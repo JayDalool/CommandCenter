@@ -206,3 +206,75 @@ class ServedUi(ApiBase):
 
     def test_route_table_is_unchanged_by_the_mount(self):
         self.assertTrue(all(r.path.startswith("/api") for r in self.app.state.routes_table))
+
+
+class ReviewFindings(ApiBase):
+    """Regression tests for the P4B-3 review (stale ready, weak keys, create leaks, merged lookup, actor)."""
+
+    def poll(self):
+        self.daemon._auto_seen.clear()
+        self.client.portal.call(self.daemon.poll_github_once)
+        self.settle()
+
+    def test_ready_to_merge_falls_back_when_the_pr_stops_being_ready(self):
+        self.tickets.create("samvision", "f", number=56, status="IN_PROGRESS")
+        self.gh.data["samvision"]["prs"] = [pr(94, "SV-056: f", review="APPROVED")]
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "READY_TO_MERGE")
+        self.gh.data["samvision"]["prs"] = [pr(94, "SV-056: f", review="APPROVED", ci="FAILURE")]
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+
+    def test_automation_never_undoes_a_human_status(self):
+        self.tickets.create("samvision", "f", number=56, status="IN_PROGRESS")
+        self.gh.data["samvision"]["prs"] = [pr(94, "SV-056: f")]
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+        self.tickets.update("SV-056", {"status": "IN_PROGRESS"}, "jay")  # changes requested
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_PROGRESS")
+
+    def test_mentions_reverts_and_lookalike_branches_do_not_link(self):
+        self.tickets.create("samvision", "f", number=40, status="IN_PROGRESS")
+        self.tickets.create("samvision", "g", number=2, status="IN_PROGRESS")
+        self.gh.data["samvision"]["prs"] = [
+            pr(91, "follow-up to SV-040"), pr(92, "Revert \"SV-040: f\""),
+            dict(pr(93, "2fa"), headRefName="sv-2fa"), dict(pr(97, "x"), headRefName="feat/sv-0021")]
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-040")["links"], [])
+        self.assertEqual(self.tickets.get("SV-002")["links"], [])
+        self.assertEqual(self.tickets.pr_keys("feat(ui): SV-040 thing"), ["SV-040"])
+        self.assertEqual(self.tickets.pr_keys("x", "claude/sv-040-fix"), ["SV-040"])
+        self.assertEqual(self.tickets.pr_keys("sv-040 lowercase title"), [])
+
+    def test_merged_pr_found_through_its_link_not_its_title(self):
+        self.tickets.create("samvision", "f", number=56, status="IN_PROGRESS")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "Untitled"), headRefName="sv-056-x")]
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+        self.gh.data["samvision"]["prs"] = []
+        self.gh.data["samvision"]["merged"] = [{"number": 94, "title": "Untitled", "url": "u", "mergedAt": "x"}]
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "VERIFYING")
+
+    def test_create_refuses_import_only_and_unknown_fields(self):
+        for body in ({"number": 999999}, {"number": "x"}, {"actor": "system:x"}, {"id": 5}):
+            r = self.post("/api/tasks", dict({"project": "commandcenter", "title": "t"}, **body))
+            self.assertEqual(r.status_code, 400, (body, r.text))
+        self.assertEqual(self.post("/api/tasks", {"project": "commandcenter", "title": "t"}).json()["key"], "CC-001")
+
+    def test_create_closed_sets_completed(self):
+        r = self.post("/api/tasks", {"project": "commandcenter", "title": "t", "status": "DONE"}).json()
+        self.assertIsNotNone(r["completedAt"])
+
+    def test_actor_header_attributes_agent_writes(self):
+        h = dict(JSON, **{"x-ccd-actor": "agent:samvision"})
+        r = self.client.post("/api/tasks", content=json.dumps({"project": "commandcenter", "title": "t"}), headers=h)
+        self.assertEqual(r.json()["creator"], "agent:samvision")
+        h = dict(JSON, **{"x-ccd-actor": "system:automation"})
+        r = self.client.post("/api/tasks", content=json.dumps({"project": "commandcenter", "title": "t"}), headers=h)
+        self.assertEqual(r.status_code, 400)
+
+    def test_prefix_collision_is_an_error(self):
+        with self.assertRaises(ValueError):
+            self.tickets.sync_projects([{"key": "sv2", "name": "x", "prefix": "SV"}])

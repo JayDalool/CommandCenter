@@ -201,7 +201,7 @@ class NeedsJay(Base):
 class KeysInText(Base):
     def test_find_keys(self):
         self.assertEqual(self.s.find_keys("SV-56: fix; branch cc-12-thing GM-9 XX-1 GYST-VN-9 SV-0056"),
-                         ["SV-056", "CC-012", "GM-009"])
+                         ["SV-056", "GM-009"])  # case-sensitive: cc-12 is not a key
 
 
 class Migrations(unittest.TestCase):

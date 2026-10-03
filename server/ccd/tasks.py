@@ -240,19 +240,32 @@ def assignee_str(kind, ref):
 
 
 class TaskStore:
-    def __init__(self, path, projects=()):
+    def __init__(self, path, projects=(), readonly=False):
         self.path = str(path)
+        self.last_change = None
+        if readonly:
+            # A second, read-only connection for work done off the event loop (the
+            # import preview), so it never shares the writer's open transaction.
+            self.db = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, isolation_level=None,
+                                      check_same_thread=False)
+            self.applied = []
+            return
         self.db = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")  # product data: durability over speed
         self.db.execute("PRAGMA foreign_keys=ON")
         self.applied = migrate(self.db)
-        self.last_change = None
         self._seed_types()
         self.sync_projects(projects)
 
     def close(self):
         self.db.close()
+
+    def reader(self):
+        """A read-only TaskStore on the same file (a :memory: store reads itself)."""
+        if self.path == ":memory:":
+            return self
+        return TaskStore(self.path, readonly=True)
 
     # ---------- projects and types ----------
 
@@ -267,6 +280,9 @@ class TaskStore:
             prefix = (p.get("prefix") or DEFAULT_PREFIXES.get(key) or re.sub(r"[^A-Z0-9]", "", key.upper())[:6])
             if not PREFIX_RE.match(prefix):
                 raise ValueError(f"bad ticket prefix {prefix!r} for {key}")
+            owner = self.db.execute("SELECT key FROM task_projects WHERE prefix=?", (prefix,)).fetchone()
+            if owner and owner[0] != key:
+                raise ValueError(f"ticket prefix {prefix} of {key} is already used by {owner[0]}; set 'prefix'")
             self.db.execute("INSERT OR IGNORE INTO task_projects(key, name, prefix, created_at) VALUES (?,?,?,?)",
                             (key, p.get("name") or key, prefix, _now()))
 
@@ -447,19 +463,60 @@ class TaskStore:
         rows = self.db.execute("SELECT status, COUNT(*) FROM tickets WHERE archived=0 GROUP BY status").fetchall()
         return {s: n for s, n in rows}
 
-    def find_keys(self, text):
-        """Ticket keys named in free text (a PR title or branch), restricted to known prefixes."""
+    def _key_pattern(self):
         prefixes = self.prefixes()
-        if not prefixes or not text:
+        if not prefixes:
+            return None
+        return "(" + "|".join(sorted(map(re.escape, prefixes), key=len, reverse=True)) + r")-(\d{1,6})"
+
+    def find_keys(self, text):
+        """Ticket keys named anywhere in free text, case-sensitive, restricted to known prefixes."""
+        pat = self._key_pattern()
+        if not pat or not text:
             return []
-        pat = re.compile(r"(?<![A-Za-z0-9])(" + "|".join(sorted(map(re.escape, prefixes), key=len, reverse=True)) +
-                         r")-(\d{1,6})(?![0-9])", re.I)
         seen = []
-        for m in pat.finditer(text):
-            key = f"{m.group(1).upper()}-{int(m.group(2)):03d}"  # CC-12 and CC-012 are one ticket
+        for m in re.finditer(r"(?<![A-Za-z0-9])" + pat + r"(?![A-Za-z0-9])", text):
+            key = f"{m.group(1)}-{int(m.group(2)):03d}"  # CC-12 and CC-012 are one ticket
             if key not in seen:
                 seen.append(key)
         return seen
+
+    def pr_keys(self, title, branch=""):
+        """The tickets a PR is FOR, strictly: a key leading its title, or leading a branch segment.
+
+        "SV-056: fix x", "feat(ui): SV-056 x", "[SV-056] x", branch "sv-056-fix" or
+        "claude/SV-056" count. A key merely mentioned ("follow-up to SV-040"), a
+        revert, or "gm-2fa" does not.
+        """
+        pat = self._key_pattern()
+        if not pat:
+            return []
+        keys = []
+        t = (title or "").strip()
+        if not re.match(r"(?i)^revert\b", t):
+            m = re.match(r"^\W{0,2}(?:[a-z]+(?:\([^)]*\))?!?:\s*)?\[?" + pat + r"(?![A-Za-z0-9])", t)
+            if m:
+                keys.append(f"{m.group(1)}-{int(m.group(2)):03d}")
+        for seg in (branch or "").split("/"):
+            m = re.match(r"(?i)^" + pat + r"(?=$|[-_.])", seg)
+            if m:
+                prefix = next(p for p in self.prefixes() if p.lower() == m.group(1).lower())
+                k = f"{prefix}-{int(m.group(2)):03d}"
+                if k not in keys:
+                    keys.append(k)
+                break
+        return keys
+
+    def keys_linked(self, provider, kind, ref):
+        return [r[0] for r in self.db.execute(
+            "SELECT t.key FROM ticket_links l JOIN tickets t ON t.id=l.ticket_id WHERE l.provider=? AND l.kind=? "
+            "AND l.ref=? AND t.archived=0", (provider, kind, ref))]
+
+    def last_status_event(self, key):
+        r = self.db.execute("SELECT e.actor, e.from_value, e.to_value FROM ticket_events e JOIN tickets t "
+                            "ON t.id=e.ticket_id WHERE t.key=? AND e.field='status' ORDER BY e.id DESC LIMIT 1",
+                            (key,)).fetchone()
+        return {"actor": r[0], "from": r[1], "to": r[2]} if r else None
 
     # ---------- writing ----------
 
@@ -498,7 +555,8 @@ class TaskStore:
         try:
             pkey, prefix, nxt = self._project(project)
             if number is not None:
-                number = int(number)
+                if not isinstance(number, int) or isinstance(number, bool):
+                    raise TaskError(400, "number must be an integer")
                 if number < 1 or self.db.execute("SELECT 1 FROM tickets WHERE project=? AND number=?",
                                                   (pkey, number)).fetchone():
                     raise TaskError(409, f"{prefix}-{number:03d} already exists")
@@ -512,8 +570,10 @@ class TaskStore:
             tid = cur.lastrowid
             self._audit(tid, actor, "created", to=key, data={"title": title, "status": status}, at=at)
             changes = self._apply(tid, fields, actor, at) if fields else []
-            if status in ("IN_PROGRESS",):
+            if status == "IN_PROGRESS":
                 self.db.execute("UPDATE tickets SET started_at=? WHERE id=?", (at, tid))
+            if status in CLOSED:
+                self.db.execute("UPDATE tickets SET completed_at=? WHERE id=?", (at, tid))
             self.db.execute("COMMIT")
         except BaseException:
             self.db.execute("ROLLBACK")

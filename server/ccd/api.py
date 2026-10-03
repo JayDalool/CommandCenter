@@ -29,6 +29,7 @@ asserts this route table exactly, so adding one is a visible, reviewed change.
 """
 import asyncio
 import json
+import re
 from pathlib import Path
 from urllib.parse import parse_qs
 
@@ -194,10 +195,22 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
 
     # ---------- tickets ----------
 
+    def actor_of(request):
+        """Who a write is recorded as. Default jay. An agent may say `X-CCD-Actor: agent:<name>`.
+
+        Self-asserted, not authentication: anything holding the token could claim
+        any actor. It keeps honest agents' writes from being filed under Jay.
+        """
+        a = request.headers.get("x-ccd-actor") or "jay"
+        if not re.match(r"^(jay|agent:[a-z0-9_:-]{1,64})$", a):
+            raise ActionError(400, "X-CCD-Actor must be jay or agent:<name>")
+        return a
+
     def guarded(fn):
         async def handler(request):
             try:
                 body = await _body(request) if request.method in WRITE_METHODS else None
+                request.state.actor = actor_of(request)
                 return _json(await fn(request, body), 201 if request.method == "POST" and fn is create_task else 200)
             except ActionError as e:
                 return _json({"ok": False, "error": e.message}, e.status)
@@ -208,7 +221,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         return daemon.task_list(project=q.get("project") or None, include_archived=q.get("archived") == "1")
 
     async def create_task(request, body):
-        return daemon.task_create(body)
+        return daemon.task_create(body, request.state.actor)
 
     async def import_preview(request, _):
         daemon._need_tasks()
@@ -218,20 +231,21 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         return daemon.task_get(request.path_params["key"])
 
     async def patch_task(request, body):
-        return daemon.task_update(request.path_params["key"], body)
+        return daemon.task_update(request.path_params["key"], body, request.state.actor)
 
     async def task_context(request, _):
         return daemon.task_context(request.path_params["key"])
 
     async def comment_task(request, body):
-        return daemon.task_comment(request.path_params["key"], body.get("body"))
+        return daemon.task_comment(request.path_params["key"], body.get("body"), request.state.actor)
 
     async def relate_task(request, body):
         return daemon.task_relate(request.path_params["key"], str(body.get("kind") or ""),
-                                  str(body.get("target") or ""), bool(body.get("remove")))
+                                  str(body.get("target") or ""), bool(body.get("remove")),
+                                  request.state.actor)
 
     async def link_task(request, body):
-        return daemon.task_link(request.path_params["key"], body)
+        return daemon.task_link(request.path_params["key"], body, request.state.actor)
 
     async def events(ws: WebSocket):
         offered = [p.strip() for p in (ws.headers.get("sec-websocket-protocol") or "").split(",")]

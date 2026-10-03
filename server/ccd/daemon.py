@@ -37,6 +37,8 @@ TASK_ID_RE = re.compile(r"^(?:(?:SV|GYST-VN|MFE|GM)-\d{1,5}|#\d{1,6})$")
 # but only when that ticket exists; the shape alone is not enough.
 TICKET_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}-\d{1,6}$")
 # Automatic ticket transitions. Each has one deterministic trigger; nothing is inferred.
+CREATE_FIELDS = {"description", "status", "priority", "type", "assignee", "agentRole", "parent", "branch", "labels",
+                 "flags", "dueAt", "estimate"} | set(tasks_mod.FLAGS)
 DISPATCH_TRANSITIONS = {"plan": (("INBOX", "PROPOSED"), "RESEARCHING"),
                         "implement": (("READY_TO_IMPLEMENT",), "IN_PROGRESS")}
 ANSWER_RE = re.compile(r"^[^\x00-\x1f\x7f]{1,2000}$")
@@ -748,6 +750,8 @@ class Daemon:
             return fn(*a, **kw)
         except tasks_mod.TaskError as e:
             raise ActionError(e.status, e.message)
+        except (ValueError, TypeError) as e:
+            raise ActionError(400, f"bad value: {str(e)[:120]}")
 
     def task_list(self, project=None, include_archived=False):
         ts = self._need_tasks()
@@ -770,7 +774,11 @@ class Daemon:
         ts = self._need_tasks()
         if not isinstance(body, dict):
             raise ActionError(400, "body must be an object")
-        fields = {k: v for k, v in body.items() if k not in ("project", "title")}
+        # Only ticket fields. `number` (import-only) and anything else are refused, not passed on.
+        extra = set(body) - {"project", "title"} - CREATE_FIELDS
+        if extra:
+            raise ActionError(400, f"cannot set {', '.join(sorted(extra))} on create")
+        fields = {k: v for k, v in body.items() if k in CREATE_FIELDS}
         ticket, changes = self._wrap(ts.create, str(body.get("project") or ""), body.get("title"), actor, **fields)
         self._task_event("task.created", ticket, f"created · {ticket['title']}", {"status": ticket["status"]})
         return ticket
@@ -803,25 +811,43 @@ class Daemon:
         return ticket
 
     def task_import_preview(self):
-        ts = self._need_tasks()
-        return importer.preview(self.cfg["projects"], self._gh_data(), ts)
+        """Runs in a worker thread, on its own read-only connection to tasks.db."""
+        reader = self._need_tasks().reader()
+        try:
+            return importer.preview(self.cfg["projects"], self._gh_data(), reader)
+        finally:
+            if reader is not self.tasks:
+                reader.close()
 
-    def _auto(self, key, fields, trigger):
-        """An automatic change: actor system:automation, its trigger recorded with every field."""
-        ticket, changes = self.tasks.update(key, fields, "system:automation", trigger=trigger)
+    def _auto(self, key, frm, to, trigger):
+        """One automatic status move, if the ticket is still in `frm` and Jay has not overridden it.
+
+        Jay wins: if the last status change was a human moving the ticket away
+        from `to`, automation does not move it back. Actor system:automation,
+        trigger recorded with the change.
+        """
+        t = self.tasks.get(key)
+        if t["status"] not in frm:
+            return t
+        last = self.tasks.last_status_event(key)
+        if last and not last["actor"].startswith("system:") and last["from"] == to:
+            return t
+        ticket, changes = self.tasks.update(key, {"status": to}, "system:automation", trigger=trigger)
         self._announce(ticket, changes)
         return ticket
 
     def _ticket_automation(self):
         """GitHub → tickets, only on deterministic triggers.
 
-          PR (open) names a ticket key in its title or branch, same project → link it
-          ...and the ticket is READY_TO_IMPLEMENT or IN_PROGRESS              → IN_REVIEW
-          linked PR approved, checks green, not draft, ticket IN_REVIEW       → READY_TO_MERGE
-          linked PR merged, ticket IN_REVIEW or READY_TO_MERGE                → VERIFYING
+          open PR whose title or branch LEADS with a key (same project) → link it, set branch
+          ...ticket READY_TO_IMPLEMENT or IN_PROGRESS                      → IN_REVIEW
+          linked PR approved, checks green, not draft, ticket IN_REVIEW    → READY_TO_MERGE
+          linked PR no longer ready, ticket READY_TO_MERGE                 → IN_REVIEW
+          linked PR merged (found by link, not title), IN_REVIEW/READY_TO_MERGE → VERIFYING
 
-        Runs once per fresh GitHub poll per project. Never moves a ticket
-        backwards, never closes one (VERIFYING → DONE is a verifier's or Jay's call).
+        Once per fresh GitHub poll per project. Never closes a ticket
+        (VERIFYING → DONE is a verifier's or Jay's call) and never undoes a
+        status Jay set by hand.
         """
         if self.tasks is None:
             return
@@ -832,37 +858,43 @@ class Daemon:
                 continue
             self._auto_seen[p["key"]] = g.get("asOf")
             data = g["data"]
-            mine = lambda k: prefixes.get(k.split("-")[0]) == p["key"] and self.tasks.exists(k)  # noqa: E731
-            try:
-                for pr in data.get("prs") if isinstance(data.get("prs"), list) else []:
-                    ref = f"{p['repo']}#{pr['number']}"
-                    keys = [k for k in self.tasks.find_keys(f"{pr.get('title', '')} {pr.get('headRefName', '')}")
-                            if mine(k)]
+
+            def mine(k):
+                return prefixes.get(k.split("-")[0]) == p["key"] and self.tasks.exists(k)
+
+            for pr in data.get("prs") if isinstance(data.get("prs"), list) else []:
+                try:
+                    n = pr["number"]
+                    ref = f"{p['repo']}#{n}"
+                    keys = [k for k in self.tasks.pr_keys(pr.get("title", ""), pr.get("headRefName", "")) if mine(k)]
+                    keys += [k for k in self.tasks.keys_linked("github", "pr", ref) if k not in keys]
                     ci = model.ci_mark(pr.get("statusCheckRollup"))
                     ready = pr.get("reviewDecision") == "APPROVED" and ci in ("✓", "–") and not pr.get("isDraft")
                     for k in keys:
                         if not self.tasks.has_link(k, "github", "pr", ref):
                             t, _ = self.tasks.link(k, "github", "pr", ref, pr.get("url"), pr.get("title"),
-                                                   "system:automation",
-                                                   trigger=f"PR #{pr['number']} names {k} in its title or branch")
-                            self._task_event("task.updated", t, f"linked PR #{pr['number']}", {"kind": "links"})
+                                                   "system:automation", trigger=f"PR #{n} title or branch leads with {k}")
+                            self._task_event("task.updated", t, f"linked PR #{n}", {"kind": "links"})
                         t = self.tasks.get(k)
                         if not t["branch"] and pr.get("headRefName"):
-                            t = self._auto(k, {"branch": pr["headRefName"]}, f"PR #{pr['number']} head branch")
-                        if t["status"] in ("READY_TO_IMPLEMENT", "IN_PROGRESS"):
-                            t = self._auto(k, {"status": "IN_REVIEW"}, f"PR #{pr['number']} is open")
-                        if t["status"] == "IN_REVIEW" and ready:
-                            self._auto(k, {"status": "READY_TO_MERGE"},
-                                       f"PR #{pr['number']} approved, checks green, not draft")
-                for m in data.get("merged") if isinstance(data.get("merged"), list) else []:
+                            t, ch = self.tasks.update(k, {"branch": pr["headRefName"]}, "system:automation",
+                                                      trigger=f"PR #{n} head branch")
+                            self._announce(t, ch)
+                        self._auto(k, ("READY_TO_IMPLEMENT", "IN_PROGRESS"), "IN_REVIEW", f"PR #{n} is open")
+                        if ready:
+                            self._auto(k, ("IN_REVIEW",), "READY_TO_MERGE", f"PR #{n} approved, checks green, not draft")
+                        else:
+                            self._auto(k, ("READY_TO_MERGE",), "IN_REVIEW",
+                                       f"PR #{n} no longer approved with green checks")
+                except Exception as e:  # noqa: BLE001 — one odd PR must not fail the snapshot
+                    log.warning(json.dumps({"msg": "ticket automation skipped a PR", "error": repr(e)[:200]}))
+            for m in data.get("merged") if isinstance(data.get("merged"), list) else []:
+                try:
                     ref = f"{p['repo']}#{m['number']}"
-                    for k in [k for k in self.tasks.find_keys(m.get("title", "")) if mine(k)]:
-                        if not self.tasks.has_link(k, "github", "pr", ref):
-                            continue  # never seen open and linked: no transition from a title alone
-                        if self.tasks.get(k)["status"] in ("IN_REVIEW", "READY_TO_MERGE"):
-                            self._auto(k, {"status": "VERIFYING"}, f"PR #{m['number']} merged")
-            except tasks_mod.TaskError as e:
-                log.warning(json.dumps({"msg": "ticket automation skipped", "error": e.message}))
+                    for k in self.tasks.keys_linked("github", "pr", ref):
+                        self._auto(k, ("IN_REVIEW", "READY_TO_MERGE"), "VERIFYING", f"PR #{m['number']} merged")
+                except Exception as e:  # noqa: BLE001
+                    log.warning(json.dumps({"msg": "ticket automation skipped a merge", "error": repr(e)[:200]}))
 
     # ---------- read API ----------
 
@@ -1070,6 +1102,6 @@ class Daemon:
             rule = DISPATCH_TRANSITIONS.get(verb)
             t = self.tasks.get(task)
             self._task_event("task.updated", t, f"dispatched: {verb} → {name}", {"kind": "dispatch"})
-            if rule and t["status"] in rule[0]:
-                self._auto(task, {"status": rule[1]}, f"dispatch '{verb}' accepted by idle coordinator {name}")
+            if rule:
+                self._auto(task, rule[0], rule[1], f"dispatch '{verb}' accepted by idle coordinator {name}")
         return {"ok": True, "coordinator": name, "task": task, "verb": verb, "plan": plan}
