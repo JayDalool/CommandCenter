@@ -1,0 +1,18 @@
+# Never commit runtime state, credentials or machine-local files.
+.venv/
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+*.log
+*.log.*
+*.sock
+*.token
+state/
+.env
+.env.*
+config.json
+!server/config.example.json
+node_modules/
+dist/

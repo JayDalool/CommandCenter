@@ -1,0 +1,23 @@
+# systemd USER unit for ccd. Installed by scripts/install-user-unit.sh.
+#
+# ccd lives in its own cgroup. Stopping or restarting it stops ccd and the
+# gh/git children it started — never herdr, never a Claude session; those run
+# in other scopes and ccd owns none of them.
+[Unit]
+Description=Command Center daemon (ccd): observes herdr, GitHub and the host; owns no agent
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/server/repos/CommandCenter/server
+ExecStart=/srv/server/repos/CommandCenter/server/.venv/bin/python -m ccd
+Restart=always
+RestartSec=2
+# Soft guard; the budget is 100 MB.
+MemoryMax=256M
+Environment=PATH=/home/jay/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,13 @@
+{
+  "_comment": "ccd reads the legacy board's config (~/command-center/board/config.json) unless CCD_CONFIG points elsewhere. Only the fields in config.PUBLIC_PROJECT_FIELDS ever leave the server. Keep notification topics and tokens out of any committed file.",
+  "github_seconds": 120,
+  "git_seconds": 300,
+  "host_seconds": 120,
+  "reconcile_seconds": 30,
+  "retention_days": 30,
+  "dispatch_projects": ["samvision", "gauzemate"],
+  "projects": [
+    {"key": "samvision", "name": "SamVision", "repo": "OWNER/SamVisionAI", "path": "/srv/server/apps/samvisionai",
+     "branch": "main", "model": "opus", "effort": "", "index": "docs/tasks/INDEX.md", "links": []}
+  ]
+}

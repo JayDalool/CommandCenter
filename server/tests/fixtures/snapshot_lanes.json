@@ -1,0 +1,46 @@
+{
+  "result": {
+    "snapshot": {
+      "protocol": 22,
+      "version": "0.9.3",
+      "focused_pane_id": "wE:p9",
+      "focused_tab_id": "wE:t1",
+      "focused_workspace_id": "wE",
+      "workspaces": [
+        {"workspace_id": "wE", "label": "Command Center", "number": 1, "pane_count": 5, "tab_count": 1, "agent_status": "working", "focused": true, "active_tab_id": "wE:t1"},
+        {"workspace_id": "wF", "label": "home", "number": 2, "pane_count": 1, "tab_count": 1, "agent_status": "unknown", "focused": false, "active_tab_id": "wF:t1"}
+      ],
+      "tabs": [
+        {"tab_id": "wE:t1", "workspace_id": "wE", "label": "1", "number": 1, "pane_count": 5, "agent_status": "working", "focused": true},
+        {"tab_id": "wF:t1", "workspace_id": "wF", "label": "1", "number": 1, "pane_count": 1, "agent_status": "unknown", "focused": false}
+      ],
+      "panes": [
+        {"pane_id": "wE:p1", "workspace_id": "wE", "tab_id": "wE:t1", "agent_status": "idle", "label": "samvision", "cwd": "/srv/server/apps/samvisionai", "foreground_cwd": "/srv/server/apps/samvisionai", "terminal_title_stripped": "What still needs my answer"},
+        {"pane_id": "wE:p2", "workspace_id": "wE", "tab_id": "wE:t1", "agent_status": "working", "label": "sv-056", "cwd": "/srv/server/apps/samvisionai", "foreground_cwd": "/srv/server/worktrees/samvisionai/SV-056", "terminal_title_stripped": "Implementing SV-056"},
+        {"pane_id": "wE:p3", "workspace_id": "wE", "tab_id": "wE:t1", "agent_status": "blocked", "label": "gyst", "cwd": "/srv/server/repos/gyst-lifeops", "foreground_cwd": "/srv/server/repos/gyst-lifeops", "terminal_title_stripped": "May I push this branch?"},
+        {"pane_id": "wE:p4", "workspace_id": "wE", "tab_id": "wE:t1", "agent_status": "unknown", "cwd": "/srv/server/repos/gyst-lifeops-scratch", "foreground_cwd": "/srv/server/repos/gyst-lifeops-scratch", "terminal_title_stripped": "jay@jay-server: scratch"},
+        {"pane_id": "wE:p9", "workspace_id": "wE", "tab_id": "wE:t1", "agent_status": "unknown", "cwd": "/home/jay/command-center", "foreground_cwd": "/home/jay/command-center", "terminal_title_stripped": "jay@jay-server: ~/command-center"},
+        {"pane_id": "wF:p1", "workspace_id": "wF", "tab_id": "wF:t1", "agent_status": "unknown", "cwd": "/home/jay", "foreground_cwd": "/home/jay", "terminal_title_stripped": "jay@jay-server: ~"}
+      ],
+      "agents": [
+        {"pane_id": "wE:p1", "workspace_id": "wE", "tab_id": "wE:t1", "agent": "claude", "name": "samvision", "agent_status": "idle", "cwd": "/srv/server/apps/samvisionai", "foreground_cwd": "/srv/server/apps/samvisionai", "terminal_title_stripped": "What still needs my answer", "agent_session": {"agent": "claude", "kind": "id", "source": "herdr:claude", "value": "aaaaaaaa-0000-0000-0000-000000000001"}},
+        {"pane_id": "wE:p2", "workspace_id": "wE", "tab_id": "wE:t1", "agent": "claude", "agent_status": "working", "cwd": "/srv/server/apps/samvisionai", "foreground_cwd": "/srv/server/worktrees/samvisionai/SV-056", "terminal_title_stripped": "Implementing SV-056", "agent_session": {"agent": "claude", "kind": "id", "source": "herdr:claude", "value": "aaaaaaaa-0000-0000-0000-000000000002"}},
+        {"pane_id": "wE:p3", "workspace_id": "wE", "tab_id": "wE:t1", "agent": "claude", "agent_status": "blocked", "cwd": "/srv/server/repos/gyst-lifeops", "foreground_cwd": "/srv/server/repos/gyst-lifeops", "terminal_title_stripped": "May I push this branch?", "agent_session": {"agent": "claude", "kind": "id", "source": "herdr:claude", "value": "aaaaaaaa-0000-0000-0000-000000000003"}}
+      ],
+      "layouts": [
+        {"workspace_id": "wE", "tab_id": "wE:t1", "zoomed": false, "focused_pane_id": "wE:p9",
+         "area": {"x": 0, "y": 0, "width": 120, "height": 40}, "splits": [],
+         "panes": [
+           {"pane_id": "wE:p1", "focused": false, "rect": {"x": 0, "y": 0, "width": 24, "height": 40}},
+           {"pane_id": "wE:p2", "focused": false, "rect": {"x": 24, "y": 0, "width": 24, "height": 40}},
+           {"pane_id": "wE:p3", "focused": false, "rect": {"x": 48, "y": 0, "width": 24, "height": 40}},
+           {"pane_id": "wE:p4", "focused": false, "rect": {"x": 72, "y": 0, "width": 24, "height": 40}},
+           {"pane_id": "wE:p9", "focused": true, "rect": {"x": 96, "y": 0, "width": 24, "height": 40}}
+         ]},
+        {"workspace_id": "wF", "tab_id": "wF:t1", "zoomed": false, "focused_pane_id": "wF:p1",
+         "area": {"x": 0, "y": 0, "width": 120, "height": 40}, "splits": [],
+         "panes": [{"pane_id": "wF:p1", "focused": true, "rect": {"x": 0, "y": 0, "width": 120, "height": 40}}]}
+      ]
+    }
+  }
+}
