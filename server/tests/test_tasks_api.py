@@ -386,3 +386,15 @@ class DevelopmentView(ApiBase):
         self.tickets.create("samvision", "sv work", status="IN_PROGRESS")
         self.tickets.create("gauzemate", "gz work", status="IN_PROGRESS")
         self.assertEqual(sorted(self.rows(project="gauzemate")), ["GZ-001"])
+
+    def test_a_cached_github_row_without_a_number_is_skipped_not_fatal(self):
+        self.daemon.gh["samvision"] = {"asOf": 1.0, "error": None,
+                                       "data": {"prs": [{"title": "no number"}, pr(107, "SV-001: work")],
+                                                "merged": [{"title": "also none"}]}}
+        index = self.daemon._pr_index("samvision")
+        self.assertEqual(sorted(index), [107])
+
+    def test_an_odd_default_branch_is_refused_not_passed_to_git(self):
+        from ccd import sources
+        self.assertEqual(sources.branches_ahead("/srv/server/apps/samvisionai", "--upload-pack=touch /tmp/x"), {})
+        self.assertEqual(sources.branches_ahead("/srv/server/apps/samvisionai", ""), {})

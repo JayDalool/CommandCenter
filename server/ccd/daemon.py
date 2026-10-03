@@ -805,6 +805,8 @@ class Daemon:
         data = g.get("data") or {}
         out = {}
         for pr in data.get("prs") if isinstance(data.get("prs"), list) else []:
+            if not isinstance(pr, dict) or not isinstance(pr.get("number"), int):
+                continue  # one odd row must not 500 the whole view
             rollup = pr.get("statusCheckRollup")
             out[pr["number"]] = {
                 "number": pr["number"], "state": "DRAFT" if pr.get("isDraft") else "OPEN",
@@ -814,6 +816,8 @@ class Daemon:
                 "mergedAt": None, "asOf": g.get("asOf"),
             }
         for pr in data.get("merged") if isinstance(data.get("merged"), list) else []:
+            if not isinstance(pr, dict) or not isinstance(pr.get("number"), int):
+                continue
             prev = out.get(pr["number"]) or {}
             out[pr["number"]] = {**prev, "number": pr["number"], "state": "MERGED", "url": pr.get("url"),
                                  "title": pr.get("title"), "mergedAt": pr.get("mergedAt"),

@@ -218,6 +218,10 @@ def branches_ahead(path, base="main"):
     """
     if FIXTURES:
         return _fixture(f"{Path(path).name}.branches.json") or {}
+    # `base` comes from config.json. A value starting with "-" would reach git as
+    # an option, so it is refused rather than passed through.
+    if not re.match(r"^[A-Za-z0-9][\w./-]{0,100}$", base or ""):
+        return {}
     code, out, _ = _run(["git", "-C", path, "log", "--format=%S", "--branches", "--not", base])
     if code != 0:
         # An unknown base (a repo on master, a fresh clone): report heads only,
