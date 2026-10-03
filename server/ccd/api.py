@@ -10,23 +10,52 @@
     POST /api/action/ack             acknowledge an alert
     POST /api/action/dispatch        send a task to an idle coordinator (guarded)
 
+    GET   /api/tasks                 every ticket (compact), projects, vocabulary
+    POST  /api/tasks                 create a ticket (project + title; the rest optional)
+    GET   /api/tasks/import-preview  what importing INDEX.md / issues / MY_ACTIONS WOULD do; writes nothing
+    GET   /api/tasks/{key}           one ticket: relations, subtasks, links, notes, timeline
+    PATCH /api/tasks/{key}           change fields (audited per field)
+    GET   /api/tasks/{key}/context   the ticket as an agent brief ("work CC-012")
+    POST  /api/tasks/{key}/comments  add a note
+    POST  /api/tasks/{key}/relations add/remove blocks, blocked_by, related, duplicates
+    POST  /api/tasks/{key}/links     add/remove an external link (a PR, a legacy ID)
+
+    GET   /, /assets/*               the built web UI (web/app/dist), when present. Public
+                                     code only; every /api path except health needs the token.
+
 There is deliberately no endpoint for merge, deploy, production commands,
 --apply, secrets, Docker, destructive git, or config and rule changes. A test
 asserts this route table exactly, so adding one is a visible, reviewed change.
 """
 import asyncio
 import json
+from pathlib import Path
 from urllib.parse import parse_qs
 
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
-from starlette.routing import Route, WebSocketRoute
+from starlette.routing import Mount, Route, WebSocketRoute
+from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from . import security
 from .daemon import ActionError
 
 NO_STORE = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+WS_PROTOCOL = "ccd.v1"
+WS_TOKEN_PREFIX = "ccd-token."
+WRITE_METHODS = ("POST", "PATCH", "PUT", "DELETE")
+
+
+def ws_token_from_protocols(header):
+    """A browser cannot set headers on a WebSocket, so the UI offers the token as a
+    subprotocol (`ccd-token.<token>`) next to `ccd.v1`. It never appears in a URL,
+    in history, or in uvicorn's path log."""
+    for item in (header or "").split(","):
+        item = item.strip()
+        if item.startswith(WS_TOKEN_PREFIX):
+            return item[len(WS_TOKEN_PREFIX):]
+    return ""
 
 
 def _json(data, status=200):
@@ -52,15 +81,18 @@ class Guard:
             problem = (403, "bad Host header")
         elif headers.get("origin") and headers["origin"] not in self.origins:
             problem = (403, "cross-origin request refused")
-        elif path != "/api/health":
+        elif (path.startswith("/api/") or path == "/api" or scope["type"] == "websocket") and path != "/api/health":
             presented = headers.get("x-ccd-token")
             if not presented and scope["type"] == "websocket":
-                presented = (parse_qs(scope.get("query_string", b"").decode()).get("token") or [""])[0]
+                presented = ws_token_from_protocols(headers.get("sec-websocket-protocol")) or \
+                    (parse_qs(scope.get("query_string", b"").decode()).get("token") or [""])[0]
             if not security.token_ok(self.token, presented):
                 problem = (401, "token required")
-            elif scope["type"] == "http" and scope.get("method") == "POST" and \
+            elif scope["type"] == "http" and scope.get("method") in WRITE_METHODS and \
                     not headers.get("content-type", "").split(";")[0].strip() == "application/json":
                 problem = (415, "actions take application/json")
+        elif scope["type"] == "http" and scope.get("method") not in ("GET", "HEAD"):
+            problem = (405, "the UI is read-only files")
         if problem is None:
             return await self.app(scope, receive, send)
         if scope["type"] == "websocket":
@@ -69,7 +101,33 @@ class Guard:
         await _json({"ok": False, "error": problem[1]}, problem[0])(scope, receive, send)
 
 
-def create_app(daemon, token, port, lifespan=None):
+class UiFiles:
+    """The built UI with strict headers. Same origin as the API, so no CORS and no proxy."""
+
+    def __init__(self, directory, port):
+        self.files = StaticFiles(directory=str(directory), html=True)
+        self.headers = [
+            (b"content-security-policy", (
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                f"connect-src 'self' ws://127.0.0.1:{port} ws://localhost:{port}; font-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'").encode()),
+            (b"x-frame-options", b"DENY"), (b"referrer-policy", b"no-referrer"),
+            (b"x-content-type-options", b"nosniff"), (b"cache-control", b"no-cache"),
+        ]
+
+    async def __call__(self, scope, receive, send):
+        async def send_with_headers(msg):
+            if msg["type"] == "http.response.start":
+                msg = dict(msg, headers=list(msg.get("headers", [])) + self.headers)
+            await send(msg)
+        await self.files(scope, receive, send_with_headers)
+
+
+def ui_dir():
+    return Path(__file__).resolve().parents[2] / "web" / "app" / "dist"
+
+
+def create_app(daemon, token, port, lifespan=None, ui=None):
     async def health(request):
         return _json(daemon.health())
 
@@ -122,9 +180,6 @@ def create_app(daemon, token, port, lifespan=None):
     async def answer(body):
         return await daemon.act_answer(str(body.get("agentId", "")), body.get("text"))
 
-    async def focus(body):
-        return await daemon.act_focus(str(body.get("agentId", "")))
-
     async def ack(body):
         return await daemon.act_ack(body.get("alertId"))
 
@@ -132,8 +187,55 @@ def create_app(daemon, token, port, lifespan=None):
         return await daemon.act_dispatch(str(body.get("project", "")), body.get("taskId"),
                                          str(body.get("verb", "")), body.get("note", ""))
 
+    async def focus_any(body):
+        if body.get("workspaceId") or body.get("tabId"):
+            return await daemon.act_focus_layout(body.get("workspaceId"), body.get("tabId"))
+        return await daemon.act_focus(str(body.get("agentId", "")))
+
+    # ---------- tickets ----------
+
+    def guarded(fn):
+        async def handler(request):
+            try:
+                body = await _body(request) if request.method in WRITE_METHODS else None
+                return _json(await fn(request, body), 201 if request.method == "POST" and fn is create_task else 200)
+            except ActionError as e:
+                return _json({"ok": False, "error": e.message}, e.status)
+        return handler
+
+    async def list_tasks(request, _):
+        q = request.query_params
+        return daemon.task_list(project=q.get("project") or None, include_archived=q.get("archived") == "1")
+
+    async def create_task(request, body):
+        return daemon.task_create(body)
+
+    async def import_preview(request, _):
+        daemon._need_tasks()
+        return await asyncio.to_thread(daemon.task_import_preview)
+
+    async def get_task(request, _):
+        return daemon.task_get(request.path_params["key"])
+
+    async def patch_task(request, body):
+        return daemon.task_update(request.path_params["key"], body)
+
+    async def task_context(request, _):
+        return daemon.task_context(request.path_params["key"])
+
+    async def comment_task(request, body):
+        return daemon.task_comment(request.path_params["key"], body.get("body"))
+
+    async def relate_task(request, body):
+        return daemon.task_relate(request.path_params["key"], str(body.get("kind") or ""),
+                                  str(body.get("target") or ""), bool(body.get("remove")))
+
+    async def link_task(request, body):
+        return daemon.task_link(request.path_params["key"], body)
+
     async def events(ws: WebSocket):
-        await ws.accept()
+        offered = [p.strip() for p in (ws.headers.get("sec-websocket-protocol") or "").split(",")]
+        await ws.accept(subprotocol=WS_PROTOCOL if WS_PROTOCOL in offered else None)
         q = daemon.subscribe()
         try:
             raw = ws.query_params.get("since")
@@ -186,10 +288,23 @@ def create_app(daemon, token, port, lifespan=None):
         Route("/api/agents/{agent_id}/tail", tail, methods=["GET"]),
         WebSocketRoute("/api/events", events),
         Route("/api/action/answer", action(answer), methods=["POST"]),
-        Route("/api/action/focus", action(focus), methods=["POST"]),
+        Route("/api/action/focus", action(focus_any), methods=["POST"]),
         Route("/api/action/ack", action(ack), methods=["POST"]),
         Route("/api/action/dispatch", action(dispatch), methods=["POST"]),
+        Route("/api/tasks", guarded(list_tasks), methods=["GET"]),
+        Route("/api/tasks", guarded(create_task), methods=["POST"]),
+        Route("/api/tasks/import-preview", guarded(import_preview), methods=["GET"]),
+        Route("/api/tasks/{key}", guarded(get_task), methods=["GET"]),
+        Route("/api/tasks/{key}", guarded(patch_task), methods=["PATCH"]),
+        Route("/api/tasks/{key}/context", guarded(task_context), methods=["GET"]),
+        Route("/api/tasks/{key}/comments", guarded(comment_task), methods=["POST"]),
+        Route("/api/tasks/{key}/relations", guarded(relate_task), methods=["POST"]),
+        Route("/api/tasks/{key}/links", guarded(link_task), methods=["POST"]),
     ]
-    app = Starlette(routes=routes, lifespan=lifespan)
+    mounts = []
+    ui = ui_dir() if ui is None else ui
+    if ui and Path(ui, "index.html").is_file():
+        mounts.append(Mount("/", app=UiFiles(ui, port), name="ui"))
+    app = Starlette(routes=routes + mounts, lifespan=lifespan)
     app.state.routes_table = routes
     return Guard(app, token, port), app

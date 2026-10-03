@@ -182,7 +182,9 @@ def project_view(p, gh, panes, blocked_min, cfg):
         ready = pr.get("reviewDecision") == "APPROVED" and mark in ("✓", "–") and not pr.get("isDraft")
         pr_rows.append({"number": pr["number"], "ref": ref_of(pr["title"]), "title": short(pr["title"], 38),
                         "ci": mark, "ready": ready, "draft": pr.get("isDraft"), "url": pr.get("url"),
-                        "sha": (pr.get("headRefOid") or "")[:7], "age_h": _age_h(pr.get("updatedAt", ""))})
+                        "sha": (pr.get("headRefOid") or "")[:7], "age_h": _age_h(pr.get("updatedAt", "")),
+                        "review": pr.get("reviewDecision"), "mergeable": pr.get("mergeable"),
+                        "branch": pr.get("headRefName"), "updatedAt": pr.get("updatedAt")})
 
     my_panes = [x for x in panes if x["project"] == p["key"]]
     live_panes = sources.agent_panes(my_panes)

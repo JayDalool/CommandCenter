@@ -170,7 +170,7 @@ class FakeHerdr:
                         reply = {"id": rid, "result": {"type": "agent_read", "read": {
                             "pane_id": a["pane_id"], "workspace_id": "wE", "tab_id": "wE:t1", "source": "recent",
                             "format": "text", "text": text, "revision": 1, "truncated": False}}}
-                elif method in ("agent.focus", "agent.prompt", "pane.send_text", "pane.send_keys"):
+                elif method in ("agent.focus", "agent.prompt", "pane.send_text", "pane.send_keys", "workspace.focus", "tab.focus"):
                     reply = {"id": rid, "result": {"type": "ok"}}
                 else:
                     reply = {"id": rid, "error": {"code": "unknown_method", "message": method}}

@@ -15,7 +15,8 @@ resyncs from session.snapshot, and also reconciles on a timer.
 
 ccd never owns a pane. It reads (snapshot, agent.read) and, for the few
 allowed actions, writes keystrokes into an agent that already exists
-(agent.focus, pane.send_text, pane.send_keys, agent.prompt). It never
+(agent.focus, workspace.focus, tab.focus, pane.send_text, pane.send_keys,
+agent.prompt). It never
 starts, stops, splits, closes or moves anything.
 """
 import asyncio
@@ -34,6 +35,7 @@ ALLOWED_METHODS = frozenset({
     "ping", "session.snapshot", "events.subscribe",
     "agent.read", "agent.focus", "agent.prompt",
     "pane.send_text", "pane.send_keys",
+    "workspace.focus", "tab.focus",   # bring a workspace/tab forward; changes no layout
 })
 
 
@@ -120,6 +122,12 @@ class Herdr:
 
     async def focus(self, target):
         return await self.call("agent.focus", {"target": target})
+
+    async def focus_workspace(self, workspace_id):
+        return await self.call("workspace.focus", {"workspace_id": workspace_id})
+
+    async def focus_tab(self, tab_id):
+        return await self.call("tab.focus", {"tab_id": tab_id})
 
     async def send_answer(self, pane_id, text):
         """Type an answer into a BLOCKED agent and press Enter.

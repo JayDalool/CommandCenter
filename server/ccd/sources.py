@@ -54,7 +54,7 @@ query($owner: String!, $name: String!, $ref: String!) {
     }
     pullRequests(states: OPEN, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
-        number title url isDraft reviewDecision headRefName headRefOid updatedAt
+        number title url isDraft reviewDecision mergeable headRefName headRefOid updatedAt
         labels(first: 20) { nodes { name } }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
@@ -111,7 +111,8 @@ def reshape(data):
         commits = (n.get("commits") or {}).get("nodes") or []
         state = (((commits[0] if commits else {}).get("commit") or {}).get("statusCheckRollup") or {}).get("state")
         prs.append({"number": n["number"], "title": n["title"], "url": n["url"], "isDraft": n["isDraft"],
-                    "reviewDecision": n.get("reviewDecision"), "headRefName": n["headRefName"],
+                    "reviewDecision": n.get("reviewDecision"), "mergeable": n.get("mergeable"),
+                    "headRefName": n["headRefName"],
                     "headRefOid": n["headRefOid"], "updatedAt": n["updatedAt"], "labels": _labels_of(n),
                     "statusCheckRollup": _rollup_list(state)})
     return {
@@ -286,6 +287,37 @@ def panes_from(snapshot):
         })
     out.sort(key=lambda p: p["pane_id"])
     return out
+
+
+def layout_from(snapshot):
+    """Workspaces, tabs and pane rectangles from the snapshot: geometry only.
+
+    The Workspaces screen draws herdr's real split layout from this. No titles
+    and no output: a terminal title can quote anything.
+    """
+    snap = snapshot_body(snapshot)
+    workspaces = [{"id": w.get("workspace_id"), "label": w.get("label") or "", "number": w.get("number"),
+                   "focused": bool(w.get("focused")), "activeTabId": w.get("active_tab_id")}
+                  for w in snap.get("workspaces") or [] if isinstance(w, dict) and w.get("workspace_id")]
+    workspaces.sort(key=lambda w: (w["number"] is None, w["number"] or 0))
+    tabs = [{"id": t.get("tab_id"), "workspaceId": t.get("workspace_id"), "label": t.get("label") or "",
+             "number": t.get("number"), "focused": bool(t.get("focused"))}
+            for t in snap.get("tabs") or [] if isinstance(t, dict) and t.get("tab_id")]
+    tabs.sort(key=lambda t: (t["number"] is None, t["number"] or 0))
+    layouts = {}
+    for l in snap.get("layouts") or []:
+        if not isinstance(l, dict) or not l.get("tab_id"):
+            continue
+        area = l.get("area") or {}
+        layouts[l["tab_id"]] = {
+            "area": {"w": area.get("width", 0), "h": area.get("height", 0)},
+            "zoomed": bool(l.get("zoomed")), "focusedPaneId": l.get("focused_pane_id"),
+            "panes": [{"paneId": p.get("pane_id"), "focused": bool(p.get("focused")),
+                       "rect": {"x": (p.get("rect") or {}).get("x", 0), "y": (p.get("rect") or {}).get("y", 0),
+                                "w": (p.get("rect") or {}).get("width", 0), "h": (p.get("rect") or {}).get("height", 0)}}
+                      for p in l.get("panes") or [] if isinstance(p, dict) and p.get("pane_id")],
+        }
+    return {"workspaces": workspaces, "tabs": tabs, "layouts": layouts}
 
 
 def herdr_panes():

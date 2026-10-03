@@ -19,6 +19,7 @@ from .api import create_app
 from .daemon import Daemon
 from .herdr import Herdr
 from .store import Store
+from .tasks import TaskStore
 
 
 class _JsonLines(logging.Formatter):
@@ -66,7 +67,9 @@ def setup_logging():
 def build(cfg=None):
     cfg = cfg or config.load()
     store = Store(config.STATE_DIR / "ccd.db")
-    daemon = Daemon(cfg, store, Herdr(config.HERDR_SOCKET))
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tasks = TaskStore(config.DATA_DIR / "tasks.db", config.task_projects(cfg))
+    daemon = Daemon(cfg, store, Herdr(config.HERDR_SOCKET), tasks=tasks)
     token = security.load_or_create_token(config.TOKEN_PATH)
 
     @contextlib.asynccontextmanager
@@ -79,6 +82,7 @@ def build(cfg=None):
         finally:
             await daemon.stop()
             store.close()
+            tasks.close()
             logging.getLogger("ccd").info(json.dumps({"msg": "stopped"}))
 
     guarded, _ = create_app(daemon, token, config.PORT, lifespan=lifespan)
