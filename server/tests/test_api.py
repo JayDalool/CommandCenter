@@ -348,3 +348,19 @@ class Tokens(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LogScrub(unittest.TestCase):
+    def test_websocket_token_in_a_query_string_never_reaches_the_log(self):
+        import logging
+        import os
+        from ccd import __main__ as main_mod
+        main_mod.setup_logging()
+        logging.getLogger("uvicorn.error").info('%s - "WebSocket %s" [accepted]', "127.0.0.1:5",
+                                                "/api/events?since=3&token=" + TOKEN)
+        for h in logging.getLogger().handlers:
+            h.flush()
+        text = open(os.path.join(os.environ["CCD_STATE_DIR"], "ccd.log")).read()
+        self.assertNotIn(TOKEN, text)
+        self.assertIn("token=[redacted]", text)
+        self.assertIn("since=3", text, "the rest of the line survives")

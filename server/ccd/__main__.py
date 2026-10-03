@@ -9,6 +9,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import sys
 
 import uvicorn
@@ -36,11 +37,25 @@ class _JsonLines(logging.Formatter):
         return json.dumps(body)
 
 
+class _RedactTokens(logging.Filter):
+    """uvicorn logs each WebSocket path with its query string, and a browser's
+    token arrives as ?token=. Scrub it before anything reaches the file."""
+    _pat = re.compile(r"(token=)[^&\s\"']+")
+
+    def filter(self, record):
+        msg = record.getMessage()
+        clean = self._pat.sub(r"\1[redacted]", msg)
+        if clean != msg:
+            record.msg, record.args = clean, ()
+        return True
+
+
 def setup_logging():
     config.STATE_DIR.mkdir(parents=True, exist_ok=True)
     handler = logging.handlers.RotatingFileHandler(config.STATE_DIR / "ccd.log", maxBytes=10 * 1024 * 1024,
                                                    backupCount=3)
     handler.setFormatter(_JsonLines())
+    handler.addFilter(_RedactTokens())
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(logging.INFO)
