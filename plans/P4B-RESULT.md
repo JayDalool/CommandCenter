@@ -48,7 +48,7 @@ Branch `p4b`, worktree `/srv/server/worktrees/CommandCenter/P4B`, draft PR #1. L
 
 **ccd status:** live, active since 2026-10-02 22:56:08 CDT, NRestarts=0, ~35 MB, not restarted; still runs main `e6fced3` (P4B is not deployed).
 
-**Herdr status:** NOT RUNNING since 2026-10-02 23:41:59 CDT — it exited with Jay's SSH disconnect; all panes got SIGHUP. ccd reports it (473 reconnect attempts, alert raised). Not restarted by me.
+**Herdr status:** fixed and verified 2026-10-03. herdr had exited with Jay's SSH disconnect at 2026-10-02 23:41:59 CDT (all panes SIGHUP). It now runs as `herdr.service` under systemd --user (enabled, Linger, `Restart=always`); `scripts/herdr.service` is the installed unit. Jay's manual test (~13:40 CDT) PASSED: herdr survived an SSH disconnect with `MainPID` unchanged, `NRestarts=0`, samvision and gauzemate panes survived, ccd stayed active. Confirmed at 13:53 CDT: active/running, MainPID 3984916, started 13:40:43, coordinator panes PIDs 3985123 (samvision) and 3985139 (gauzemate) inside the unit's cgroup. Correction Jay made to the night-shift proposal: an explicit `Environment=PATH=` with `/home/jay/.local/bin` first (without it panes had no `claude`), the literal ExecStart path instead of `%h`, and `Restart=always`. See docs/ARCHITECTURE.md.
 
 **P2 soak:** ~4.7 h at 03:36 CDT, clean for ccd (no errors since start). Not a 24 h pass. herdr down means the agent path is not being exercised.
 

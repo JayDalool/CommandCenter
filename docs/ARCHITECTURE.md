@@ -24,6 +24,23 @@
         └── ssh -N -L 7777:127.0.0.1:7777 jay-server ← Windows browser (P4B)
 ```
 
+## herdr under systemd --user
+
+herdr runs as `herdr.service` (`scripts/herdr.service`, installed and verified
+2026-10-03) under the same user manager as ccd, with Linger=yes, so herdr and
+every pane it owns survive SSH disconnects. Before that it ran in the
+foreground of an SSH session and shut down when the session ended
+(2026-10-02 23:41:59 CDT), killing every Claude pane.
+
+The unit sets `PATH` explicitly. A `systemd --user` service inherits the user
+manager's environment, not a login shell's: `/home/jay/.local/bin` reaches an
+interactive shell through `~/.profile`, which the user manager never reads.
+herdr spawns its panes as children of the service, so without the line every
+pane inherited a `PATH` without `~/.local/bin` and `claude` was "command not
+found" — the panes came up, but no Claude session could start in them.
+`Environment=PATH=` puts `/home/jay/.local/bin` first for the server and every
+pane. If herdr or claude moves, that line moves with it.
+
 ## herdr protocol notes (0.9.3, protocol 22, verified live)
 
 - newline-delimited JSON over the unix socket; one response line per request

@@ -44,7 +44,7 @@ Two independent reviews (backend, frontend), both REQUEST CHANGES, all 14 findin
 
 ## Outstanding risks
 
-1. **herdr is down** since 23:41:59 — exited with the SSH session. Coordinators gone. Root cause looks like herdr being tied to the login session; not verified beyond the log and sshd timestamps.
+1. ~~**herdr is down** since 23:41:59 — exited with the SSH session.~~ **Fixed and verified 2026-10-03:** herdr runs as `herdr.service` under systemd --user; Jay's disconnect test passed (MainPID unchanged, NRestarts=0, coordinator panes survived, ccd stayed active). The proposal needed an explicit `Environment=PATH=` (claude lives in `~/.local/bin`, which a user service does not inherit). `scripts/herdr.service` now matches the installed unit.
 2. `X-CCD-Actor` is self-asserted; any token holder (incl. agents as `jay` user) can write tickets.
 3. Ticket text has no redactor; don't paste secrets/licensed data into tickets.
 4. tasks.db needs to join the backup set once real tickets exist.

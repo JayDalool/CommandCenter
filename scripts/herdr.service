@@ -1,7 +1,15 @@
-# PROPOSAL — not installed. Runs the herdr server under systemd --user (the same
-# manager as ccd, with Linger=yes) so it survives SSH disconnects. On 2026-10-02
-# 23:41:59 herdr shut down right after Jay's SSH session ended, taking every
-# Claude pane with it. Jay installs this only after reading it:
+# INSTALLED AND VERIFIED (2026-10-03) — this is the unit running on jay-server
+# at ~/.config/systemd/user/herdr.service. It runs the herdr server under
+# systemd --user (same manager as ccd, Linger=yes), so herdr and every Claude
+# pane it owns survive SSH disconnects. Before this, herdr shut down with Jay's
+# SSH session (2026-10-02 23:41:59 CDT) and took every pane with it.
+#
+# PATH must be explicit: a user service inherits the user manager's environment,
+# not a login shell's, so ~/.local/bin (where herdr and claude live) is missing
+# unless set here. Without it, panes start but `claude` is "command not found".
+# See docs/ARCHITECTURE.md, "herdr under systemd --user".
+#
+# Install / reinstall:
 #   cp scripts/herdr.service ~/.config/systemd/user/ && systemctl --user daemon-reload
 #   systemctl --user enable --now herdr && herdr status
 # Attach from anywhere with `herdr` (or `ssh -t jay-server herdr` from Windows).
@@ -11,11 +19,11 @@ After=default.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/herdr server
-Restart=on-failure
+ExecStart=/home/jay/.local/bin/herdr server
+Restart=always
 RestartSec=5
-# Panes are login shells; give them a sane terminal.
 Environment=TERM=xterm-256color
+Environment=PATH=/home/jay/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
 
 [Install]
 WantedBy=default.target
