@@ -1,6 +1,6 @@
 import { getToken } from "./auth";
 import type {
-  ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent,
+  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent,
 } from "./types";
 
 export class ApiError extends Error {
@@ -55,6 +55,9 @@ export class Api {
     return this.req<{ ok: true; coordinator: string }>("POST", "/api/action/dispatch", { project, taskId, verb, note });
   }
 
+  development(project?: string) {
+    return this.req<Development>("GET", `/api/development${project ? `?project=${encodeURIComponent(project)}` : ""}`);
+  }
   tasks() { return this.req<TaskList>("GET", "/api/tasks"); }
   task(key: string) { return this.req<TicketDetail>("GET", `/api/tasks/${encodeURIComponent(key)}`); }
   createTask(body: { project: string; title: string } & Partial<Record<string, unknown>>) {

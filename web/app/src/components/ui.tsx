@@ -88,7 +88,9 @@ export function Panel({ title, count, meta, tools, children, className = "", pad
   title: string; count?: number | string; meta?: ReactNode; tools?: ReactNode; children: ReactNode; className?: string;
   pad?: boolean; jay?: boolean; id?: string }) {
   const hid = id ? `${id}-h` : undefined;
-  return <section className={`panel ${jay ? "is-jay " : ""}${className}`} aria-labelledby={hid}>
+  // The id is on the section, so a layout can place panels by name and a link
+  // can jump to one. The heading carries `${id}-h`.
+  return <section id={id} className={`panel ${jay ? "is-jay " : ""}${className}`} aria-labelledby={hid}>
     <header className="panel-head">
       <h2 className="panel-title" id={hid}>{title}</h2>
       {count != null && <span className="panel-count">{count}</span>}

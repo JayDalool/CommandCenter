@@ -3,7 +3,7 @@
 import { Api, ApiError, api as defaultApi } from "../api/client";
 import { getToken, setToken, clearToken } from "../api/auth";
 import { Live, type LiveStatus } from "../api/live";
-import type { CcdEvent, State, TaskMeta, TaskProject, Ticket, TicketDetail } from "../api/types";
+import type { CcdEvent, Development, State, TaskMeta, TaskProject, Ticket, TicketDetail } from "../api/types";
 import { Store } from "../lib/store";
 
 export interface AppData {
@@ -20,13 +20,17 @@ export interface AppData {
   meta: TaskMeta | null;
   details: Record<string, TicketDetail>;
   activity: CcdEvent[];
+  /** The Development view: loaded on demand, refreshed while that screen is open. */
+  development: Development | null;
+  developmentAt: number | null;
   toast: { text: string; tone: "ok" | "bad" } | null;
 }
 
 export const initial: AppData = {
   auth: "checking", authError: null, state: null, stateAt: null,
   conn: { status: "offline", lastMessageAt: null, attempt: 0 }, error: null,
-  tickets: [], ticketsLoaded: false, taskProjects: [], meta: null, details: {}, activity: [], toast: null,
+  tickets: [], ticketsLoaded: false, taskProjects: [], meta: null, details: {}, activity: [],
+  development: null, developmentAt: null, toast: null,
 };
 
 const ACTIVITY_CAP = 300;
@@ -42,6 +46,8 @@ export class App {
   private ticketTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private idle: ReturnType<typeof setInterval> | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  private devTimer: ReturnType<typeof setTimeout> | null = null;
+  private devReq = 0;
 
   constructor(public api: Api = defaultApi, WebSocketImpl?: typeof WebSocket) {
     this.live = new Live({
@@ -191,6 +197,27 @@ export class App {
       const tickets = exists ? d.tickets.map((x) => (x.key === t.key ? { ...x, ...row } : x)) : [{ ...row }, ...d.tickets];
       return { ...d, tickets, details: { ...d.details, [t.key]: t } };
     });
+  }
+
+  /** The Development trail. Coalesced like /api/state: at most one call per 1.5 s. */
+  async refreshDevelopment() {
+    const req = ++this.devReq;
+    try {
+      const dev = await this.api.development();
+      if (req !== this.devReq) return;
+      this.store.patch({ development: dev, developmentAt: Date.now() });
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return;   // an older ccd without the route
+      this.store.patch({ error: (e as Error).message });
+    }
+  }
+
+  scheduleDevelopment(delay = 400) {
+    if (this.devTimer) return;
+    this.devTimer = setTimeout(() => {
+      this.devTimer = null;
+      void this.refreshDevelopment();
+    }, Math.max(delay, 1500 - (Date.now() - (this.data.developmentAt ?? 0))));
   }
 
   async loadTicket(key: string) {

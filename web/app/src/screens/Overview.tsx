@@ -1,17 +1,37 @@
-// Five questions in five seconds: is the server healthy, what is working, what
-// is blocked, what needs Jay, what changed. No KPI-card wall.
+// OVERVIEW answers four questions and stops:
+//
+//   NEEDS JAY        what is waiting for him
+//   ACTIVE WORK      what is being worked on right now
+//   SYSTEM STATUS    is anything broken
+//   RECENT ACTIVITY  what changed
+//
+// Everything else belongs to a section that owns it. No KPI wall, no widget
+// Jay has to decode, nothing repeated from another page.
 import { useMemo } from "react";
 import { app } from "../store/app";
 import { useSelector } from "../lib/store";
-import { href, go } from "../lib/router";
-import { jayQueue, PIPELINE, STATUS_META, CLOSED } from "../tickets/model";
-import { Panel, AgentState, Project, EmptyState, Ago, StatusDot, Flags } from "../components/ui";
+import { href } from "../lib/router";
+import { jayQueue } from "../tickets/model";
+import { Panel, AgentState, Project, EmptyState, StateText, StatusDot } from "../components/ui";
 import { ActivityRow, meaningful } from "../components/Feed";
-import { DataTable, type Column } from "../components/DataTable";
 import { NeedsTable } from "./needs";
-import { ServerMeters } from "./Server";
 import { dur } from "../lib/time";
-import type { Agent } from "../api/types";
+
+/** One line per thing that is wrong, in words. Empty means healthy. */
+export function systemProblems(st: NonNullable<ReturnType<typeof app.store.get>["state"]>) {
+  const h = st.host;
+  const out: { id: string; text: string; where: string }[] = [];
+  if (!st.sources.herdr.ok) out.push({ id: "herdr", text: "herdr is unreachable — agent state is unknown", where: "server" });
+  Object.entries(st.sources.github ?? {}).forEach(([k, g]) => {
+    if (g.error) out.push({ id: `gh:${k}`, text: `GitHub data for ${k} is stale`, where: "server" });
+  });
+  if ((h.disk ?? 0) >= 85) out.push({ id: "disk", text: `disk is ${h.disk}% full`, where: "server" });
+  if ((h.swapPct ?? 0) >= 60) out.push({ id: "swap", text: `swap is ${Math.round(h.swapPct ?? 0)}% used`, where: "server" });
+  if ((h.oomKills24h ?? 0) > 0) out.push({ id: "oom", text: `${h.oomKills24h} OOM kills in 24h`, where: "server" });
+  (st.host.down ?? []).slice(0, 3).forEach((n) => out.push({ id: `c:${n}`, text: `container ${n} is not running`, where: "server" }));
+  st.alerts.filter((a) => !a.ack).slice(0, 4).forEach((a) => out.push({ id: a.id, text: a.text, where: "alerts" }));
+  return out;
+}
 
 export function Overview() {
   const st = useSelector(app.store, (d) => d.state);
@@ -19,80 +39,73 @@ export function Overview() {
   const activity = useSelector(app.store, (d) => d.activity);
   const queue = useMemo(() => jayQueue(st), [st]);
   if (!st) return <EmptyState title="Loading state from ccd…" />;
+
+  const problems = systemProblems(st);
   const working = st.agents.filter((a) => a.status === "working");
   const blocked = st.agents.filter((a) => a.status === "blocked");
-  const h = st.host;
-  const memPct = h.memTotal ? Math.round((100 * (h.memUsed ?? 0)) / h.memTotal) : null;
-  const healthBad = !st.sources.herdr.ok || (h.disk ?? 0) >= 85 || (h.swapPct ?? 0) >= 60 || (h.oomKills24h ?? 0) > 0;
-  const openTickets = tickets.filter((t) => !t.archived && !CLOSED.has(t.status));
-  const last = activity.filter(meaningful)[0];
-  const agentCols: Column<Agent>[] = [
-    { id: "p", header: "Project", cell: (a) => <Project k={a.project} name={st.projects.find((p) => p.key === a.project)?.name} /> },
-    { id: "n", header: "Agent", cell: (a) => <span className="mono">{a.agent_name || a.id}</span> },
-    { id: "r", header: "Role", cell: (a) => <span className="text2">{a.role}</span> },
-    { id: "s", header: "State", cell: (a) => <AgentState status={a.status} /> },
-    { id: "t", header: "For", className: "is-num", cell: (a) => a.blockedForMin != null
-      ? <span className="mono-xs jay-t">{dur(a.blockedForMin * 60)}</span> : <span className="faint">—</span> },
-  ];
-  const active = [...blocked, ...working, ...st.agents.filter((a) => !["blocked", "working"].includes(a.status))];
-  return <div className="ov">
-    <section className="ov-glance" aria-label="At a glance">
-      <a className={`glance${healthBad ? " is-bad" : ""}`} href={href("server")}>
-        <span className="glance-q"><StatusDot tone={healthBad ? "failed" : "working"} />Server</span>
-        <span className="glance-a">{healthBad ? (!st.sources.herdr.ok ? "herdr down" : "needs a look") : "healthy"}
-          <span className="mono-xs muted"> · mem {memPct ?? "—"}% · disk {h.disk ?? "—"}%</span></span></a>
-      <a className="glance" href={href("agents")}>
-        <span className="glance-q"><StatusDot tone="working" />Working</span>
-        <span className="glance-a">{working.length ? working.map((a) => a.agent_name || a.project).join(", ") : "nothing running"}</span></a>
-      <a className={`glance${blocked.length ? " is-jay" : ""}`} href={href("agents")}>
-        <span className="glance-q"><StatusDot tone="blocked" shape="square" />Blocked</span>
-        <span className="glance-a">{blocked.length ? `${blocked.length} waiting for an answer` : "none"}</span></a>
-      <a className={`glance${queue.length ? " is-jay" : ""}`} href="#needs">
-        <span className="glance-q"><StatusDot tone="jay" />Needs Jay</span>
-        <span className="glance-a">{queue.length ? `${queue.length} item${queue.length > 1 ? "s" : ""}` : "nothing"}</span></a>
-      <a className="glance" href={href("activity")}>
-        <span className="glance-q"><StatusDot tone="review" shape="ring" />Changed</span>
-        <span className="glance-a">{last ? last.text : "quiet"}</span></a>
-    </section>
-    <div className="ov-cols">
-      <div className="stack">
-        <Panel id="needs" title="Needs Jay" count={queue.length} jay={queue.length > 0}
-          meta={queue.length ? "blocked agents first, then merges, then flagged tickets" : undefined}
-          tools={<a className="goto" href={href("tasks", null, { view: "jay" })}>Queue →</a>}>
-          <NeedsTable items={queue.slice(0, 10)} />
-        </Panel>
-        <Panel id="agents" title="Active agents" count={st.agents.length}
-          meta={`${working.length} working · ${blocked.length} blocked`} tools={<a className="goto" href={href("agents")}>All agents →</a>}>
-          <div className="tbl-wrap"><DataTable label="Agents" rows={active.slice(0, 8)} columns={agentCols} rowKey={(a) => a.id}
-            rowClass={(a) => (a.status === "blocked" ? "is-attn" : "")} onActivate={(k) => go("agents", k)}
-            empty={<EmptyState title="No live agents" hint={st.sources.herdr.ok ? undefined : "herdr is unreachable"} />} /></div>
-        </Panel>
-        <Panel id="pipeline" title="Task pipeline" count={openTickets.length} tools={<a className="goto" href={href("tasks", null, { view: "board" })}>Board →</a>}>
-          <div className="pipe-strip">{PIPELINE.map((s) => {
-            const n = tickets.filter((t) => !t.archived && t.status === s).length;
-            const m = STATUS_META[s];
-            return <a key={s} className={`pipe-cell tone-${m.tone}`} href={href("tasks", null, { view: "list", status: s })}>
-              <span className="caps muted trunc">{m.short}</span>
-              <span className={`pipe-n${n ? "" : " is-zero"}`}>{n}</span>
-              <span className="pipe-bar" style={{ opacity: n ? .85 : .15 }} aria-hidden />
-            </a>;
-          })}</div>
-          {openTickets.some((t) => t.flags.length) && <div className="panel-body is-pad row" style={{ flexWrap: "wrap", borderTop: "1px solid var(--line)" }}>
-            <span className="caps muted">flagged</span>
-            {openTickets.filter((t) => t.flags.length).slice(0, 6).map((t) => <a key={t.key} href={href("tasks", t.key)} className="row">
-              <span className="key">{t.key}</span><Flags flags={t.flags} /></a>)}
-          </div>}
-        </Panel>
-      </div>
-      <aside className="stack">
-        <Panel id="server" title="Server health" meta={<>jay-server · <Ago at={h.asOf} /></>} tools={<a className="goto" href={href("server")}>Details →</a>}>
-          <ServerMeters compact />
-        </Panel>
-        <Panel id="activity" title="Recent activity" tools={<a className="goto" href={href("activity")}>All →</a>}>
-          <ul className="compact" aria-label="Recent activity">{activity.filter(meaningful).slice(0, 12).map((e) => <ActivityRow key={e.seq} e={e} />)}
-            {!activity.length && <li><EmptyState title="No events yet" /></li>}</ul>
-        </Panel>
-      </aside>
-    </div>
+  // "Active work" is work, not agents: a ticket someone is on, or an agent that
+  // is running without one.
+  const live = [...blocked, ...working];
+  const rows = live.map((a) => ({
+    agent: a,
+    ticket: tickets.find((t) => t.agentPaneId === a.id)
+      ?? tickets.find((t) => t.project === a.project && t.status === "IN_PROGRESS" && t.assignee === `agent:${a.agent_name}`)
+      ?? null,
+  }));
+  const open = tickets.filter((t) => !t.archived && ["IN_PROGRESS", "IN_REVIEW", "READY_TO_MERGE", "VERIFYING"].includes(t.status));
+  const unattended = open.filter((t) => !rows.some((r) => r.ticket?.key === t.key));
+
+  return <div className="ov2">
+    <Panel id="needs" title="Needs Jay" count={queue.length} jay={queue.length > 0}
+      meta={queue.length ? "blocked agents, then merges, then flagged tickets" : undefined}
+      tools={<a className="goto" href={href("tasks", null, { view: "jay" })}>Full queue →</a>}>
+      {queue.length ? <NeedsTable items={queue.slice(0, 8)} />
+        : <div className="ov-clear"><StatusDot tone="done" /> Nothing is waiting for you.</div>}
+    </Panel>
+
+    <Panel id="active" title="Active work" count={rows.length + unattended.length}
+      meta={`${working.length} working · ${blocked.length} blocked`}
+      tools={<a className="goto" href={href("development")}>Development →</a>}>
+      {rows.length ? <ul className="ov-work">
+        {rows.map(({ agent, ticket }) => <li key={agent.id} className={agent.status === "blocked" ? "is-attn" : ""}>
+          <AgentState status={agent.status} />
+          <Project k={agent.project} name={st.projects.find((p) => p.key === agent.project)?.name} />
+          {ticket ? <a className="key" href={href("tasks", ticket.key)}>{ticket.key}</a> : <span className="faint">no ticket</span>}
+          <span className="trunc t">{ticket?.title ?? agent.agent_name ?? agent.id}</span>
+          <span className="mono-xs muted">{agent.role}</span>
+          {agent.blockedForMin != null && <span className="mono-xs jay-t">{dur(agent.blockedForMin * 60)}</span>}
+          <a className="goto" href={href("console", null, { project: agent.project ?? undefined,
+            ticket: ticket?.key })}>Console →</a>
+        </li>)}
+      </ul> : null}
+      {/* Tickets in flight with nobody on them: one line, not nine rows that
+          repeat what Development already shows in full. */}
+      {unattended.length > 0 && <div className="ov-more">
+        <StateText status={unattended[0].status} code />
+        <span className="trunc">{unattended.length} open ticket{unattended.length > 1 ? "s" : ""} with no agent on
+          {" "}{unattended.length > 1 ? "them" : "it"}: {unattended.slice(0, 4).map((t) => t.key).join(", ")}
+          {unattended.length > 4 ? "…" : ""}</span>
+        <a className="goto" style={{ marginLeft: "auto" }} href={href("development")}>Development →</a>
+      </div>}
+      {!rows.length && !unattended.length
+        ? <div className="ov-clear"><StatusDot tone="idle" shape="ring" /> Nothing is running.</div> : null}
+    </Panel>
+
+    <Panel id="status" title="System status" count={problems.length || undefined}
+      meta={problems.length ? undefined : "herdr, GitHub, git and the host all answering"}
+      tools={<a className="goto" href={href("server")}>Server →</a>}>
+      {problems.length ? <ul className="ov-problems">{problems.map((p) => <li key={p.id}>
+        <StatusDot tone="failed" shape="square" />
+        <span className="trunc">{p.text}</span>
+        <a className="goto" href={href(p.where)}>Look →</a></li>)}</ul>
+        : <div className="ov-clear"><StatusDot tone="working" /> Everything is answering.</div>}
+    </Panel>
+
+    <Panel id="activity" title="Recent activity" tools={<a className="goto" href={href("activity")}>All →</a>}>
+      <ul className="compact" aria-label="Recent activity">
+        {activity.filter(meaningful).slice(0, 10).map((e) => <ActivityRow key={e.seq} e={e} />)}
+        {!activity.length && <li><EmptyState title="No events yet" /></li>}
+      </ul>
+    </Panel>
   </div>;
 }

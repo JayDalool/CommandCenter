@@ -193,6 +193,48 @@ def unpushed_branches(path):
             for b, n in sorted(counts.items())]
 
 
+def branch_heads(path):
+    """branch → (unix committer date, short SHA). One call for every branch."""
+    code, out, _ = _run(["git", "-C", path, "for-each-ref",
+                         "--format=%(refname:short)|%(committerdate:unix)|%(objectname:short)", "refs/heads"])
+    heads = {}
+    if code != 0:
+        return heads
+    for line in out.splitlines():
+        parts = line.split("|")
+        if len(parts) == 3 and parts[1].strip().isdigit():
+            heads[parts[0]] = (int(parts[1]), parts[2])
+    return heads
+
+
+def branches_ahead(path, base="main"):
+    """Every local branch with commits the base branch does not have.
+
+    The Development view answers "how much work exists for this ticket" from
+    this: ticket → branch → commits. `git log --format=%S --branches --not
+    <base>` tags each commit with the branch it was reached from, so one call
+    counts them all (the same trick unpushed_branches uses — a count per branch
+    would be one subprocess per branch, 200+ on samvisionai).
+    """
+    if FIXTURES:
+        return _fixture(f"{Path(path).name}.branches.json") or {}
+    code, out, _ = _run(["git", "-C", path, "log", "--format=%S", "--branches", "--not", base])
+    if code != 0:
+        # An unknown base (a repo on master, a fresh clone): report heads only,
+        # never a fabricated commit count.
+        counts = Counter()
+    else:
+        counts = Counter(line.strip() for line in out.splitlines() if line.strip())
+    heads = branch_heads(path)
+    out_rows = {}
+    for b, (when, sha) in heads.items():
+        if b == base:
+            continue
+        out_rows[b] = {"commits": counts.get(b, 0), "head": sha, "at": when,
+                       "countOk": code == 0}
+    return out_rows
+
+
 def worktree_count(path):
     """Lane worktrees, not counting the checkout itself."""
     return max(0, len(worktree_paths(path)) - 1)

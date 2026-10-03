@@ -175,7 +175,9 @@ class Daemon:
                                   "lastAttempt": None}
         self.gh = gh_cache
         (unpushed, _), (worktrees, git_at) = store.get("git:unpushed", {}), store.get("git:worktrees", {})
-        self.git = {"unpushed": unpushed or {}, "worktrees": worktrees or {}, "asOf": git_at, "error": None}
+        (branches, _) = store.get("git:branches", {})
+        self.git = {"unpushed": unpushed or {}, "worktrees": worktrees or {}, "branches": branches or {},
+                    "asOf": git_at, "error": None}
         host_data, host_at = store.get("host:last", {})
         self.host = {"data": host_data or {}, "asOf": host_at, "error": None, "oom24h": None,
                      "ooms_at": None, "running": set(host_data.get("running", []) if host_data else [])}
@@ -420,18 +422,21 @@ class Daemon:
     # ---------- git ----------
 
     def _git_collect(self):
-        unpushed, worktrees = {}, {}
+        unpushed, worktrees, branches = {}, {}, {}
         for p in self.cfg["projects"]:
             if p.get("path"):
                 unpushed[p["key"]] = sources.unpushed_branches(p["path"])
                 worktrees[p["key"]] = sources.worktree_paths(p["path"])
-        return unpushed, worktrees
+                branches[p["key"]] = sources.branches_ahead(p["path"], p.get("branch") or "main")
+        return unpushed, worktrees, branches
 
     async def poll_git_once(self):
-        unpushed, worktrees = await asyncio.to_thread(self.git_fn)
-        self.git.update(unpushed=unpushed, worktrees=worktrees, asOf=_now(), error=None)
+        got = await asyncio.to_thread(self.git_fn)
+        unpushed, worktrees, branches = got if len(got) == 3 else (got[0], got[1], {})
+        self.git.update(unpushed=unpushed, worktrees=worktrees, branches=branches, asOf=_now(), error=None)
         self.store.put("git:unpushed", unpushed)
         self.store.put("git:worktrees", worktrees)
+        self.store.put("git:branches", branches)
         if self.panes:  # before herdr's first answer there is nothing to re-place, and the
             # remembered agent set from the last run must survive until it is compared.
             self.panes = self._attribute(self.panes)
@@ -788,6 +793,116 @@ class Daemon:
 
     def task_get(self, key):
         return self._wrap(self._need_tasks().get, key)
+
+    # ---------- development traceability ----------
+
+    CI_WORD = {"\u2713": "PASS", "\u2717": "FAIL", "\u2026": "PENDING", "\u2013": "NONE"}
+    DEV_STAGES = ("branch", "commits", "pr", "ci", "review", "merge", "verify", "deploy")
+
+    def _pr_index(self, project_key):
+        """PR number → one flat record, open PRs and recently merged ones alike."""
+        g = self.gh.get(project_key) or {}
+        data = g.get("data") or {}
+        out = {}
+        for pr in data.get("prs") if isinstance(data.get("prs"), list) else []:
+            rollup = pr.get("statusCheckRollup")
+            out[pr["number"]] = {
+                "number": pr["number"], "state": "DRAFT" if pr.get("isDraft") else "OPEN",
+                "url": pr.get("url"), "title": pr.get("title"), "branch": pr.get("headRefName"),
+                "ci": self.CI_WORD.get(model.ci_mark(rollup), "NONE"),
+                "review": pr.get("reviewDecision") or "PENDING",
+                "mergedAt": None, "asOf": g.get("asOf"),
+            }
+        for pr in data.get("merged") if isinstance(data.get("merged"), list) else []:
+            prev = out.get(pr["number"]) or {}
+            out[pr["number"]] = {**prev, "number": pr["number"], "state": "MERGED", "url": pr.get("url"),
+                                 "title": pr.get("title"), "mergedAt": pr.get("mergedAt"),
+                                 "ci": prev.get("ci", "NONE"), "review": prev.get("review", "PENDING"),
+                                 "branch": prev.get("branch"), "asOf": g.get("asOf")}
+        return out
+
+    def _branch_for(self, ticket, branches):
+        """The ticket's branch, by strong evidence only.
+
+        1. `ticket.branch` — set by hand or from a linked PR's head branch
+        2. a local branch whose leading segment IS the key (SV-056-x, claude/SV-056)
+
+        A key merely mentioned inside a branch name ("fix-after-SV-056") is not
+        evidence and is ignored. Returns None rather than a guess.
+        """
+        named = ticket.get("branch")
+        if named:
+            row = branches.get(named) or {}
+            return {"name": named, "evidence": "ticket branch", "exists": bool(row),
+                    "commits": row.get("commits"), "head": row.get("head"), "at": row.get("at"),
+                    "countOk": row.get("countOk", False)}
+        key = ticket["key"]
+        for name, row in sorted(branches.items()):
+            if self.tasks.pr_keys("", name) == [key]:
+                return {"name": name, "evidence": "branch named for the ticket", "exists": True,
+                        "commits": row.get("commits"), "head": row.get("head"), "at": row.get("at"),
+                        "countOk": row.get("countOk", False)}
+        return None
+
+    def development(self, project=None):
+        """Ticket → branch → commits → PR → CI → review → merge → verify → deploy.
+
+        Every association is evidence ccd can point at: the ticket's own branch,
+        a branch whose leading segment is the key, or a PR linked to the ticket
+        (which the automation only links when the key LEADS its title or branch).
+        Nothing is inferred from a key mentioned in passing, and `deploy` is
+        always unknown because ccd observes no deployments.
+        """
+        ts = self._need_tasks()
+        tickets = ts.list(project=project)
+        links = ts.links_by_key("github", "pr")
+        prs_by_project = {}
+        rows = []
+        for t in tickets:
+            if t["project"] not in prs_by_project:
+                prs_by_project[t["project"]] = self._pr_index(t["project"])
+            prs = prs_by_project[t["project"]]
+            branches = (self.git.get("branches") or {}).get(t["project"]) or {}
+            branch = self._branch_for(t, branches)
+            linked = []
+            for link in links.get(t["key"]) or []:
+                num = link["ref"].rsplit("#", 1)[-1]
+                rec = prs.get(int(num)) if num.isdigit() else None
+                linked.append(rec or {"number": int(num) if num.isdigit() else None, "state": "UNKNOWN",
+                                      "url": link["url"], "title": link["title"], "ci": "NONE",
+                                      "review": "PENDING", "mergedAt": None, "branch": None, "asOf": None})
+            pr = linked[0] if linked else None
+            merged = bool(pr and pr["state"] == "MERGED")
+            if merged:
+                merge = "MERGED"
+            elif t["status"] == "READY_TO_MERGE":
+                merge = "WAITING FOR JAY"
+            elif t["status"] == "BLOCKED":
+                merge = "BLOCKED"
+            else:
+                merge = None
+            verify = {"VERIFYING": "PENDING", "DONE": "DONE"}.get(t["status"])
+            active = t["status"] in ("IN_PROGRESS", "IN_REVIEW", "READY_TO_MERGE", "VERIFYING")
+            if not (branch or pr or active):
+                continue
+            rows.append({
+                "key": t["key"], "project": t["project"], "title": t["title"], "status": t["status"],
+                "priority": t["priority"], "assignee": t["assignee"], "flags": t["flags"],
+                "updatedAt": t["updatedAt"],
+                "branch": branch, "prs": linked, "pr": pr,
+                "commits": (branch or {}).get("commits"),
+                "ci": pr["ci"] if pr else None,
+                "review": pr["review"] if pr else None,
+                "merge": merge, "verify": verify, "deploy": None,
+            })
+        rows.sort(key=lambda r: (-tasks_mod.STATUSES.index(r["status"]) if r["status"] in tasks_mod.STATUSES else 0,
+                                 r["key"]))
+        return {"rows": rows, "seq": self.seq, "gitAsOf": self.git.get("asOf"),
+                "stages": list(self.DEV_STAGES),
+                "notes": ["Associations use strong evidence only: the ticket's branch, a branch whose leading "
+                          "segment is the key, or a PR linked to the ticket. A key mentioned in passing is not "
+                          "an association.",
+                          "deploy is always unknown: ccd observes no deployments."]}
 
     def task_context(self, key):
         ctx = self._wrap(self._need_tasks().context, key)

@@ -30,6 +30,7 @@ ALLOWED = {
     ("POST", "/api/action/answer"), ("POST", "/api/action/focus"),
     ("POST", "/api/action/ack"), ("POST", "/api/action/dispatch"),
     # P4B ticket system: product data, no infrastructure reach
+    ("GET", "/api/development"),
     ("GET", "/api/tasks"), ("POST", "/api/tasks"), ("GET", "/api/tasks/import-preview"),
     ("GET", "/api/tasks/{key}"), ("PATCH", "/api/tasks/{key}"), ("GET", "/api/tasks/{key}/context"),
     ("POST", "/api/tasks/{key}/comments"), ("POST", "/api/tasks/{key}/relations"),

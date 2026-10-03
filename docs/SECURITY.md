@@ -95,3 +95,34 @@ on its own read-only SQLite connection; there is no apply endpoint. herdr's
 allowlist gained only `workspace.focus` and `tab.focus`.
 
 **Host data.** Top processes expose pid, `comm` and RSS — never command lines.
+
+
+## P4B revision: Development and Console
+
+**`GET /api/development`** joins data ccd already has — tickets, the cached
+GitHub poll and local branch names — and adds no new reach. The one new
+subprocess is `git log --format=%S --branches --not <default>` per repo per
+`git_seconds`, read-only, in the repos already configured. Branch names and
+commit counts are metadata, not content: no diff, no commit message, no file
+ever leaves ccd through this route.
+
+**The Console's Claude tab** uses the existing `GET /api/agents/{id}/tail`:
+redacted, capped at 200 lines, fetched on demand, never stored. It polls only
+while the page is on screen and `document.visibilityState` is `visible`, so a
+forgotten tab stops reading a pane. Typing into a blocked agent is the same
+guarded one-line action as before.
+
+**The Console's shells are not implemented.** An interactive PTY is the one
+change that would turn a leaked ccd token from "read operational metadata" into
+"run commands as jay", so it is designed in
+[ADR 0004](adr/0004-console-and-real-terminals.md) and waits for Jay rather than
+shipping quietly with the UI. When it is built it must keep every rule here:
+loopback only, the SSH tunnel, the same `Guard` (Host, Origin, token as a
+WebSocket subprotocol, never in a URL or a log), session names derived from the
+config rather than client-supplied paths, bounded output buffers with a dropped
+client rather than a stalled PTY, and audit rows for session open/close/attach
+only — never keystrokes, command lines or output, which can contain secrets.
+
+No new listener, no port, no herdr socket bridge, and no allowlist of commands
+Jay may type in his own shell: the terminal is Jay's shell. UI buttons outside a
+terminal stay under the existing safe-action rules.

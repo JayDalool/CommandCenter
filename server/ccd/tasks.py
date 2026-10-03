@@ -320,7 +320,8 @@ class TaskStore:
         for p in projects:
             key = p["key"]
             prefix = registry.check(key, p.get("prefix"), registry.legacy_of(key))
-            name = p.get("name") or registry.name_of(key)
+            # A registered project's display name is the registry's, like its prefix.
+            name = registry.name_of(key) if registry.project(key) else (p.get("name") or key)
             row = self.db.execute("SELECT prefix FROM task_projects WHERE key=?", (key,)).fetchone()
             if row is None:
                 owner = self.db.execute("SELECT key FROM task_projects WHERE prefix=?", (prefix,)).fetchone()
@@ -591,6 +592,15 @@ class TaskStore:
                     keys.append(k)
                 break
         return keys
+
+    def links_by_key(self, provider, kind):
+        """Every ticket's links of one kind, in one query: key → [{ref, url, title}]."""
+        out = {}
+        for key, ref, url, title in self.db.execute(
+                "SELECT t.key, l.ref, l.url, l.title FROM ticket_links l JOIN tickets t ON t.id=l.ticket_id "
+                "WHERE l.provider=? AND l.kind=? AND t.archived=0 ORDER BY l.id", (provider, kind)):
+            out.setdefault(key, []).append({"ref": ref, "url": url, "title": title})
+        return out
 
     def keys_linked(self, provider, kind, ref):
         return [r[0] for r in self.db.execute(

@@ -6,11 +6,16 @@ export interface Prefs {
   sshHost: string;
   consoleOpen: boolean;
   consoleAgent: string | null;
+  consoleTab: "claude" | "repo" | "server";
+  consoleProject: string | null;
+  consoleFull: boolean;
+  consoleFollow: boolean;
   lastProject: string | null;
 }
 const KEY = "cc.prefs";
 const DEFAULTS: Prefs = { theme: "dark", density: "comfortable", sshHost: "jay-server", consoleOpen: false,
-  consoleAgent: null, lastProject: null };
+  consoleAgent: null, consoleTab: "claude", consoleProject: null, consoleFull: false, consoleFollow: true,
+  lastProject: null };
 
 function load(): Prefs {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? "{}") }; } catch { return { ...DEFAULTS }; }
@@ -40,7 +45,7 @@ export const usePrefs = <S,>(sel: (p: Prefs) => S) => useSelector(prefs, sel);
 export const LIVE_PORT = "7777";
 export const LIVE_TOKEN_FILE = ".config/command-center/ccd.token";
 export const DEV_TOKEN_FILE = "command-center/dev/ccd.token";
-const DEV_PORTS = new Set(["7788", "5173"]);
+const DEV_PORTS = new Set(["7788", "7789", "5173"]);
 
 /** The port this page is served on, which is the port of the ccd behind it. */
 export function servedPort(): string {
@@ -57,5 +62,7 @@ export const commands = {
   tunnel: (h: string, port: string = servedPort()) => `ssh -N -L ${port}:127.0.0.1:${port} ${h}`,
   attach: (h: string) => `ssh -t ${h} herdr`,
   attachAgent: (h: string, agent: string) => `ssh -t ${h} herdr agent attach ${agent}`,
+  repoShell: (h: string, path: string) => `ssh -t ${h} "cd ${path} && exec \\$SHELL -l"`,
+  serverShell: (h: string) => `ssh -t ${h}`,
   token: (h: string, port: string = servedPort()) => `ssh ${h} cat ${tokenFile(port)} | clip`,
 };

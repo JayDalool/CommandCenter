@@ -8,6 +8,8 @@ import { Overview } from "./screens/Overview";
 import { Projects } from "./screens/Projects";
 import { Agents } from "./screens/Agents";
 import { Tasks } from "./screens/Tasks";
+import { Development } from "./screens/Development";
+import { Console } from "./screens/Console";
 import { PullRequests } from "./screens/PullRequests";
 import { Workspaces } from "./screens/Workspaces";
 import { Server } from "./screens/Server";
@@ -16,9 +18,10 @@ import { Alerts } from "./screens/Alerts";
 import { Settings } from "./screens/Settings";
 import { EmptyState } from "./components/ui";
 
-const SCREENS: Record<string, () => React.JSX.Element> = { overview: Overview, projects: Projects, agents: Agents, tasks: Tasks,
-  prs: PullRequests, workspaces: Workspaces, server: Server, activity: Activity, alerts: Alerts, settings: Settings };
-const FLUSH = new Set(["tasks", "workspaces"]);
+const SCREENS: Record<string, () => React.JSX.Element> = { overview: Overview, projects: Projects, agents: Agents,
+  tasks: Tasks, development: Development, console: Console, prs: PullRequests, workspaces: Workspaces, server: Server,
+  activity: Activity, alerts: Alerts, settings: Settings };
+const FLUSH = new Set(["tasks", "workspaces", "console"]);
 
 export function App() {
   const auth = useSelector(app.store, (d) => d.auth);

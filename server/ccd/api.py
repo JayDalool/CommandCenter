@@ -10,6 +10,7 @@
     POST /api/action/ack             acknowledge an alert
     POST /api/action/dispatch        send a task to an idle coordinator (guarded)
 
+    GET   /api/development           ticket → branch → commits → PR → CI → review → merge → verify
     GET   /api/tasks                 every ticket (compact), projects, vocabulary
     POST  /api/tasks                 create a ticket (project + title; the rest optional)
     GET   /api/tasks/import-preview  what importing INDEX.md / issues / MY_ACTIONS WOULD do; writes nothing
@@ -230,6 +231,9 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     async def get_task(request, _):
         return daemon.task_get(request.path_params["key"])
 
+    async def development(request, _):
+        return daemon.development(project=request.query_params.get("project") or None)
+
     async def patch_task(request, body):
         return daemon.task_update(request.path_params["key"], body, request.state.actor)
 
@@ -305,6 +309,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/action/focus", action(focus_any), methods=["POST"]),
         Route("/api/action/ack", action(ack), methods=["POST"]),
         Route("/api/action/dispatch", action(dispatch), methods=["POST"]),
+        Route("/api/development", guarded(development), methods=["GET"]),
         Route("/api/tasks", guarded(list_tasks), methods=["GET"]),
         Route("/api/tasks", guarded(create_task), methods=["POST"]),
         Route("/api/tasks/import-preview", guarded(import_preview), methods=["GET"]),

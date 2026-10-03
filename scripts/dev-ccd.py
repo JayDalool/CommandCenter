@@ -12,6 +12,7 @@ nothing touches ~/command-center/state, the live ccd.db, tasks.db or ccd.token.
 
     scripts/dev-ccd.py              run (Ctrl+C to stop)
     scripts/dev-ccd.py --reseed     wipe the dev tasks.db first
+    scripts/dev-ccd.py --port 7789  a second preview beside a running one
 
 From Windows: ssh -N -L 7788:127.0.0.1:7788 jay-server, then http://127.0.0.1:7788
 Token: ssh jay-server cat command-center/dev/ccd.token | clip
@@ -27,7 +28,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEV = Path(os.environ.get("CCD_DEV_DIR", Path.home() / "command-center" / "dev"))
-PORT = 7788
+# Parsed before anything imports ccd, because the port goes into the environment.
+_ap = argparse.ArgumentParser(description="a development ccd; never the live one")
+_ap.add_argument("--reseed", action="store_true", help="wipe the dev tasks.db first")
+_ap.add_argument("--port", type=int, default=7788, help="loopback port (default 7788)")
+ARGS = _ap.parse_args()
+PORT = ARGS.port
 
 # Point ccd at the dev directories BEFORE any ccd module is imported.
 os.environ.update(CCD_STATE_DIR=str(DEV / "state"), CCD_DATA_DIR=str(DEV / "data"), CCD_HANDOFF=str(DEV / "handoff"),
@@ -81,8 +87,22 @@ def github(project):
     return copy.deepcopy(GH[project["key"]])
 
 
+# Local branches with commits ahead of the default branch, so the Development
+# view has something real-shaped to show in the preview.
+BRANCHES = {
+    "samvision": {"sv-056-map-clusters": {"commits": 4, "head": "9c41ab2", "at": time.time() - 3600, "countOk": True},
+                  "sv-042-rotate": {"commits": 2, "head": "2f10bd8", "at": time.time() - 18000, "countOk": True},
+                  "sv-031-prune": {"commits": 7, "head": "71aa0c5", "at": time.time() - 216000, "countOk": True},
+                  "follow-up-to-SV-056": {"commits": 11, "head": "badbadb", "at": time.time(), "countOk": True}},
+    "gauzemate": {"gm-020-contrast": {"commits": 3, "head": "4dd9e71", "at": time.time() - 32400, "countOk": True},
+                  "gz-027-scanner-retry": {"commits": 1, "head": "0ab77c3", "at": time.time() - 900, "countOk": True}},
+    "gyst": {"ui-11-galaxy": {"commits": 5, "head": "cc0191f", "at": time.time() - 72000, "countOk": True}},
+    "mfe": {},
+}
+
+
 def git():
-    return ({k: [] for k in WORKTREES}, copy.deepcopy(WORKTREES))
+    return ({k: [] for k in WORKTREES}, copy.deepcopy(WORKTREES), copy.deepcopy(BRANCHES))
 
 
 def seed(ts):
@@ -98,7 +118,7 @@ def seed(ts):
        assignee="role:IMPLEMENTER", labels=["map", "ui"], branch="sv-056-map-clusters",
        description="Cluster comparable sales on the map at low zoom.\n\n- cluster radius 60 px\n- click expands\n- keep the legend")
     mk("samvision", "Rotate postgres credentials on deploy", 42, status="IN_REVIEW", priority="URGENT", type="SECURITY",
-       assignee="role:REVIEWER", needs_deploy=True)
+       assignee="role:REVIEWER", needs_deploy=True, branch="sv-042-rotate")
     mk("samvision", "Prune agent worktrees script", 31, status="VERIFYING", priority="MEDIUM", type="INFRA", needs_jay=True,
        description="The prune script exists but has not run: 14 agent worktrees still exist. Jay runs it after reviewing the list.")
     mk("samvision", "Licensed data in git history", 14, status="BLOCKED", priority="URGENT", type="LEGAL", needs_legal=True,
@@ -111,6 +131,10 @@ def seed(ts):
     mk("gauzemate", "Book Manitoba health-tech lawyer", 4, status="INBOX", type="OWNER_ACTION", assignee="jay", needs_jay=True)
     mk("gauzemate", "Barcode / QR scanner for a medication", 26, status="IN_PROGRESS", priority="HIGH", type="FEATURE",
        assignee="agent:gauzemate")
+    # The first ticket minted after the GM → GZ rename, so the preview shows both
+    # the retired prefix (history) and the live one side by side.
+    mk("gauzemate", "Scanner retry on a blurred barcode", status="IN_PROGRESS", priority="MEDIUM", type="BUG",
+       assignee="agent:gauzemate", branch="gz-027-scanner-retry")
     mk("gyst", "Galaxy keyboard navigation", 11, status="IN_PROGRESS", priority="MEDIUM", type="FEATURE", assignee="role:IMPLEMENTER")
     mk("gyst", "Production foreign-key audit", None, status="PROPOSED", priority="HIGH", type="MAINTENANCE")
     mk("mfe", "Run prisma migrate deploy, then check a receipt total", None, status="INBOX", type="OWNER_ACTION", needs_jay=True,
@@ -179,6 +203,4 @@ async def main(reseed):
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--reseed", action="store_true")
-    asyncio.run(main(ap.parse_args().reseed))
+    asyncio.run(main(ARGS.reseed))

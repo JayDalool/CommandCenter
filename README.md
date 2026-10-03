@@ -23,8 +23,15 @@ own; when ccd is down, it builds locally exactly as before.
   no Cloudflare, no Tailscale Serve, and the herdr socket is never bridged to TCP.
   The Windows client will reach it with `ssh -L 7777:127.0.0.1:7777 jay-server`.
 - **No dangerous endpoints.** There is no API for merge, deploy, production,
-  secrets, Docker, destructive git, or config/rule changes. A test asserts the
+  secrets, Docker, destructive git, or config/rule changes, and no interactive
+  shell: the Console's Claude tab is a read-only mirror of a herdr pane, and the
+  repo/server shells are designed but not built (see
+  [ADR 0004](docs/adr/0004-console-and-real-terminals.md)). A test asserts the
   route table exactly. See [docs/API.md](docs/API.md).
+- **One project registry.** A project's name, ticket prefix and retired prefixes
+  live in `server/ccd/registry.py` and nowhere else. GauzeMate is `GZ`; `GM-*`
+  keys are history and keep working. A project with no registry row and no
+  explicit prefix can hold no tickets.
 - **SQLite holds operational metadata only.** No secrets, transcripts, pane
   output, property or licensed data. See [docs/SECURITY.md](docs/SECURITY.md).
 
@@ -56,6 +63,7 @@ cd server && .venv/bin/pip install -r requirements-dev.txt
 cd web/app && npm ci && npm run build      # → web/app/dist, served by ccd at / (same origin)
 npm test                                   # vitest: model, stream, controller, components
 ../../scripts/dev-ccd.py                   # dev ccd on 127.0.0.1:7788 (fake herdr, seeded tickets)
+../../scripts/dev-ccd.py --port 7789       # a second preview beside a running one
 ```
 
 From Windows: `ssh -N -L 7777:127.0.0.1:7777 jay-server`, open

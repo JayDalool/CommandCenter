@@ -164,6 +164,8 @@ export interface Workspace {
 export interface PublicProject {
   key: string; name: string; repo: string; path: string; branch: string;
   model?: string; effort?: string; index?: string; prefix?: string;
+  /** Prefixes this project has retired. Their keys still resolve; new keys never use them. */
+  legacy_prefixes?: string[];
 }
 
 export interface Coordinator { name: string; paneId: string | null; status: string; canonical: boolean }
@@ -288,7 +290,31 @@ export interface TicketDetail extends Ticket {
   timeline: TimelineEvent[];
 }
 
-export interface TaskProject { key: string; name: string; prefix: string; nextNumber: number }
+export interface TaskProject { key: string; name: string; prefix: string; nextNumber: number;
+  legacyPrefixes?: string[] }
+
+/** One ticket's development trail. Every field is evidence, never a guess. */
+export interface DevBranch {
+  name: string; evidence: string; exists: boolean;
+  commits: number | null; head: string | null; at: number | null; countOk: boolean;
+}
+export interface DevPr {
+  number: number | null; state: "OPEN" | "DRAFT" | "MERGED" | "UNKNOWN"; url: string | null;
+  title: string | null; branch: string | null; ci: "PASS" | "FAIL" | "PENDING" | "NONE";
+  review: string; mergedAt: string | null; asOf: number | null;
+}
+export interface DevRow {
+  key: string; project: string; title: string; status: TicketStatus; priority: Priority;
+  assignee: string | null; flags: Flag[]; updatedAt: number;
+  branch: DevBranch | null; prs: DevPr[]; pr: DevPr | null;
+  commits: number | null;
+  ci: DevPr["ci"] | null; review: string | null;
+  merge: "MERGED" | "WAITING FOR JAY" | "BLOCKED" | null;
+  verify: "PENDING" | "DONE" | null;
+  deploy: null;
+}
+export interface Development { rows: DevRow[]; seq: number; gitAsOf: number | null; stages: string[];
+  notes: string[] }
 
 export interface TaskMeta {
   statuses: TicketStatus[]; offPipeline: TicketStatus[]; priorities: Priority[]; types: string[];

@@ -94,7 +94,7 @@ flowchart LR
 - **Frontend layers** (`web/app/src`):
 
 ```text
-screens/*          Overview, Projects, Agents, Tasks, PRs, Workspaces, Server, Activity, Alerts, Settings
+screens/*          Overview, Projects, Tasks, Development, Console, Agents, Server, Activity, Alerts, Settings
    ↓ useSelector (lib/store.ts: external store, slice subscriptions, no library)
 store/app.ts       one controller: REST bootstrap, live events, targeted refresh, never blanks
    ↓
@@ -209,6 +209,60 @@ skipped. It writes nothing. Existing IDs are kept (SV-056 stays SV-056); new key
 start after the highest ID any source used. Applying it is a separate,
 Jay-approved step that is not implemented yet. GitHub issues are never closed or
 edited by it.
+
+## P4B revision: information architecture
+
+Ten sections, in Jay's order. Pull requests live inside **Development** and the
+herdr layout map inside **Console**; both keep their own routes, so old links
+still work and nothing was deleted.
+
+| section | answers |
+|---|---|
+| Overview | what needs Jay, what is being worked on, is anything broken, what changed |
+| Projects | one project's cockpit |
+| Tasks | the ticket system: table, pipeline, Needs Jay, inbox, detail |
+| Development | ticket → branch → commits → PR → CI → review → merge → verify → deploy |
+| Console | Claude mirror, repo shell, server shell |
+| Agents · Server · Activity · Alerts · Settings | unchanged |
+
+**Overview** is deliberately four panels and nothing else: NEEDS JAY, ACTIVE
+WORK, SYSTEM STATUS, RECENT ACTIVITY. No KPI strip, no pipeline widget, no
+server meters — those belong to the sections that own them. Tickets in flight
+with no agent on them collapse into one line rather than repeating Development.
+
+**Development** (`GET /api/development`) associates a ticket with git work only
+on evidence ccd can point at:
+
+| evidence | counts |
+|---|---|
+| `ticket.branch` (set by hand, or from a linked PR's head branch) | yes |
+| a local branch whose **leading segment** is the key (`SV-056-x`, `claude/SV-056`) | yes |
+| a PR linked to the ticket (the automation links only a key that LEADS the title or branch) | yes |
+| the key mentioned inside a branch name or in passing in a title | **no** |
+| the key in a commit message | supporting only; it never creates an association |
+
+Commit counts come from one `git log --format=%S --branches --not <default>`
+per repo per `git_seconds` — one subprocess for every branch, not one each.
+`deploy` is always `—`: ccd observes no deployments, and says so rather than
+guessing.
+
+## P4B revision: Console
+
+See [ADR 0004](adr/0004-console-and-real-terminals.md) for the full design and
+the herdr capability findings behind it.
+
+| tab | what it is | lifetime |
+|---|---|---|
+| Claude | a READ-ONLY mirror of the project's coordinator pane, refreshed while visible; Jay can answer a blocked agent, as before | herdr's pane. Opening the browser never starts a session; closing it never ends one |
+| Repo shell | a shell rooted in the project's repo — **not built**: shows the exact `ssh` command and why | a named ccd PTY session, once phase 3 ships |
+| Server shell | a shell in `$HOME` — **not built**, same | same |
+
+herdr has no output byte stream (`pane_output_changed` carries a revision, and
+the client then calls `pane.read`) and no cols×rows control, so the Claude tab
+is a mirror by nature. The two shells need a PTY service inside ccd; that is
+the one change that would let anything holding the token run commands, so it
+waits for Jay. The Quick Console at the bottom is now a launcher and a status
+line, not a half-terminal.
 
 ## P4B: workspaces — browser mode vs Tauri mode
 

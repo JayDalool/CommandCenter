@@ -301,3 +301,88 @@ class ServerData(ApiBase):
     def test_state_carries_worktrees(self):
         st = self.get("/api/state").json()
         self.assertIn("/srv/server/worktrees/samvisionai/SV-056", st["worktrees"]["samvision"])
+
+
+class DevelopmentView(ApiBase):
+    """Ticket → branch → commits → PR → CI → review → merge → verify, on evidence only."""
+
+    def poll(self):
+        self.daemon._auto_seen.clear()
+        self.client.portal.call(self.daemon.poll_github_once)
+        self.settle()
+
+    def rows(self, **q):
+        r = self.get("/api/development" + ("?" + "&".join(f"{k}={v}" for k, v in q.items()) if q else ""))
+        self.assertEqual(r.status_code, 200, r.text)
+        return {row["key"]: row for row in r.json()["rows"]}
+
+    def with_branches(self, project, branches):
+        self.daemon.git["branches"] = {project: branches}
+
+    def test_a_ticket_with_no_work_and_no_activity_is_not_listed(self):
+        self.tickets.create("samvision", "just an idea")
+        self.assertNotIn("SV-001", self.rows())
+
+    def test_an_active_ticket_is_listed_even_before_any_work(self):
+        self.tickets.create("samvision", "started", status="IN_PROGRESS")
+        row = self.rows()["SV-001"]
+        self.assertIsNone(row["branch"])
+        self.assertIsNone(row["pr"])
+        self.assertIsNone(row["commits"])
+
+    def test_the_tickets_own_branch_brings_its_commit_count(self):
+        self.tickets.create("samvision", "work", status="IN_PROGRESS", branch="SV-001-valuation")
+        self.with_branches("samvision", {"SV-001-valuation": {"commits": 4, "head": "abc1234", "at": 1,
+                                                              "countOk": True}})
+        row = self.rows()["SV-001"]
+        self.assertEqual((row["branch"]["name"], row["branch"]["evidence"]), ("SV-001-valuation", "ticket branch"))
+        self.assertEqual((row["commits"], row["branch"]["head"]), (4, "abc1234"))
+
+    def test_a_branch_whose_leading_segment_is_the_key_counts_as_evidence(self):
+        self.tickets.create("samvision", "work", status="IN_PROGRESS")
+        self.with_branches("samvision", {"sv-001-fix": {"commits": 2, "head": "d00d", "at": 1, "countOk": True},
+                                         "follow-up-to-SV-001": {"commits": 9, "head": "bad", "at": 2,
+                                                                 "countOk": True}})
+        row = self.rows()["SV-001"]
+        self.assertEqual(row["branch"]["name"], "sv-001-fix")           # leads the segment
+        self.assertEqual(row["branch"]["evidence"], "branch named for the ticket")
+        self.assertEqual(row["commits"], 2)                              # not the 9 of the mention-only branch
+
+    def test_a_key_mentioned_in_a_branch_name_is_not_an_association(self):
+        self.tickets.create("samvision", "work", status="IN_PROGRESS")
+        self.with_branches("samvision", {"revert-SV-001": {"commits": 3, "head": "x", "at": 1, "countOk": True}})
+        self.assertIsNone(self.rows()["SV-001"]["branch"])
+
+    def test_a_linked_pr_brings_ci_review_and_the_merge_column(self):
+        self.tickets.create("samvision", "work", status="IN_REVIEW")
+        self.gh.data["samvision"]["prs"] = [pr(103, "SV-001: work", ci="SUCCESS", review="APPROVED")]
+        self.poll()
+        row = self.rows()["SV-001"]
+        self.assertEqual((row["pr"]["number"], row["pr"]["state"]), (103, "OPEN"))
+        self.assertEqual((row["ci"], row["review"]), ("PASS", "APPROVED"))
+        self.assertEqual(row["merge"], "WAITING FOR JAY")      # automation moved it to READY_TO_MERGE
+        self.assertEqual(row["status"], "READY_TO_MERGE")
+        self.assertIsNone(row["deploy"])                        # ccd observes no deployments
+
+    def test_failing_checks_read_as_fail(self):
+        self.tickets.create("samvision", "work", status="IN_REVIEW")
+        self.gh.data["samvision"]["prs"] = [pr(104, "SV-001: work", ci="FAILURE")]
+        self.poll()
+        row = self.rows()["SV-001"]
+        self.assertEqual((row["ci"], row["review"], row["merge"]), ("FAIL", "PENDING", None))
+
+    def test_a_merged_pr_shows_merged_and_verification_pending(self):
+        self.tickets.create("samvision", "work", status="IN_REVIEW")
+        self.gh.data["samvision"]["prs"] = [pr(105, "SV-001: work")]
+        self.poll()
+        self.gh.data["samvision"]["prs"] = []
+        self.gh.data["samvision"]["merged"] = [{"number": 105, "title": "SV-001: work", "url": "u",
+                                               "mergedAt": "2026-10-03T00:00:00Z"}]
+        self.poll()
+        row = self.rows()["SV-001"]
+        self.assertEqual((row["pr"]["state"], row["merge"], row["verify"]), ("MERGED", "MERGED", "PENDING"))
+
+    def test_the_project_filter_narrows_the_view(self):
+        self.tickets.create("samvision", "sv work", status="IN_PROGRESS")
+        self.tickets.create("gauzemate", "gz work", status="IN_PROGRESS")
+        self.assertEqual(sorted(self.rows(project="gauzemate")), ["GZ-001"])

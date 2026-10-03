@@ -9,6 +9,7 @@ import type { TicketDetail, TicketStatus, Priority, TimelineEvent } from "../api
 import { PRIORITIES, ROLES, FLAGS } from "../api/types";
 import { ALL_STATUSES, STATUS_META, PRIORITY_META, FLAG_LABEL, assigneeLabel } from "../tickets/model";
 import { StateText, Assignee, Project, Ci, DetailRow, EmptyState, Ago, AgentState, Kbd, Command } from "../components/ui";
+import { DevTrail } from "../components/DevTrail";
 import { NewTicket } from "../components/NewTicket";
 import { stamp } from "../lib/time";
 
@@ -56,6 +57,10 @@ function Detail({ t, onClose }: { t: TicketDetail; onClose: () => void }) {
   const coord = st?.coordinators[t.project];
   const dispatchable = !!coord?.paneId && ["samvision", "gauzemate"].includes(t.project);
   const items = useMemo(() => timeline(t), [t]);
+  // The Jira-like DEVELOPMENT section: the same trail the Development screen shows.
+  const devRow = useSelector(app.store, (d) => d.development?.rows.find((r) => r.key === t.key) ?? null);
+  const devLoaded = useSelector(app.store, (d) => d.development !== null);
+  useEffect(() => { if (!devLoaded) void app.refreshDevelopment(); else app.scheduleDevelopment(); }, [t.key, devLoaded]);
 
   return <aside className="td" aria-label={`Ticket ${t.key}`}>
     <header className="td-head">
@@ -114,6 +119,15 @@ function Detail({ t, onClose }: { t: TicketDetail; onClose: () => void }) {
             <button type="button" className="btn is-sm" onClick={() => { setDesc(t.description); setEditDesc(false); }}>Cancel</button>
             <span className="muted mono-xs">Ctrl+Enter save</span></div></div>
           : <p className={`desc${t.description ? "" : " is-empty"}`}>{t.description || "No description."}</p>}
+      </section>
+
+      <section aria-label="Development">
+        <div className="td-sec-title">Development</div>
+        <DevTrail row={devRow} repo={proj?.repo ?? null} />
+        <div className="row" style={{ gap: 8 }}>
+          <a className="btn is-sm" href={href("development")}>All development</a>
+          <a className="btn is-sm" href={href("console", null, { project: t.project, ticket: t.key })}>Console</a>
+        </div>
       </section>
 
       <section aria-label="Pull request and agent">

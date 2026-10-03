@@ -19,7 +19,7 @@ export function NeedsTable({ items }: { items: JayItem[] }) {
       if (j.kind === "answer" && j.agentId) window.dispatchEvent(new CustomEvent("cc:console", { detail: j.agentId }));
       else if (j.kind === "ticket") location.hash = href("tasks", j.ref);
       else if (j.url) window.open(j.url, "_blank", "noopener");
-      else if (j.kind === "merge") location.hash = href("prs");
+      else if (j.kind === "merge") location.hash = href("development");
       else app.toast(`${j.project}: ${j.text}`);
     }}
     empty={<EmptyState title="Nothing waits on you." hint="blocked agents, merges and flagged tickets land here" />} /></div>;

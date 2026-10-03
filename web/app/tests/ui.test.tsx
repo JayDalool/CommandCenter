@@ -7,6 +7,8 @@ import { DataTable } from "../src/components/DataTable";
 import { CommandPalette, buildItems, rank } from "../src/components/CommandPalette";
 import { Tasks } from "../src/screens/Tasks";
 import { Overview } from "../src/screens/Overview";
+import { Console } from "../src/screens/Console";
+import { Development } from "../src/screens/Development";
 import { Workspaces } from "../src/screens/Workspaces";
 import { NewTicket } from "../src/components/NewTicket";
 import { state, tasks } from "./helpers";
@@ -78,8 +80,12 @@ describe("global keyboard", () => {
     await user.keyboard("{Control>}k{/Control}");
     expect(screen.getByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
     await user.keyboard("{Escape}");
-    await user.keyboard("4");
+    await user.keyboard("3");
     expect(location.hash).toBe("#/tasks");
+    await user.keyboard("4");
+    expect(location.hash).toBe("#/development");
+    await user.keyboard("5");
+    expect(location.hash).toBe("#/console");
   });
 });
 
@@ -139,13 +145,94 @@ describe("tasks screen", () => {
 });
 
 describe("overview", () => {
-  it("answers the five questions and lists needs, agents, pipeline, server, activity", () => {
+  it("answers exactly four questions and nothing else", () => {
     render(<Overview />);
-    const glance = screen.getByRole("region", { name: "At a glance" });
-    expect(within(glance).getByText(/waiting for an answer/)).toBeInTheDocument();
-    for (const name of ["Needs Jay", "Active agents", "Task pipeline", "Server health", "Recent activity"]) {
-      expect(screen.getByRole("region", { name })).toBeInTheDocument();
-    }
+    const titles = screen.getAllByRole("region").map((r) => r.getAttribute("aria-labelledby"))
+      .map((id) => (id ? document.getElementById(id)?.textContent : null)).filter(Boolean);
+    expect(titles).toEqual(["Needs Jay", "Active work", "System status", "Recent activity"]);
+  });
+
+  it("active work names the ticket an agent is on and links to its console", () => {
+    render(<Overview />);
+    const active = screen.getByRole("region", { name: "Active work" });
+    expect(within(active).getAllByRole("link", { name: "Console →" }).length).toBeGreaterThan(0);
+  });
+
+  it("system status is words, not meters, and stays quiet when healthy", () => {
+    render(<Overview />);
+    const status = screen.getByRole("region", { name: "System status" });
+    expect(status.textContent).not.toMatch(/%/);          // no meters here; that is the Server page
+  });
+});
+
+describe("console", () => {
+  it("has the three modes and the Claude header Jay asked for", () => {
+    location.hash = "#/console?project=samvision";
+    render(<Console />);
+    const tabs = screen.getByRole("tablist", { name: "Console mode" });
+    expect(within(tabs).getAllByRole("tab").map((t) => t.textContent)).toEqual(["Claude", "Repo shell", "Server shell"]);
+    const head = screen.getByRole("group", { name: "Console context" });
+    expect(within(head).getAllByText(/Project|Claude session|Model|Agent state|Herdr pane|cwd/)
+      .map((e) => e.textContent)).toEqual(["Project", "Claude session", "Model", "Agent state", "Herdr pane", "cwd"]);
+  });
+
+  it("the Claude mirror is labelled read-only and never claims to be a shell", async () => {
+    vi.spyOn(app.api, "tail").mockResolvedValue({ agentId: "wE:p2", name: "samvision", lines: 200,
+      text: "\u2713 tests passed", redactions: 0, truncated: false });
+    location.hash = "#/console?tab=claude&project=samvision";
+    render(<Console />);
+    expect(await screen.findByText("\u2713 tests passed")).toBeInTheDocument();
+    expect(screen.getByText("READ-ONLY MIRROR")).toBeInTheDocument();
+  });
+
+  it("the repo shell says it is not enabled and gives the command that works today", () => {
+    location.hash = "#/console?tab=repo&project=samvision";
+    render(<Console />);
+    expect(screen.getByText("NOT ENABLED")).toBeInTheDocument();
+    expect(screen.getByTitle(/cd \/srv\/server\/apps\/samvisionai/)).toBeInTheDocument();
+    const head = screen.getByRole("group", { name: "Console context" });
+    expect(within(head).getAllByText(/Project|Repository|Branch|Ticket|cwd/).map((e) => e.textContent))
+      .toEqual(["Project", "Repository", "Branch", "Ticket", "cwd"]);
+  });
+
+  it("the server shell is clearly a different scope from the repo shell", () => {
+    location.hash = "#/console?tab=server";
+    render(<Console />);
+    expect(screen.getByText(/whole server, not a repository/)).toBeInTheDocument();
+    expect(screen.getByText("ssh -t jay-server")).toBeInTheDocument();
+  });
+
+  it("carries the ticket Jay was looking at into the repo shell context", () => {
+    location.hash = "#/console?tab=repo&ticket=SV-056";
+    render(<Console />);
+    // once in the tab bar, once in the context header: both point at the ticket
+    expect(screen.getAllByRole("link", { name: "SV-056" })).toHaveLength(2);
+    const head = screen.getByRole("group", { name: "Console context" });
+    expect(within(head).getByRole("link", { name: "SV-056" })).toHaveAttribute("href", "#/tasks/SV-056");
+  });
+});
+
+describe("development", () => {
+  it("shows the trail and does not invent what ccd cannot see", async () => {
+    vi.spyOn(app.api, "development").mockResolvedValue({
+      rows: [{ key: "SV-056", project: "samvision", title: "Valuation comparison", status: "IN_REVIEW",
+        priority: "HIGH", assignee: null, flags: [], updatedAt: 0,
+        branch: { name: "SV-056-valuation-comparison", evidence: "ticket branch", exists: true, commits: 4,
+          head: "abc1234", at: 0, countOk: true },
+        prs: [], pr: { number: 103, state: "OPEN", url: "u", title: "t", branch: "SV-056-valuation-comparison",
+          ci: "PASS", review: "APPROVED", mergedAt: null, asOf: 0 },
+        commits: 4, ci: "PASS", review: "APPROVED", merge: "WAITING FOR JAY", verify: null, deploy: null }],
+      seq: 1, gitAsOf: 0, stages: [], notes: [],
+    } as never);
+    location.hash = "#/development";
+    render(<Development />);
+    const t = await screen.findByRole("table", { name: "Ticket development" });
+    expect(within(t).getByText("SV-056-valuation-comparison")).toBeInTheDocument();
+    expect(within(t).getByText("4")).toBeInTheDocument();
+    expect(within(t).getByText("#103")).toBeInTheDocument();
+    expect(within(t).getByText("PASS")).toBeInTheDocument();
+    expect(within(t).getByText("WAITING FOR JAY")).toBeInTheDocument();
+    expect(within(t).getByTitle("ccd observes no deployments")).toBeInTheDocument();
   });
 });
 
@@ -181,13 +268,25 @@ describe("workspaces", () => {
 });
 
 describe("quick console", () => {
-  it("is labelled read-only and offers the real attach command", async () => {
-    vi.spyOn(app.api, "tail").mockResolvedValue({ agentId: "wE:p2", name: "samvision", lines: 60, text: "✓ tests passed", redactions: 0, truncated: false });
+  it("is a launcher and a status line, not a terminal", async () => {
+    const tail = vi.spyOn(app.api, "tail");
     prefs.patch({ consoleOpen: true, consoleAgent: "wE:p2" });
     render(<AppShell><div /></AppShell>);
-    expect(await screen.findByText("READ-ONLY TAIL")).toBeInTheDocument();
-    expect(await screen.findByText("✓ tests passed")).toBeInTheDocument();
-    expect(screen.getByText("ssh -t jay-server herdr agent attach samvision")).toBeInTheDocument();
+    const bar = screen.getByRole("region", { name: "Quick console" });
+    expect(within(bar).getByRole("button", { name: "Open console" })).toBeInTheDocument();
+    expect(within(bar).getByRole("button", { name: "Focus Claude" })).toBeInTheDocument();
+    expect(within(bar).getByRole("button", { name: "Repo shell" })).toBeInTheDocument();
+    expect(tail).not.toHaveBeenCalled();           // the bar never reads a pane
+    await act(async () => { prefs.patch({ consoleOpen: false }); });
+  });
+
+  it("Open console takes Jay to the full Console with that project", async () => {
+    const user = userEvent.setup();
+    prefs.patch({ consoleOpen: true, consoleAgent: "wE:p2" });
+    render(<AppShell><div /></AppShell>);
+    await user.click(screen.getByRole("button", { name: "Open console" }));
+    expect(location.hash).toMatch(/^#\/console\?/);
+    expect(location.hash).toContain("tab=claude");
     await act(async () => { prefs.patch({ consoleOpen: false }); });
   });
 });

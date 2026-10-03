@@ -11,13 +11,15 @@ import { QuickConsole } from "./QuickConsole";
 import { CommandPalette } from "./CommandPalette";
 import { NewTicket } from "./NewTicket";
 
+// One list, in Jay's order (P4B revision). Pull requests live inside Development
+// and Workspaces inside Console; both keep their routes so old links still work.
 export const NAV: { id: (typeof SCREENS)[number]; label: string; title: string }[] = [
   { id: "overview", label: "Overview", title: "Overview" },
   { id: "projects", label: "Projects", title: "Projects" },
-  { id: "agents", label: "Agents", title: "Agents" },
   { id: "tasks", label: "Tasks", title: "Tasks" },
-  { id: "prs", label: "Pull requests", title: "Pull requests" },
-  { id: "workspaces", label: "Workspaces", title: "Workspaces" },
+  { id: "development", label: "Development", title: "Development" },
+  { id: "console", label: "Console", title: "Console" },
+  { id: "agents", label: "Agents", title: "Agents" },
   { id: "server", label: "Server", title: "Server" },
   { id: "activity", label: "Activity", title: "Activity" },
   { id: "alerts", label: "Alerts", title: "Alerts" },
@@ -61,7 +63,7 @@ function Rail() {
     overview: counts.jay ? <span className="nav-n is-jay" title="waiting on Jay">{counts.jay}</span> : null,
     agents: <span className={`nav-n${counts.blocked ? " is-warn" : ""}`}>{counts.blocked ? `${counts.blocked}!` : counts.agents}</span>,
     tasks: <span className="nav-n">{counts.tasks || ""}</span>,
-    prs: <span className="nav-n">{counts.prs || ""}</span>,
+    development: <span className="nav-n">{counts.prs || ""}</span>,
     alerts: counts.alerts ? <span className="nav-n is-warn">{counts.alerts}</span> : null,
   };
   return <aside className="rail" aria-label="Navigation">
@@ -114,7 +116,7 @@ function TopBar() {
       <a className="chip is-jay" href={href("overview")}><b>{c.jay}</b> needs Jay</a>
       {c.blocked > 0 && <a className="chip is-blocked" href={href("agents")}><b>{c.blocked}</b> blocked</a>}
       <a className="chip" href={href("agents")}><b>{c.working}</b> working</a>
-      <a className="chip" href={href("prs")}><b>{c.prs}</b> open PRs</a>
+      <a className="chip" href={href("development")}><b>{c.prs}</b> open PRs</a>
       <span className="vsep" aria-hidden />
       <button type="button" className="btn is-quiet is-sm" onClick={() => window.dispatchEvent(new Event("cc:new-task"))}
         aria-keyshortcuts="n"><Kbd>N</Kbd> New task</button>
