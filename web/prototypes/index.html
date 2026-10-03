@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design Review — Command Center V2</title>
+<style>
+  :root {
+    --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "Cascadia Mono", "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas, monospace;
+  }
+  :root, :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #111214; --surface: #16181b; --raise: #1d2024; --line: #25282d; --line-strong: #32363c;
+    --text: #e2e4e7; --text-2: #b0b5bc; --muted: #80868e; --faint: #5c6168; --accent: #8fb4e3; --jay: #e0aa55;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      color-scheme: light;
+      --bg: #f3f3f2; --surface: #ffffff; --raise: #eeefee; --line: #e1e2e1; --line-strong: #cdcfcd;
+      --text: #17191b; --text-2: #3f4448; --muted: #646a70; --faint: #93989d; --accent: #2b5ea8; --jay: #9a5c0b;
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f3f3f2; --surface: #ffffff; --raise: #eeefee; --line: #e1e2e1; --line-strong: #cdcfcd;
+    --text: #17191b; --text-2: #3f4448; --muted: #646a70; --faint: #93989d; --accent: #2b5ea8; --jay: #9a5c0b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--font-ui); -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 28px 28px 48px; }
+  header { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--line-strong); }
+  .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.14em; color: var(--muted); }
+  h1 { margin: 4px 0 0; font: 600 22px var(--font-ui); letter-spacing: -0.01em; }
+  .lede { margin: 6px 0 0; color: var(--text-2); max-width: 72ch; }
+  .tools { display: flex; gap: 8px; }
+  button { font: inherit; }
+  .btn { height: 28px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 4px; background: transparent; color: var(--text-2); cursor: pointer; font-size: 12.5px; }
+  .btn:hover { color: var(--text); background: var(--raise); }
+  .note { display: flex; gap: 18px; flex-wrap: wrap; margin: 14px 0 22px; color: var(--muted); font-size: 12.5px; }
+  .note b { color: var(--text-2); font-weight: 600; }
+
+  .dirs { border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+  .dir { display: grid; grid-template-columns: 52px minmax(0, 1.25fr) minmax(0, 1fr) 236px; gap: 22px; padding: 20px 22px; border-bottom: 1px solid var(--line); }
+  .dir:last-child { border-bottom: 0; }
+  .letter { font: 600 28px/1 var(--font-mono); color: var(--muted); padding-top: 2px; }
+  .name { display: flex; align-items: baseline; gap: 10px; }
+  .name h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.005em; }
+  .name .tag { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: var(--muted); }
+  .pitch { margin: 6px 0 10px; color: var(--text-2); }
+  .open { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 4px;
+          color: var(--accent); font-weight: 600; font-size: 13px; text-decoration: none; }
+  .open:hover { background: var(--raise); }
+  .quick { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 10px; font-size: 12.5px; }
+  .quick a { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--line-strong); }
+  .quick a:hover { color: var(--text); }
+  dl.spec { display: grid; grid-template-columns: 92px 1fr; gap: 4px 12px; margin: 0; font-size: 12.5px; align-content: start; }
+  dl.spec dt { color: var(--muted); }
+  dl.spec dd { margin: 0; color: var(--text-2); }
+  .mono { font-family: var(--font-mono); font-size: 12px; }
+  .swatches { display: grid; gap: 8px; align-content: start; }
+  .sw-label { font-size: 11px; color: var(--muted); letter-spacing: 0.04em; }
+  .sw { display: grid; grid-template-columns: repeat(7, 1fr); height: 22px; border: 1px solid var(--line-strong); border-radius: 3px; overflow: hidden; }
+  .sw i { display: block; }
+  .rowmock { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 8px; height: 26px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 3px; font-size: 12px; }
+  .rowmock i { width: 8px; height: 8px; border-radius: 1px; }
+
+  section.how { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 26px; margin-top: 28px; }
+  section.how h3 { margin: 0 0 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  section.how ol, section.how ul { margin: 0; padding-left: 18px; color: var(--text-2); font-size: 13px; }
+  section.how li { margin: 3px 0; }
+  kbd { font: 600 11px var(--font-mono); padding: 0 4px; border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 3px; color: var(--text-2); }
+  footer { margin-top: 30px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .decide { color: var(--text); font-weight: 600; }
+  @media (max-width: 1100px) {
+    .dir { grid-template-columns: 40px 1fr; } .dir > dl, .dir > .swatches { grid-column: 2; }
+    section.how { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="eyebrow">COMMAND CENTER V2 · P4A</div>
+      <h1>Design review — pick one direction</h1>
+      <p class="lede">Three complete directions over the same data, the same nine screens and the same keyboard model. Open each, live in it for a few minutes, then choose A, B or C. Nothing is built in React until you do.</p>
+    </div>
+    <div class="tools"><button class="btn" id="theme">Toggle light / dark</button></div>
+  </header>
+  <div class="note">
+    <span><b>Fixture data only.</b> Nothing here connects to ccd, herdr or GitHub.</span>
+    <span><b>No actions are real.</b> Answer, focus and acknowledge show a “prototype” notice.</span>
+    <span><b>Best at</b> 1920 × 1080, 1440 × 900 or 1280 × 800. Usable at 1024 wide.</span>
+  </div>
+
+  <div class="dirs">
+    <article class="dir">
+      <div class="letter">A</div>
+      <div>
+        <div class="name"><h2>Operator</h2><span class="tag">DENSE OPERATIONS CONSOLE</span></div>
+        <p class="pitch">An infrastructure console. One grid, hairline rules, 28 px rows, uppercase micro-headings and mono values. No panels and no shadows — colour is reserved for state. The most information per square inch.</p>
+        <a class="open" href="operator/index.html">Open Operator →</a>
+        <div class="quick"><a href="operator/index.html#agents">Agents</a><a href="operator/index.html#server">Server</a><a href="operator/index.html#prs">Pull requests</a><a href="operator/index.html?state=offline">Offline state</a><a href="operator/index.html?state=loading">Loading state</a><a href="operator/index.html?theme=light">Light</a></div>
+      </div>
+      <dl class="spec">
+        <dt>Density</dt><dd>Highest · 28 px rows · 13 px text</dd>
+        <dt>Typeface</dt><dd>Segoe UI Variable · Cascadia Mono for values</dd>
+        <dt>Navigation</dt><dd>Numbered rail, counts on the right</dd>
+        <dt>Colour</dt><dd>Cool neutrals, steel-blue accent, amber for Jay</dd>
+        <dt>Corners</dt><dd>3 px</dd>
+      </dl>
+      <div class="swatches">
+        <span class="sw-label">DARK · LIGHT</span>
+        <div class="sw"><i style="background:#0f1114"></i><i style="background:#13161a"></i><i style="background:#2d333b"></i><i style="background:#d9dee4"></i><i style="background:#7aa5e0"></i><i style="background:#57b98a"></i><i style="background:#e8a23d"></i></div>
+        <div class="sw"><i style="background:#f3f4f6"></i><i style="background:#ffffff"></i><i style="background:#cbd0d7"></i><i style="background:#14171b"></i><i style="background:#2b5ea8"></i><i style="background:#1d8452"></i><i style="background:#b06600"></i></div>
+        <div class="rowmock" style="background:#13161a;color:#d9dee4;border-color:#2d333b;font-family:var(--font-ui)"><i style="background:#e8a23d"></i><span>samvision · implementer</span><span style="color:#e8a23d;font-weight:600;font-size:10.5px;letter-spacing:.05em">BLOCKED</span></div>
+      </div>
+    </article>
+
+    <article class="dir">
+      <div class="letter">B</div>
+      <div>
+        <div class="name"><h2>Studio</h2><span class="tag">REFINED DESKTOP SOFTWARE</span></div>
+        <p class="pitch">Modern professional desktop software. Warm graphite and paper, a sage-teal accent, sentence-case typography, quiet panels with 1 px borders and small radii, 32 px rows. A page title tells you where you are; the rail also summarises each project.</p>
+        <a class="open" href="studio/index.html">Open Studio →</a>
+        <div class="quick"><a href="studio/index.html#agents">Agents</a><a href="studio/index.html#server">Server</a><a href="studio/index.html#prs">Pull requests</a><a href="studio/index.html?state=offline">Offline state</a><a href="studio/index.html?state=loading">Loading state</a><a href="studio/index.html?theme=light">Light</a></div>
+      </div>
+      <dl class="spec">
+        <dt>Density</dt><dd>High · 32 px rows · 13.5 px text</dd>
+        <dt>Typeface</dt><dd>Segoe UI Variable Text + Display · Cascadia Mono for ids</dd>
+        <dt>Navigation</dt><dd>Rail with pages and per-project status</dd>
+        <dt>Colour</dt><dd>Warm neutrals, sage teal, amber for Jay</dd>
+        <dt>Corners</dt><dd>5 px controls, 8 px panels</dd>
+      </dl>
+      <div class="swatches">
+        <span class="sw-label">DARK · LIGHT</span>
+        <div class="sw"><i style="background:#121314"></i><i style="background:#18191b"></i><i style="background:#34363b"></i><i style="background:#ebe8e2"></i><i style="background:#6dbaa8"></i><i style="background:#78c393"></i><i style="background:#e4a752"></i></div>
+        <div class="sw"><i style="background:#f2f0eb"></i><i style="background:#fcfbf9"></i><i style="background:#d2ccc1"></i><i style="background:#1d1c1a"></i><i style="background:#1f7a6b"></i><i style="background:#2a7c4f"></i><i style="background:#a56200"></i></div>
+        <div class="rowmock" style="background:#18191b;color:#ebe8e2;border-color:#34363b;border-radius:5px"><i style="background:#e4a752"></i><span>SamVision · implementer</span><span style="color:#e4a752;font-weight:600;font-size:11.5px">Blocked</span></div>
+      </div>
+    </article>
+
+    <article class="dir">
+      <div class="letter">C</div>
+      <div>
+        <div class="name"><h2>Terminal+</h2><span class="tag">GRAPHICAL WORKSTATION</span></div>
+        <p class="pitch">A modern graphical terminal. Monospace throughout so every column lines up, 26 px rows, a tmux-style status line, a command line, box-titled panes and bracketed four-letter state codes. The fastest to scan and the most keyboard-first; the mouse still works everywhere.</p>
+        <a class="open" href="terminal-plus/index.html">Open Terminal+ →</a>
+        <div class="quick"><a href="terminal-plus/index.html#agents">Agents</a><a href="terminal-plus/index.html#server">Server</a><a href="terminal-plus/index.html#prs">Pull requests</a><a href="terminal-plus/index.html?state=offline">Offline state</a><a href="terminal-plus/index.html?state=loading">Loading state</a><a href="terminal-plus/index.html?theme=light">Light</a></div>
+      </div>
+      <dl class="spec">
+        <dt>Density</dt><dd>Extreme · 26 px rows · 12.5 px mono</dd>
+        <dt>Typeface</dt><dd>Cascadia Mono everywhere</dd>
+        <dt>Navigation</dt><dd>[1]–[9] rail, status line, command line</dd>
+        <dt>Colour</dt><dd>Blue-black / warm paper, muted phosphor green</dd>
+        <dt>Corners</dt><dd>0–2 px</dd>
+      </dl>
+      <div class="swatches">
+        <span class="sw-label">DARK · LIGHT</span>
+        <div class="sw"><i style="background:#0d1116"></i><i style="background:#11161c"></i><i style="background:#2a3643"></i><i style="background:#cbd5dd"></i><i style="background:#92cf8a"></i><i style="background:#8db8e6"></i><i style="background:#e6b45c"></i></div>
+        <div class="sw"><i style="background:#f1eee5"></i><i style="background:#f7f5ee"></i><i style="background:#c7bea9"></i><i style="background:#1e2226"></i><i style="background:#2e7a31"></i><i style="background:#285f9c"></i><i style="background:#9a6200"></i></div>
+        <div class="rowmock" style="background:#11161c;color:#cbd5dd;border-color:#2a3643;border-radius:0;font-family:var(--font-mono)"><i style="background:#e6b45c"></i><span>samvision implementer</span><span style="color:#e6b45c;font-weight:700"><span style="color:#4a5a67">[</span>BLKD<span style="color:#4a5a67">]</span></span></div>
+      </div>
+    </article>
+  </div>
+
+  <section class="how">
+    <div>
+      <h3>Look for</h3>
+      <ol>
+        <li>Overview: can you answer the five questions in five seconds? Server healthy · what's working · what's blocked · what needs you · what changed.</li>
+        <li>Agents: the blocked implementer is expanded inline with its question and an answer box.</li>
+        <li>Pull requests: are the rows that need you obvious without shouting?</li>
+        <li>Server: is it compact, and is the worktree warning clear but calm?</li>
+        <li>Offline: does the stale state look trustworthy rather than broken?</li>
+      </ol>
+    </div>
+    <div>
+      <h3>Keyboard (all three)</h3>
+      <ul>
+        <li><kbd>1</kbd>–<kbd>9</kbd> screens · <kbd>Ctrl</kbd> <kbd>K</kbd> palette · <kbd>?</kbd> all keys</li>
+        <li><kbd>j</kbd> <kbd>k</kbd> rows · <kbd>Enter</kbd> expand · <kbd>Esc</kbd> collapse</li>
+        <li><kbd>F</kbd> focus pane · <kbd>A</kbd> answer a blocked agent</li>
+        <li><kbd>T</kbd> tasks table ↔ pipeline · <kbd>[</kbd> <kbd>]</kbd> filters</li>
+        <li><kbd>D</kbd> dark ↔ light · <kbd>Shift</kbd> <kbd>O</kbd> simulate offline</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Also notice</h3>
+      <ul>
+        <li>Two events arrive on their own in the first minute: watch Activity.</li>
+        <li>Every state is a shape and a word, never colour alone.</li>
+        <li>There is no merge, deploy or delete anywhere — those don't exist in the API.</li>
+        <li>Context / tokens show “—” on purpose (deferred).</li>
+        <li>Settings has the prototype controls: offline, loading, insert an event.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    <span class="decide">Then reply with one letter: A, B or C — plus anything to steal from the others.</span>
+    <span>web/prototypes · plans/P4A-DESIGN-REVIEW.md</span>
+  </footer>
+</div>
+<script>
+  (function () {
+    var root = document.documentElement;
+    try { var t = localStorage.getItem("cc-proto-theme"); if (t) root.dataset.theme = t; } catch (e) {}
+    document.getElementById("theme").addEventListener("click", function () {
+      var cur = root.dataset.theme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      root.dataset.theme = cur === "dark" ? "light" : "dark";
+      try { localStorage.setItem("cc-proto-theme", root.dataset.theme); } catch (e) {}
+    });
+  })();
+</script>
+</body>
+</html>
