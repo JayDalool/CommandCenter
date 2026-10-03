@@ -49,6 +49,9 @@ export class Live {
   get lastSeq() { return this.seq; }
 
   start(since: number) {
+    // Never two sockets: a second start (overlapping boots, StrictMode) replaces the first.
+    this.closeSocket();
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     this.stopped = false;
     this.seq = since;
     this.attempt = 0;
@@ -64,7 +67,6 @@ export class Live {
   }
 
   restart(since: number) {
-    this.closeSocket();
     this.start(since);
   }
 

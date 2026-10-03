@@ -5,13 +5,17 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), selec
 
 export function useFocusTrap(onClose: () => void) {
   const ref = useRef<HTMLDivElement>(null);
+  // Callers pass inline closures; keep the latest in a ref so the trap is set up
+  // once per open and never steals focus back on a parent re-render.
+  const close = useRef(onClose);
+  close.current = onClose;
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
     const el = ref.current;
     const first = el?.querySelector<HTMLElement>("[data-autofocus]") ?? el?.querySelector<HTMLElement>(FOCUSABLE);
     first?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); onClose(); return; }
+      if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); close.current(); return; }
       if (e.key !== "Tab" || !el) return;
       const items = Array.from(el.querySelectorAll<HTMLElement>(FOCUSABLE));
       if (!items.length) return;
@@ -21,7 +25,7 @@ export function useFocusTrap(onClose: () => void) {
     };
     el?.addEventListener("keydown", onKey);
     return () => { el?.removeEventListener("keydown", onKey); prev?.focus?.(); };
-  }, [onClose]);
+  }, []);
   return ref;
 }
 

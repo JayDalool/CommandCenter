@@ -17,7 +17,7 @@ export function Activity() {
   const [f, setF] = useState<F>("ALL");
   const [busy, setBusy] = useState(false);
   const project = route.params.get("project");
-  const all = useMemo(() => mergeActivity(live, older), [live, older]);
+  const all = useMemo(() => mergeActivity(live, older, Infinity), [live, older]);
   const rows = all.filter((e) => meaningful(e) && (!project || e.project === project) && (!MAP[f] || MAP[f]!.includes(categorize(e.kind))));
   const more = async () => {
     setBusy(true);

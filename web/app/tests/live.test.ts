@@ -72,3 +72,19 @@ describe("live event stream", () => {
     live.stop();
   });
 });
+
+describe("live stream review fixes", () => {
+  beforeEach(() => { FakeSocket.reset(); });
+  it("a second start replaces the first socket instead of leaking it", () => {
+    const seen: number[] = [];
+    const live = new Live({ onEvent: (e) => seen.push(e.seq), onLost() {}, onStatus() {} },
+      { token: () => "x".repeat(40), WebSocketImpl: FakeSocket as unknown as typeof WebSocket, url: "ws://x/api/events" });
+    live.start(1);
+    const first = FakeSocket.last();
+    live.start(1);
+    expect(first.closed).toBe(true);
+    first.msg({ type: "event", event: ev(2, "agent.started") });  // the orphan must be deaf
+    expect(seen).toEqual([]);
+    live.stop();
+  });
+});

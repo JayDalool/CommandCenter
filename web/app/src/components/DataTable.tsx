@@ -54,6 +54,8 @@ export function DataTable<T>({ rows, columns, rowKey, label, selected, onSelect,
 
   const onKey = (e: KeyboardEvent<HTMLTableRowElement>, row: T, k: string) => {
     if (onKeyExtra?.(e, row)) return;
+    // Only plain keys on the row itself: Ctrl+K is the palette, Enter on a link is the link's.
+    if (e.ctrlKey || e.metaKey || e.altKey || e.target !== e.currentTarget) return;
     const i = keys.indexOf(k);
     const move = (j: number) => {
       const nk = keys[Math.max(0, Math.min(keys.length - 1, j))];

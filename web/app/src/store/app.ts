@@ -38,6 +38,7 @@ export class App {
   live: Live;
   private stateTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStateFetch = 0;
+  private stateReq = 0;
   private ticketTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private idle: ReturnType<typeof setInterval> | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -90,6 +91,7 @@ export class App {
     clearToken();
     this.live.stop();
     if (this.idle) clearInterval(this.idle);
+    this.idle = null;
     this.store.set({ ...initial, auth: "needed" });
   }
 
@@ -109,12 +111,14 @@ export class App {
   }
 
   async loadAll() {
+    const req = ++this.stateReq;
     const [st, tl, act] = await Promise.all([
       this.api.state(),
       this.api.tasks().catch((e) => (e instanceof ApiError && e.status === 404 ? null : Promise.reject(e))),
       this.api.activity({ limit: 150 }).catch(() => null),
     ]);
     this.lastStateFetch = Date.now();
+    if (req !== this.stateReq) return;  // a newer fetch started meanwhile; its answer wins
     this.store.patch({
       state: st, stateAt: Date.now(), error: null,
       ...(tl ? { tickets: tl.tickets, taskProjects: tl.projects, meta: tl.meta, ticketsLoaded: true } : {}),
@@ -133,9 +137,11 @@ export class App {
   }
 
   async refreshState() {
+    const req = ++this.stateReq;
     try {
       const st = await this.api.state();
       this.lastStateFetch = Date.now();
+      if (req !== this.stateReq) return;
       this.store.patch({ state: st, stateAt: Date.now(), error: null });
     } catch (e) {
       // Keep the last good state. The banner says how old it is.
@@ -224,12 +230,12 @@ export class App {
   }
 }
 
-export function mergeActivity(cur: CcdEvent[], incoming: CcdEvent[]): CcdEvent[] {
+export function mergeActivity(cur: CcdEvent[], incoming: CcdEvent[], cap = ACTIVITY_CAP): CcdEvent[] {
   if (!incoming.length) return cur;
   const seen = new Set(cur.map((e) => e.seq));
   const add = incoming.filter((e) => !seen.has(e.seq));
   if (!add.length) return cur;
-  return [...add, ...cur].sort((a, b) => b.seq - a.seq).slice(0, ACTIVITY_CAP);
+  return [...add, ...cur].sort((a, b) => b.seq - a.seq).slice(0, cap);
 }
 
 export const app = new App();

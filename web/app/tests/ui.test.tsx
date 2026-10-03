@@ -191,3 +191,27 @@ describe("quick console", () => {
     await act(async () => { prefs.patch({ consoleOpen: false }); });
   });
 });
+
+describe("review fixes", () => {
+  it("a dialog keeps focus in its field when the parent re-renders", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<NewTicket onClose={() => {}} defaults={{ project: "commandcenter" }} />);
+    const pri = screen.getByRole("combobox", { name: "Priority" });
+    pri.focus();
+    rerender(<NewTicket onClose={() => {}} defaults={{ project: "commandcenter" }} />);
+    await act(async () => { load(); });
+    expect(document.activeElement).toBe(pri);
+    void user;
+  });
+  it("Ctrl+K and Enter on a link inside a row do not drive the table", () => {
+    const opened: string[] = [];
+    let selected = "A";
+    render(<DataTable label="t" rows={[{ k: "A" }, { k: "B" }]} rowKey={(r) => r.k} selected={selected}
+      columns={[{ id: "k", header: "K", cell: (r) => <a href="#x">{r.k}</a> }]} onSelect={(k) => { selected = k; }} onActivate={(k) => opened.push(k)} />);
+    const row = screen.getAllByRole("row")[1];
+    fireEvent.keyDown(row, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(within(row).getByRole("link"), { key: "Enter" });
+    expect(selected).toBe("A");
+    expect(opened).toEqual([]);
+  });
+});
