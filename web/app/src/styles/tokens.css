@@ -1,0 +1,121 @@
+/* Command Center — WORKSTATION tokens.
+ *
+ * Studio's structure (page titles, quiet 1 px panels, small radii), Operator's
+ * density (28–30 px rows, hairline rules), Terminal+'s personality: a warm
+ * graphite with a faint blue cast, phosphor-sage accent, CRT-amber for anything
+ * that waits on Jay, mono for every machine value. No gradients, no glass.
+ */
+
+:root {
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas, "Liberation Mono", monospace;
+
+  --fs: 13px; --fs-sm: 12px; --fs-xs: 11px; --fs-mono: 12px; --fs-mono-xs: 11px; --fs-title: 17px;
+  --lh: 1.4;
+  --row: 30px; --row-tight: 26px; --th-h: 26px; --pad-x: 10px;
+  --radius: 4px; --radius-sm: 2px; --radius-lg: 6px;
+  --gap: 16px; --gap-sm: 8px;
+  --rail-w: 212px; --top-h: 48px; --status-h: 24px; --console-h: 220px;
+  --track-caps: 0.08em;
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --t-fast: 110ms;
+}
+:root[data-density="compact"] { --row: 28px; --row-tight: 24px; --th-h: 24px; --pad-x: 8px; --gap: 12px; }
+
+/* ---------- dark (default) ---------- */
+:root, :root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111417;          /* graphite, a breath of blue */
+  --bg-2: #0d1013;        /* status line, console well */
+  --surface: #161a1e;
+  --surface-2: #1b2024;
+  --raise: #232a30;
+  --hover: #1d2227;
+  --sel: #1d2a26;
+  --line: #242b31;
+  --line-strong: #313a42;
+  --text: #dfe4e2;
+  --text-2: #aab4b3;
+  --muted: #77848a;
+  --faint: #4f5b62;
+  --accent: #86c7a3;      /* phosphor sage */
+  --accent-ink: #0b1510;
+  --accent-soft: rgba(134, 199, 163, .13);
+  --focus: #9ad3b4;
+  --jay: #e5b05a;         /* CRT amber: everything that waits on Jay */
+  --jay-soft: rgba(229, 176, 90, .12);
+  --jay-line: rgba(229, 176, 90, .45);
+  --ok: #86c98f; --warn: #e2a854; --bad: #ec806f; --info: #8db6df;
+  --st-working: #86c98f; --st-blocked: #e5a54d; --st-failed: #ec806f; --st-review: #8db6df;
+  --st-verifying: #6cc4bc; --st-waiting: #a7aea9; --st-idle: #6c7a81; --st-done: #7fa98a; --st-unknown: #77848a;
+  --pj-samvision: #8db6df; --pj-gauzemate: #d6a06c; --pj-gyst: #94c88b; --pj-mfe: #c5a3cb; --pj-commandcenter: #86c7a3;
+  --pj-home: #77848a;
+  --human: #e5b05a; --agent: #8db6df;
+  --scrim: rgba(5, 7, 9, .62);
+  --shadow-pop: 0 18px 44px rgba(0, 0, 0, .5), 0 0 0 1px var(--line-strong);
+  --term-bg: #0b0e10; --term-text: #c9d4cf; --term-dim: #66757b;
+  --kbd-bg: #1b2024;
+  --input-bg: #0f1215;
+  --grid-dot: rgba(134, 199, 163, .05);
+}
+
+/* ---------- light ---------- */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f0eee8;          /* warm paper */
+  --bg-2: #e6e3da;
+  --surface: #faf9f5;
+  --surface-2: #f4f2ec;
+  --raise: #e8e5dc;
+  --hover: #efece5;
+  --sel: #e3ece5;
+  --line: #e0dcd2;
+  --line-strong: #cdc6b8;
+  --text: #1c2022;
+  --text-2: #42494c;
+  --muted: #69716f;
+  --faint: #9a9d97;
+  --accent: #23775a;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(35, 119, 90, .10);
+  --focus: #23775a;
+  --jay: #93590a;
+  --jay-soft: rgba(147, 89, 10, .09);
+  --jay-line: rgba(147, 89, 10, .4);
+  --ok: #2a7a43; --warn: #93590a; --bad: #b2392b; --info: #2f5f98;
+  --st-working: #2a7a43; --st-blocked: #9c5e00; --st-failed: #b2392b; --st-review: #2f5f98;
+  --st-verifying: #15736c; --st-waiting: #5f6763; --st-idle: #8b918d; --st-done: #4c7a57; --st-unknown: #7c827f;
+  --pj-samvision: #2f5f98; --pj-gauzemate: #9c6224; --pj-gyst: #3b8241; --pj-mfe: #85598f; --pj-commandcenter: #23775a;
+  --pj-home: #7c827f;
+  --human: #93590a; --agent: #2f5f98;
+  --scrim: rgba(40, 34, 22, .22);
+  --shadow-pop: 0 14px 36px rgba(50, 40, 20, .18), 0 0 0 1px var(--line-strong);
+  --term-bg: #1a1f22; --term-text: #d2dad6; --term-dim: #7a878c;
+  --kbd-bg: #faf9f5;
+  --input-bg: #ffffff;
+  --grid-dot: rgba(35, 119, 90, .06);
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    color-scheme: light;
+    --bg: #f0eee8; --bg-2: #e6e3da; --surface: #faf9f5; --surface-2: #f4f2ec; --raise: #e8e5dc; --hover: #efece5;
+    --sel: #e3ece5; --line: #e0dcd2; --line-strong: #cdc6b8; --text: #1c2022; --text-2: #42494c; --muted: #69716f;
+    --faint: #9a9d97; --accent: #23775a; --accent-ink: #ffffff; --accent-soft: rgba(35, 119, 90, .10); --focus: #23775a;
+    --jay: #93590a; --jay-soft: rgba(147, 89, 10, .09); --jay-line: rgba(147, 89, 10, .4);
+    --ok: #2a7a43; --warn: #93590a; --bad: #b2392b; --info: #2f5f98;
+    --st-working: #2a7a43; --st-blocked: #9c5e00; --st-failed: #b2392b; --st-review: #2f5f98; --st-verifying: #15736c;
+    --st-waiting: #5f6763; --st-idle: #8b918d; --st-done: #4c7a57; --st-unknown: #7c827f;
+    --pj-samvision: #2f5f98; --pj-gauzemate: #9c6224; --pj-gyst: #3b8241; --pj-mfe: #85598f; --pj-commandcenter: #23775a;
+    --human: #93590a; --agent: #2f5f98; --scrim: rgba(40, 34, 22, .22);
+    --shadow-pop: 0 14px 36px rgba(50, 40, 20, .18), 0 0 0 1px var(--line-strong);
+    --term-bg: #1a1f22; --term-text: #d2dad6; --term-dim: #7a878c; --kbd-bg: #faf9f5; --input-bg: #ffffff;
+    --grid-dot: rgba(35, 119, 90, .06);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --t-fast: 0ms; }
+  *, *::before, *::after { animation-duration: 0ms !important; transition-duration: 0ms !important; }
+}

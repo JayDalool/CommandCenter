@@ -1,0 +1,39 @@
+// Modal dialog with a focus trap, Esc to close and focus restored on close.
+import { useEffect, useRef, type ReactNode } from "react";
+
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+export function useFocusTrap(onClose: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const prev = document.activeElement as HTMLElement | null;
+    const el = ref.current;
+    const first = el?.querySelector<HTMLElement>("[data-autofocus]") ?? el?.querySelector<HTMLElement>(FOCUSABLE);
+    first?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); onClose(); return; }
+      if (e.key !== "Tab" || !el) return;
+      const items = Array.from(el.querySelectorAll<HTMLElement>(FOCUSABLE));
+      if (!items.length) return;
+      const a = items[0], z = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === a) { e.preventDefault(); z.focus(); }
+      else if (!e.shiftKey && document.activeElement === z) { e.preventDefault(); a.focus(); }
+    };
+    el?.addEventListener("keydown", onKey);
+    return () => { el?.removeEventListener("keydown", onKey); prev?.focus?.(); };
+  }, [onClose]);
+  return ref;
+}
+
+export function Dialog({ title, onClose, children, footer, className = "dialog" }: { title: ReactNode; onClose: () => void;
+  children: ReactNode; footer?: ReactNode; className?: string }) {
+  const ref = useFocusTrap(onClose);
+  return <div className="scrim" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className={className} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined} ref={ref}>
+      <div className="dialog-head"><h2 className="panel-title">{title}</h2>
+        <button type="button" className="btn is-quiet is-sm" style={{ marginLeft: "auto" }} onClick={onClose} aria-label="Close">Esc</button></div>
+      <div className="dialog-body">{children}</div>
+      {footer && <div className="dialog-foot">{footer}</div>}
+    </div>
+  </div>;
+}

@@ -1,0 +1,3040 @@
+{
+ "state": {
+  "at": 1791016122.023579,
+  "projects": [
+   {
+    "key": "samvision",
+    "name": "SamVision",
+    "repo": "JayDalool/SamVisionAI",
+    "path": "/srv/server/apps/samvisionai",
+    "source": "issues",
+    "tasks": [],
+    "prs": [
+     {
+      "number": 94,
+      "ref": "SV-056",
+      "title": "Comparable sales map clusters",
+      "ci": "\u2026",
+      "ready": false,
+      "draft": false,
+      "url": "https://github.com/JayDalool/x/pull/94",
+      "sha": "0094a3f",
+      "age_h": 1.0002822502777777,
+      "review": null,
+      "mergeable": "MERGEABLE",
+      "branch": "sv-056-map-clusters",
+      "updatedAt": "2026-10-03T07:28:41Z"
+     },
+     {
+      "number": 92,
+      "ref": "SV-042",
+      "title": "Rotate postgres credentials on deploy",
+      "ci": "\u2713",
+      "ready": true,
+      "draft": false,
+      "url": "https://github.com/JayDalool/x/pull/92",
+      "sha": "0092a3f",
+      "age_h": 5.000282274444444,
+      "review": "APPROVED",
+      "mergeable": "MERGEABLE",
+      "branch": "sv-042-rotate",
+      "updatedAt": "2026-10-03T03:28:41Z"
+     },
+     {
+      "number": 88,
+      "ref": "SV-031",
+      "title": "Prune agent worktrees script",
+      "ci": "\u2717",
+      "ready": false,
+      "draft": false,
+      "url": "https://github.com/JayDalool/x/pull/88",
+      "sha": "0088a3f",
+      "age_h": 60.000282285833336,
+      "review": null,
+      "mergeable": "MERGEABLE",
+      "branch": "sv-031-prune",
+      "updatedAt": "2026-09-30T20:28:41Z"
+     }
+    ],
+    "recent": [
+     {
+      "ref": "#90",
+      "title": "Net sheet rounding",
+      "url": "https://github.com/x/pull/90"
+     }
+    ],
+    "team": [
+     {
+      "name": "samvision",
+      "model": "",
+      "status": "idle",
+      "pane_id": "wE:p2",
+      "stuck_min": null
+     },
+     {
+      "name": "sv-056-impl",
+      "model": "",
+      "status": "working",
+      "pane_id": "wE:pA",
+      "stuck_min": null
+     },
+     {
+      "name": "checker",
+      "model": "haiku",
+      "status": "via coordinator",
+      "pane_id": null,
+      "stuck_min": null
+     },
+     {
+      "name": "impeccable-asset-producer",
+      "model": "inherit",
+      "status": "via coordinator",
+      "pane_id": null,
+      "stuck_min": null
+     },
+     {
+      "name": "impeccable-documenter",
+      "model": "inherit",
+      "status": "via coordinator",
+      "pane_id": null,
+      "stuck_min": null
+     },
+     {
+      "name": "impeccable-finish-reviewer",
+      "model": "inherit",
+      "status": "via coordinator",
+      "pane_id": null,
+      "stuck_min": null
+     },
+     {
+      "name": "impeccable-manual-edit-applier",
+      "model": "inherit",
+      "status": "via coordinator",
+      "pane_id": null,
+      "stuck_min": null
+     },
+     {
+      "name": "implementer",
+      "model": "sonnet",
+      "status": "via coordinator",
+      "pane_id": null,
+      "stuck_min": null
+     },
+     {
+      "name": "implementer",
+      "model": "sonnet",
+      "status": "via coordinator",
+      "pane_id": null,
+      "stuck_min": null
+     },
+     {
+      "name": "low-risk-implementer",
+      "model": "haiku",
+      "status": "via coordinator",
+      "pane_id": null,
+      "stuck_min": null
+     },
+     {
+      "name": "planner",
+      "model": "opus",
+      "status": "via coordinator",
+      "pane_id": null,
+      "stuck_min": null
+     },
+     {
+      "name": "reviewer",
+      "model": "opus",
+      "status": "via coordinator",
+      "pane_id": null,
+      "stuck_min": null
+     },
+     {
+      "name": "verifier",
+      "model": "sonnet",
+      "status": "via coordinator",
+      "pane_id": null,
+      "stuck_min": null
+     },
+     {
+      "name": "scout",
+      "model": "haiku",
+      "status": "via coordinator",
+      "pane_id": null,
+      "stuck_min": null
+     }
+    ],
+    "panes": [
+     {
+      "pane_id": "wE:p2",
+      "status": "idle",
+      "live": true,
+      "agent": "claude",
+      "agent_name": "samvision",
+      "label": "samvision",
+      "cwd": "/srv/server/apps/samvisionai",
+      "workspace_id": "wE",
+      "workspace": "Command Center",
+      "tab_id": "wE:t1",
+      "session_id": "ae9345c7-8e20-474f-9d2a-de7c3828a8dc",
+      "project": "samvision",
+      "id": "wE:p2",
+      "role": "coordinator",
+      "blockedSinceMs": null,
+      "blockedForMin": null,
+      "context": null
+     },
+     {
+      "pane_id": "wE:pA",
+      "status": "working",
+      "live": true,
+      "agent": "claude",
+      "agent_name": "sv-056-impl",
+      "label": "",
+      "cwd": "/srv/server/worktrees/samvisionai/SV-056",
+      "workspace_id": "wE",
+      "workspace": "Command Center",
+      "tab_id": "wE:t1",
+      "session_id": "s-wE:pA",
+      "project": "samvision",
+      "id": "wE:pA",
+      "role": "lane",
+      "blockedSinceMs": null,
+      "blockedForMin": null,
+      "context": null
+     }
+    ],
+    "all_panes": [
+     {
+      "pane_id": "w8:p1",
+      "status": "unknown",
+      "live": false,
+      "agent": "",
+      "agent_name": "",
+      "label": "",
+      "cwd": "/srv/server/apps/samvisionai",
+      "workspace_id": "w8",
+      "workspace": "samvision",
+      "tab_id": "w8:t1",
+      "session_id": "",
+      "project": "samvision"
+     },
+     {
+      "pane_id": "wE:p2",
+      "status": "idle",
+      "live": true,
+      "agent": "claude",
+      "agent_name": "samvision",
+      "label": "samvision",
+      "cwd": "/srv/server/apps/samvisionai",
+      "workspace_id": "wE",
+      "workspace": "Command Center",
+      "tab_id": "wE:t1",
+      "session_id": "ae9345c7-8e20-474f-9d2a-de7c3828a8dc",
+      "project": "samvision"
+     },
+     {
+      "pane_id": "wE:pA",
+      "status": "working",
+      "live": true,
+      "agent": "claude",
+      "agent_name": "sv-056-impl",
+      "label": "",
+      "cwd": "/srv/server/worktrees/samvisionai/SV-056",
+      "workspace_id": "wE",
+      "workspace": "Command Center",
+      "tab_id": "wE:t1",
+      "session_id": "s-wE:pA",
+      "project": "samvision"
+     },
+     {
+      "pane_id": "wE:pD",
+      "status": "unknown",
+      "live": false,
+      "agent": "",
+      "agent_name": "",
+      "label": "samvision",
+      "cwd": "/srv/server/apps/samvisionai",
+      "workspace_id": "wE",
+      "workspace": "Command Center",
+      "tab_id": "wE:t2",
+      "session_id": "",
+      "project": "samvision"
+     },
+     {
+      "pane_id": "wE:pF",
+      "status": "unknown",
+      "live": false,
+      "agent": "",
+      "agent_name": "",
+      "label": "samvision",
+      "cwd": "/srv/server/apps/samvisionai",
+      "workspace_id": "wE",
+      "workspace": "Command Center",
+      "tab_id": "wE:t2",
+      "session_id": "",
+      "project": "samvision"
+     }
+    ],
+    "tests": {
+     "ui": {
+      "exists": true,
+      "open": 0,
+      "done": 0,
+      "items": []
+     },
+     "actions": {
+      "exists": true,
+      "open": 2,
+      "done": 0,
+      "items": [
+       "item 1",
+       "item 2"
+      ]
+     }
+    },
+    "links": [],
+    "commands": [],
+    "main_ci": "\u2713",
+    "counts": {
+     "needs_jay": 0,
+     "legal": 0,
+     "ui_review": 0,
+     "deploy": 0,
+     "working": 0,
+     "review": 0,
+     "ready": 0,
+     "blocked": 0,
+     "backlog": 0,
+     "prs": 3,
+     "live": 2,
+     "running": 1
+    },
+    "errors": [],
+    "handoff": [],
+    "coordinator": {
+     "pane_id": "wE:p2",
+     "status": "idle",
+     "live": true,
+     "agent": "claude",
+     "agent_name": "samvision",
+     "label": "samvision",
+     "cwd": "/srv/server/apps/samvisionai",
+     "workspace_id": "wE",
+     "workspace": "Command Center",
+     "tab_id": "wE:t1",
+     "session_id": "ae9345c7-8e20-474f-9d2a-de7c3828a8dc",
+     "project": "samvision",
+     "id": "wE:p2",
+     "role": "coordinator",
+     "blockedSinceMs": null,
+     "blockedForMin": null,
+     "context": null
+    },
+    "summary": "2 PRs in review \u00b7 1 ready to merge",
+    "github": {
+     "asOf": 1791016121.8109372,
+     "error": null
+    }
+   },
+   {
+    "key": "gyst",
+    "name": "GYST",
+    "repo": "JayDalool/gyst-lifeops",
+    "path": "/srv/server/repos/gyst-lifeops",
+    "source": "issues",
+    "tasks": [],
+    "prs": [
+     {
+      "number": 31,
+      "ref": "",
+      "title": "UI-11: Galaxy keyboard navigation",
+      "ci": "\u2713",
+      "ready": false,
+      "draft": true,
+      "url": "https://github.com/JayDalool/x/pull/31",
+      "sha": "0031a3f",
+      "age_h": 20.000283611666664,
+      "review": null,
+      "mergeable": "MERGEABLE",
+      "branch": "ui-11-galaxy",
+      "updatedAt": "2026-10-02T12:28:41Z"
+     }
+    ],
+    "recent": [],
+    "team": [],
+    "panes": [],
+    "all_panes": [
+     {
+      "pane_id": "w9:p1",
+      "status": "unknown",
+      "live": false,
+      "agent": "",
+      "agent_name": "",
+      "label": "",
+      "cwd": "/srv/server/repos/gyst-lifeops",
+      "workspace_id": "w9",
+      "workspace": "gyst",
+      "tab_id": "w9:t1",
+      "session_id": "",
+      "project": "gyst"
+     },
+     {
+      "pane_id": "wE:p3",
+      "status": "unknown",
+      "live": false,
+      "agent": "",
+      "agent_name": "",
+      "label": "gyst",
+      "cwd": "/srv/server/repos/gyst-lifeops",
+      "workspace_id": "wE",
+      "workspace": "Command Center",
+      "tab_id": "wE:t1",
+      "session_id": "",
+      "project": "gyst"
+     },
+     {
+      "pane_id": "wE:pC",
+      "status": "unknown",
+      "live": false,
+      "agent": "",
+      "agent_name": "",
+      "label": "",
+      "cwd": "/srv/server/repos/gyst-lifeops",
+      "workspace_id": "wE",
+      "workspace": "Command Center",
+      "tab_id": "wE:t1",
+      "session_id": "",
+      "project": "gyst"
+     }
+    ],
+    "tests": {
+     "ui": {
+      "exists": true,
+      "open": 10,
+      "done": 0,
+      "items": [
+       "item 1",
+       "item 2",
+       "item 3",
+       "item 4",
+       "item 5",
+       "item 6",
+       "item 7",
+       "item 8"
+      ]
+     },
+     "actions": {
+      "exists": true,
+      "open": 4,
+      "done": 0,
+      "items": [
+       "item 1",
+       "item 2",
+       "item 3",
+       "item 4"
+      ]
+     }
+    },
+    "links": [],
+    "commands": [],
+    "main_ci": "\u2717",
+    "counts": {
+     "needs_jay": 0,
+     "legal": 0,
+     "ui_review": 0,
+     "deploy": 0,
+     "working": 0,
+     "review": 0,
+     "ready": 0,
+     "blocked": 0,
+     "backlog": 0,
+     "prs": 1,
+     "live": 0,
+     "running": 0
+    },
+    "errors": [],
+    "handoff": [],
+    "coordinator": null,
+    "summary": "main CI red \u00b7 1 PR in review",
+    "github": {
+     "asOf": 1791016121.8117495,
+     "error": null
+    }
+   },
+   {
+    "key": "mfe",
+    "name": "MFE",
+    "repo": "JayDalool/MyFamilyExpenses",
+    "path": "/srv/server/repos/MyFamilyExpenses",
+    "source": "issues",
+    "tasks": [],
+    "prs": [],
+    "recent": [],
+    "team": [],
+    "panes": [],
+    "all_panes": [
+     {
+      "pane_id": "wA:p1",
+      "status": "unknown",
+      "live": false,
+      "agent": "",
+      "agent_name": "",
+      "label": "",
+      "cwd": "/srv/server/repos/MyFamilyExpenses",
+      "workspace_id": "wA",
+      "workspace": "mfe",
+      "tab_id": "wA:t1",
+      "session_id": "",
+      "project": "mfe"
+     },
+     {
+      "pane_id": "wE:p5",
+      "status": "unknown",
+      "live": false,
+      "agent": "",
+      "agent_name": "",
+      "label": "mfe",
+      "cwd": "/srv/server/repos/MyFamilyExpenses",
+      "workspace_id": "wE",
+      "workspace": "Command Center",
+      "tab_id": "wE:t1",
+      "session_id": "",
+      "project": "mfe"
+     }
+    ],
+    "tests": {
+     "ui": {
+      "exists": true,
+      "open": 11,
+      "done": 0,
+      "items": [
+       "item 1",
+       "item 2",
+       "item 3",
+       "item 4",
+       "item 5",
+       "item 6",
+       "item 7",
+       "item 8"
+      ]
+     },
+     "actions": {
+      "exists": true,
+      "open": 5,
+      "done": 0,
+      "items": [
+       "item 1",
+       "item 2",
+       "item 3",
+       "item 4",
+       "item 5"
+      ]
+     }
+    },
+    "links": [],
+    "commands": [],
+    "main_ci": "\u2013",
+    "counts": {
+     "needs_jay": 0,
+     "legal": 0,
+     "ui_review": 0,
+     "deploy": 0,
+     "working": 0,
+     "review": 0,
+     "ready": 0,
+     "blocked": 0,
+     "backlog": 0,
+     "prs": 0,
+     "live": 0,
+     "running": 0
+    },
+    "errors": [],
+    "handoff": [],
+    "coordinator": null,
+    "summary": "quiet",
+    "github": {
+     "asOf": 1791016121.8121786,
+     "error": null
+    }
+   },
+   {
+    "key": "gauzemate",
+    "name": "GauzeMate",
+    "repo": "JayDalool/GauzeMate",
+    "path": "/srv/server/repos/GauzeMate",
+    "source": "issues",
+    "tasks": [],
+    "prs": [
+     {
+      "number": 26,
+      "ref": "GM-020",
+      "title": "Contrast and touch target audit",
+      "ci": "\u2713",
+      "ready": false,
+      "draft": false,
+      "url": "https://github.com/JayDalool/x/pull/26",
+      "sha": "0026a3f",
+      "age_h": 9.000284007222222,
+      "review": "CHANGES_REQUESTED",
+      "mergeable": "MERGEABLE",
+      "branch": "gm-020-contrast",
+      "updatedAt": "2026-10-02T23:28:41Z"
+     },
+     {
+      "number": 25,
+      "ref": "GM-018",
+      "title": "TASKS.md: mark PR 8, 9 and 10 merged",
+      "ci": "\u2713",
+      "ready": true,
+      "draft": false,
+      "url": "https://github.com/JayDalool/x/pull/25",
+      "sha": "0025a3f",
+      "age_h": 4.000284019722223,
+      "review": "APPROVED",
+      "mergeable": "MERGEABLE",
+      "branch": "gm-018-tasks",
+      "updatedAt": "2026-10-03T04:28:41Z"
+     }
+    ],
+    "recent": [],
+    "team": [
+     {
+      "name": "gauzemate",
+      "model": "",
+      "status": "blocked",
+      "pane_id": "wE:p4",
+      "stuck_min": 0.0032995422681172688
+     }
+    ],
+    "panes": [
+     {
+      "pane_id": "wE:p4",
+      "status": "blocked",
+      "live": true,
+      "agent": "claude",
+      "agent_name": "gauzemate",
+      "label": "gauzemate",
+      "cwd": "/srv/server/repos/GauzeMate",
+      "workspace_id": "wE",
+      "workspace": "Command Center",
+      "tab_id": "wE:t1",
+      "session_id": "76230988-02a9-4cea-bf4c-1367f75972bb",
+      "project": "gauzemate",
+      "id": "wE:p4",
+      "role": "coordinator",
+      "blockedSinceMs": 1791016121814,
+      "blockedForMin": 0.0,
+      "context": null
+     }
+    ],
+    "all_panes": [
+     {
+      "pane_id": "w6:p1",
+      "status": "unknown",
+      "live": false,
+      "agent": "",
+      "agent_name": "",
+      "label": "",
+      "cwd": "/srv/server/repos/GauzeMate",
+      "workspace_id": "w6",
+      "workspace": "gauzemate",
+      "tab_id": "w6:t1",
+      "session_id": "",
+      "project": "gauzemate"
+     },
+     {
+      "pane_id": "wB:p1",
+      "status": "unknown",
+      "live": false,
+      "agent": "",
+      "agent_name": "",
+      "label": "",
+      "cwd": "/srv/server/repos/GauzeMate",
+      "workspace_id": "wB",
+      "workspace": "gauzemate",
+      "tab_id": "wB:t1",
+      "session_id": "",
+      "project": "gauzemate"
+     },
+     {
+      "pane_id": "wE:p4",
+      "status": "blocked",
+      "live": true,
+      "agent": "claude",
+      "agent_name": "gauzemate",
+      "label": "gauzemate",
+      "cwd": "/srv/server/repos/GauzeMate",
+      "workspace_id": "wE",
+      "workspace": "Command Center",
+      "tab_id": "wE:t1",
+      "session_id": "76230988-02a9-4cea-bf4c-1367f75972bb",
+      "project": "gauzemate"
+     }
+    ],
+    "tests": {
+     "ui": {
+      "exists": true,
+      "open": 18,
+      "done": 0,
+      "items": [
+       "item 1",
+       "item 2",
+       "item 3",
+       "item 4",
+       "item 5",
+       "item 6",
+       "item 7",
+       "item 8"
+      ]
+     },
+     "actions": {
+      "exists": true,
+      "open": 14,
+      "done": 0,
+      "items": [
+       "item 1",
+       "item 2",
+       "item 3",
+       "item 4",
+       "item 5",
+       "item 6",
+       "item 7",
+       "item 8"
+      ]
+     }
+    },
+    "links": [],
+    "commands": [],
+    "main_ci": "\u2713",
+    "counts": {
+     "needs_jay": 0,
+     "legal": 0,
+     "ui_review": 0,
+     "deploy": 0,
+     "working": 0,
+     "review": 0,
+     "ready": 0,
+     "blocked": 0,
+     "backlog": 0,
+     "prs": 2,
+     "live": 1,
+     "running": 0
+    },
+    "errors": [],
+    "handoff": [],
+    "coordinator": {
+     "pane_id": "wE:p4",
+     "status": "blocked",
+     "live": true,
+     "agent": "claude",
+     "agent_name": "gauzemate",
+     "label": "gauzemate",
+     "cwd": "/srv/server/repos/GauzeMate",
+     "workspace_id": "wE",
+     "workspace": "Command Center",
+     "tab_id": "wE:t1",
+     "session_id": "76230988-02a9-4cea-bf4c-1367f75972bb",
+     "project": "gauzemate",
+     "id": "wE:p4",
+     "role": "coordinator",
+     "blockedSinceMs": 1791016121814,
+     "blockedForMin": 0.0,
+     "context": null
+    },
+    "summary": "1 PR in review \u00b7 1 ready to merge",
+    "github": {
+     "asOf": 1791016121.8126357,
+     "error": null
+    }
+   }
+  ],
+  "needs": [
+   {
+    "project": "samvision",
+    "ref": "#92",
+    "text": "merge \u00b7 Rotate postgres credentials on deploy",
+    "kind": "merge",
+    "url": "https://github.com/JayDalool/x/pull/92",
+    "sha": "0092a3f",
+    "number": 92
+   },
+   {
+    "project": "samvision",
+    "ref": "actions",
+    "text": "2 in My actions",
+    "kind": "actions",
+    "url": null
+   },
+   {
+    "project": "gyst",
+    "ref": "actions",
+    "text": "2 in My actions",
+    "kind": "actions",
+    "url": null
+   },
+   {
+    "project": "gyst",
+    "ref": "CI",
+    "text": "main is red",
+    "kind": "ci",
+    "url": null
+   },
+   {
+    "project": "mfe",
+    "ref": "actions",
+    "text": "2 in My actions",
+    "kind": "actions",
+    "url": null
+   },
+   {
+    "project": "gauzemate",
+    "ref": "#25",
+    "text": "merge \u00b7 TASKS.md: mark PR 8, 9 and 10 merged",
+    "kind": "merge",
+    "url": "https://github.com/JayDalool/x/pull/25",
+    "sha": "0025a3f",
+    "number": 25
+   },
+   {
+    "project": "gauzemate",
+    "ref": "actions",
+    "text": "2 in My actions",
+    "kind": "actions",
+    "url": null
+   },
+   {
+    "project": "samvision",
+    "ref": "SV-014",
+    "text": "Licensed data in git history",
+    "kind": "ticket",
+    "url": null,
+    "flags": [
+     "needs_legal"
+    ],
+    "status": "BLOCKED",
+    "since": 1791016121.6592517
+   },
+   {
+    "project": "gauzemate",
+    "ref": "GM-004",
+    "text": "Book Manitoba health-tech lawyer",
+    "kind": "ticket",
+    "url": null,
+    "flags": [
+     "needs_jay"
+    ],
+    "status": "INBOX",
+    "since": 1791016121.671512
+   },
+   {
+    "project": "mfe",
+    "ref": "MFE-001",
+    "text": "Run prisma migrate deploy, then check a receipt total",
+    "kind": "ticket",
+    "url": null,
+    "flags": [
+     "needs_jay"
+    ],
+    "status": "INBOX",
+    "since": 1791016121.680416
+   },
+   {
+    "project": "commandcenter",
+    "ref": "CC-003",
+    "text": "Approve the task migration preview",
+    "kind": "ticket",
+    "url": null,
+    "flags": [
+     "needs_jay"
+    ],
+    "status": "INBOX",
+    "since": 1791016121.7004848
+   },
+   {
+    "project": "samvision",
+    "ref": "SV-042",
+    "text": "Rotate postgres credentials on deploy",
+    "kind": "ticket",
+    "url": null,
+    "flags": [
+     "needs_deploy"
+    ],
+    "status": "READY_TO_MERGE",
+    "since": 1791016122.050357
+   },
+   {
+    "project": "samvision",
+    "ref": "SV-031",
+    "text": "Prune agent worktrees script",
+    "kind": "ticket",
+    "url": null,
+    "flags": [
+     "needs_jay"
+    ],
+    "status": "VERIFYING",
+    "since": 1791016122.056251
+   },
+   {
+    "project": "gauzemate",
+    "ref": "GM-020",
+    "text": "Contrast and touch target audit",
+    "kind": "ticket",
+    "url": null,
+    "flags": [
+     "needs_ui_review"
+    ],
+    "status": "IN_REVIEW",
+    "since": 1791016122.0631135
+   }
+  ],
+  "blocked": [
+   {
+    "project": "gauzemate",
+    "pane_id": "wE:p4",
+    "name": "gauzemate",
+    "question": "Should I keep initials out of the export file? (y/n)",
+    "stuck_min": 0.0032995422681172688
+   }
+  ],
+  "stale": [
+   {
+    "project": "samvision",
+    "text": "PR #88 idle 2d \u00b7 Prune agent worktrees script"
+   }
+  ],
+  "server": {
+   "disk": 46,
+   "containers_up": 17,
+   "containers_total": 19,
+   "down": [
+    "samvision-wrreb-staging",
+    "xenodochial_brown"
+   ],
+   "running": [
+    "cloudflared",
+    "fms-api",
+    "fms-postgres",
+    "fms-web",
+    "gyst-caddy",
+    "gyst-lifeops",
+    "minecraft",
+    "myfamilyexpenses-app-1",
+    "myfamilyexpenses-db-1",
+    "myfamilyexpenses-ocr-1",
+    "n8n",
+    "n8n-postgres",
+    "nginx-proxy-manager",
+    "portainer",
+    "samvision-postgres",
+    "samvision-web",
+    "uptime-kuma"
+   ],
+   "containers": [
+    {
+     "name": "cloudflared",
+     "state": "running"
+    },
+    {
+     "name": "fms-api",
+     "state": "running"
+    },
+    {
+     "name": "fms-postgres",
+     "state": "running"
+    },
+    {
+     "name": "fms-web",
+     "state": "running"
+    },
+    {
+     "name": "gyst-caddy",
+     "state": "running"
+    },
+    {
+     "name": "gyst-lifeops",
+     "state": "running"
+    },
+    {
+     "name": "minecraft",
+     "state": "running"
+    },
+    {
+     "name": "myfamilyexpenses-app-1",
+     "state": "running"
+    },
+    {
+     "name": "myfamilyexpenses-db-1",
+     "state": "running"
+    },
+    {
+     "name": "myfamilyexpenses-ocr-1",
+     "state": "running"
+    },
+    {
+     "name": "n8n",
+     "state": "running"
+    },
+    {
+     "name": "n8n-postgres",
+     "state": "running"
+    },
+    {
+     "name": "nginx-proxy-manager",
+     "state": "running"
+    },
+    {
+     "name": "portainer",
+     "state": "running"
+    },
+    {
+     "name": "samvision-postgres",
+     "state": "running"
+    },
+    {
+     "name": "samvision-web",
+     "state": "running"
+    },
+    {
+     "name": "samvision-wrreb-staging",
+     "state": "exited"
+    },
+    {
+     "name": "uptime-kuma",
+     "state": "running"
+    },
+    {
+     "name": "xenodochial_brown",
+     "state": "exited"
+    }
+   ],
+   "memTotal": 16013811712,
+   "memAvailable": 6011043840,
+   "memUsed": 10002767872,
+   "swapTotal": 12884893696,
+   "swapUsed": 3908214784,
+   "swapPct": 30.3,
+   "load": [
+    0.47,
+    0.29,
+    0.28
+   ],
+   "cpuPct": null,
+   "cpus": 6,
+   "uptimeS": 1539763.26,
+   "procs": [
+    {
+     "pid": 1374347,
+     "name": "java",
+     "rssMB": 3463
+    },
+    {
+     "pid": 3159511,
+     "name": "MainThread",
+     "rssMB": 533
+    },
+    {
+     "pid": 3155867,
+     "name": "MainThread",
+     "rssMB": 501
+    },
+    {
+     "pid": 3487906,
+     "name": "claude",
+     "rssMB": 452
+    },
+    {
+     "pid": 3477373,
+     "name": "uvicorn",
+     "rssMB": 290
+    },
+    {
+     "pid": 3507048,
+     "name": "node",
+     "rssMB": 278
+    },
+    {
+     "pid": 3840380,
+     "name": "node-MainThread",
+     "rssMB": 254
+    },
+    {
+     "pid": 3155857,
+     "name": "MainThread",
+     "rssMB": 188
+    }
+   ],
+   "claudeCount": 1,
+   "oomKills24h": 0
+  },
+  "totals": {
+   "needs": 15,
+   "prs": 6,
+   "ui": 39,
+   "deploy": 0,
+   "legal": 0,
+   "running": 1,
+   "tickets": {
+    "BLOCKED": 1,
+    "DONE": 1,
+    "INBOX": 3,
+    "IN_PROGRESS": 3,
+    "IN_REVIEW": 2,
+    "PROPOSED": 3,
+    "READY_TO_IMPLEMENT": 1,
+    "READY_TO_MERGE": 2,
+    "RESEARCHING": 1,
+    "VERIFYING": 1
+   }
+  },
+  "herdr_error": null,
+  "brief": "",
+  "panes": [
+   {
+    "pane_id": "w6:p1",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "",
+    "cwd": "/srv/server/repos/GauzeMate",
+    "workspace_id": "w6",
+    "workspace": "gauzemate",
+    "tab_id": "w6:t1",
+    "session_id": "",
+    "project": "gauzemate"
+   },
+   {
+    "pane_id": "w7:p1",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "",
+    "cwd": "/home/jay/command-center",
+    "workspace_id": "w7",
+    "workspace": "command-center",
+    "tab_id": "w7:t1",
+    "session_id": "",
+    "project": "home"
+   },
+   {
+    "pane_id": "w8:p1",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "",
+    "cwd": "/srv/server/apps/samvisionai",
+    "workspace_id": "w8",
+    "workspace": "samvision",
+    "tab_id": "w8:t1",
+    "session_id": "",
+    "project": "samvision"
+   },
+   {
+    "pane_id": "w9:p1",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "",
+    "cwd": "/srv/server/repos/gyst-lifeops",
+    "workspace_id": "w9",
+    "workspace": "gyst",
+    "tab_id": "w9:t1",
+    "session_id": "",
+    "project": "gyst"
+   },
+   {
+    "pane_id": "wA:p1",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "",
+    "cwd": "/srv/server/repos/MyFamilyExpenses",
+    "workspace_id": "wA",
+    "workspace": "mfe",
+    "tab_id": "wA:t1",
+    "session_id": "",
+    "project": "mfe"
+   },
+   {
+    "pane_id": "wB:p1",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "",
+    "cwd": "/srv/server/repos/GauzeMate",
+    "workspace_id": "wB",
+    "workspace": "gauzemate",
+    "tab_id": "wB:t1",
+    "session_id": "",
+    "project": "gauzemate"
+   },
+   {
+    "pane_id": "wC:p1",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "",
+    "cwd": "/home/jay",
+    "workspace_id": "wC",
+    "workspace": "home",
+    "tab_id": "wC:t1",
+    "session_id": "",
+    "project": "home"
+   },
+   {
+    "pane_id": "wD:p1",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "",
+    "cwd": "/home/jay",
+    "workspace_id": "wD",
+    "workspace": "home",
+    "tab_id": "wD:t1",
+    "session_id": "",
+    "project": "home"
+   },
+   {
+    "pane_id": "wE:p1",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "",
+    "cwd": "/",
+    "workspace_id": "wE",
+    "workspace": "Command Center",
+    "tab_id": "wE:t1",
+    "session_id": "",
+    "project": null
+   },
+   {
+    "pane_id": "wE:p2",
+    "status": "idle",
+    "live": true,
+    "agent": "claude",
+    "agent_name": "samvision",
+    "label": "samvision",
+    "cwd": "/srv/server/apps/samvisionai",
+    "workspace_id": "wE",
+    "workspace": "Command Center",
+    "tab_id": "wE:t1",
+    "session_id": "ae9345c7-8e20-474f-9d2a-de7c3828a8dc",
+    "project": "samvision"
+   },
+   {
+    "pane_id": "wE:p3",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "gyst",
+    "cwd": "/srv/server/repos/gyst-lifeops",
+    "workspace_id": "wE",
+    "workspace": "Command Center",
+    "tab_id": "wE:t1",
+    "session_id": "",
+    "project": "gyst"
+   },
+   {
+    "pane_id": "wE:p4",
+    "status": "blocked",
+    "live": true,
+    "agent": "claude",
+    "agent_name": "gauzemate",
+    "label": "gauzemate",
+    "cwd": "/srv/server/repos/GauzeMate",
+    "workspace_id": "wE",
+    "workspace": "Command Center",
+    "tab_id": "wE:t1",
+    "session_id": "76230988-02a9-4cea-bf4c-1367f75972bb",
+    "project": "gauzemate"
+   },
+   {
+    "pane_id": "wE:p5",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "mfe",
+    "cwd": "/srv/server/repos/MyFamilyExpenses",
+    "workspace_id": "wE",
+    "workspace": "Command Center",
+    "tab_id": "wE:t1",
+    "session_id": "",
+    "project": "mfe"
+   },
+   {
+    "pane_id": "wE:pA",
+    "status": "working",
+    "live": true,
+    "agent": "claude",
+    "agent_name": "sv-056-impl",
+    "label": "",
+    "cwd": "/srv/server/worktrees/samvisionai/SV-056",
+    "workspace_id": "wE",
+    "workspace": "Command Center",
+    "tab_id": "wE:t1",
+    "session_id": "s-wE:pA",
+    "project": "samvision"
+   },
+   {
+    "pane_id": "wE:pB",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "",
+    "cwd": "/home/jay/command-center",
+    "workspace_id": "wE",
+    "workspace": "Command Center",
+    "tab_id": "wE:t2",
+    "session_id": "",
+    "project": "home"
+   },
+   {
+    "pane_id": "wE:pC",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "",
+    "cwd": "/srv/server/repos/gyst-lifeops",
+    "workspace_id": "wE",
+    "workspace": "Command Center",
+    "tab_id": "wE:t1",
+    "session_id": "",
+    "project": "gyst"
+   },
+   {
+    "pane_id": "wE:pD",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "samvision",
+    "cwd": "/srv/server/apps/samvisionai",
+    "workspace_id": "wE",
+    "workspace": "Command Center",
+    "tab_id": "wE:t2",
+    "session_id": "",
+    "project": "samvision"
+   },
+   {
+    "pane_id": "wE:pF",
+    "status": "unknown",
+    "live": false,
+    "agent": "",
+    "agent_name": "",
+    "label": "samvision",
+    "cwd": "/srv/server/apps/samvisionai",
+    "workspace_id": "wE",
+    "workspace": "Command Center",
+    "tab_id": "wE:t2",
+    "session_id": "",
+    "project": "samvision"
+   }
+  ],
+  "agents": [
+   {
+    "pane_id": "wE:p2",
+    "status": "idle",
+    "live": true,
+    "agent": "claude",
+    "agent_name": "samvision",
+    "label": "samvision",
+    "cwd": "/srv/server/apps/samvisionai",
+    "workspace_id": "wE",
+    "workspace": "Command Center",
+    "tab_id": "wE:t1",
+    "session_id": "ae9345c7-8e20-474f-9d2a-de7c3828a8dc",
+    "project": "samvision",
+    "id": "wE:p2",
+    "role": "coordinator",
+    "blockedSinceMs": null,
+    "blockedForMin": null,
+    "context": null
+   },
+   {
+    "pane_id": "wE:p4",
+    "status": "blocked",
+    "live": true,
+    "agent": "claude",
+    "agent_name": "gauzemate",
+    "label": "gauzemate",
+    "cwd": "/srv/server/repos/GauzeMate",
+    "workspace_id": "wE",
+    "workspace": "Command Center",
+    "tab_id": "wE:t1",
+    "session_id": "76230988-02a9-4cea-bf4c-1367f75972bb",
+    "project": "gauzemate",
+    "id": "wE:p4",
+    "role": "coordinator",
+    "blockedSinceMs": 1791016121814,
+    "blockedForMin": 0.0,
+    "context": null
+   },
+   {
+    "pane_id": "wE:pA",
+    "status": "working",
+    "live": true,
+    "agent": "claude",
+    "agent_name": "sv-056-impl",
+    "label": "",
+    "cwd": "/srv/server/worktrees/samvisionai/SV-056",
+    "workspace_id": "wE",
+    "workspace": "Command Center",
+    "tab_id": "wE:t1",
+    "session_id": "s-wE:pA",
+    "project": "samvision",
+    "id": "wE:pA",
+    "role": "lane",
+    "blockedSinceMs": null,
+    "blockedForMin": null,
+    "context": null
+   }
+  ],
+  "home_panes": [],
+  "coordinators": {
+   "samvision": {
+    "name": "samvision",
+    "paneId": "wE:p2",
+    "status": "idle",
+    "canonical": true
+   },
+   "gyst": {
+    "name": "gyst",
+    "paneId": null,
+    "status": "offline",
+    "canonical": false
+   },
+   "mfe": {
+    "name": "mfe",
+    "paneId": null,
+    "status": "offline",
+    "canonical": false
+   },
+   "gauzemate": {
+    "name": "gauzemate",
+    "paneId": "wE:p4",
+    "status": "blocked",
+    "canonical": true
+   }
+  },
+  "workspaces": [
+   {
+    "id": "w6",
+    "label": "gauzemate",
+    "number": 1,
+    "focused": false,
+    "activeTabId": "w6:t1",
+    "project": "gauzemate",
+    "tabs": [
+     {
+      "id": "w6:t1",
+      "label": "1",
+      "number": 1,
+      "focused": false,
+      "zoomed": false,
+      "focusedPaneId": "w6:p1",
+      "area": {
+       "w": 120,
+       "h": 40
+      },
+      "panes": [
+       {
+        "id": "w6:p1",
+        "rect": {
+         "x": 0,
+         "y": 0,
+         "w": 120,
+         "h": 40
+        },
+        "focused": true,
+        "live": false,
+        "agentName": null,
+        "agent": null,
+        "label": null,
+        "status": null,
+        "role": null,
+        "project": "gauzemate",
+        "cwd": "/srv/server/repos/GauzeMate"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "w7",
+    "label": "command-center",
+    "number": 2,
+    "focused": false,
+    "activeTabId": "w7:t1",
+    "project": "home",
+    "tabs": [
+     {
+      "id": "w7:t1",
+      "label": "1",
+      "number": 1,
+      "focused": false,
+      "zoomed": false,
+      "focusedPaneId": "w7:p1",
+      "area": {
+       "w": 120,
+       "h": 40
+      },
+      "panes": [
+       {
+        "id": "w7:p1",
+        "rect": {
+         "x": 0,
+         "y": 0,
+         "w": 120,
+         "h": 40
+        },
+        "focused": true,
+        "live": false,
+        "agentName": null,
+        "agent": null,
+        "label": null,
+        "status": null,
+        "role": null,
+        "project": "home",
+        "cwd": "/home/jay/command-center"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "w8",
+    "label": "samvision",
+    "number": 3,
+    "focused": false,
+    "activeTabId": "w8:t1",
+    "project": "samvision",
+    "tabs": [
+     {
+      "id": "w8:t1",
+      "label": "1",
+      "number": 1,
+      "focused": false,
+      "zoomed": false,
+      "focusedPaneId": "w8:p1",
+      "area": {
+       "w": 120,
+       "h": 40
+      },
+      "panes": [
+       {
+        "id": "w8:p1",
+        "rect": {
+         "x": 0,
+         "y": 0,
+         "w": 120,
+         "h": 40
+        },
+        "focused": true,
+        "live": false,
+        "agentName": null,
+        "agent": null,
+        "label": null,
+        "status": null,
+        "role": null,
+        "project": "samvision",
+        "cwd": "/srv/server/apps/samvisionai"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "w9",
+    "label": "gyst",
+    "number": 4,
+    "focused": false,
+    "activeTabId": "w9:t1",
+    "project": "gyst",
+    "tabs": [
+     {
+      "id": "w9:t1",
+      "label": "1",
+      "number": 1,
+      "focused": false,
+      "zoomed": false,
+      "focusedPaneId": "w9:p1",
+      "area": {
+       "w": 120,
+       "h": 40
+      },
+      "panes": [
+       {
+        "id": "w9:p1",
+        "rect": {
+         "x": 0,
+         "y": 0,
+         "w": 120,
+         "h": 40
+        },
+        "focused": true,
+        "live": false,
+        "agentName": null,
+        "agent": null,
+        "label": null,
+        "status": null,
+        "role": null,
+        "project": "gyst",
+        "cwd": "/srv/server/repos/gyst-lifeops"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "wA",
+    "label": "mfe",
+    "number": 5,
+    "focused": false,
+    "activeTabId": "wA:t1",
+    "project": "mfe",
+    "tabs": [
+     {
+      "id": "wA:t1",
+      "label": "1",
+      "number": 1,
+      "focused": false,
+      "zoomed": false,
+      "focusedPaneId": "wA:p1",
+      "area": {
+       "w": 120,
+       "h": 40
+      },
+      "panes": [
+       {
+        "id": "wA:p1",
+        "rect": {
+         "x": 0,
+         "y": 0,
+         "w": 120,
+         "h": 40
+        },
+        "focused": true,
+        "live": false,
+        "agentName": null,
+        "agent": null,
+        "label": null,
+        "status": null,
+        "role": null,
+        "project": "mfe",
+        "cwd": "/srv/server/repos/MyFamilyExpenses"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "wB",
+    "label": "gauzemate",
+    "number": 6,
+    "focused": false,
+    "activeTabId": "wB:t1",
+    "project": "gauzemate",
+    "tabs": [
+     {
+      "id": "wB:t1",
+      "label": "1",
+      "number": 1,
+      "focused": false,
+      "zoomed": false,
+      "focusedPaneId": "wB:p1",
+      "area": {
+       "w": 120,
+       "h": 40
+      },
+      "panes": [
+       {
+        "id": "wB:p1",
+        "rect": {
+         "x": 0,
+         "y": 0,
+         "w": 120,
+         "h": 40
+        },
+        "focused": true,
+        "live": false,
+        "agentName": null,
+        "agent": null,
+        "label": null,
+        "status": null,
+        "role": null,
+        "project": "gauzemate",
+        "cwd": "/srv/server/repos/GauzeMate"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "wC",
+    "label": "home",
+    "number": 7,
+    "focused": false,
+    "activeTabId": "wC:t1",
+    "project": "home",
+    "tabs": [
+     {
+      "id": "wC:t1",
+      "label": "1",
+      "number": 1,
+      "focused": false,
+      "zoomed": false,
+      "focusedPaneId": "wC:p1",
+      "area": {
+       "w": 120,
+       "h": 40
+      },
+      "panes": [
+       {
+        "id": "wC:p1",
+        "rect": {
+         "x": 0,
+         "y": 0,
+         "w": 120,
+         "h": 40
+        },
+        "focused": true,
+        "live": false,
+        "agentName": null,
+        "agent": null,
+        "label": null,
+        "status": null,
+        "role": null,
+        "project": "home",
+        "cwd": "/home/jay"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "wD",
+    "label": "home",
+    "number": 8,
+    "focused": false,
+    "activeTabId": "wD:t1",
+    "project": "home",
+    "tabs": [
+     {
+      "id": "wD:t1",
+      "label": "1",
+      "number": 1,
+      "focused": false,
+      "zoomed": false,
+      "focusedPaneId": "wD:p1",
+      "area": {
+       "w": 120,
+       "h": 40
+      },
+      "panes": [
+       {
+        "id": "wD:p1",
+        "rect": {
+         "x": 0,
+         "y": 0,
+         "w": 120,
+         "h": 40
+        },
+        "focused": true,
+        "live": false,
+        "agentName": null,
+        "agent": null,
+        "label": null,
+        "status": null,
+        "role": null,
+        "project": "home",
+        "cwd": "/home/jay"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "wE",
+    "label": "Command Center",
+    "number": 9,
+    "focused": true,
+    "activeTabId": "wE:t2",
+    "project": "samvision",
+    "tabs": [
+     {
+      "id": "wE:t1",
+      "label": "1",
+      "number": 1,
+      "focused": false,
+      "zoomed": false,
+      "focusedPaneId": "wE:p2",
+      "area": {
+       "w": 120,
+       "h": 40
+      },
+      "panes": [
+       {
+        "id": "wE:p1",
+        "rect": {
+         "x": 0,
+         "y": 0,
+         "w": 53,
+         "h": 40
+        },
+        "focused": false,
+        "live": false,
+        "agentName": null,
+        "agent": null,
+        "label": null,
+        "status": null,
+        "role": null,
+        "project": null,
+        "cwd": "/"
+       },
+       {
+        "id": "wE:p2",
+        "rect": {
+         "x": 53,
+         "y": 0,
+         "w": 34,
+         "h": 20
+        },
+        "focused": true,
+        "live": true,
+        "agentName": "samvision",
+        "agent": "claude",
+        "label": "samvision",
+        "status": "idle",
+        "role": "coordinator",
+        "project": "samvision",
+        "cwd": "/srv/server/apps/samvisionai"
+       },
+       {
+        "id": "wE:p4",
+        "rect": {
+         "x": 87,
+         "y": 0,
+         "w": 33,
+         "h": 20
+        },
+        "focused": false,
+        "live": true,
+        "agentName": "gauzemate",
+        "agent": "claude",
+        "label": "gauzemate",
+        "status": "blocked",
+        "role": "coordinator",
+        "project": "gauzemate",
+        "cwd": "/srv/server/repos/GauzeMate"
+       },
+       {
+        "id": "wE:p3",
+        "rect": {
+         "x": 53,
+         "y": 20,
+         "w": 17,
+         "h": 20
+        },
+        "focused": false,
+        "live": false,
+        "agentName": null,
+        "agent": null,
+        "label": "gyst",
+        "status": null,
+        "role": null,
+        "project": "gyst",
+        "cwd": "/srv/server/repos/gyst-lifeops"
+       },
+       {
+        "id": "wE:p5",
+        "rect": {
+         "x": 87,
+         "y": 20,
+         "w": 33,
+         "h": 20
+        },
+        "focused": false,
+        "live": false,
+        "agentName": null,
+        "agent": null,
+        "label": "mfe",
+        "status": null,
+        "role": null,
+        "project": "mfe",
+        "cwd": "/srv/server/repos/MyFamilyExpenses"
+       },
+       {
+        "id": "wE:pA",
+        "rect": {
+         "x": 70,
+         "y": 20,
+         "w": 17,
+         "h": 20
+        },
+        "focused": false,
+        "live": true,
+        "agentName": "sv-056-impl",
+        "agent": "claude",
+        "label": null,
+        "status": "working",
+        "role": "lane",
+        "project": "samvision",
+        "cwd": "/srv/server/worktrees/samvisionai/SV-056"
+       }
+      ]
+     },
+     {
+      "id": "wE:t2",
+      "label": "mfe",
+      "number": 2,
+      "focused": true,
+      "zoomed": false,
+      "focusedPaneId": "wE:pF",
+      "area": {
+       "w": 120,
+       "h": 40
+      },
+      "panes": [
+       {
+        "id": "wE:pB",
+        "rect": {
+         "x": 0,
+         "y": 0,
+         "w": 30,
+         "h": 40
+        },
+        "focused": false,
+        "live": false,
+        "agentName": null,
+        "agent": null,
+        "label": null,
+        "status": null,
+        "role": null,
+        "project": "home",
+        "cwd": "/home/jay/command-center"
+       },
+       {
+        "id": "wE:pF",
+        "rect": {
+         "x": 30,
+         "y": 0,
+         "w": 30,
+         "h": 40
+        },
+        "focused": true,
+        "live": false,
+        "agentName": null,
+        "agent": null,
+        "label": "samvision",
+        "status": null,
+        "role": null,
+        "project": "samvision",
+        "cwd": "/srv/server/apps/samvisionai"
+       },
+       {
+        "id": "wE:pD",
+        "rect": {
+         "x": 60,
+         "y": 0,
+         "w": 60,
+         "h": 40
+        },
+        "focused": false,
+        "live": false,
+        "agentName": null,
+        "agent": null,
+        "label": "samvision",
+        "status": null,
+        "role": null,
+        "project": "samvision",
+        "cwd": "/srv/server/apps/samvisionai"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "host": {
+   "disk": 46,
+   "containers_up": 17,
+   "containers_total": 19,
+   "down": [
+    "samvision-wrreb-staging",
+    "xenodochial_brown"
+   ],
+   "containers": [
+    {
+     "name": "minecraft",
+     "state": "running"
+    },
+    {
+     "name": "n8n",
+     "state": "exited"
+    }
+   ],
+   "memTotal": 16013811712,
+   "memAvailable": 6011043840,
+   "memUsed": 10002767872,
+   "swapTotal": 12884893696,
+   "swapUsed": 3908214784,
+   "swapPct": 30.3,
+   "load": [
+    0.47,
+    0.29,
+    0.28
+   ],
+   "cpuPct": null,
+   "cpus": 6,
+   "uptimeS": 1539763.26,
+   "procs": [
+    {
+     "pid": 101,
+     "name": "java",
+     "rssMB": 3400
+    },
+    {
+     "pid": 202,
+     "name": "postgres",
+     "rssMB": 410
+    }
+   ],
+   "claudeCount": 3,
+   "oomKills24h": 0,
+   "asOf": 1791016121.8911078
+  },
+  "worktrees": {
+   "samvision": [
+    "/srv/server/apps/samvisionai",
+    "/srv/server/worktrees/samvisionai/SV-056"
+   ],
+   "gyst": [
+    "/srv/server/repos/gyst-lifeops"
+   ],
+   "mfe": [
+    "/srv/server/repos/MyFamilyExpenses"
+   ],
+   "gauzemate": [
+    "/srv/server/repos/GauzeMate"
+   ]
+  },
+  "projectsConfig": [
+   {
+    "key": "samvision",
+    "name": "SamVision",
+    "repo": "JayDalool/SamVisionAI",
+    "path": "/srv/server/apps/samvisionai",
+    "branch": "main",
+    "model": "opus",
+    "effort": "",
+    "links": [],
+    "index": "",
+    "prefix": null
+   },
+   {
+    "key": "gyst",
+    "name": "GYST",
+    "repo": "JayDalool/gyst-lifeops",
+    "path": "/srv/server/repos/gyst-lifeops",
+    "branch": "master",
+    "model": "opus",
+    "effort": "",
+    "links": [],
+    "index": "",
+    "prefix": null
+   },
+   {
+    "key": "mfe",
+    "name": "MFE",
+    "repo": "JayDalool/MyFamilyExpenses",
+    "path": "/srv/server/repos/MyFamilyExpenses",
+    "branch": "main",
+    "model": "sonnet",
+    "effort": "",
+    "links": [],
+    "index": "",
+    "prefix": null
+   },
+   {
+    "key": "gauzemate",
+    "name": "GauzeMate",
+    "repo": "JayDalool/GauzeMate",
+    "path": "/srv/server/repos/GauzeMate",
+    "branch": "main",
+    "model": "opus",
+    "effort": "max",
+    "links": [],
+    "index": "",
+    "prefix": null
+   }
+  ],
+  "sources": {
+   "herdr": {
+    "ok": true,
+    "connected": true,
+    "error": null,
+    "protocol": 22,
+    "lastSnapshotAt": 1791016121.8138034,
+    "lastEventAt": null,
+    "warning": null
+   },
+   "github": {
+    "samvision": {
+     "asOf": 1791016121.8109372,
+     "error": null
+    },
+    "gyst": {
+     "asOf": 1791016121.8117495,
+     "error": null
+    },
+    "mfe": {
+     "asOf": 1791016121.8121786,
+     "error": null
+    },
+    "gauzemate": {
+     "asOf": 1791016121.8126357,
+     "error": null
+    }
+   },
+   "git": {
+    "asOf": 1791016121.8112962,
+    "error": null
+   },
+   "host": {
+    "asOf": 1791016121.8911078,
+    "error": null
+   },
+   "tasks": {
+    "ok": true,
+    "asOf": 1791016122.0756633,
+    "error": null
+   }
+  },
+  "alerts": [
+   {
+    "id": "blocked:wE:p4",
+    "severity": "warn",
+    "source": "herdr",
+    "project": "gauzemate",
+    "text": "gauzemate is waiting for you",
+    "since": 1791016122.0255532,
+    "lastSeen": 1791016122.0255532,
+    "ack": false,
+    "ackAt": null,
+    "active": true
+   },
+   {
+    "id": "merge:samvision:92:0092a3f",
+    "severity": "action",
+    "source": "github",
+    "project": "samvision",
+    "text": "samvision PR #92 ready to merge",
+    "since": 1791016122.0255532,
+    "lastSeen": 1791016122.0255532,
+    "ack": false,
+    "ackAt": null,
+    "active": true
+   },
+   {
+    "id": "ci:gyst",
+    "severity": "warn",
+    "source": "github",
+    "project": "gyst",
+    "text": "gyst main checks failing",
+    "since": 1791016122.0255532,
+    "lastSeen": 1791016122.0255532,
+    "ack": false,
+    "ackAt": null,
+    "active": true
+   },
+   {
+    "id": "merge:gauzemate:25:0025a3f",
+    "severity": "action",
+    "source": "github",
+    "project": "gauzemate",
+    "text": "gauzemate PR #25 ready to merge",
+    "since": 1791016122.0255532,
+    "lastSeen": 1791016122.0255532,
+    "ack": false,
+    "ackAt": null,
+    "active": true
+   }
+  ],
+  "seq": 21,
+  "latestSeq": 21,
+  "version": "0.1.0",
+  "health": {
+   "ok": true,
+   "herdr": {
+    "ok": true,
+    "connected": true,
+    "error": null,
+    "protocol": 22,
+    "lastSnapshotAt": 1791016121.8138034,
+    "lastEventAt": null,
+    "reconnects": 0,
+    "resyncs": 1,
+    "eventsReceived": 0,
+    "warning": null
+   },
+   "gh": {
+    "ok": true,
+    "projects": {
+     "samvision": {
+      "asOf": 1791016121.8109372,
+      "error": null
+     },
+     "gyst": {
+      "asOf": 1791016121.8117495,
+      "error": null
+     },
+     "mfe": {
+      "asOf": 1791016121.8121786,
+      "error": null
+     },
+     "gauzemate": {
+      "asOf": 1791016121.8126357,
+      "error": null
+     }
+    }
+   },
+   "git": {
+    "asOf": 1791016121.8112962,
+    "error": null
+   },
+   "host": {
+    "asOf": 1791016121.8911078,
+    "error": null
+   },
+   "tasks": {
+    "enabled": true,
+    "schemaVersion": 1
+   },
+   "seq": 21,
+   "uptimeS": 13.8,
+   "version": "0.1.0"
+  }
+ },
+ "tasks": {
+  "tickets": [
+   {
+    "id": 9,
+    "key": "GM-018",
+    "project": "gauzemate",
+    "number": 18,
+    "title": "TASKS.md: mark PR 8, 9 and 10 merged",
+    "status": "READY_TO_MERGE",
+    "priority": "LOW",
+    "type": "DOCS",
+    "creator": "jay",
+    "assignee": null,
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": "gm-018-tasks",
+    "createdAt": 1791016121.6686852,
+    "updatedAt": 1791016122.0756633,
+    "startedAt": null,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [],
+    "archived": false,
+    "labels": [],
+    "links": [
+     {
+      "provider": "github",
+      "kind": "pr",
+      "ref": "JayDalool/GauzeMate#25",
+      "url": "https://github.com/JayDalool/x/pull/25",
+      "title": "GM-018: TASKS.md: mark PR 8, 9 and 10 merged",
+      "number": 25,
+      "createdAt": 1791016122.0669253,
+      "createdBy": "system:automation"
+     }
+    ],
+    "prNumber": 25,
+    "prUrl": "https://github.com/JayDalool/x/pull/25",
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 8,
+    "key": "GM-020",
+    "project": "gauzemate",
+    "number": 20,
+    "title": "Contrast and touch target audit",
+    "status": "IN_REVIEW",
+    "priority": "MEDIUM",
+    "type": "DESIGN",
+    "creator": "jay",
+    "assignee": null,
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": "gm-020-contrast",
+    "createdAt": 1791016121.666979,
+    "updatedAt": 1791016122.0631135,
+    "startedAt": null,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [
+     "needs_ui_review"
+    ],
+    "archived": false,
+    "labels": [],
+    "links": [
+     {
+      "provider": "github",
+      "kind": "pr",
+      "ref": "JayDalool/GauzeMate#26",
+      "url": "https://github.com/JayDalool/x/pull/26",
+      "title": "GM-020: Contrast and touch target audit",
+      "number": 26,
+      "createdAt": 1791016122.0603192,
+      "createdBy": "system:automation"
+     }
+    ],
+    "prNumber": 26,
+    "prUrl": "https://github.com/JayDalool/x/pull/26",
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 3,
+    "key": "SV-031",
+    "project": "samvision",
+    "number": 31,
+    "title": "Prune agent worktrees script",
+    "status": "VERIFYING",
+    "priority": "MEDIUM",
+    "type": "INFRA",
+    "creator": "jay",
+    "assignee": null,
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": "sv-031-prune",
+    "createdAt": 1791016121.6563337,
+    "updatedAt": 1791016122.056251,
+    "startedAt": null,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [
+     "needs_jay"
+    ],
+    "archived": false,
+    "labels": [],
+    "links": [
+     {
+      "provider": "github",
+      "kind": "pr",
+      "ref": "JayDalool/SamVisionAI#88",
+      "url": "https://github.com/JayDalool/x/pull/88",
+      "title": "SV-031: Prune agent worktrees script",
+      "number": 88,
+      "createdAt": 1791016122.0533254,
+      "createdBy": "system:automation"
+     }
+    ],
+    "prNumber": 88,
+    "prUrl": "https://github.com/JayDalool/x/pull/88",
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 2,
+    "key": "SV-042",
+    "project": "samvision",
+    "number": 42,
+    "title": "Rotate postgres credentials on deploy",
+    "status": "READY_TO_MERGE",
+    "priority": "URGENT",
+    "type": "SECURITY",
+    "creator": "jay",
+    "assignee": "role:REVIEWER",
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": "sv-042-rotate",
+    "createdAt": 1791016121.6543639,
+    "updatedAt": 1791016122.050357,
+    "startedAt": null,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [
+     "needs_deploy"
+    ],
+    "archived": false,
+    "labels": [],
+    "links": [
+     {
+      "provider": "github",
+      "kind": "pr",
+      "ref": "JayDalool/SamVisionAI#92",
+      "url": "https://github.com/JayDalool/x/pull/92",
+      "title": "SV-042: Rotate postgres credentials on deploy",
+      "number": 92,
+      "createdAt": 1791016122.0440278,
+      "createdBy": "system:automation"
+     }
+    ],
+    "prNumber": 92,
+    "prUrl": "https://github.com/JayDalool/x/pull/92",
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 1,
+    "key": "SV-056",
+    "project": "samvision",
+    "number": 56,
+    "title": "Comparable sales map clusters",
+    "status": "IN_REVIEW",
+    "priority": "HIGH",
+    "type": "FEATURE",
+    "creator": "jay",
+    "assignee": "role:IMPLEMENTER",
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": "sv-056-map-clusters",
+    "createdAt": 1791016121.6516116,
+    "updatedAt": 1791016122.0299454,
+    "startedAt": 1791016121.6516116,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [],
+    "archived": false,
+    "labels": [
+     "map",
+     "ui"
+    ],
+    "links": [
+     {
+      "provider": "github",
+      "kind": "pr",
+      "ref": "JayDalool/SamVisionAI#94",
+      "url": "https://github.com/JayDalool/SamVisionAI/pull/94",
+      "title": null,
+      "number": 94,
+      "createdAt": 1791016121.7027957,
+      "createdBy": "jay"
+     }
+    ],
+    "prNumber": 94,
+    "prUrl": "https://github.com/JayDalool/SamVisionAI/pull/94",
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 17,
+    "key": "CC-003",
+    "project": "commandcenter",
+    "number": 3,
+    "title": "Approve the task migration preview",
+    "status": "INBOX",
+    "priority": "NO_PRIORITY",
+    "type": "OWNER_ACTION",
+    "creator": "jay",
+    "assignee": "jay",
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": null,
+    "createdAt": 1791016121.6880157,
+    "updatedAt": 1791016121.7004848,
+    "startedAt": null,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [
+     "needs_jay"
+    ],
+    "archived": false,
+    "labels": [],
+    "links": [],
+    "prNumber": null,
+    "prUrl": null,
+    "blockedBy": [
+     "CC-002"
+    ],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 16,
+    "key": "CC-002",
+    "project": "commandcenter",
+    "number": 2,
+    "title": "Pipeline view and Needs Jay queue",
+    "status": "READY_TO_IMPLEMENT",
+    "priority": "HIGH",
+    "type": "FEATURE",
+    "creator": "jay",
+    "assignee": null,
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": "CC-001",
+    "branch": null,
+    "createdAt": 1791016121.6840217,
+    "updatedAt": 1791016121.7004848,
+    "startedAt": null,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [],
+    "archived": false,
+    "labels": [
+     "p4b"
+    ],
+    "links": [],
+    "prNumber": null,
+    "prUrl": null,
+    "blockedBy": [
+     "CC-001"
+    ],
+    "blocks": [
+     "CC-003"
+    ],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 15,
+    "key": "CC-001",
+    "project": "commandcenter",
+    "number": 1,
+    "title": "Tasks UI: list, detail, create, filters",
+    "status": "IN_PROGRESS",
+    "priority": "HIGH",
+    "type": "FEATURE",
+    "creator": "jay",
+    "assignee": "role:IMPLEMENTER",
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": null,
+    "createdAt": 1791016121.6815248,
+    "updatedAt": 1791016121.6961591,
+    "startedAt": 1791016121.6815248,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [],
+    "archived": false,
+    "labels": [
+     "p4b",
+     "ui"
+    ],
+    "links": [],
+    "prNumber": null,
+    "prUrl": null,
+    "blockedBy": [],
+    "blocks": [
+     "CC-002"
+    ],
+    "subtasks": {
+     "total": 1,
+     "done": 0
+    }
+   },
+   {
+    "id": 18,
+    "key": "CC-004",
+    "project": "commandcenter",
+    "number": 4,
+    "title": "Tauri desktop shell",
+    "status": "PROPOSED",
+    "priority": "LOW",
+    "type": "RESEARCH",
+    "creator": "jay",
+    "assignee": null,
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": null,
+    "createdAt": 1791016121.6919925,
+    "updatedAt": 1791016121.693924,
+    "startedAt": null,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [],
+    "archived": false,
+    "labels": [
+     "later"
+    ],
+    "links": [],
+    "prNumber": null,
+    "prUrl": null,
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 14,
+    "key": "MFE-001",
+    "project": "mfe",
+    "number": 1,
+    "title": "Run prisma migrate deploy, then check a receipt total",
+    "status": "INBOX",
+    "priority": "NO_PRIORITY",
+    "type": "OWNER_ACTION",
+    "creator": "jay",
+    "assignee": "jay",
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": null,
+    "createdAt": 1791016121.6792781,
+    "updatedAt": 1791016121.680416,
+    "startedAt": null,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [
+     "needs_jay"
+    ],
+    "archived": false,
+    "labels": [],
+    "links": [],
+    "prNumber": null,
+    "prUrl": null,
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 13,
+    "key": "GYST-012",
+    "project": "gyst",
+    "number": 12,
+    "title": "Production foreign-key audit",
+    "status": "PROPOSED",
+    "priority": "HIGH",
+    "type": "MAINTENANCE",
+    "creator": "jay",
+    "assignee": null,
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": null,
+    "createdAt": 1791016121.677012,
+    "updatedAt": 1791016121.6782386,
+    "startedAt": null,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [],
+    "archived": false,
+    "labels": [],
+    "links": [],
+    "prNumber": null,
+    "prUrl": null,
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 12,
+    "key": "GYST-011",
+    "project": "gyst",
+    "number": 11,
+    "title": "Galaxy keyboard navigation",
+    "status": "IN_PROGRESS",
+    "priority": "MEDIUM",
+    "type": "FEATURE",
+    "creator": "jay",
+    "assignee": "role:IMPLEMENTER",
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": null,
+    "createdAt": 1791016121.6748395,
+    "updatedAt": 1791016121.676,
+    "startedAt": 1791016121.6748395,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [],
+    "archived": false,
+    "labels": [],
+    "links": [],
+    "prNumber": null,
+    "prUrl": null,
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 11,
+    "key": "GM-026",
+    "project": "gauzemate",
+    "number": 26,
+    "title": "Barcode / QR scanner for a medication",
+    "status": "IN_PROGRESS",
+    "priority": "HIGH",
+    "type": "FEATURE",
+    "creator": "jay",
+    "assignee": "agent:gauzemate",
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": null,
+    "createdAt": 1791016121.6723568,
+    "updatedAt": 1791016121.6735084,
+    "startedAt": 1791016121.6723568,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [],
+    "archived": false,
+    "labels": [],
+    "links": [],
+    "prNumber": null,
+    "prUrl": null,
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 10,
+    "key": "GM-004",
+    "project": "gauzemate",
+    "number": 4,
+    "title": "Book Manitoba health-tech lawyer",
+    "status": "INBOX",
+    "priority": "NO_PRIORITY",
+    "type": "OWNER_ACTION",
+    "creator": "jay",
+    "assignee": "jay",
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": null,
+    "createdAt": 1791016121.6705,
+    "updatedAt": 1791016121.671512,
+    "startedAt": null,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [
+     "needs_jay"
+    ],
+    "archived": false,
+    "labels": [],
+    "links": [],
+    "prNumber": null,
+    "prUrl": null,
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 7,
+    "key": "SV-050",
+    "project": "samvision",
+    "number": 50,
+    "title": "Net sheet rounding",
+    "status": "DONE",
+    "priority": "MEDIUM",
+    "type": "BUG",
+    "creator": "jay",
+    "assignee": null,
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": null,
+    "createdAt": 1791016121.6645293,
+    "updatedAt": 1791016121.665824,
+    "startedAt": null,
+    "completedAt": 1791016121.6645293,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [],
+    "archived": false,
+    "labels": [],
+    "links": [],
+    "prNumber": null,
+    "prUrl": null,
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 6,
+    "key": "SV-011",
+    "project": "samvision",
+    "number": 11,
+    "title": "Global quick-search research",
+    "status": "RESEARCHING",
+    "priority": "LOW",
+    "type": "RESEARCH",
+    "creator": "jay",
+    "assignee": "role:PLANNER",
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": null,
+    "createdAt": 1791016121.6622221,
+    "updatedAt": 1791016121.6634004,
+    "startedAt": null,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [],
+    "archived": false,
+    "labels": [],
+    "links": [],
+    "prNumber": null,
+    "prUrl": null,
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 5,
+    "key": "SV-010",
+    "project": "samvision",
+    "number": 10,
+    "title": "Overview workspace refinement",
+    "status": "PROPOSED",
+    "priority": "MEDIUM",
+    "type": "DESIGN",
+    "creator": "jay",
+    "assignee": null,
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": null,
+    "createdAt": 1791016121.660219,
+    "updatedAt": 1791016121.6611404,
+    "startedAt": null,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [],
+    "archived": false,
+    "labels": [],
+    "links": [],
+    "prNumber": null,
+    "prUrl": null,
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   },
+   {
+    "id": 4,
+    "key": "SV-014",
+    "project": "samvision",
+    "number": 14,
+    "title": "Licensed data in git history",
+    "status": "BLOCKED",
+    "priority": "URGENT",
+    "type": "LEGAL",
+    "creator": "jay",
+    "assignee": "jay",
+    "agentRole": null,
+    "agentPaneId": null,
+    "agentSessionId": null,
+    "parent": null,
+    "branch": null,
+    "createdAt": 1791016121.6582198,
+    "updatedAt": 1791016121.6592517,
+    "startedAt": null,
+    "completedAt": null,
+    "dueAt": null,
+    "estimate": null,
+    "flags": [
+     "needs_legal"
+    ],
+    "archived": false,
+    "labels": [],
+    "links": [],
+    "prNumber": null,
+    "prUrl": null,
+    "blockedBy": [],
+    "blocks": [],
+    "subtasks": {
+     "total": 0,
+     "done": 0
+    }
+   }
+  ],
+  "projects": [
+   {
+    "key": "commandcenter",
+    "name": "Command Center",
+    "prefix": "CC",
+    "nextNumber": 5
+   },
+   {
+    "key": "gauzemate",
+    "name": "GauzeMate",
+    "prefix": "GM",
+    "nextNumber": 27
+   },
+   {
+    "key": "gyst",
+    "name": "GYST",
+    "prefix": "GYST",
+    "nextNumber": 13
+   },
+   {
+    "key": "mfe",
+    "name": "MFE",
+    "prefix": "MFE",
+    "nextNumber": 2
+   },
+   {
+    "key": "samvision",
+    "name": "SamVision",
+    "prefix": "SV",
+    "nextNumber": 57
+   }
+  ],
+  "meta": {
+   "statuses": [
+    "INBOX",
+    "PROPOSED",
+    "RESEARCHING",
+    "READY_TO_IMPLEMENT",
+    "IN_PROGRESS",
+    "IN_REVIEW",
+    "READY_TO_MERGE",
+    "VERIFYING",
+    "DONE"
+   ],
+   "offPipeline": [
+    "BLOCKED",
+    "DENIED",
+    "CANCELLED"
+   ],
+   "priorities": [
+    "NO_PRIORITY",
+    "URGENT",
+    "HIGH",
+    "MEDIUM",
+    "LOW"
+   ],
+   "types": [
+    "FEATURE",
+    "BUG",
+    "SECURITY",
+    "INFRA",
+    "DESIGN",
+    "RESEARCH",
+    "DOCS",
+    "MAINTENANCE",
+    "LEGAL",
+    "OWNER_ACTION"
+   ],
+   "roles": [
+    "COORDINATOR",
+    "PLANNER",
+    "IMPLEMENTER",
+    "REVIEWER",
+    "VERIFIER"
+   ],
+   "flags": [
+    "needs_jay",
+    "needs_legal",
+    "needs_ui_review",
+    "needs_deploy"
+   ],
+   "relationKinds": [
+    "blocks",
+    "related",
+    "duplicates",
+    "blocked_by"
+   ],
+   "schemaVersion": 1
+  },
+  "seq": 21
+ }
+}

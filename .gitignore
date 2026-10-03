@@ -16,3 +16,4 @@ config.json
 !server/config.example.json
 node_modules/
 dist/
+*.tsbuildinfo
