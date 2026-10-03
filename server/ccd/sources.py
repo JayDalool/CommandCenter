@@ -422,6 +422,7 @@ def server(cfg):
         info["containers_total"] = len(rows)
         info["down"] = [n for n, s in rows if s != "running"][:5]
         info["running"] = sorted(n for n, s in rows if s == "running")
+        info["containers"] = [{"name": n, "state": s} for n, s in sorted(rows)][:60]
     if cfg.get("backup_status_glob"):
         files = glob.glob(cfg["backup_status_glob"])
         if files:

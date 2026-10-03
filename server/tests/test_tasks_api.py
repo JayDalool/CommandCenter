@@ -278,3 +278,16 @@ class ReviewFindings(ApiBase):
     def test_prefix_collision_is_an_error(self):
         with self.assertRaises(ValueError):
             self.tickets.sync_projects([{"key": "sv2", "name": "x", "prefix": "SV"}])
+
+
+class ServerData(ApiBase):
+    def test_top_processes_are_names_and_memory_only(self):
+        from ccd.daemon import top_processes
+        rows, claude = top_processes(limit=5)
+        self.assertLessEqual(len(rows), 5)
+        self.assertTrue(all(set(r) == {"pid", "name", "rssMB"} for r in rows))
+        self.assertIsInstance(claude, int)
+
+    def test_state_carries_worktrees(self):
+        st = self.get("/api/state").json()
+        self.assertIn("/srv/server/worktrees/samvisionai/SV-056", st["worktrees"]["samvision"])

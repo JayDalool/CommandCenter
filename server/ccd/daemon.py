@@ -101,7 +101,32 @@ def host_snapshot(cfg, prev_cpu=None):
         "load": load, "cpuPct": cpu_pct, "cpus": os.cpu_count(),
         "uptimeS": float(up[0]) if up else None,
     })
+    info["procs"], info["claudeCount"] = top_processes()
     return info, (idle, tot)
+
+
+def top_processes(limit=8, proc="/proc"):
+    """Largest processes by resident memory: pid, short name (comm), MB, and how many are `claude`.
+
+    comm only — never the command line, which can carry tokens or paths to data.
+    """
+    rows, claude = [], 0
+    page = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
+    try:
+        pids = [d for d in os.listdir(proc) if d.isdigit()]
+    except OSError:
+        return [], None
+    for pid in pids:
+        try:
+            name = Path(proc, pid, "comm").read_text().strip()
+            rss = int(Path(proc, pid, "statm").read_text().split()[1]) * page
+        except (OSError, ValueError, IndexError):
+            continue
+        if name == "claude":
+            claude += 1
+        rows.append({"pid": int(pid), "name": name[:32], "rssMB": round(rss / 2**20)})
+    rows.sort(key=lambda r: r["rssMB"], reverse=True)
+    return rows[:limit], claude
 
 
 def oom_kills_24h():
@@ -552,6 +577,7 @@ class Daemon:
         snap["workspaces"] = self._workspaces(snap["panes"], live)
         snap["host"] = dict(self.host["data"] or {}, asOf=self.host["asOf"])
         snap["host"].pop("running", None)
+        snap["worktrees"] = {k: list(v or []) for k, v in (self.git["worktrees"] or {}).items()}
         snap["projectsConfig"] = [public_project(p) for p in self.cfg["projects"]]
         snap["sources"] = {
             "herdr": {k: self.herdr_state[k] for k in ("ok", "connected", "error", "protocol", "lastSnapshotAt",
