@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { app } from "../store/app";
 import { useSelector } from "../lib/store";
-import { usePrefs, commands } from "../lib/prefs";
+import { usePrefs, commands, servedPort, tokenFile, LIVE_PORT } from "../lib/prefs";
 import { TOKEN_SHAPE } from "../api/auth";
 import { Command } from "../components/ui";
 
@@ -12,15 +12,16 @@ export function Connect() {
   const checking = useSelector(app.store, (d) => d.auth === "checking");
   const host = usePrefs((p) => p.sshHost);
   const [token, setToken] = useState("");
+  const port = servedPort();
   const [remember, setRemember] = useState(false);
   const ok = TOKEN_SHAPE.test(token.trim());
   return <div className="connect"><main className="connect-card" aria-labelledby="connect-title">
     <div className="dialog-head"><span className="brand-mark" aria-hidden><i /><i /><i /><i /></span>
-      <h1 id="connect-title" className="brand-name">Command Center</h1><span className="brand-host" style={{ marginLeft: "auto" }}>jay-server · 127.0.0.1</span></div>
+      <h1 id="connect-title" className="brand-name">Command Center</h1><span className="brand-host" style={{ marginLeft: "auto" }}>{host} · 127.0.0.1:{port}{port !== LIVE_PORT && " · preview"}</span></div>
     <form className="dialog-body" onSubmit={(e) => { e.preventDefault(); if (ok) void app.login(token, remember); }}>
       <ol className="connect-steps">
-        <li><span className="mono muted">1</span><span>Tunnel from Windows (keep it open):<Command cmd={commands.tunnel(host)} /></span></li>
-        <li><span className="mono muted">2</span><span>Copy the token to the clipboard:<Command cmd={commands.token(host)} /></span></li>
+        <li><span className="mono muted">1</span><span>Tunnel from Windows (keep it open):<Command cmd={commands.tunnel(host, port)} /></span></li>
+        <li><span className="mono muted">2</span><span>Copy <span className="mono">~/{tokenFile(port)}</span> — this ccd's own token:<Command cmd={commands.token(host, port)} /></span></li>
         <li><span className="mono muted">3</span><span>Paste it here.</span></li>
       </ol>
       <input className="input mono" type="password" autoComplete="off" spellCheck={false} value={token} autoFocus

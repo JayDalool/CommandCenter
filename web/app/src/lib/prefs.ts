@@ -31,10 +31,31 @@ export function apply(p: Prefs = prefs.get()) {
 
 export const usePrefs = <S,>(sel: (p: Prefs) => S) => useSelector(prefs, sel);
 
+// Each ccd has its own token file, and one will not authenticate against the
+// other. The live daemon on 7777 reads ~/.config/command-center/ccd.token; the
+// dev preview (scripts/dev-ccd.py on 7788, reached directly or through the Vite
+// proxy on 5173) reads ~/command-center/dev/ccd.token. The Connect screen must
+// name the file belonging to the ccd that served this page, or Jay pastes a
+// valid token that the other ccd correctly refuses.
+export const LIVE_PORT = "7777";
+export const LIVE_TOKEN_FILE = ".config/command-center/ccd.token";
+export const DEV_TOKEN_FILE = "command-center/dev/ccd.token";
+const DEV_PORTS = new Set(["7788", "5173"]);
+
+/** The port this page is served on, which is the port of the ccd behind it. */
+export function servedPort(): string {
+  const p = typeof location === "undefined" ? "" : location.port;
+  return p || LIVE_PORT;
+}
+
+export function tokenFile(port: string = servedPort()): string {
+  return DEV_PORTS.has(port) ? DEV_TOKEN_FILE : LIVE_TOKEN_FILE;
+}
+
 /** Commands Jay can paste into a Windows terminal. Host alias is his SSH config name. */
 export const commands = {
-  tunnel: (h: string) => `ssh -N -L 7777:127.0.0.1:7777 ${h}`,
+  tunnel: (h: string, port: string = servedPort()) => `ssh -N -L ${port}:127.0.0.1:${port} ${h}`,
   attach: (h: string) => `ssh -t ${h} herdr`,
   attachAgent: (h: string, agent: string) => `ssh -t ${h} herdr agent attach ${agent}`,
-  token: (h: string) => `ssh ${h} cat .config/command-center/ccd.token | clip`,
+  token: (h: string, port: string = servedPort()) => `ssh ${h} cat ${tokenFile(port)} | clip`,
 };
