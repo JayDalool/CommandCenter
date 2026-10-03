@@ -125,10 +125,10 @@ class Automation(ApiBase):
         self.assertEqual(self.tickets.get("SV-057")["status"], "READY_TO_IMPLEMENT")
 
     def test_other_projects_keys_are_not_linked(self):
-        self.tickets.create("gauzemate", "gm thing")
-        self.gh.data["samvision"]["prs"] = [pr(96, "mentions GM-001 in passing")]
+        self.tickets.create("gauzemate", "gz thing")
+        self.gh.data["samvision"]["prs"] = [pr(96, "mentions GZ-001 in passing")]
         self.poll()
-        self.assertEqual(self.tickets.get("GM-001")["links"], [])
+        self.assertEqual(self.tickets.get("GZ-001")["links"], [])
 
 
 class DispatchByTicket(ApiBase):
@@ -141,11 +141,17 @@ class DispatchByTicket(ApiBase):
         self.assertIn("dispatch", t["timeline"][-1]["trigger"])
 
     def test_dispatch_refuses_unknown_or_foreign_tickets(self):
-        self.tickets.create("gauzemate", "gm")
-        r = self.post("/api/action/dispatch", {"project": "samvision", "taskId": "CC-404", "verb": "plan"})
-        self.assertEqual(r.status_code, 400)
-        r = self.post("/api/action/dispatch", {"project": "samvision", "taskId": "GM-001", "verb": "plan"})
+        self.tickets.create("gauzemate", "gz")
+        # Shape alone is not enough to cross projects: GZ-001 is GauzeMate's.
+        r = self.post("/api/action/dispatch", {"project": "samvision", "taskId": "GZ-001", "verb": "plan"})
         self.assertEqual(r.status_code, 409)
+        # A retired prefix behaves the same once its ticket exists.
+        self.tickets.db.execute("INSERT OR IGNORE INTO task_project_aliases(prefix, project, retired_at) "
+                                "VALUES ('GM', 'gauzemate', 0)")
+        self.tickets.create("gauzemate", "legacy numbered", number=14)
+        self.assertTrue(self.tickets.exists("GZ-014"))
+        r = self.post("/api/action/dispatch", {"project": "samvision", "taskId": "nonsense", "verb": "plan"})
+        self.assertEqual(r.status_code, 400)
 
 
 class Workspaces(ApiBase):
@@ -276,8 +282,12 @@ class ReviewFindings(ApiBase):
         self.assertEqual(r.status_code, 400)
 
     def test_prefix_collision_is_an_error(self):
-        with self.assertRaises(ValueError):
+        from ccd import registry
+        with self.assertRaises(registry.RegistryError):
             self.tickets.sync_projects([{"key": "sv2", "name": "x", "prefix": "SV"}])
+        # A retired prefix is just as taken as a live one: numbers are never recycled.
+        with self.assertRaises(registry.RegistryError):
+            self.tickets.sync_projects([{"key": "gm2", "name": "x", "prefix": "GM"}])
 
 
 class ServerData(ApiBase):

@@ -19,6 +19,7 @@ import re
 import time
 from pathlib import Path
 
+from . import registry
 from . import tasks as T
 from .config import HANDOFF_DIR
 
@@ -125,6 +126,11 @@ def preview(projects, gh_data, store, handoff_dir=None):
             skipped.append({"project": key, "source": "config", "ref": key, "reason": "project has no ticket prefix"})
             continue
         prefix = tp["prefix"]
+        # A historical ID keeps its own prefix: GauzeMate's GM-014 imports as
+        # GM-014, not as a renumbered GZ key. Only NEW keys use the live prefix.
+        legacy = [a for a in tp.get("legacyPrefixes") or registry.legacy_of(key)]
+        accepted = [prefix] + list(legacy)
+        prx = "(?:" + "|".join(re.escape(x) for x in sorted(accepted, key=len, reverse=True)) + ")"
         cands = {}  # proposed key → candidate
         by_legacy = {}
 
@@ -132,9 +138,12 @@ def preview(projects, gh_data, store, handoff_dir=None):
             k = cand["proposedKey"]
             if k in cands:
                 prev = cands[k]
-                duplicates.append({"project": key, "key": k, "sources": prev["sources"] + [source_ref],
-                                   "resolution": f"merged into one ticket; {prev['sources'][0]['kind']} wins on "
-                                                 "title and status, flags and links are combined"})
+                # A stub with no sources is an existing ticket this source only
+                # updates, not two sources describing one new ticket.
+                if prev["sources"]:
+                    duplicates.append({"project": key, "key": k, "sources": prev["sources"] + [source_ref],
+                                       "resolution": f"merged into one ticket; {prev['sources'][0]['kind']} wins on "
+                                                     "title and status, flags and links are combined"})
                 prev["sources"].append(source_ref)
                 prev["flags"] = sorted(set(prev["flags"]) | set(cand["flags"]))
                 prev["links"] += [l for l in cand["links"] if l not in prev["links"]]
@@ -145,7 +154,7 @@ def preview(projects, gh_data, store, handoff_dir=None):
         # Numbers already used by an ID in any source are reserved first, so a new
         # key can never collide with one (GauzeMate's MY_ACTIONS uses GM-001…GM-014).
         reserved = set()
-        idrx = re.compile(rf"(?<![A-Za-z0-9]){re.escape(prefix)}-(\d{{1,6}})(?![0-9])")
+        idrx = re.compile(rf"(?<![A-Za-z0-9]){prx}-(\d{{1,6}})(?![0-9])")
         if p.get("index") and p.get("path"):
             for r in index_rows(os.path.join(p["path"], p["index"]))[0] or []:
                 reserved |= {int(x) for x in idrx.findall(r["id"])}
@@ -172,12 +181,12 @@ def preview(projects, gh_data, store, handoff_dir=None):
             rows, err = index_rows(ipath)
             sources.append({"project": key, "kind": "index", "ref": p["index"], "count": len(rows or []), "error": err})
             for r in rows or []:
-                m = re.match(rf"^{re.escape(prefix)}-(\d+)$", r["id"])
+                m = re.match(rf"^({prx})-(\d+)$", r["id"])
                 status, note = _status_of(r["status"])
                 src = {"kind": "index", "ref": f"{p['index']}:{r['line']}"}
                 if not m:
                     ambiguous.append({"project": key, "source": "index", "ref": r["id"], "title": r["title"],
-                                      "reason": f"ID does not use the {prefix} prefix",
+                                      "reason": f"ID does not use the {' or '.join(accepted)} prefix",
                                       "suggestion": f"new {prefix} key with {r['id']} kept as a legacy link"})
                     continue
                 if status is None:
@@ -185,14 +194,14 @@ def preview(projects, gh_data, store, handoff_dir=None):
                                       "reason": f"status '{r['status'][:60]}' is not a pipeline status",
                                       "suggestion": "import as PROPOSED and review"})
                     continue
-                k = f"{prefix}-{int(m.group(1)):03d}"
+                k = f"{m.group(1)}-{int(m.group(2)):03d}"
                 links = []
                 for num in re.findall(r"#(\d+)", r["pr"] + " " + note):
                     if p.get("repo"):
                         links.append({"provider": "github", "kind": "pr", "ref": f"{p['repo']}#{num}"})
                         break  # the first PR named is the ticket's PR; the rest stay in the note
-                deps = re.findall(rf"{re.escape(prefix)}-\d+", r["dependency"])
-                add({"proposedKey": k, "number": int(m.group(1)), "keepsId": True, "project": key, "title": r["title"][:300],
+                deps = re.findall(rf"{prx}-\d+", r["dependency"])
+                add({"proposedKey": k, "number": int(m.group(2)), "keepsId": True, "project": key, "title": r["title"][:300],
                      "status": status, "priority": PRIORITY_MAP.get(r["priority"].upper(), "NO_PRIORITY"),
                      "type": None, "flags": _flags_from_note(status, note), "links": links, "blockedBy": deps,
                      "note": note[:300], "sources": [src]}, src)
@@ -241,7 +250,7 @@ def preview(projects, gh_data, store, handoff_dir=None):
                 prio = next((PRIORITY_MAP[l.split(":", 1)[1].upper()] for l in labels
                              if l.startswith("priority:") and l.split(":", 1)[1].upper() in PRIORITY_MAP), "NO_PRIORITY")
                 lead = re.match(r"^\s*([A-Z]{1,4}-?\d+)\s*[·—:-]\s*", it.get("title", ""))
-                named = [k for k in store.find_keys(it.get("title", "")) if k.startswith(prefix + "-")]
+                named = [k for k in store.find_keys(it.get("title", "")) if k.rsplit("-", 1)[0] in accepted]
                 legacy = re.findall(r"\b((?:VN|UI|[A-Z]{1,4})-?\d+)\b", it.get("title", ""))
                 if named:
                     k = named[0]
@@ -280,8 +289,8 @@ def preview(projects, gh_data, store, handoff_dir=None):
             for a in lines:
                 src = {"kind": "my_actions", "ref": f"MY_ACTIONS.md:{a['line']}"}
                 tid = (a["id"] or "").strip()
-                m = re.match(rf"^{re.escape(prefix)}-(\d+)$", tid)
-                k = f"{prefix}-{int(m.group(1)):03d}" if m else None
+                m = re.match(rf"^({prx})-(\d+)$", tid)
+                k = f"{m.group(1)}-{int(m.group(2)):03d}" if m else None
                 if k and k in cands:
                     add({"proposedKey": k, "flags": ["needs_jay"], "links": [], "sources": [src]}, src)
                     continue
@@ -291,7 +300,7 @@ def preview(projects, gh_data, store, handoff_dir=None):
                     add({"proposedKey": k, "flags": ["needs_jay"], "links": [], "sources": [src]}, src)
                     continue
                 if k:
-                    kk, n, keeps = k, int(m.group(1)), True
+                    kk, n, keeps = k, int(m.group(2)), True
                 else:
                     (kk, n), keeps = new_key(), False
                 link = [{"provider": "legacy", "kind": "legacy_id", "ref": tid}] if tid and not k else []
@@ -335,7 +344,7 @@ def preview(projects, gh_data, store, handoff_dir=None):
         "sources": sources, "wouldCreate": create, "wouldUpdate": update, "ambiguous": ambiguous,
         "duplicates": duplicates, "skipped": skipped,
         "notes": ["Nothing was written. GitHub issues are not closed, edited or deleted by an import.",
-                  "IDs that already use the project prefix are kept (SV-056 stays SV-056) and the counter moves past "
-                  "them, so no key is ever reused.",
+                  "IDs that already use the project prefix, live or retired, are kept (SV-056 stays SV-056, "
+                  "GM-014 stays GM-014) and the counter moves past them, so no key is ever reused.",
                   "P0/P1/P2/P3 in INDEX.md map to URGENT/HIGH/MEDIUM/LOW."],
     }

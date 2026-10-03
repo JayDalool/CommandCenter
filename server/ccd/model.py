@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import coordinators, sources
+from . import coordinators, registry, sources
 from .config import HANDOFF_DIR, STATE_DIR
 
 STAGE_LABEL = {
@@ -59,12 +59,12 @@ def ci_mark(rollup):
 
 
 def short(text, n=42):
-    text = re.sub(r"^(?:SV|GYST-VN|MFE|GM)-\d+\s*[—:-]\s*", "", text or "").strip()
+    text = re.sub(rf"^{registry.board_id_pattern()}-\d+\s*[—:-]\s*", "", text or "").strip()
     return text if len(text) <= n else text[: n - 1] + "…"
 
 
 def ref_of(title, number=None):
-    m = re.search(r"\b((?:SV|GYST-VN|MFE|GM)-\d+)\b", title or "")
+    m = re.search(rf"\b({registry.board_id_pattern()}-\d+)\b", title or "")
     return m.group(1) if m else (f"#{number}" if number else "")
 
 

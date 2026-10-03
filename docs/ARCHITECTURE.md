@@ -114,6 +114,42 @@ api/live.ts        WS /api/events: token as subprotocol, replay from seq, events
   for prose and titles, mono for keys, SHAs, branches, times, metrics, commands.
   No component library; React and react-dom are the only runtime dependencies.
 
+## The project registry
+
+`server/ccd/registry.py` is the one authoritative place a project's identity
+lives: its display name, its ticket prefix, and any prefix it has retired.
+
+| project | prefix | example | retired |
+|---|---|---|---|
+| SamVision | `SV` | SV-056 | – |
+| GauzeMate | `GZ` | GZ-014 | `GM` |
+| MyFamilyExpenses | `MFE` | MFE-008 | – |
+| Command Center | `CC` | CC-012 | – |
+| GYST / LifeOps | `GYST` | GYST-021 | – |
+
+Everything reads it from there — `tasks.py` allocates keys, `config.py` fills
+the board's project list, `model.py` strips and extracts IDs from PR and issue
+titles, `daemon.py` validates a dispatch target, and the UI gets `prefix` per
+project — so a prefix is never written down twice and can never disagree
+between frontend, backend and migration code. A `prefix` in `config.json` may
+repeat the registry but not contradict it; a contradiction is a startup error.
+
+A project with no registry row and no explicit prefix can hold no tickets at
+all, and says so instead of inventing a prefix from its directory name.
+
+**Retiring a prefix** (GauzeMate GM → GZ, Jay's decision 2026-10-03):
+
+- the keys already minted keep their prefix *and their numbers*: GM-014 stays
+  GM-014, resolves, links to PRs, and appears in history
+- the counter is per project, not per prefix, so the next GauzeMate ticket is
+  `GZ-<next>`; no number is ever reused across the rename
+- `task_project_aliases` records the retirement, and SQLite triggers enforce it:
+  a prefix cannot change unless the old one is retired in the same transaction,
+  a retired prefix cannot be deleted, moved or claimed by another project
+- `GYST-VN-009`, `VN-073` and `OPS1` are *board IDs*, not ticket prefixes: they
+  are recognised when reading INDEX.md and issue titles (`registry.BOARD_ID_PREFIXES`)
+  and the importer keeps them as `legacy` ticket_links
+
 ## P4B: task system
 
 Command Center's own tickets, so day-to-day work no longer lives in GitHub
@@ -121,7 +157,8 @@ Issues/Projects. See [ADR 0001](adr/0001-ticket-system-source-of-truth.md).
 
 | table | holds |
 |---|---|
-| `task_projects` | project key → ticket prefix (SV, GM, GYST, MFE, CC) and a forward-only counter |
+| `task_projects` | project key → ticket prefix (SV, GZ, GYST, MFE, CC) and a forward-only counter |
+| `task_project_aliases` | prefixes a project has retired (GauzeMate's GM). Resolved forever, never minted again |
 | `tickets` | key, title, description, status, priority, type, assignee (`jay` / `role:X` / `agent:name`), agent pane/session, parent, branch, timestamps, four needs flags, archived, reserved `cycle_id` |
 | `ticket_labels`, `ticket_relations` | labels; `blocks` / `related` / `duplicates` edges (`blocked_by` is the inverse view) |
 | `ticket_comments` | human and agent notes |

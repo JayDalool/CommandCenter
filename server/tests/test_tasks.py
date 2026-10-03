@@ -4,7 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from ccd import importer, tasks
+from ccd import importer, registry, tasks
 from ccd.tasks import TaskError, TaskStore
 
 PROJECTS = [{"key": "samvision", "name": "SamVision"}, {"key": "gauzemate", "name": "GauzeMate"},
@@ -54,9 +54,15 @@ class Numbering(Base):
         with self.assertRaises(TaskError):
             self.s.create("samvision", "clash", number=56)
 
-    def test_prefix_of_an_existing_project_never_changes(self):
-        self.s.sync_projects([{"key": "samvision", "name": "x", "prefix": "XX"}])
+    def test_a_config_prefix_that_contradicts_the_registry_is_refused(self):
+        with self.assertRaises(registry.RegistryError):
+            self.s.sync_projects([{"key": "samvision", "name": "x", "prefix": "XX"}])
         self.assertEqual({p["key"]: p["prefix"] for p in self.s.projects()}["samvision"], "SV")
+
+    def test_an_unregistered_project_without_a_prefix_can_hold_no_tickets(self):
+        with self.assertRaises(registry.RegistryError):
+            self.s.sync_projects([{"key": "someday", "name": "Someday"}])
+        self.assertNotIn("someday", [p["key"] for p in self.s.projects()])
 
     def test_survives_a_restart(self):
         self.s.create("commandcenter", "durable")
@@ -200,8 +206,9 @@ class NeedsJay(Base):
 
 class KeysInText(Base):
     def test_find_keys(self):
-        self.assertEqual(self.s.find_keys("SV-56: fix; branch cc-12-thing GM-9 XX-1 GYST-VN-9 SV-0056"),
-                         ["SV-056", "GM-009"])  # case-sensitive: cc-12 is not a key
+        # GM is GauzeMate's retired prefix, so GM-009 is still a key; GZ is the live one.
+        self.assertEqual(self.s.find_keys("SV-56: fix; branch cc-12-thing GM-9 GZ-4 XX-1 GYST-VN-9 SV-0056"),
+                         ["SV-056", "GM-009", "GZ-004"])  # case-sensitive: cc-12 is not a key
 
 
 class Migrations(unittest.TestCase):
@@ -236,7 +243,7 @@ class Migrations(unittest.TestCase):
         finally:
             tasks.MIGRATIONS[:] = saved
         db.execute("ROLLBACK") if db.in_transaction else None
-        self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 1)
+        self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], tasks.SCHEMA_VERSION)
         self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE name='ok_one'").fetchone())
 
 

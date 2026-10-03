@@ -26,6 +26,8 @@ import re
 import sqlite3
 import time
 
+from . import registry
+
 STATUSES = ("INBOX", "PROPOSED", "RESEARCHING", "READY_TO_IMPLEMENT", "IN_PROGRESS", "IN_REVIEW",
             "READY_TO_MERGE", "VERIFYING", "DONE")
 OFF_PIPELINE = ("BLOCKED", "DENIED", "CANCELLED")
@@ -43,9 +45,9 @@ LINK_PROVIDERS = ("github", "legacy", "url")
 
 # Fields a PATCH may change, and how each is checked. Everything else is read-only.
 TEXT_FIELDS = {"title": 300, "description": 20000, "branch": 200}
-DEFAULT_PREFIXES = {"samvision": "SV", "gauzemate": "GM", "gyst": "GYST", "mfe": "MFE", "commandcenter": "CC"}
-PREFIX_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
-KEY_RE = re.compile(r"^([A-Z][A-Z0-9]{1,5})-(\d{1,6})$")
+# Prefixes live in ccd/registry.py — the one authoritative project registry.
+PREFIX_RE = registry.PREFIX_RE
+KEY_RE = re.compile(r"^([A-Z][A-Z0-9]{0,8}(?:-[A-Z0-9]{1,8})?)-(\d{1,6})$")
 LABEL_RE = re.compile(r"^[a-z0-9][a-z0-9:._/-]{0,39}$")
 ACTOR_RE = re.compile(r"^(jay|system:[a-z0-9_-]{1,32}|agent:[a-z0-9_:-]{1,64})$")
 
@@ -177,6 +179,39 @@ CREATE TRIGGER ticket_events_append_only_u BEFORE UPDATE ON ticket_events
 CREATE TRIGGER ticket_events_append_only_d BEFORE DELETE ON ticket_events
   BEGIN SELECT RAISE(ABORT, 'the audit trail is append-only'); END;
 """),
+    # 2: a project may retire a prefix (GauzeMate GM → GZ). The keys already
+    # minted with the old prefix keep working and keep their numbers; nothing
+    # new is ever minted with it, and no other project can ever claim it.
+    (2, """
+CREATE TABLE task_project_aliases (
+  prefix     TEXT PRIMARY KEY,
+  project    TEXT NOT NULL REFERENCES task_projects(key),
+  retired_at REAL NOT NULL
+);
+CREATE INDEX task_project_aliases_project ON task_project_aliases(project);
+CREATE TRIGGER task_project_aliases_never_deleted BEFORE DELETE ON task_project_aliases
+  BEGIN SELECT RAISE(ABORT, 'a retired prefix is history; it is never deleted'); END;
+CREATE TRIGGER task_project_aliases_never_moved BEFORE UPDATE ON task_project_aliases
+  BEGIN SELECT RAISE(ABORT, 'a retired prefix is history; it is never changed'); END;
+CREATE TRIGGER task_project_aliases_not_another_projects BEFORE INSERT ON task_project_aliases
+  WHEN EXISTS (SELECT 1 FROM task_projects WHERE prefix = NEW.prefix AND key != NEW.project)
+  BEGIN SELECT RAISE(ABORT, 'that prefix is another project''s live prefix'); END;
+
+-- Replaces the v1 trigger: the counter is still forward-only, but a prefix may
+-- now change -- only after the old one is retired into task_project_aliases in
+-- the same transaction, so a prefix can never simply vanish.
+DROP TRIGGER task_projects_counter_forward;
+CREATE TRIGGER task_projects_counter_forward BEFORE UPDATE OF next_number ON task_projects
+  WHEN NEW.next_number < OLD.next_number
+  BEGIN SELECT RAISE(ABORT, 'ticket numbers are never recycled'); END;
+CREATE TRIGGER task_projects_prefix_retired BEFORE UPDATE OF prefix ON task_projects
+  WHEN NEW.prefix != OLD.prefix AND NOT EXISTS (
+    SELECT 1 FROM task_project_aliases WHERE prefix = OLD.prefix AND project = OLD.key)
+  BEGIN SELECT RAISE(ABORT, 'retire the old prefix into task_project_aliases first'); END;
+CREATE TRIGGER task_projects_prefix_not_retired BEFORE UPDATE OF prefix ON task_projects
+  WHEN EXISTS (SELECT 1 FROM task_project_aliases WHERE prefix = NEW.prefix AND project != NEW.key)
+  BEGIN SELECT RAISE(ABORT, 'that prefix is another project''s retired prefix'); END;
+"""),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
@@ -274,27 +309,76 @@ class TaskStore:
             self.db.execute("INSERT OR IGNORE INTO ticket_types(name, position) VALUES (?, ?)", (t, i))
 
     def sync_projects(self, projects):
-        """Register projects. An existing project's prefix never changes (keys depend on it)."""
+        """Register projects from the one project registry (ccd/registry.py).
+
+        A project with no registry row and no explicit prefix can hold no
+        tickets, and says so. A registered project whose live prefix has changed
+        since this file was written (GauzeMate GM → GZ) retires the old prefix
+        and switches: already-minted keys keep their prefix and their numbers,
+        the counter does not move, and nothing new uses the retired prefix.
+        """
         for p in projects:
             key = p["key"]
-            prefix = (p.get("prefix") or DEFAULT_PREFIXES.get(key) or re.sub(r"[^A-Z0-9]", "", key.upper())[:6])
-            if not PREFIX_RE.match(prefix):
-                raise ValueError(f"bad ticket prefix {prefix!r} for {key}")
-            owner = self.db.execute("SELECT key FROM task_projects WHERE prefix=?", (prefix,)).fetchone()
-            if owner and owner[0] != key:
-                raise ValueError(f"ticket prefix {prefix} of {key} is already used by {owner[0]}; set 'prefix'")
-            self.db.execute("INSERT OR IGNORE INTO task_projects(key, name, prefix, created_at) VALUES (?,?,?,?)",
-                            (key, p.get("name") or key, prefix, _now()))
+            prefix = registry.check(key, p.get("prefix"), registry.legacy_of(key))
+            name = p.get("name") or registry.name_of(key)
+            row = self.db.execute("SELECT prefix FROM task_projects WHERE key=?", (key,)).fetchone()
+            if row is None:
+                owner = self.db.execute("SELECT key FROM task_projects WHERE prefix=?", (prefix,)).fetchone()
+                if owner and owner[0] != key:
+                    raise registry.RegistryError(
+                        f"ticket prefix {prefix} of {key} is already used by {owner[0]}")
+                self.db.execute("INSERT INTO task_projects(key, name, prefix, created_at) VALUES (?,?,?,?)",
+                                (key, name, prefix, _now()))
+            elif row[0] != prefix:
+                self._retire_prefix(key, row[0], prefix)
+            self.db.execute("UPDATE task_projects SET name=? WHERE key=? AND name!=?", (name, key, name))
+
+    def _retire_prefix(self, key, old, new):
+        """Move a project to a new live prefix, keeping the old one as history."""
+        if old not in registry.legacy_of(key):
+            raise registry.RegistryError(
+                f"{key} holds keys with the prefix {old} but the registry does not list it under 'legacy'; "
+                f"add {old!r} to legacy for {key} before changing its prefix to {new}")
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.db.execute("INSERT OR IGNORE INTO task_project_aliases(prefix, project, retired_at) VALUES (?,?,?)",
+                            (old, key, _now()))
+            self.db.execute("UPDATE task_projects SET prefix=? WHERE key=?", (new, key))
+            self.db.execute("COMMIT")
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            raise
+
+    def aliases(self):
+        """retired prefix → project key, from this file (not the registry)."""
+        return {r[0]: r[1] for r in self.db.execute("SELECT prefix, project FROM task_project_aliases")}
 
     def projects(self):
         rows = self.db.execute("SELECT key, name, prefix, next_number FROM task_projects ORDER BY key").fetchall()
-        return [{"key": r[0], "name": r[1], "prefix": r[2], "nextNumber": r[3]} for r in rows]
+        aliases = self.aliases()
+        return [{"key": r[0], "name": r[1], "prefix": r[2], "nextNumber": r[3],
+                 "legacyPrefixes": sorted(a for a, k in aliases.items() if k == r[0])} for r in rows]
 
     def types(self):
         return [r[0] for r in self.db.execute("SELECT name FROM ticket_types WHERE archived=0 ORDER BY position")]
 
     def prefixes(self):
+        """Live prefix → project key. Only these mint new keys."""
         return {r[0]: r[1] for r in self.db.execute("SELECT prefix, key FROM task_projects")}
+
+    def key_prefixes(self):
+        """Every prefix a real ticket key can start with: live plus retired.
+
+        Recognition is wider than minting on purpose: GM-014 must still resolve,
+        link to a PR and show in history long after GauzeMate moved to GZ. The
+        retired ones come from this file and from the registry, so a prefix the
+        registry retires is recognised even before a key proves it.
+        """
+        out = self.prefixes()
+        live = set(out.values())
+        out.update({pre: key for pre, key in registry.legacy_prefixes().items() if key in live})
+        out.update(self.aliases())
+        return out
 
     def meta(self):
         return {"statuses": list(STATUSES), "offPipeline": list(OFF_PIPELINE), "priorities": list(PRIORITIES),
@@ -464,7 +548,8 @@ class TaskStore:
         return {s: n for s, n in rows}
 
     def _key_pattern(self):
-        prefixes = self.prefixes()
+        """Live and retired prefixes, longest alternative first (GYST before GY)."""
+        prefixes = self.key_prefixes()
         if not prefixes:
             return None
         return "(" + "|".join(sorted(map(re.escape, prefixes), key=len, reverse=True)) + r")-(\d{1,6})"
@@ -500,7 +585,7 @@ class TaskStore:
         for seg in (branch or "").split("/"):
             m = re.match(r"(?i)^" + pat + r"(?=$|[-_.])", seg)
             if m:
-                prefix = next(p for p in self.prefixes() if p.lower() == m.group(1).lower())
+                prefix = next(p for p in self.key_prefixes() if p.lower() == m.group(1).lower())
                 k = f"{prefix}-{int(m.group(2)):03d}"
                 if k not in keys:
                     keys.append(k)
@@ -537,11 +622,16 @@ class TaskStore:
             raise TaskError(404, f"unknown project {key}")
         return row
 
-    def create(self, project, title, actor="jay", *, number=None, **fields):
+    def create(self, project, title, actor="jay", *, number=None, prefix=None, **fields):
         """A new ticket. Only project and title are required; the key comes from the project counter.
 
         `number` is for the reviewed import only: it keeps an existing ID (SV-056)
         and moves the counter past it, so nothing is ever renumbered or reused.
+
+        `prefix` is narrower still: it keeps a historical ID whose prefix the
+        project has since retired (GM-014 after GauzeMate moved to GZ). It
+        requires `number`, so a retired prefix can never take a number from the
+        counter — every ticket ccd mints on its own is a live-prefix key.
         """
         actor = _actor(actor)
         title = _printable(str(title or "").strip(), TEXT_FIELDS["title"], "title")
@@ -553,16 +643,23 @@ class TaskStore:
         at = _now()
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            pkey, prefix, nxt = self._project(project)
+            pkey, live, nxt = self._project(project)
+            use = live
+            if prefix is not None and prefix != live:
+                if number is None:
+                    raise TaskError(400, "a retired prefix can only keep an existing number, never take a new one")
+                if self.aliases().get(prefix) != pkey:
+                    raise TaskError(400, f"{prefix} is not a retired prefix of {pkey}")
+                use = prefix
             if number is not None:
                 if not isinstance(number, int) or isinstance(number, bool):
                     raise TaskError(400, "number must be an integer")
                 if number < 1 or self.db.execute("SELECT 1 FROM tickets WHERE project=? AND number=?",
                                                   (pkey, number)).fetchone():
-                    raise TaskError(409, f"{prefix}-{number:03d} already exists")
+                    raise TaskError(409, f"{use}-{number:03d} already exists")
             else:
                 number = nxt
-            key = f"{prefix}-{number:03d}"
+            key = f"{use}-{number:03d}"
             self.db.execute("UPDATE task_projects SET next_number=MAX(next_number, ?) WHERE key=?", (number + 1, pkey))
             cur = self.db.execute(
                 "INSERT INTO tickets(project, number, key, title, status, creator, created_at, updated_at) "

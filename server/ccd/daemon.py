@@ -22,7 +22,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import __version__, coordinators, model, sources
+from . import __version__, coordinators, model, registry, sources
 from . import herdr as herdr_mod
 from . import importer
 from . import tasks as tasks_mod
@@ -32,7 +32,9 @@ log = logging.getLogger("ccd")
 
 STRUCTURAL_EVENTS = {t.replace(".", "_") for t in herdr_mod.STRUCTURAL}
 DISPATCH_VERBS = ("plan", "implement", "review", "verify", "continue", "stop")
-TASK_ID_RE = re.compile(r"^(?:(?:SV|GYST-VN|MFE|GM)-\d{1,5}|#\d{1,6})$")
+# A legacy board ID (INDEX.md row, issue title) or a GitHub issue number. The
+# prefixes come from the project registry, never from a literal list here.
+TASK_ID_RE = re.compile(rf"^(?:{registry.board_id_pattern()}-\d{{1,5}}|#\d{{1,6}})$")
 # A ticket key from tasks.db (CC-012, GYST-021) is also a valid dispatch target,
 # but only when that ticket exists; the shape alone is not enough.
 TICKET_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}-\d{1,6}$")
@@ -877,7 +879,7 @@ class Daemon:
         """
         if self.tasks is None:
             return
-        prefixes = self.tasks.prefixes()
+        prefixes = self.tasks.key_prefixes()  # a retired prefix still owns its old keys
         for p in self.cfg["projects"]:
             g = self.gh.get(p["key"]) or {}
             if g.get("error") or not g.get("data") or self._auto_seen.get(p["key"]) == g.get("asOf"):
@@ -886,7 +888,7 @@ class Daemon:
             data = g["data"]
 
             def mine(k):
-                return prefixes.get(k.split("-")[0]) == p["key"] and self.tasks.exists(k)
+                return prefixes.get(k.rsplit("-", 1)[0]) == p["key"] and self.tasks.exists(k)
 
             for pr in data.get("prs") if isinstance(data.get("prs"), list) else []:
                 try:
@@ -1101,8 +1103,8 @@ class Daemon:
         is_ticket = isinstance(task, str) and self.tasks is not None and bool(TICKET_KEY_RE.match(task)) \
             and self.tasks.exists(task)
         if not isinstance(task, str) or not (TASK_ID_RE.match(task) or is_ticket):
-            raise ActionError(400, "taskId must look like SV-056, GYST-VN-009, MFE-3, GM-12 or #42, "
-                                   "or be an existing ticket key")
+            raise ActionError(400, f"taskId must look like {registry.prefix_of('samvision')}-056, GYST-VN-009 or "
+                                   f"#42, or be an existing ticket key")
         if is_ticket and self.tasks.get(task)["project"] != project:
             raise ActionError(409, f"{task} belongs to another project")
         if not isinstance(note, str) or not NOTE_RE.match(note):

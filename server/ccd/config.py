@@ -15,6 +15,8 @@ import json
 import os
 from pathlib import Path
 
+from . import registry
+
 LEGACY = Path(os.environ.get("CCBOARD_HOME", Path.home() / "command-center"))
 CONFIG_PATH = Path(os.environ.get("CCD_CONFIG", LEGACY / "board" / "config.json"))
 STATE_DIR = Path(os.environ.get("CCD_STATE_DIR", LEGACY / "state"))
@@ -41,18 +43,31 @@ DEFAULTS = {
     "reconcile_seconds": 30,
     "retention_days": 30,
     # Ticket projects beyond the board's own list (they have no repo to poll).
-    "task_projects": [{"key": "commandcenter", "name": "Command Center", "prefix": "CC"}],
+    # Identity comes from the project registry; only the key is named here.
+    "task_projects": [{"key": "commandcenter"}],
 }
 
 # The only project fields that may leave the server.
-PUBLIC_PROJECT_FIELDS = ("key", "name", "repo", "path", "branch", "model", "effort", "links", "index", "prefix")
+PUBLIC_PROJECT_FIELDS = ("key", "name", "repo", "path", "branch", "model", "effort", "links", "index", "prefix",
+                         "legacy_prefixes")
 
 
 def load(path=None):
-    cfg = dict(DEFAULTS)
+    cfg = json.loads(json.dumps(DEFAULTS))  # never hand out the module's own lists
     p = Path(path) if path else CONFIG_PATH
     if p.exists():
         cfg.update(json.loads(p.read_text()))
+    for proj in cfg["projects"] + list(cfg.get("task_projects") or []):
+        # Identity — display name, ticket prefix, retired prefixes — comes from
+        # the one project registry, so the config file cannot drift from it. A
+        # config "prefix" that disagrees is a loud error; see ccd/registry.py.
+        key = proj["key"]
+        proj["prefix"] = registry.check(key, proj.get("prefix"), registry.legacy_of(key))
+        proj["legacy_prefixes"] = list(registry.legacy_of(key))
+        if registry.project(key):
+            proj["name"] = registry.name_of(key)
+        else:
+            proj.setdefault("name", key)
     for proj in cfg["projects"]:
         proj.setdefault("branch", "main")
         proj.setdefault("session", proj["key"])
