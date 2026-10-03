@@ -6,7 +6,8 @@ The control plane for Jay's agent fleet on jay-server.
 server/ccd/   the headless daemon: observes herdr, GitHub and the host; owns no agent
 server/tests/ unit + integration tests (a fake herdr that speaks the real protocol)
 scripts/      systemd user unit, installer, live canary
-web/          the browser UI — not built yet (phase P4)
+web/app/      the browser UI (P4B): React + TypeScript + Vite, served by ccd at /
+web/prototypes/ P4A design review (historical)
 docs/         API, security model, architecture
 ```
 
@@ -48,6 +49,19 @@ cd server && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m unittest discover -s tests -t .
 ../scripts/ccd-canary.py check|stop-start|degrade|replay <seq>|ws-listen <s>|measure <s>
 ```
+
+## Web UI
+
+```
+cd web/app && npm ci && npm run build      # → web/app/dist, served by ccd at / (same origin)
+npm test                                   # vitest: model, stream, controller, components
+../../scripts/dev-ccd.py                   # dev ccd on 127.0.0.1:7788 (fake herdr, seeded tickets)
+```
+
+From Windows: `ssh -N -L 7777:127.0.0.1:7777 jay-server`, open
+http://127.0.0.1:7777, paste the token (`ssh jay-server cat
+.config/command-center/ccd.token | clip`). Tickets live in
+`~/command-center/data/tasks.db` — back it up as data.
 
 ## Roll back
 

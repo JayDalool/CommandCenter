@@ -1,4 +1,4 @@
-# Security model (ccd, P2)
+# Security model (ccd, P2 + P4B)
 
 ## Exposure
 
@@ -63,3 +63,35 @@ a task to an idle coordinator under the dispatch skill's rules. Every action is
 audited before it runs. herdr methods outside an explicit allowlist
 (`herdr.ALLOWED_METHODS`) are refused before they reach the socket — ccd cannot
 close, split, start or move anything even by mistake.
+
+
+## P4B additions
+
+**Served UI.** `GET /` and `/assets/*` serve `web/app/dist` without a token
+(public code, no data), with `Content-Security-Policy: default-src 'self';
+script-src 'self'; connect-src 'self' ws://127.0.0.1:<port> …; frame-ancestors
+'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`. Non-GET to a UI
+path is 405. Host checks still apply. Every `/api/*` path except health still
+needs the token.
+
+**Token in the browser.** Pasted once; held in memory and `sessionStorage`
+(or `localStorage` if "remember" is ticked) for the 127.0.0.1:7777 origin only.
+Sent as a header for REST and as a WebSocket subprotocol — never a URL. The
+same-origin policy keeps other sites from reading it; the CSP blocks injected
+scripts.
+
+**tasks.db** (`~/command-center/data/`, 0700 dir): Jay's ticket titles,
+descriptions, notes and the audit trail. Product data: never pruned, not
+secrets. Do not paste credentials or licensed property data into tickets; there
+is no redactor on ticket text.
+
+**Attribution limit.** Agents run as the same Unix user and can read the token,
+so `X-CCD-Actor` is self-asserted: it keeps honest agents' writes from being
+filed under Jay; it is not authentication. Per-agent tokens are the fix if that
+ever matters.
+
+**Read-only by design.** The import preview reads files and cached GitHub data
+on its own read-only SQLite connection; there is no apply endpoint. herdr's
+allowlist gained only `workspace.focus` and `tab.focus`.
+
+**Host data.** Top processes expose pid, `comm` and RSS — never command lines.
