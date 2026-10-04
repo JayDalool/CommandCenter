@@ -11,7 +11,9 @@ from ccd import security
 from ccd.api import create_app
 from ccd.daemon import DISPATCH_TEMPLATE, Daemon
 from ccd.herdr import Herdr
+from ccd.config import task_projects
 from ccd.store import Store
+from ccd.tasks import TaskStore
 
 from .fake_herdr import FakeHerdr
 from .helpers import FakeGitHub, cfg, fake_git, fake_host, new_db, wait_sync
@@ -27,6 +29,20 @@ ALLOWED = {
     ("GET", "/api/agents/{agent_id}/tail"), ("WS", "/api/events"),
     ("POST", "/api/action/answer"), ("POST", "/api/action/focus"),
     ("POST", "/api/action/ack"), ("POST", "/api/action/dispatch"),
+    # P4B ticket system: product data, no infrastructure reach
+    ("GET", "/api/development"),
+    ("GET", "/api/tasks"), ("POST", "/api/tasks"), ("GET", "/api/tasks/import-preview"),
+    ("GET", "/api/tasks/{key}"), ("PATCH", "/api/tasks/{key}"), ("GET", "/api/tasks/{key}/context"),
+    ("POST", "/api/tasks/{key}/comments"), ("POST", "/api/tasks/{key}/relations"),
+    ("POST", "/api/tasks/{key}/links"),
+    # Workspace: registered roots only; every write needs Developer Unlock too
+    ("GET", "/api/development/{key}/commits"), ("GET", "/api/workspace/projects"),
+    ("GET", "/api/files/list"), ("GET", "/api/files/read"), ("GET", "/api/files/download"),
+    ("POST", "/api/files/save"), ("POST", "/api/files/upload"),
+    ("GET", "/api/attachments"), ("POST", "/api/attachments"), ("GET", "/api/attachments/{aid}/download"),
+    ("DELETE", "/api/attachments/{aid}"),
+    ("GET", "/api/developer"), ("POST", "/api/developer/unlock"), ("POST", "/api/developer/lock"),
+    ("GET", "/api/desktop/launcher"), ("GET", "/api/desktop/launcher/download"),
 }
 FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec",
                    "shell", "run", "kill", "restart", "delete", "worktree", "settings")
@@ -38,9 +54,12 @@ class ApiBase(unittest.TestCase):
         self.gh = FakeGitHub()
         self.store = Store(new_db())
         self.cfg = cfg()
+        self.tickets = TaskStore(new_db().replace("ccd.db", "tasks.db"), task_projects(self.cfg))
         self.daemon = Daemon(self.cfg, self.store, Herdr(self.fake.path, timeout=2.0), github_fn=self.gh,
-                             host_fn=fake_host, git_fn=fake_git, oom_fn=lambda: 0)
+                             host_fn=fake_host, git_fn=fake_git, oom_fn=lambda: 0, tasks=self.tickets)
         daemon = self.daemon
+        if hasattr(self, "equip"):
+            self.equip(daemon)
 
         @contextlib.asynccontextmanager
         async def lifespan(app):
@@ -48,7 +67,7 @@ class ApiBase(unittest.TestCase):
             yield
             await daemon.stop()
 
-        guarded, self.app = create_app(daemon, TOKEN, PORT, lifespan=lifespan)
+        guarded, self.app = create_app(daemon, TOKEN, PORT, lifespan=lifespan, ui=getattr(self, "ui", ""))
         self.client = TestClient(guarded, base_url=f"http://127.0.0.1:{PORT}")
         self.client.__enter__()
         wait_sync(lambda: daemon.snap is not None and daemon.herdr_state["connected"]
@@ -58,6 +77,7 @@ class ApiBase(unittest.TestCase):
     def tearDown(self):
         self.client.__exit__(None, None, None)
         self.store.close()
+        self.tickets.close()
         self.fake.stop_thread()
 
     def settle(self):

@@ -5,6 +5,7 @@ environment variable that makes ccd listen anywhere but loopback.
 """
 import asyncio
 import contextlib
+import hmac
 import json
 import logging
 import logging.handlers
@@ -14,11 +15,12 @@ import sys
 
 import uvicorn
 
-from . import __version__, config, security
+from . import __version__, attachments, config, files, security
 from .api import create_app
 from .daemon import Daemon
 from .herdr import Herdr
 from .store import Store
+from .tasks import TaskStore
 
 
 class _JsonLines(logging.Formatter):
@@ -66,8 +68,21 @@ def setup_logging():
 def build(cfg=None):
     cfg = cfg or config.load()
     store = Store(config.STATE_DIR / "ccd.db")
-    daemon = Daemon(cfg, store, Herdr(config.HERDR_SOCKET))
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tasks = TaskStore(config.DATA_DIR / "tasks.db", config.task_projects(cfg))
+    daemon = Daemon(cfg, store, Herdr(config.HERDR_SOCKET), tasks=tasks)
     token = security.load_or_create_token(config.TOKEN_PATH)
+    # Workspace: registered roots only; attachments outside every repository;
+    # a second credential (developer.token, 0600) for anything that writes.
+    upload_max = int(cfg.get("upload_max_mb") or 50) * 1024 * 1024
+    daemon.files = files.Roots(upload_max=upload_max)
+    daemon.attachments = attachments.Attachments(config.DATA_DIR / "attachments.db", config.ATTACH_DIR, upload_max)
+    dev_secret = security.load_or_create_token(config.DEV_TOKEN_PATH)
+    if hmac.compare_digest(dev_secret, token):
+        sys.exit("developer.token must differ from ccd.token")
+    daemon.dev_gate = security.DeveloperGate(dev_secret)
+    daemon.secret_values = (token, dev_secret)
+    daemon.launcher_dir = config.LAUNCHER_DIR
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -79,6 +94,8 @@ def build(cfg=None):
         finally:
             await daemon.stop()
             store.close()
+            tasks.close()
+            daemon.attachments.close()
             logging.getLogger("ccd").info(json.dumps({"msg": "stopped"}))
 
     guarded, _ = create_app(daemon, token, config.PORT, lifespan=lifespan)

@@ -1,4 +1,4 @@
-# Security model (ccd, P2)
+# Security model (ccd, P2 + P4B)
 
 ## Exposure
 
@@ -63,3 +63,120 @@ a task to an idle coordinator under the dispatch skill's rules. Every action is
 audited before it runs. herdr methods outside an explicit allowlist
 (`herdr.ALLOWED_METHODS`) are refused before they reach the socket — ccd cannot
 close, split, start or move anything even by mistake.
+
+
+## P4B additions
+
+**Served UI.** `GET /` and `/assets/*` serve `web/app/dist` without a token
+(public code, no data), with `Content-Security-Policy: default-src 'self';
+script-src 'self'; connect-src 'self' ws://127.0.0.1:<port> …; frame-ancestors
+'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`. Non-GET to a UI
+path is 405. Host checks still apply. Every `/api/*` path except health still
+needs the token.
+
+**Token in the browser.** Pasted once; held in memory and `sessionStorage`
+(or `localStorage` if "remember" is ticked) for the 127.0.0.1:7777 origin only.
+Sent as a header for REST and as a WebSocket subprotocol — never a URL. The
+same-origin policy keeps other sites from reading it; the CSP blocks injected
+scripts.
+
+**tasks.db** (`~/command-center/data/`, 0700 dir): Jay's ticket titles,
+descriptions, notes and the audit trail. Product data: never pruned, not
+secrets. Do not paste credentials or licensed property data into tickets; there
+is no redactor on ticket text.
+
+**Attribution limit.** Agents run as the same Unix user and can read the token,
+so `X-CCD-Actor` is self-asserted: it keeps honest agents' writes from being
+filed under Jay; it is not authentication. Per-agent tokens are the fix if that
+ever matters.
+
+**Read-only by design.** The import preview reads files and cached GitHub data
+on its own read-only SQLite connection; there is no apply endpoint. herdr's
+allowlist gained only `workspace.focus` and `tab.focus`.
+
+**Host data.** Top processes expose pid, `comm` and RSS — never command lines.
+
+
+## P4B revision: Development and Console
+
+**`GET /api/development`** joins data ccd already has — tickets, the cached
+GitHub poll and local branch names — and adds no new reach. The one new
+subprocess is `git log --format=%S --branches --not <default>` per repo per
+`git_seconds`, read-only, in the repos already configured. Branch names and
+commit counts are metadata, not content: no diff, no commit message, no file
+ever leaves ccd through this route.
+
+**The Console's Claude tab** uses the existing `GET /api/agents/{id}/tail`:
+redacted, capped at 200 lines, fetched on demand, never stored. It polls only
+while the page is on screen and `document.visibilityState` is `visible`, so a
+forgotten tab stops reading a pane. Typing into a blocked agent is the same
+guarded one-line action as before.
+
+**The Console's shells are not implemented.** An interactive PTY is the one
+change that would turn a leaked ccd token from "read operational metadata" into
+"run commands as jay", so it is designed in
+[ADR 0004](adr/0004-console-and-real-terminals.md) and waits for Jay rather than
+shipping quietly with the UI. When it is built it must keep every rule here:
+loopback only, the SSH tunnel, the same `Guard` (Host, Origin, token as a
+WebSocket subprotocol, never in a URL or a log), session names derived from the
+config rather than client-supplied paths, bounded output buffers with a dropped
+client rather than a stalled PTY, and audit rows for session open/close/attach
+only — never keystrokes, command lines or output, which can contain secrets.
+
+No new listener, no port, no herdr socket bridge, and no allowlist of commands
+Jay may type in his own shell: the terminal is Jay's shell. UI buttons outside a
+terminal stay under the existing safe-action rules.
+
+
+## Workspace, files and Developer Unlock (go-live)
+
+Two credentials, two powers:
+
+| Credential | Where | Allows |
+|---|---|---|
+| ccd token | `~/.config/command-center/ccd.token` (0600) | everything that reads, plus ticket metadata and the guarded herdr actions |
+| developer token | `~/.config/command-center/developer.token` (0600, created on first start, must differ from the ccd token) | **also** saving and uploading repository files, adding and removing attachments |
+
+The browser sends the developer token once to `POST /api/developer/unlock` and
+gets a random session id that lives only in ccd's memory and the tab's memory
+(never localStorage, sessionStorage, a URL or the page). Sessions end on LOCK,
+2 h idle, 8 h total, or a ccd restart. Five wrong tokens in five minutes lock
+unlocking for five minutes. Write routes answer 403 to the ccd token alone.
+
+**Roots.** The explorer, editor and uploads reach only a registered project's
+`root` in `ccd/registry.py`. The browser sends a project key and a relative
+path, never a root. Every path is refused if it holds NUL, control characters,
+a backslash, an absolute path, `..`, or a percent-encoded `.`/`..`/separator;
+symlinks are resolved and anything whose real path leaves the root is refused.
+`.git` is hidden and unwritable at any depth.
+
+**Protected files** (listed with a lock, never read, downloaded, saved or
+uploaded; checked on the requested path and again on the resolved path;
+case-insensitive). The exact lists live in `ccd/files.py`:
+
+- directories `.git .ssh .gnupg .aws .azure .kube .docker .password-store`
+- dotenv files and every variant of them, except the `.example`, `.sample`,
+  `.template` and `.dist` variants
+- private-key names (`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`), netrc,
+  npmrc, pypirc, git-credentials, pgpass, htpasswd, `credentials`,
+  `credentials.json`, `token`, `token.txt`, `secrets.{json,yaml,yml,toml}`
+- extensions `.pem .key .p12 .pfx .jks .keystore .kdbx .gpg .asc .token`
+
+**Writes.** Saves are atomic (temp file in the same folder, fsync, rename), keep
+the file's mode, refuse symlinks and non-UTF-8/NUL files, and refuse if the
+file's SHA-256 changed since it was opened (409). Uploads are raw
+`application/octet-stream` (still a CORS-preflighted type), capped at
+`upload_max_mb` (default 50), and never overwrite silently: the default fails
+on a clash, `rename` and the default place the file with a hard link that
+cannot clobber, and `replace` must be chosen explicitly.
+
+**Attachments** live in `~/.local/share/command-center/attachments/` (0700),
+named by a random 128-bit id; the original name is display metadata in
+`~/command-center/data/attachments.db`. They never enter a repository. Downloads
+are always `application/octet-stream`, `Content-Disposition: attachment`,
+`CSP: default-src 'none'; sandbox`, so HTML/SVG are saved, never rendered.
+The ticket audit trail records `attachment_added` / `attachment_removed` with
+name and size only, never contents.
+
+**Not built:** browser PTY shells (ADR 0004 phase 3). The Workspace shows them
+as NOT ENABLED.

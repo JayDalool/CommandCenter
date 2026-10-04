@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import coordinators, sources
+from . import coordinators, github, registry, sources
 from .config import HANDOFF_DIR, STATE_DIR
 
 STAGE_LABEL = {
@@ -59,12 +59,12 @@ def ci_mark(rollup):
 
 
 def short(text, n=42):
-    text = re.sub(r"^(?:SV|GYST-VN|MFE|GM)-\d+\s*[—:-]\s*", "", text or "").strip()
+    text = re.sub(rf"^{registry.board_id_pattern()}-\d+\s*[—:-]\s*", "", text or "").strip()
     return text if len(text) <= n else text[: n - 1] + "…"
 
 
 def ref_of(title, number=None):
-    m = re.search(r"\b((?:SV|GYST-VN|MFE|GM)-\d+)\b", title or "")
+    m = re.search(rf"\b({registry.board_id_pattern()}-\d+)\b", title or "")
     return m.group(1) if m else (f"#{number}" if number else "")
 
 
@@ -165,7 +165,7 @@ def project_view(p, gh, panes, blocked_min, cfg):
     for it in issues:
         labels = _labels(it)
         tasks.append({"ref": ref_of(it["title"], it["number"]), "title": short(it["title"]),
-                      "stage": stage_from_labels(labels), "url": it.get("url"),
+                      "stage": stage_from_labels(labels), "url": github.issue_url(p.get("repo"), it.get("number")),
                       "flags": [l for l in labels if l.startswith("needs:")],
                       "you_do_it": "risk:not-agent-eligible" in labels and "status:ready" in labels,
                       "has_status": any(l.startswith("status:") for l in labels)})
@@ -181,8 +181,10 @@ def project_view(p, gh, panes, blocked_min, cfg):
         mark = ci_mark(pr.get("statusCheckRollup"))
         ready = pr.get("reviewDecision") == "APPROVED" and mark in ("✓", "–") and not pr.get("isDraft")
         pr_rows.append({"number": pr["number"], "ref": ref_of(pr["title"]), "title": short(pr["title"], 38),
-                        "ci": mark, "ready": ready, "draft": pr.get("isDraft"), "url": pr.get("url"),
-                        "sha": (pr.get("headRefOid") or "")[:7], "age_h": _age_h(pr.get("updatedAt", ""))})
+                        "ci": mark, "ready": ready, "draft": pr.get("isDraft"), "url": github.pr_url(p.get("repo"), pr.get("number")),
+                        "sha": (pr.get("headRefOid") or "")[:7], "age_h": _age_h(pr.get("updatedAt", "")),
+                        "review": pr.get("reviewDecision"), "mergeable": pr.get("mergeable"),
+                        "branch": pr.get("headRefName"), "updatedAt": pr.get("updatedAt")})
 
     my_panes = [x for x in panes if x["project"] == p["key"]]
     live_panes = sources.agent_panes(my_panes)
@@ -198,9 +200,10 @@ def project_view(p, gh, panes, blocked_min, cfg):
              "actions": sources.checklist(os.path.join(p["path"], p["actions"])) if p["path"] else sources.checklist("")}
 
     cutoff = 48
-    recent = [{"ref": f"#{m['number']}", "title": short(m["title"], 40), "url": m.get("url")}
+    recent = [{"ref": f"#{m['number']}", "title": short(m["title"], 40), "url": github.pr_url(p.get("repo"), m.get("number"))}
               for m in merged if _age_h(m.get("mergedAt", "")) <= cutoff]
-    recent += [{"ref": ref_of(c["title"], c["number"]), "title": short(c["title"], 40), "url": c.get("url")}
+    recent += [{"ref": ref_of(c["title"], c["number"]), "title": short(c["title"], 40),
+                "url": github.issue_url(p.get("repo"), c.get("number"))}
                for c in closed if _age_h(c.get("closedAt", "")) <= cutoff and c.get("stateReason") in ("COMPLETED", "completed")]
 
     main_ci = "–"
@@ -219,6 +222,7 @@ def project_view(p, gh, panes, blocked_min, cfg):
     handoff = (sources.read_text(HANDOFF_DIR / f"{p['key']}.md") or "").strip().splitlines()[:3]
 
     view = {"key": p["key"], "name": p["name"], "repo": p["repo"], "path": p["path"], "source": source,
+            "repoUrl": github.repo_url(p.get("repo") or ""),
             "tasks": tasks, "prs": pr_rows, "recent": recent, "team": team, "panes": live_panes,
             "all_panes": my_panes, "tests": tests,
             "links": p["links"], "commands": p["commands"], "main_ci": main_ci, "counts": counts,

@@ -6,7 +6,8 @@ The control plane for Jay's agent fleet on jay-server.
 server/ccd/   the headless daemon: observes herdr, GitHub and the host; owns no agent
 server/tests/ unit + integration tests (a fake herdr that speaks the real protocol)
 scripts/      systemd user unit, installer, live canary
-web/          the browser UI — not built yet (phase P4)
+web/app/      the browser UI (P4B): React + TypeScript + Vite, served by ccd at /
+web/prototypes/ P4A design review (historical)
 docs/         API, security model, architecture
 ```
 
@@ -22,8 +23,17 @@ own; when ccd is down, it builds locally exactly as before.
   no Cloudflare, no Tailscale Serve, and the herdr socket is never bridged to TCP.
   The Windows client will reach it with `ssh -L 7777:127.0.0.1:7777 jay-server`.
 - **No dangerous endpoints.** There is no API for merge, deploy, production,
-  secrets, Docker, destructive git, or config/rule changes. A test asserts the
+  secrets, Docker, destructive git, or config/rule changes, and no interactive
+  shell: the Workspace's Claude tab mirrors a herdr pane, and the repo/server
+  shells are designed but not built (see
+  [ADR 0004](docs/adr/0004-console-and-real-terminals.md)). Editing and
+  uploading files inside a registered project needs a second credential,
+  Developer Unlock ([docs/SECURITY.md](docs/SECURITY.md)). A test asserts the
   route table exactly. See [docs/API.md](docs/API.md).
+- **One project registry.** A project's name, ticket prefix and retired prefixes
+  live in `server/ccd/registry.py` and nowhere else. GauzeMate is `GZ`; `GM-*`
+  keys are history and keep working. A project with no registry row and no
+  explicit prefix can hold no tickets.
 - **SQLite holds operational metadata only.** No secrets, transcripts, pane
   output, property or licensed data. See [docs/SECURITY.md](docs/SECURITY.md).
 
@@ -48,6 +58,20 @@ cd server && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m unittest discover -s tests -t .
 ../scripts/ccd-canary.py check|stop-start|degrade|replay <seq>|ws-listen <s>|measure <s>
 ```
+
+## Web UI
+
+```
+cd web/app && npm ci && npm run build      # → web/app/dist, served by ccd at / (same origin)
+npm test                                   # vitest: model, stream, controller, components
+../../scripts/dev-ccd.py                   # dev ccd on 127.0.0.1:7788 (fake herdr, seeded tickets)
+../../scripts/dev-ccd.py --port 7789       # a second preview beside a running one
+```
+
+From Windows: `ssh -N -L 7777:127.0.0.1:7777 jay-server`, open
+http://127.0.0.1:7777, paste the token (`ssh jay-server cat
+.config/command-center/ccd.token | clip`). Tickets live in
+`~/command-center/data/tasks.db` — back it up as data.
 
 ## Roll back
 

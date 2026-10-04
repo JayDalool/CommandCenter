@@ -1,0 +1,68 @@
+name: launcher
+
+on:
+  push:
+    paths:
+      - "launcher/**"
+      - "scripts/build-launcher.sh"
+      - ".github/workflows/launcher.yml"
+  pull_request:
+    paths:
+      - "launcher/**"
+      - "scripts/build-launcher.sh"
+      - ".github/workflows/launcher.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: launcher
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+          cache: false
+      - name: go vet
+        run: go vet ./...
+      - name: go test (includes job-object and binary-content tests)
+        run: go test -count=1 -v ./...
+      - name: build GUI exe
+        shell: bash
+        run: |
+          go build -trimpath -ldflags "-H windowsgui -s -w -X main.version=ci -X main.commit=${GITHUB_SHA::7}" -o CommandCenter.exe .
+          sha256sum CommandCenter.exe | tee CommandCenter.exe.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CommandCenter-windows-amd64
+          path: |
+            launcher/CommandCenter.exe
+            launcher/CommandCenter.exe.sha256
+          retention-days: 14
+
+  linux:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: launcher
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+          cache: false
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - name: go vet (linux + windows)
+        run: |
+          go vet ./...
+          GOOS=windows GOARCH=amd64 go vet ./...
+      - name: go test
+        run: go test -count=1 -race ./...
+      - name: build script (vet, test, cross-compile, PE/GUI + secret-string check)
+        working-directory: .
+        run: CCD_LAUNCHER_DIR="$RUNNER_TEMP/launcher" scripts/build-launcher.sh

@@ -22,15 +22,27 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import __version__, coordinators, model, sources
+from . import __version__, coordinators, github, model, registry, sources
 from . import herdr as herdr_mod
+from . import importer
+from . import tasks as tasks_mod
 from .config import STATE_DIR, public_project
 
 log = logging.getLogger("ccd")
 
 STRUCTURAL_EVENTS = {t.replace(".", "_") for t in herdr_mod.STRUCTURAL}
 DISPATCH_VERBS = ("plan", "implement", "review", "verify", "continue", "stop")
-TASK_ID_RE = re.compile(r"^(?:(?:SV|GYST-VN|MFE|GM)-\d{1,5}|#\d{1,6})$")
+# A legacy board ID (INDEX.md row, issue title) or a GitHub issue number. The
+# prefixes come from the project registry, never from a literal list here.
+TASK_ID_RE = re.compile(rf"^(?:{registry.board_id_pattern()}-\d{{1,5}}|#\d{{1,6}})$")
+# A ticket key from tasks.db (CC-012, GYST-021) is also a valid dispatch target,
+# but only when that ticket exists; the shape alone is not enough.
+TICKET_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}-\d{1,6}$")
+# Automatic ticket transitions. Each has one deterministic trigger; nothing is inferred.
+CREATE_FIELDS = {"description", "status", "priority", "type", "assignee", "agentRole", "parent", "branch", "labels",
+                 "flags", "dueAt", "estimate"} | set(tasks_mod.FLAGS)
+DISPATCH_TRANSITIONS = {"plan": (("INBOX", "PROPOSED"), "RESEARCHING"),
+                        "implement": (("READY_TO_IMPLEMENT",), "IN_PROGRESS")}
 ANSWER_RE = re.compile(r"^[^\x00-\x1f\x7f]{1,2000}$")
 NOTE_RE = re.compile(r"^[^\x00-\x1f\x7f]{0,500}$")
 # The dispatch skill's message, verbatim apart from the filled-in fields.
@@ -91,7 +103,32 @@ def host_snapshot(cfg, prev_cpu=None):
         "load": load, "cpuPct": cpu_pct, "cpus": os.cpu_count(),
         "uptimeS": float(up[0]) if up else None,
     })
+    info["procs"], info["claudeCount"] = top_processes()
     return info, (idle, tot)
+
+
+def top_processes(limit=8, proc="/proc"):
+    """Largest processes by resident memory: pid, short name (comm), MB, and how many are `claude`.
+
+    comm only — never the command line, which can carry tokens or paths to data.
+    """
+    rows, claude = [], 0
+    page = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
+    try:
+        pids = [d for d in os.listdir(proc) if d.isdigit()]
+    except OSError:
+        return [], None
+    for pid in pids:
+        try:
+            name = Path(proc, pid, "comm").read_text().strip()
+            rss = int(Path(proc, pid, "statm").read_text().split()[1]) * page
+        except (OSError, ValueError, IndexError):
+            continue
+        if name == "claude":
+            claude += 1
+        rows.append({"pid": int(pid), "name": name[:32], "rssMB": round(rss / 2**20)})
+    rows.sort(key=lambda r: r["rssMB"], reverse=True)
+    return rows[:limit], claude
 
 
 def oom_kills_24h():
@@ -108,23 +145,26 @@ def oom_kills_24h():
 
 
 class Daemon:
-    def __init__(self, cfg, store, herdr, *, github_fn=None, host_fn=None, git_fn=None, oom_fn=None):
+    def __init__(self, cfg, store, herdr, *, github_fn=None, host_fn=None, git_fn=None, oom_fn=None, tasks=None):
         self.cfg = cfg
         self.store = store
         self.herdr = herdr
+        self.tasks = tasks  # TaskStore, durable product data (tasks.db); None = task system off
+        self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
         self.git_fn = git_fn or self._git_collect
         self.oom_fn = oom_fn or oom_kills_24h
         self.started = _now()
         self.subscribers = set()
-        self.tasks = []
+        self._loops = []
         self._stopping = False
         self._dirty = asyncio.Event()
         self._git_now = asyncio.Event()
         self._last_action = {}
 
         self.panes = []
+        self.layout = {"workspaces": [], "tabs": [], "layouts": {}}
         self.herdr_state = {"ok": False, "connected": False, "error": "starting", "protocol": None,
                             "lastSnapshotAt": None, "lastEventAt": None, "reconnects": 0, "resyncs": 0,
                             "eventsReceived": 0, "warning": None}
@@ -135,7 +175,9 @@ class Daemon:
                                   "lastAttempt": None}
         self.gh = gh_cache
         (unpushed, _), (worktrees, git_at) = store.get("git:unpushed", {}), store.get("git:worktrees", {})
-        self.git = {"unpushed": unpushed or {}, "worktrees": worktrees or {}, "asOf": git_at, "error": None}
+        (branches, _) = store.get("git:branches", {})
+        self.git = {"unpushed": unpushed or {}, "worktrees": worktrees or {}, "branches": branches or {},
+                    "asOf": git_at, "error": None}
         host_data, host_at = store.get("host:last", {})
         self.host = {"data": host_data or {}, "asOf": host_at, "error": None, "oom24h": None,
                      "ooms_at": None, "running": set(host_data.get("running", []) if host_data else [])}
@@ -155,15 +197,15 @@ class Daemon:
     def start(self):
         loops = [self.herdr_loop, self.github_loop, self.git_loop, self.host_loop, self.derive_loop,
                  self.housekeeping_loop]
-        self.tasks = [asyncio.create_task(fn(), name=fn.__name__) for fn in loops]
+        self._loops = [asyncio.create_task(fn(), name=fn.__name__) for fn in loops]
         self._event("daemon", "daemon.started", f"ccd {__version__} started", data={"pid": os.getpid()})
         self._dirty.set()
 
     async def stop(self):
         self._stopping = True
-        for t in self.tasks:
+        for t in self._loops:
             t.cancel()
-        await asyncio.gather(*self.tasks, return_exceptions=True)
+        await asyncio.gather(*self._loops, return_exceptions=True)
         self._event("daemon", "daemon.stopped", "ccd stopped")
 
     # ---------- events ----------
@@ -258,6 +300,7 @@ class Daemon:
         snap = await self.herdr.snapshot()
         self.herdr_state["lastSnapshotAt"] = _now()
         self.herdr_state["resyncs"] += 1
+        self.layout = sources.layout_from(snap)
         self.set_panes(sources.panes_from(snap), reason)
 
     def _herdr_up(self):
@@ -379,18 +422,21 @@ class Daemon:
     # ---------- git ----------
 
     def _git_collect(self):
-        unpushed, worktrees = {}, {}
+        unpushed, worktrees, branches = {}, {}, {}
         for p in self.cfg["projects"]:
             if p.get("path"):
                 unpushed[p["key"]] = sources.unpushed_branches(p["path"])
                 worktrees[p["key"]] = sources.worktree_paths(p["path"])
-        return unpushed, worktrees
+                branches[p["key"]] = sources.branches_ahead(p["path"], p.get("branch") or "main")
+        return unpushed, worktrees, branches
 
     async def poll_git_once(self):
-        unpushed, worktrees = await asyncio.to_thread(self.git_fn)
-        self.git.update(unpushed=unpushed, worktrees=worktrees, asOf=_now(), error=None)
+        got = await asyncio.to_thread(self.git_fn)
+        unpushed, worktrees, branches = got if len(got) == 3 else (got[0], got[1], {})
+        self.git.update(unpushed=unpushed, worktrees=worktrees, branches=branches, asOf=_now(), error=None)
         self.store.put("git:unpushed", unpushed)
         self.store.put("git:worktrees", worktrees)
+        self.store.put("git:branches", branches)
         if self.panes:  # before herdr's first answer there is nothing to re-place, and the
             # remembered agent set from the last run must survive until it is compared.
             self.panes = self._attribute(self.panes)
@@ -493,6 +539,7 @@ class Daemon:
         quiet = self.seq == snap_seq  # nobody logged anything while we awaited
         self._decorate(snap)
         self._diff_and_alert(snap)    # synchronous: what it logs IS this snapshot
+        self._ticket_automation()
         snap["seq"] = self.seq if quiet else snap_seq
         self.snap = snap
 
@@ -534,8 +581,10 @@ class Daemon:
             if g.get("error") and g.get("data") is not None:
                 v["errors"] = [f"GitHub: {g['error']} (showing data as of {time.strftime('%H:%M', time.localtime(g['asOf']))})"]
         snap["coordinators"] = coord
+        snap["workspaces"] = self._workspaces(snap["panes"], live)
         snap["host"] = dict(self.host["data"] or {}, asOf=self.host["asOf"])
         snap["host"].pop("running", None)
+        snap["worktrees"] = {k: list(v or []) for k, v in (self.git["worktrees"] or {}).items()}
         snap["projectsConfig"] = [public_project(p) for p in self.cfg["projects"]]
         snap["sources"] = {
             "herdr": {k: self.herdr_state[k] for k in ("ok", "connected", "error", "protocol", "lastSnapshotAt",
@@ -669,6 +718,401 @@ class Daemon:
                 log.warning(json.dumps({"msg": "prune failed", "error": repr(e)[:200]}))
             await asyncio.sleep(86400)
 
+    # ---------- workspaces (herdr layout, read-only) ----------
+
+    def _workspaces(self, panes, agents):
+        """herdr's workspaces → tabs → panes with geometry, for the Workspaces screen.
+
+        Geometry and identity only. Terminal titles stay out (they can quote
+        anything); pane output is never part of state.
+        """
+        by_pane = {p["pane_id"]: p for p in panes}
+        role = {a["id"]: a["role"] for a in agents}
+        out = []
+        for w in self.layout.get("workspaces") or []:
+            tabs = []
+            projects = []
+            for t in (x for x in self.layout.get("tabs") or [] if x["workspaceId"] == w["id"]):
+                lay = (self.layout.get("layouts") or {}).get(t["id"]) or {}
+                cells = []
+                for c in lay.get("panes") or []:
+                    p = by_pane.get(c["paneId"], {})
+                    if p.get("project"):
+                        projects.append(p["project"])
+                    cells.append({"id": c["paneId"], "rect": c["rect"], "focused": c["focused"],
+                                  "live": bool(p.get("live")), "agentName": p.get("agent_name") or None,
+                                  "agent": p.get("agent") or None, "label": p.get("label") or None,
+                                  "status": p.get("status") if p.get("live") else None,
+                                  "role": role.get(c["paneId"]), "project": p.get("project"), "cwd": p.get("cwd") or None})
+                tabs.append({"id": t["id"], "label": t["label"], "number": t["number"], "focused": t["focused"],
+                             "zoomed": bool(lay.get("zoomed")), "focusedPaneId": lay.get("focusedPaneId"),
+                             "area": lay.get("area") or {"w": 0, "h": 0}, "panes": cells})
+            main = max(set(projects), key=projects.count) if projects else None
+            out.append({"id": w["id"], "label": w["label"], "number": w["number"], "focused": w["focused"],
+                        "activeTabId": w["activeTabId"], "project": main, "tabs": tabs})
+        return out
+
+    # ---------- tickets ----------
+
+    def _task_event(self, kind, ticket, text, data=None):
+        self._event("tasks", kind, f"{ticket['key']} {text}"[:300], project=ticket["project"], ref=ticket["key"],
+                    severity="action" if kind == "task.updated" and (data or {}).get("kind") in tasks_mod.FLAGS
+                    and (data or {}).get("to") is True else "info", data=data or {})
+
+    def _announce(self, ticket, changes):
+        """One ops event per change, so live clients refresh the ticket. The audit trail is in tasks.db."""
+        for c in changes:
+            f = c["field"]
+            if f in ("description", "title"):
+                self._task_event("task.updated", ticket, f"{f} edited", {"kind": f})
+            elif f == "labels":
+                self._task_event("task.updated", ticket, "labels changed", {"kind": f})
+            else:
+                frm = c["from"] if not isinstance(c["from"], (list, dict)) else None
+                to = c["to"] if not isinstance(c["to"], (list, dict)) else None
+                self._task_event("task.updated", ticket, f"{f} {frm if frm not in (None, '') else '—'} → "
+                                 f"{to if to not in (None, '') else '—'}", {"kind": f, "from": frm, "to": to})
+
+    def _need_tasks(self):
+        if self.tasks is None:
+            raise ActionError(503, "the task system is not enabled")
+        return self.tasks
+
+    def _wrap(self, fn, *a, **kw):
+        try:
+            return fn(*a, **kw)
+        except tasks_mod.TaskError as e:
+            raise ActionError(e.status, e.message)
+        except (ValueError, TypeError) as e:
+            raise ActionError(400, f"bad value: {str(e)[:120]}")
+
+    def task_list(self, project=None, include_archived=False):
+        ts = self._need_tasks()
+        return {"tickets": ts.list(project=project, include_archived=include_archived), "projects": ts.projects(),
+                "meta": ts.meta(), "seq": self.seq}
+
+    def task_get(self, key):
+        return self._wrap(self._need_tasks().get, key)
+
+    # ---------- development traceability ----------
+
+    CI_WORD = {"\u2713": "PASS", "\u2717": "FAIL", "\u2026": "PENDING", "\u2013": "NONE"}
+    DEV_STAGES = ("branch", "commits", "pr", "ci", "review", "merge", "verify", "deploy")
+
+    def _pr_index(self, project_key):
+        """PR number → one flat record, open PRs and recently merged ones alike."""
+        g = self.gh.get(project_key) or {}
+        data = g.get("data") or {}
+        slug = next((p.get("repo") for p in self.cfg["projects"] if p["key"] == project_key), None) \
+            or registry.github_of(project_key)
+        out = {}
+        for pr in data.get("prs") if isinstance(data.get("prs"), list) else []:
+            if not isinstance(pr, dict) or not isinstance(pr.get("number"), int):
+                continue  # one odd row must not 500 the whole view
+            rollup = pr.get("statusCheckRollup")
+            out[pr["number"]] = {
+                "number": pr["number"], "state": "DRAFT" if pr.get("isDraft") else "OPEN",
+                "url": github.pr_url(slug, pr["number"]), "title": pr.get("title"), "branch": pr.get("headRefName"),
+                "ci": self.CI_WORD.get(model.ci_mark(rollup), "NONE"),
+                "review": pr.get("reviewDecision") or "PENDING",
+                "mergedAt": None, "asOf": g.get("asOf"),
+            }
+        for pr in data.get("merged") if isinstance(data.get("merged"), list) else []:
+            if not isinstance(pr, dict) or not isinstance(pr.get("number"), int):
+                continue
+            prev = out.get(pr["number"]) or {}
+            out[pr["number"]] = {**prev, "number": pr["number"], "state": "MERGED", "url": github.pr_url(slug, pr["number"]),
+                                 "title": pr.get("title"), "mergedAt": pr.get("mergedAt"),
+                                 "ci": prev.get("ci", "NONE"), "review": prev.get("review", "PENDING"),
+                                 "branch": prev.get("branch"), "asOf": g.get("asOf")}
+        return out
+
+    def _branch_for(self, ticket, branches):
+        """The ticket's branch, by strong evidence only.
+
+        1. `ticket.branch` — set by hand or from a linked PR's head branch
+        2. a local branch whose leading segment IS the key (SV-056-x, claude/SV-056)
+
+        A key merely mentioned inside a branch name ("fix-after-SV-056") is not
+        evidence and is ignored. Returns None rather than a guess.
+        """
+        named = ticket.get("branch")
+        if named:
+            row = branches.get(named) or {}
+            return {"name": named, "evidence": "ticket branch", "exists": bool(row),
+                    "commits": row.get("commits"), "head": row.get("head"), "at": row.get("at"),
+                    "countOk": row.get("countOk", False)}
+        key = ticket["key"]
+        for name, row in sorted(branches.items()):
+            if self.tasks.pr_keys("", name) == [key]:
+                return {"name": name, "evidence": "branch named for the ticket", "exists": True,
+                        "commits": row.get("commits"), "head": row.get("head"), "at": row.get("at"),
+                        "countOk": row.get("countOk", False)}
+        return None
+
+    def development(self, project=None):
+        """Ticket → branch → commits → PR → CI → review → merge → verify → deploy.
+
+        Every association is evidence ccd can point at: the ticket's own branch,
+        a branch whose leading segment is the key, or a PR linked to the ticket
+        (which the automation only links when the key LEADS its title or branch).
+        Nothing is inferred from a key mentioned in passing, and `deploy` is
+        always unknown because ccd observes no deployments.
+        """
+        ts = self._need_tasks()
+        tickets = ts.list(project=project)
+        links = ts.links_by_key("github", "pr")
+        prs_by_project = {}
+        rows = []
+        for t in tickets:
+            if t["project"] not in prs_by_project:
+                prs_by_project[t["project"]] = self._pr_index(t["project"])
+            prs = prs_by_project[t["project"]]
+            branches = (self.git.get("branches") or {}).get(t["project"]) or {}
+            branch = self._branch_for(t, branches)
+            linked = []
+            for link in links.get(t["key"]) or []:
+                num = link["ref"].rsplit("#", 1)[-1]
+                rec = prs.get(int(num)) if num.isdigit() else None
+                linked.append(rec or {"number": int(num) if num.isdigit() else None, "state": "UNKNOWN",
+                                      "url": github.pr_ref_url(link["ref"]), "title": link["title"], "ci": "NONE",
+                                      "review": "PENDING", "mergedAt": None, "branch": None, "asOf": None})
+            pr = linked[0] if linked else None
+            merged = bool(pr and pr["state"] == "MERGED")
+            if merged:
+                merge = "MERGED"
+            elif t["status"] == "READY_TO_MERGE":
+                merge = "WAITING FOR JAY"
+            elif t["status"] == "BLOCKED":
+                merge = "BLOCKED"
+            else:
+                merge = None
+            verify = {"VERIFYING": "PENDING", "DONE": "DONE"}.get(t["status"])
+            active = t["status"] in ("IN_PROGRESS", "IN_REVIEW", "READY_TO_MERGE", "VERIFYING")
+            if not (branch or pr or active):
+                continue
+            rows.append({
+                "key": t["key"], "project": t["project"], "title": t["title"], "status": t["status"],
+                "priority": t["priority"], "assignee": t["assignee"], "flags": t["flags"],
+                "updatedAt": t["updatedAt"],
+                "branch": branch, "prs": linked, "pr": pr,
+                "commits": (branch or {}).get("commits"),
+                "ci": pr["ci"] if pr else None,
+                "review": pr["review"] if pr else None,
+                "merge": merge, "verify": verify, "deploy": None,
+            })
+        rows.sort(key=lambda r: (-tasks_mod.STATUSES.index(r["status"]) if r["status"] in tasks_mod.STATUSES else 0,
+                                 r["key"]))
+        return {"rows": rows, "seq": self.seq, "gitAsOf": self.git.get("asOf"),
+                "stages": list(self.DEV_STAGES),
+                "notes": ["Associations use strong evidence only: the ticket's branch, a branch whose leading "
+                          "segment is the key, or a PR linked to the ticket. A key mentioned in passing is not "
+                          "an association.",
+                          "deploy is always unknown: ccd observes no deployments."]}
+
+    BRANCH_RE = re.compile(r"^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$")
+
+    def dev_commits(self, key, limit=50):
+        """The commits on a ticket's branch that its base branch lacks: sha, subject, author, time, URL.
+        Read-only `git log` in the registered checkout; nothing is fetched."""
+        return self.dev_commits_run(self.dev_commits_plan(key, limit))
+
+    def dev_commits_plan(self, key, limit=50):
+        dev = self.development()
+        row = next((r for r in dev["rows"] if r["key"] == str(key).upper()), None)
+        if not row:
+            raise ActionError(404, f"no development activity for {key}")
+        branch = (row.get("branch") or {}).get("name") or ((row.get("pr") or {}).get("branch"))
+        root = registry.root_of(row["project"])
+        cfgp = next((p for p in self.cfg["projects"] if p["key"] == row["project"]), {})
+        base = cfgp.get("branch") or "main"
+        slug = cfgp.get("repo") or registry.github_of(row["project"])
+        out = {"key": row["key"], "branch": branch, "base": base, "commits": [],
+               "branchUrl": github.branch_url(slug, branch) if branch else None}
+        return {"out": out, "root": root, "slug": slug, "limit": int(limit)}
+
+    def dev_commits_run(self, plan):
+        out, root, slug, limit = plan["out"], plan["root"], plan["slug"], plan["limit"]
+        branch, base = out["branch"], out["base"]
+        if not branch or not root or not self.BRANCH_RE.match(branch) or not self.BRANCH_RE.match(base):
+            return out
+        try:
+            r = subprocess.run(["git", "-C", root, "log", f"--max-count={int(limit)}", "--no-color",
+                                "--format=%H%x1f%s%x1f%an%x1f%at", f"refs/heads/{base}..refs/heads/{branch}", "--"],
+                               capture_output=True, text=True, timeout=8, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            out["error"] = "git log failed"
+            return out
+        if r.returncode != 0:
+            out["error"] = "branch not found locally"
+            return out
+        for line in r.stdout.splitlines():
+            parts = line.split("\x1f")
+            if len(parts) != 4:
+                continue
+            sha, subject, author, at = parts
+            out["commits"].append({"sha": sha, "short": sha[:7], "message": subject[:300], "author": author[:100],
+                                   "at": int(at) if at.isdigit() else None, "url": github.commit_url(slug, sha)})
+        return out
+
+    def workspace_projects(self):
+        """Every registered project the Workspace can open: identity, root, branch, coordinator.
+        Roots come from the registry only."""
+        views = {v["key"]: v for v in (self.snap or {}).get("projects") or []}
+        out = []
+        for key, reg in sorted(registry.PROJECTS.items()):
+            root = reg.get("root")
+            branch = None
+            if root and os.path.isdir(root):
+                try:
+                    r = subprocess.run(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True,
+                                       text=True, timeout=3, check=False)
+                    branch = r.stdout.strip() if r.returncode == 0 else None
+                except (OSError, subprocess.TimeoutExpired):
+                    branch = None
+            coord = (views.get(key) or {}).get("coordinator") or None
+            out.append({"key": key, "name": reg["name"], "prefix": reg["prefix"], "root": root,
+                        "exists": bool(root and os.path.isdir(root)), "branch": branch,
+                        "github": github.identity(reg.get("github") or ""),
+                        "coordinator": {"id": coord.get("pane_id"), "name": coord.get("agent_name") or coord.get("label"),
+                                        "status": coord.get("status"), "cwd": coord.get("cwd")} if coord else None})
+        return {"projects": out}
+
+    def task_context(self, key):
+        ctx = self._wrap(self._need_tasks().context, key)
+        t = ctx["ticket"]
+        coord = (self.snap or {}).get("coordinators", {}).get(t["project"]) if self.snap else None
+        ctx["coordinator"] = coord
+        ctx["dispatchable"] = bool(coord) and t["project"] in set(
+            self.cfg.get("dispatch_projects") or ("samvision", "gauzemate"))
+        return ctx
+
+    def task_create(self, body, actor="jay"):
+        ts = self._need_tasks()
+        if not isinstance(body, dict):
+            raise ActionError(400, "body must be an object")
+        # Only ticket fields. `number` (import-only) and anything else are refused, not passed on.
+        extra = set(body) - {"project", "title"} - CREATE_FIELDS
+        if extra:
+            raise ActionError(400, f"cannot set {', '.join(sorted(extra))} on create")
+        fields = {k: v for k, v in body.items() if k in CREATE_FIELDS}
+        ticket, changes = self._wrap(ts.create, str(body.get("project") or ""), body.get("title"), actor, **fields)
+        self._task_event("task.created", ticket, f"created · {ticket['title']}", {"status": ticket["status"]})
+        return ticket
+
+    def task_update(self, key, body, actor="jay"):
+        ticket, changes = self._wrap(self._need_tasks().update, key, body, actor)
+        self._announce(ticket, changes)
+        return ticket
+
+    def task_comment(self, key, body, actor="jay"):
+        ticket = self._wrap(self._need_tasks().comment, key, body, actor)
+        self._task_event("task.commented", ticket, "note added", {"count": len(ticket["comments"])})
+        return ticket
+
+    def task_relate(self, key, kind, target, remove=False, actor="jay"):
+        ticket, changed = self._wrap(self._need_tasks().relate, key, kind, target, actor, remove)
+        if changed:
+            other = self._wrap(self._need_tasks().get, target)
+            for t in (ticket, other):
+                self._task_event("task.updated", t, "relations changed", {"kind": "relations"})
+        return ticket
+
+    def task_link(self, key, body, actor="jay"):
+        ticket, changed = self._wrap(self._need_tasks().link, key, str(body.get("provider") or "github"),
+                                     str(body.get("kind") or "pr"), body.get("ref"), body.get("url"),
+                                     body.get("title"), actor, None, bool(body.get("remove")))
+        if changed:
+            self._task_event("task.updated", ticket, f"{'unlinked' if body.get('remove') else 'linked'} "
+                             f"{body.get('kind') or 'pr'} {body.get('ref')}", {"kind": "links"})
+        return ticket
+
+    def task_import_preview(self):
+        """Runs in a worker thread, on its own read-only connection to tasks.db."""
+        reader = self._need_tasks().reader()
+        try:
+            return importer.preview(self.cfg["projects"], self._gh_data(), reader)
+        finally:
+            if reader is not self.tasks:
+                reader.close()
+
+    def _auto(self, key, frm, to, trigger):
+        """One automatic status move, if the ticket is still in `frm` and Jay has not overridden it.
+
+        Jay wins: if the last status change was a human moving the ticket away
+        from `to`, automation does not move it back. Actor system:automation,
+        trigger recorded with the change.
+        """
+        t = self.tasks.get(key)
+        if t["status"] not in frm:
+            return t
+        last = self.tasks.last_status_event(key)
+        if last and not last["actor"].startswith("system:") and last["from"] == to:
+            return t
+        ticket, changes = self.tasks.update(key, {"status": to}, "system:automation", trigger=trigger)
+        self._announce(ticket, changes)
+        return ticket
+
+    def _ticket_automation(self):
+        """GitHub → tickets, only on deterministic triggers.
+
+          open PR whose title or branch LEADS with a key (same project) → link it, set branch
+          ...ticket READY_TO_IMPLEMENT or IN_PROGRESS                      → IN_REVIEW
+          linked PR approved, checks green, not draft, ticket IN_REVIEW    → READY_TO_MERGE
+          linked PR no longer ready, ticket READY_TO_MERGE                 → IN_REVIEW
+          linked PR merged (found by link, not title), IN_REVIEW/READY_TO_MERGE → VERIFYING
+
+        Once per fresh GitHub poll per project. Never closes a ticket
+        (VERIFYING → DONE is a verifier's or Jay's call) and never undoes a
+        status Jay set by hand.
+        """
+        if self.tasks is None:
+            return
+        prefixes = self.tasks.key_prefixes()  # a retired prefix still owns its old keys
+        for p in self.cfg["projects"]:
+            g = self.gh.get(p["key"]) or {}
+            if g.get("error") or not g.get("data") or self._auto_seen.get(p["key"]) == g.get("asOf"):
+                continue
+            self._auto_seen[p["key"]] = g.get("asOf")
+            data = g["data"]
+
+            def mine(k):
+                return prefixes.get(k.rsplit("-", 1)[0]) == p["key"] and self.tasks.exists(k)
+
+            for pr in data.get("prs") if isinstance(data.get("prs"), list) else []:
+                try:
+                    n = pr["number"]
+                    ref = f"{p['repo']}#{n}"
+                    keys = [k for k in self.tasks.pr_keys(pr.get("title", ""), pr.get("headRefName", "")) if mine(k)]
+                    keys += [k for k in self.tasks.keys_linked("github", "pr", ref) if k not in keys]
+                    ci = model.ci_mark(pr.get("statusCheckRollup"))
+                    ready = pr.get("reviewDecision") == "APPROVED" and ci in ("✓", "–") and not pr.get("isDraft")
+                    for k in keys:
+                        if not self.tasks.has_link(k, "github", "pr", ref):
+                            t, _ = self.tasks.link(k, "github", "pr", ref, github.pr_ref_url(ref), pr.get("title"),
+                                                   "system:automation", trigger=f"PR #{n} title or branch leads with {k}")
+                            self._task_event("task.updated", t, f"linked PR #{n}", {"kind": "links"})
+                        t = self.tasks.get(k)
+                        if not t["branch"] and pr.get("headRefName"):
+                            t, ch = self.tasks.update(k, {"branch": pr["headRefName"]}, "system:automation",
+                                                      trigger=f"PR #{n} head branch")
+                            self._announce(t, ch)
+                        self._auto(k, ("READY_TO_IMPLEMENT", "IN_PROGRESS"), "IN_REVIEW", f"PR #{n} is open")
+                        if ready:
+                            self._auto(k, ("IN_REVIEW",), "READY_TO_MERGE", f"PR #{n} approved, checks green, not draft")
+                        else:
+                            self._auto(k, ("READY_TO_MERGE",), "IN_REVIEW",
+                                       f"PR #{n} no longer approved with green checks")
+                except Exception as e:  # noqa: BLE001 — one odd PR must not fail the snapshot
+                    log.warning(json.dumps({"msg": "ticket automation skipped a PR", "error": repr(e)[:200]}))
+            for m in data.get("merged") if isinstance(data.get("merged"), list) else []:
+                try:
+                    ref = f"{p['repo']}#{m['number']}"
+                    for k in self.tasks.keys_linked("github", "pr", ref):
+                        self._auto(k, ("IN_REVIEW", "READY_TO_MERGE"), "VERIFYING", f"PR #{m['number']} merged")
+                except Exception as e:  # noqa: BLE001
+                    log.warning(json.dumps({"msg": "ticket automation skipped a merge", "error": repr(e)[:200]}))
+
     # ---------- read API ----------
 
     def state(self):
@@ -678,6 +1122,18 @@ class Daemon:
         snap.setdefault("seq", 0)
         snap.update(latestSeq=self.seq, version=__version__, health=self.health(short=True))
         snap.setdefault("alerts", self.alerts)
+        if self.tasks is not None:
+            # Ticket flags (needs:jay, needs:legal, …) join the one Needs-Jay queue.
+            # Read live from tasks.db, so a flag shows the moment it is set.
+            ticket_needs = self.tasks.needs()
+            snap["needs"] = list(snap.get("needs") or []) + ticket_needs
+            totals = dict(snap.get("totals") or {})
+            totals["needs"] = totals.get("needs", 0) + len(ticket_needs)
+            totals["tickets"] = self.tasks.counts()
+            snap["totals"] = totals
+            srcs = dict(snap.get("sources") or {})
+            srcs["tasks"] = {"ok": True, "asOf": self.tasks.last_change, "error": None}
+            snap["sources"] = srcs
         return snap
 
     def health(self, short=False):
@@ -690,6 +1146,8 @@ class Daemon:
             "gh": {"ok": gh_ok, "projects": {k: {"asOf": v["asOf"], "error": v["error"]} for k, v in self.gh.items()}},
             "git": {"asOf": self.git["asOf"], "error": self.git["error"]},
             "host": {"asOf": self.host["asOf"], "error": self.host["error"]},
+            "tasks": {"enabled": self.tasks is not None,
+                      "schemaVersion": tasks_mod.SCHEMA_VERSION if self.tasks is not None else None},
             "seq": self.seq,
             "uptimeS": round(_now() - self.started, 1),
             "version": __version__,
@@ -723,6 +1181,11 @@ class Daemon:
         lines = max(1, min(int(lines), 200))
         got = await self.herdr.read_tail(agent["pane_id"], lines)
         text, n = redact(got["text"])
+        # ccd's own credentials have no recognisable shape; redact their exact values.
+        for secret in getattr(self, "secret_values", ()) or ():
+            if secret and secret in text:
+                n += text.count(secret)
+                text = text.replace(secret, "[redacted]")
         return {"agentId": agent["pane_id"], "name": agent.get("agent_name") or None, "lines": lines,
                 "text": text, "redactions": n, "truncated": got["truncated"]}
 
@@ -761,6 +1224,28 @@ class Daemon:
                         data={"kind": "answer", "error": str(e)[:160]})
             raise ActionError(502, f"herdr refused: {e}")
         return {"ok": True, "agentId": pid}
+
+    async def act_focus_layout(self, workspace_id=None, tab_id=None):
+        """Bring a herdr workspace or tab forward in Jay's attached herdr client. Changes no layout."""
+        target = tab_id or workspace_id
+        if not isinstance(target, str) or not re.match(r"^[A-Za-z0-9]{1,8}(:t[A-Za-z0-9]{1,8})?$", target):
+            raise ActionError(400, "workspaceId or tabId required")
+        self._throttle(f"focus:{target}", 0.3)
+        if not self.herdr_state["ok"]:
+            raise ActionError(503, "herdr unreachable")
+        await self.resync("action")
+        known = {w["id"] for w in self.layout.get("workspaces") or []} | {t["id"] for t in self.layout.get("tabs") or []}
+        if target not in known:
+            raise ActionError(404, "no such workspace or tab")
+        self._event("action", "action.focus", f"focus {'tab' if tab_id else 'workspace'} {target}", ref=target)
+        try:
+            if tab_id:
+                await self.herdr.focus_tab(tab_id)
+            else:
+                await self.herdr.focus_workspace(workspace_id)
+        except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
+            raise ActionError(502, f"herdr refused: {e}")
+        return {"ok": True, "target": target}
 
     async def act_focus(self, ident):
         self._throttle(f"focus:{ident}", 0.3)
@@ -809,8 +1294,13 @@ class Daemon:
             raise ActionError(409, f"{project} has no coordinator; tasks go to a lane (see the dispatch skill)")
         if verb not in DISPATCH_VERBS:
             raise ActionError(400, f"verb must be one of {', '.join(DISPATCH_VERBS)}")
-        if not isinstance(task, str) or not TASK_ID_RE.match(task):
-            raise ActionError(400, "taskId must look like SV-056, GYST-VN-009, MFE-3, GM-12 or #42")
+        is_ticket = isinstance(task, str) and self.tasks is not None and bool(TICKET_KEY_RE.match(task)) \
+            and self.tasks.exists(task)
+        if not isinstance(task, str) or not (TASK_ID_RE.match(task) or is_ticket):
+            raise ActionError(400, f"taskId must look like {registry.prefix_of('samvision')}-056, GYST-VN-009 or "
+                                   f"#42, or be an existing ticket key")
+        if is_ticket and self.tasks.get(task)["project"] != project:
+            raise ActionError(409, f"{task} belongs to another project")
         if not isinstance(note, str) or not NOTE_RE.match(note):
             raise ActionError(400, "note must be printable, one line, at most 500 characters")
         self._throttle(f"dispatch:{project}", 5.0)
@@ -830,4 +1320,10 @@ class Daemon:
             self._event("action", "action.failed", f"dispatch to {name} failed", severity="warn",
                         project=project, data={"kind": "dispatch", "error": str(e)[:160]})
             raise ActionError(502, f"herdr refused: {e}")
+        if is_ticket:
+            rule = DISPATCH_TRANSITIONS.get(verb)
+            t = self.tasks.get(task)
+            self._task_event("task.updated", t, f"dispatched: {verb} → {name}", {"kind": "dispatch"})
+            if rule:
+                self._auto(task, rule[0], rule[1], f"dispatch '{verb}' accepted by idle coordinator {name}")
         return {"ok": True, "coordinator": name, "task": task, "verb": verb, "plan": plan}

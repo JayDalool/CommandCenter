@@ -82,3 +82,64 @@ def redact(text):
 def control_free(text):
     """Printable text only: no escape sequences can be typed into a pane."""
     return not re.search(r"[\x00-\x08\x0b-\x1f\x7f]", text or "")
+
+
+class DeveloperGate:
+    """The second, higher credential: Developer Unlock.
+
+    The ordinary ccd token reads and steers metadata. Changing a repository
+    file, uploading, removing an attachment — anything that writes Jay's code or
+    files — needs Developer Unlock: the browser presents the secret in
+    ~/.config/command-center/developer.token (0600) once, to /api/developer/unlock,
+    and receives a random session id that lives only in ccd's memory and the
+    tab's memory. The secret itself is never stored by the UI, never returned,
+    never logged. Sessions end on lock, after IDLE seconds unused, after TTL
+    seconds regardless, and on any ccd restart. Five wrong secrets in five
+    minutes lock unlocking for the rest of those five minutes.
+    """
+    TTL = 8 * 3600
+    IDLE = 2 * 3600
+    FAIL_WINDOW = 300
+    FAIL_LIMIT = 5
+
+    def __init__(self, secret, clock=None):
+        import time as _time
+        self.secret = secret
+        self.clock = clock or _time.monotonic
+        self.sessions = {}  # id → (created, last_used)
+        self.fails = []
+
+    def unlock(self, presented):
+        now = self.clock()
+        self.fails = [t for t in self.fails if now - t < self.FAIL_WINDOW]
+        if len(self.fails) >= self.FAIL_LIMIT:
+            return None, "too many wrong attempts; wait five minutes"
+        if not isinstance(presented, str) or not token_ok(self.secret, presented.strip()):
+            self.fails.append(now)
+            return None, "that is not the developer token"
+        sid = secrets.token_urlsafe(32)
+        self.sessions[sid] = (now, now)
+        return sid, None
+
+    def check(self, sid):
+        if not isinstance(sid, str) or not sid:
+            return False
+        now = self.clock()
+        for k, (made, used) in list(self.sessions.items()):
+            if now - made > self.TTL or now - used > self.IDLE:
+                del self.sessions[k]
+        for k in self.sessions:
+            if hmac.compare_digest(k, sid):
+                self.sessions[k] = (self.sessions[k][0], now)
+                return True
+        return False
+
+    def expires_in(self, sid):
+        hit = self.sessions.get(sid) if isinstance(sid, str) else None
+        if not hit:
+            return None
+        now = self.clock()
+        return max(0, min(self.TTL - (now - hit[0]), self.IDLE - (now - hit[1])))
+
+    def lock(self, sid):
+        self.sessions.pop(sid, None) if isinstance(sid, str) else None
