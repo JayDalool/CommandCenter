@@ -570,12 +570,19 @@ export function Workspace() {
                 active={term === "claude" && termOpen} theme={theme} onMaximize={() => maximize("term")}
                 closeText={`Close the Claude terminal for ${proj.name}? Only this attach closes — Claude keeps running in herdr.`}
                 toolbar={<span className="mono-xs faint" title="herdr direct attach: Ctrl+B then q detaches; Ctrl+B Ctrl+B sends a literal Ctrl+B">Ctrl+B q detaches</span>} />}
-            <div className="native-strip">
+            <div className="native-strip" onClickCapture={(e) => {
+              // herdr allows one writer: hand Claude over to the native terminal / the mirror by
+              // releasing the browser's attach first (Claude itself keeps running).
+              const el = (e.target as HTMLElement).closest("a,button");
+              if (el && (el.getAttribute("href")?.startsWith("commandcenter:") || el.getAttribute("data-release") === "1"))
+                void app.api.ptyClose(`claude:${proj.prefix}`).catch(() => undefined);
+            }}>
               <NativeButton action="claude" prefix={proj.prefix} primary={false} small>Open native terminal</NativeButton>
               {coordinatorAgent && <button type="button" className="btn is-quiet is-sm" onClick={() => void workspace.focusAgent(coordinatorAgent.id)}>Open in herdr</button>}
-              <button type="button" className="btn is-quiet is-sm" aria-pressed={claudeMirror} onClick={() => setClaudeMirror(!claudeMirror)}
+              <button type="button" className="btn is-quiet is-sm" aria-pressed={claudeMirror} data-release={claudeMirror ? "0" : "1"}
+                onClick={() => setClaudeMirror(!claudeMirror)}
                 title="The old read-only snapshot view (fallback)">{claudeMirror ? "Back to terminal" : "Mirror"}</button>
-              <span className="mono-xs faint">one writer at a time: if the native terminal is attached, the browser is refused (and vice versa)</span>
+              <span className="mono-xs faint">one writer at a time — Open native terminal and Mirror release the browser's attach; leaving Workspace releases it after a minute</span>
             </div>
           </>}
         </div>

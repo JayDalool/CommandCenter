@@ -46,7 +46,11 @@ RING_BYTES = 256 * 1024
 CLIENT_QUEUE = 512          # chunks; ~ up to 32 MiB worst case per client before it is dropped
 READ_CHUNK = 64 * 1024
 INPUT_MAX = 64 * 1024       # one input message
-IDLE_EXPIRE = 12 * 3600     # an unattached session ends after this long
+IDLE_EXPIRE = 12 * 3600     # an unattached shell ends after this long
+# A claude:<PREFIX> session holds herdr's single writable attach slot for that coordinator, so
+# once nobody is viewing it, it is released quickly (a refresh or quick navigation reattaches
+# within the grace; anything longer frees the slot for the native terminal).
+CLAUDE_GRACE = 60.0
 CLOSE_GRACE = 2.0
 
 
@@ -106,6 +110,7 @@ class PtyManager:
         self.user = pw.pw_name
         self.env = env
         self.cc_terminal = cc_terminal or CC_TERMINAL
+        self.claude_grace = CLAUDE_GRACE
         self.python = python or sys.executable
         # own_scope: start each shell in its own transient systemd user scope, OUTSIDE ccd's
         # cgroup, so a build in a terminal neither shares ccd's MemoryMax nor can get ccd OOM-killed.
@@ -344,7 +349,19 @@ class PtyManager:
             s.clients.discard(c)
             if not s.clients:
                 s.detached_at = time.time()
+                if s.name.startswith("claude:"):
+                    asyncio.get_running_loop().call_later(self.claude_grace, self._release_if_unwatched, s)
             self.audit("pty.detached", f"terminal {s.name} detached", {"session": s.name, "clients": len(s.clients)})
+
+    def _release_if_unwatched(self, s):
+        if not s.clients and not s.ended and self.sessions.get(s.name) is s:
+            asyncio.get_running_loop().create_task(self._quiet_close(s.name, "expired"))
+
+    async def _quiet_close(self, name, reason):
+        try:
+            await self.close(name, reason)
+        except PtyError:
+            pass
 
     def write(self, s, data):
         if s.ended:

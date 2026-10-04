@@ -174,3 +174,29 @@ class ClaudeAttachPty(unittest.TestCase):
         self.assertTrue(m.cc_terminal.endswith(os.path.join("scripts", "cc-terminal")))
         self.assertTrue(os.access(m.cc_terminal, os.X_OK))
         self.assertEqual(seen["cwd"], ROOTS["samvision"])
+
+
+@unittest.skipUnless(HAVE_ROOTS, "needs the registered checkouts (jay-server)")
+class ClaudeWriterSlot(ClaudeAttachPty):
+    def test_an_unwatched_claude_attach_releases_herdrs_writer_slot(self):
+        async def run():
+            m = self.manager()
+            m.claude_grace = 0.5
+            s, _ = await m.open("claude:SV")
+            c, _ = m.attach(s)
+            await self.read_until(c, b"ATTACHED")
+            m.detach(s, c)
+            await asyncio.sleep(0.2)
+            c2, _ = m.attach(s)              # came back within the grace: same attach
+            m.detach(s, c2)
+            await asyncio.sleep(1.5)          # nobody watching past the grace: released
+            self.assertNotIn("claude:SV", m.sessions)
+            self.assertIsNone(self.coordinator.poll())
+            # repo shells are not released early
+            r, _ = await m.open("repo:SV")
+            rc, _ = m.attach(r)
+            m.detach(r, rc)
+            await asyncio.sleep(1.0)
+            self.assertIn("repo:SV", m.sessions)
+            await m.close_all()
+        asyncio.run(run())
