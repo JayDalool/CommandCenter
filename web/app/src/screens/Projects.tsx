@@ -66,7 +66,7 @@ function ActionBar({ k, github, paneId, coordName, coordStatus, asOf }: {
       <a className="btn is-sm" href={ws({ view: "scm" })}>Source control</a>
       <a className="btn is-sm" href={href("development", null, { project: k })}>Development</a>
       {github && <a className="btn is-sm" href={github} target="_blank" rel="noopener noreferrer">GitHub ↗</a>}
-      <button type="button" className="btn is-sm" onClick={() => window.dispatchEvent(new Event("cc:new-task"))}>New ticket</button>
+      <button type="button" className="btn is-sm" onClick={() => window.dispatchEvent(new CustomEvent("cc:new-task", { detail: { project: k } }))}>New ticket</button>
       {paneId && <button type="button" className="btn is-quiet is-sm" onClick={() => void workspace.focusAgent(paneId)}>Focus coordinator in herdr</button>}
     </div>
     <div className="row mono-xs muted" style={{ flexWrap: "wrap", gap: 12 }}>

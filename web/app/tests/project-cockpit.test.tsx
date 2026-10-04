@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act, within } from "@testing-library/react";
 import { vi } from "vitest";
 import { app, initial } from "../src/store/app";
 import { Projects, resetRegistryCache } from "../src/screens/Projects";
+import { AppShell } from "../src/components/Shell";
 import { state, tasks } from "./helpers";
 
 const reg = [{ key: "commandcenter", name: "Command Center", prefix: "CC", root: "/srv/cc", exists: true, branch: "main",
@@ -55,4 +56,14 @@ it("commandcenter: same bar from the registry, fetched once", async () => {
   await waitFor(() => expect(screen.getByText("cc-coord")).toBeTruthy());
   expect(container.querySelector('a[href^="#/workspaces"]')).toBeNull();
   expect(app.api.workspaceProjects).toHaveBeenCalledTimes(1);
+});
+
+it("New ticket preselects the project; a plain cc:new-task event still works", async () => {
+  location.hash = "#/tasks";
+  render(<AppShell><div /></AppShell>);
+  act(() => { window.dispatchEvent(new CustomEvent("cc:new-task", { detail: { project: "commandcenter" } })); });
+  const dlg = await screen.findByRole("dialog");
+  expect((within(dlg).getByLabelText("Project") as HTMLSelectElement).value).toBe("commandcenter");
+  act(() => { window.dispatchEvent(new Event("cc:new-task")); });
+  expect(screen.getAllByRole("dialog").length).toBeGreaterThan(0);
 });

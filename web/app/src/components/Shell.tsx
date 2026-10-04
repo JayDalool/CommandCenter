@@ -187,11 +187,12 @@ function Toast() {
 export function AppShell({ children, flush = false }: { children: ReactNode; flush?: boolean }) {
   const [palette, setPalette] = useState(false);
   const [newTask, setNewTask] = useState(false);
+  const [newProject, setNewProject] = useState<string | undefined>(undefined);
   const [unlock, setUnlock] = useState(false);
   const consoleOpen = usePrefs((p) => p.consoleOpen);
   useEffect(() => {
     const openPal = () => setPalette(true);
-    const openNew = () => setNewTask(true);
+    const openNew = (e: Event) => { setNewProject((e as CustomEvent<{ project?: string } | null>).detail?.project); setNewTask(true); };
     window.addEventListener("cc:palette", openPal);
     window.addEventListener("cc:new-task", openNew);
     const openUnlock = () => setUnlock(true);
@@ -203,7 +204,7 @@ export function AppShell({ children, flush = false }: { children: ReactNode; flu
       }
       if (typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
       if (document.querySelector("[role=dialog]")) return;
-      if (e.key === "n" || e.key === "N") { e.preventDefault(); setNewTask(true); }
+      if (e.key === "n" || e.key === "N") { e.preventDefault(); setNewProject(undefined); setNewTask(true); }
       else if (e.key === "`") { e.preventDefault(); prefs.patch({ consoleOpen: !prefs.get().consoleOpen }); }
       else if (e.key === "/") { e.preventDefault(); window.dispatchEvent(new Event("cc:focus-search")); }
       else if (/^[0-9]$/.test(e.key)) {
@@ -227,8 +228,8 @@ export function AppShell({ children, flush = false }: { children: ReactNode; flu
     <QuickConsole hidden={!consoleOpen} />
     <FreshnessBar />
     <Toast />
-    {palette && <CommandPalette onClose={() => setPalette(false)} onNewTask={() => { setPalette(false); setNewTask(true); }} />}
-    {newTask && <NewTicket onClose={() => setNewTask(false)} />}
+    {palette && <CommandPalette onClose={() => setPalette(false)} onNewTask={() => { setPalette(false); setNewProject(undefined); setNewTask(true); }} />}
+    {newTask && <NewTicket onClose={() => setNewTask(false)} defaults={newProject ? { project: newProject } : undefined} />}
     {unlock && <UnlockDialog onClose={() => setUnlock(false)} />}
   </div>;
 }
