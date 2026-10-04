@@ -689,7 +689,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
             for t in tasks_:  # collect every outcome: a closed socket or refused input just ends this view
                 try:
                     await t
-                except (asyncio.CancelledError, WebSocketDisconnect, RuntimeError, ConnectionError, PtyError):
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001 — whatever ended the view, detach
                     pass
             ptys.detach(s, client)
             try:

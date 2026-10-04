@@ -21,6 +21,8 @@ This module never talks to herdr: Claude panes are herdr's and are untouched.
 """
 import asyncio
 import fcntl
+import json
+import logging
 import os
 import pwd
 import secrets
@@ -97,6 +99,9 @@ class PtyManager:
         # own_scope: start each shell in its own transient systemd user scope, OUTSIDE ccd's
         # cgroup, so a build in a terminal neither shares ccd's MemoryMax nor can get ccd OOM-killed.
         self.own_scope = own_scope and shutil.which("systemd-run") is not None
+        if own_scope and not self.own_scope:
+            logging.getLogger("ccd").warning(json.dumps({"msg": "systemd-run not found: terminals share ccd's cgroup "
+                                                                "and MemoryMax"}))
         self._lock = asyncio.Lock()
 
     # ---------- lifecycle ----------
@@ -119,6 +124,7 @@ class PtyManager:
         env = self._child_env(cwd)
         argv = [os.path.basename(self.shell), "-l"]
         shell = self.shell
+        unit = None
         if self.own_scope:
             unit = f"cc-pty-{name.replace(':', '-')}-{secrets.token_hex(3)}"
             argv = ["systemd-run", "--user", "--scope", "--quiet", "--collect", f"--unit={unit}",
@@ -139,7 +145,9 @@ class PtyManager:
         os.set_inheritable(fd, False)
         self._winsize(fd, cols, rows)
         os.set_blocking(fd, False)
-        return Session(name, cwd, pid, fd)
+        s = Session(name, cwd, pid, fd)
+        s.unit = unit
+        return s
 
     @staticmethod
     def _winsize(fd, cols, rows):
@@ -268,8 +276,22 @@ class PtyManager:
             except ProcessLookupError:
                 pass
             await self._reaped(s, 1.0)
+        await self._stop_scope(s)
         self._ended(s, reason)
         return {"ok": True, "name": name}
+
+    async def _stop_scope(self, s):
+        """CLOSE SESSION ends everything started in that terminal, background and nohup jobs
+        included: they live in the session's own scope, which is stopped here. Nothing else is."""
+        if not getattr(s, "unit", None):
+            return
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "systemctl", "--user", "stop", "--no-block", f"{s.unit}.scope",
+                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await asyncio.wait_for(proc.wait(), 5)
+        except (OSError, asyncio.TimeoutError):
+            pass
 
     async def close_all(self):
         for name in list(self.sessions):
