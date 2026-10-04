@@ -100,7 +100,10 @@ export function TerminalView({ name, label, active, theme, onMaximize }: {
   // Connect when first shown with Developer Mode on; never on its own otherwise.
   useEffect(() => { if (active && dev && conn === "idle") void connect(); }, [active, dev, conn, connect]);
   // Locking Developer Mode ends this view; unlocking again reconnects when the tab is showing.
-  useEffect(() => { if (!dev) { const s = ws.current; ws.current = null; s?.close(); setConn("idle"); } }, [dev]);
+  // Only a view that was connected comes back by itself; a detached or closed one stays as Jay left it.
+  useEffect(() => {
+    if (!dev) { const s = ws.current; ws.current = null; s?.close(); setConn((c) => (c === "live" || c === "connecting" ? "idle" : c)); }
+  }, [dev]);
   useEffect(() => { if (term.current) term.current.options.theme = termTheme(); }, [theme]);
   useEffect(() => {
     if (!host.current) return;
@@ -125,7 +128,7 @@ export function TerminalView({ name, label, active, theme, onMaximize }: {
       <p className="text2">A real shell runs commands as jay on jay-server, so it needs Developer Unlock as well as the ccd token.</p>
       <button type="button" className="btn is-jay" onClick={unlockDialogOpen}>Unlock</button>
     </div></div>}
-    <div className="term-bar">
+    <div className="term-bar" inert={!dev}>
       <span className={`ro-tag${conn === "live" ? " is-live" : conn === "refused" || conn === "lost" ? " is-off" : ""}`}>{WORD[conn]}</span>
       <span className="mono-xs">{name}</span>
       <span className="mono-xs faint trunc" title={cwd ?? ""}>{cwd ?? ""}</span>
@@ -139,6 +142,6 @@ export function TerminalView({ name, label, active, theme, onMaximize }: {
       <button type="button" className="btn is-quiet is-sm" onClick={() => void closeSession()} disabled={conn === "ended"}>Close session</button>
       {onMaximize && <button type="button" className="btn is-quiet is-sm" onClick={onMaximize} title="Maximize terminal (Ctrl+Shift+Enter)">Maximize</button>}
     </div>
-    <div className="term-host" ref={host} aria-label={`${label} terminal`} />
+    <div className="term-host" ref={host} aria-label={`${label} terminal`} inert={!dev} />
   </div>;
 }

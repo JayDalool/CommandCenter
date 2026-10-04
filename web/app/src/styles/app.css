@@ -680,9 +680,11 @@ tr:focus-visible, .row-btn:focus-visible { outline-offset: -2px; }
 .ctx-item.is-danger { color: var(--bad); }
 
 @media (max-width: 900px) {
-  .ws2-main { display: flex !important; flex-direction: column; }
+  /* :not([hidden]) so a maximized terminal still hides the main area here too */
+  .ws2-main:not([hidden]) { display: flex; flex-direction: column; }
   .ws2-main > .ws-explorer { flex: 0 0 200px; border-right: 0; border-bottom: 1px solid var(--line); }
-  .ws2-main > .ws2-xsplit, .ws2-main > .ws-ex-rail { display: none; }
+  .ws2-main > .ws2-xsplit { display: none; }
+  .ws2-main > .ws-ex-rail { flex: 0 0 26px; border-right: 0; border-bottom: 1px solid var(--line); }
   .ws2-main > .ws-center { flex: 1 1 0; }
   .scm { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
   .claude-head { display: none; }

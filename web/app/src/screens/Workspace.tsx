@@ -499,7 +499,7 @@ export function Workspace() {
             hidden={cur?.file.kind !== "text"} onSave={() => void save()}
             onChange={(x, text) => setTabs((ts) => ts.map((t) => t.path === x ? { ...t, dirty: text !== t.text } : t))} />}
         </div>
-        {main === "claude" && <div className="ws-view"><ClaudePanel active agent={coordinatorAgent} project={proj ? { key: proj.key, name: proj.name } : null}
+        {main === "claude" && <div className="ws-view"><ClaudePanel active={mainOpen} agent={coordinatorAgent} project={proj ? { key: proj.key, name: proj.name } : null}
           ticket={qt} model={cfg?.model ?? null} onMaximize={() => maximize("main")} /></div>}
         {main === "scm" && <div className="ws-view"><SourceControl project={key}
           ticket={scmTicket}
