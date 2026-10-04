@@ -128,7 +128,7 @@ export function ClaudePanel({ agent, project, ticket, model, compact = false, on
       {question ? <span className="ro-tag is-live" title={question.question}>ANSWER</span>
         : <span className="ro-tag">{status === "working" ? "WORKING" : "MESSAGE"}</span>}
       {question && <span className="muted trunc claude-q" title={question.question}>{question.question}</span>}
-      <input className="input grow" value={msg} onChange={(e) => setMsg(e.target.value)} maxLength={question ? 2000 : 8000}
+      <input className="input grow" data-unsaved-guard value={msg} onChange={(e) => setMsg(e.target.value)} maxLength={question ? 2000 : 8000}
         disabled={!question && status === "working"}
         placeholder={question ? "One line, typed into the question" : status === "working" ? "Claude is working — wait, or press Esc to interrupt"
           : dev ? `Message ${name}` : "Sending a message needs Developer Mode"}

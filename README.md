@@ -77,3 +77,21 @@ http://127.0.0.1:7777, paste the token (`ssh jay-server cat
 
 `scripts/install-user-unit.sh --remove`. The legacy board falls back to local
 builds on its own; nothing else depends on ccd yet.
+
+## Deploying the UI
+
+```
+scripts/deploy-web.sh        # build → ~/.local/share/command-center/web/releases/<stamp>-<rev>/ → atomic `current` switch
+```
+
+ccd serves `~/.local/share/command-center/web/current` when it exists (else
+`web/app/dist`), resolving the link per request, so a UI deploy needs no ccd
+restart — except the very first, because ccd picks the directory when it
+starts: restart ccd once after the first `deploy-web.sh`. Never `npm run build` into the served directory: Vite empties it, and
+windows still running the previous build lose their lazy chunks ("Failed to
+fetch dynamically imported module"). Each release carries the hashed assets of
+the last 3 releases; `index.html` is `Cache-Control: no-cache`, hashed
+`/assets/*` are `public, max-age=31536000, immutable`, and a missing asset is a
+plain 404 (never the app shell). A window that still hits a missing chunk shows
+"Command Center was updated" and reloads once (never over unsaved edits).
+

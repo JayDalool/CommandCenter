@@ -2,13 +2,23 @@
 // and undo history. Monaco is imported lazily, so Overview and Tasks never load it.
 import { useEffect, useRef, useState } from "react";
 import type * as Monaco from "monaco-editor";
+import { handleChunkError } from "../lib/stale";
 
 type M = typeof Monaco;
-let loading: Promise<M> | null = null;
-function loadMonaco(): Promise<M> {
-  loading ??= import("./monaco").then((m) => m.monaco as unknown as M);
-  return loading;
+
+/** A lazy loader that shares one in-flight import but NEVER caches a failure (or a module that
+ *  came back without what we need): the next call imports again. */
+export function lazyOnce<T>(load: () => Promise<T>, ok: (v: T) => boolean = (v) => v != null): () => Promise<T> {
+  let p: Promise<T> | null = null;
+  return () => {
+    p ??= load().then((v) => {
+      if (!ok(v)) throw new TypeError("Failed to fetch dynamically imported module (module came back empty)");
+      return v;
+    }).catch((e) => { p = null; throw e; });
+    return p;
+  };
 }
+const loadMonaco = lazyOnce(() => import("./monaco").then((m) => m?.monaco as unknown as M), (m) => !!m?.editor);
 
 const LANG: Record<string, string> = {
   py: "python", ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", mjs: "javascript",
@@ -86,7 +96,10 @@ export function CodeEditor({ path, text, version, onChange, onSave, theme, handl
         return true;
       };
       setReady(true);
-    }).catch((e) => setErr(String(e?.message ?? e)));
+    }).catch((e) => {
+      setErr(handleChunkError(e) ? "Command Center was updated while this window was open — reloading to the new version."
+        : String(e?.message ?? e));
+    });
     return () => {
       dead = true;
       ed.current?.dispose();  // the models stay; see `models`

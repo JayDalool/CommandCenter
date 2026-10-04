@@ -12,13 +12,17 @@ import type { SearchAddon } from "@xterm/addon-search";
 import { getToken } from "../api/auth";
 import { devSession } from "../api/developer";
 import { app } from "../store/app";
+import { handleChunkError } from "../lib/stale";
 import { unlockDialogOpen, useDevActive } from "../components/DevMode";
 
 type Mods = { Terminal: typeof XTerm; FitAddon: typeof FitAddon; SearchAddon: typeof SearchAddon };
 let mods: Promise<Mods> | null = null;
 function loadXterm(): Promise<Mods> {
   mods ??= Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit"), import("@xterm/addon-search"),
-    import("@xterm/xterm/css/xterm.css")]).then(([x, f, s]) => ({ Terminal: x.Terminal, FitAddon: f.FitAddon, SearchAddon: s.SearchAddon }));
+    import("@xterm/xterm/css/xterm.css")]).then(([x, f, s]) => {
+    if (!x?.Terminal || !f?.FitAddon || !s?.SearchAddon) throw new TypeError("Failed to fetch dynamically imported module (terminal)");
+    return { Terminal: x.Terminal, FitAddon: f.FitAddon, SearchAddon: s.SearchAddon };
+  }).catch((e) => { mods = null; handleChunkError(e); throw e; });
   return mods;
 }
 

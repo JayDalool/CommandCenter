@@ -52,7 +52,7 @@ export function NewTicket({ onClose, defaults }: { onClose: () => void; defaults
         <select className="select" value={project} onChange={(e) => setProject(e.target.value)} aria-label="Project" required>
           {projects.map((p) => <option key={p.key} value={p.key}>{p.prefix} · {p.name}</option>)}
         </select>
-        <input data-autofocus className="input np-title" value={title} onChange={(e) => setTitle(e.target.value)}
+        <input data-autofocus data-unsaved-guard className="input np-title" value={title} onChange={(e) => setTitle(e.target.value)}
           placeholder="Title — what needs to happen" aria-label="Title" maxLength={300} required />
       </div>
       <div className="np-opts">
