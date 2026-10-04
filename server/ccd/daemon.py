@@ -1225,6 +1225,46 @@ class Daemon:
             raise ActionError(502, f"herdr refused: {e}")
         return {"ok": True, "agentId": pid}
 
+    PROMPT_RE = re.compile(r"^[^\x00-\x08\x0b-\x1f\x7f]{1,8000}$")
+    KEYS = {"esc": "esc", "enter": "Enter"}
+
+    async def act_prompt(self, ident, text):
+        """Send Jay's message to an idle Claude pane (herdr agent.prompt). Developer-only at the API.
+        herdr refuses a blocked agent (answer it instead) and a working one would interleave, so
+        both are refused here. The text is not stored, only its length."""
+        if not isinstance(text, str) or not self.PROMPT_RE.match(text) or not text.strip():
+            raise ActionError(400, "message must be 1–8000 printable characters")
+        self._throttle(f"prompt:{ident}")
+        agent = await self._fresh_agent(ident)
+        if agent["status"] == "blocked":
+            raise ActionError(409, "the agent is waiting on a question; answer it instead")
+        if agent["status"] == "working":
+            raise ActionError(409, "the agent is working; wait until it is idle, or interrupt it first")
+        pid = agent["pane_id"]
+        self._event("action", "action.prompt", f"message sent to {agent.get('agent_name') or pid}",
+                    project=agent.get("project"), agent_id=pid, data={"count": len(text)})
+        try:
+            await self.herdr.prompt(pid, text)
+        except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
+            raise ActionError(502, f"herdr refused: {e}")
+        return {"ok": True, "agentId": pid}
+
+    async def act_key(self, ident, key):
+        """One whitelisted key into a Claude pane: esc (interrupt) or enter."""
+        k = self.KEYS.get(str(key or "").lower())
+        if not k:
+            raise ActionError(400, "key must be esc or enter")
+        self._throttle(f"key:{ident}", 0.3)
+        agent = await self._fresh_agent(ident)
+        pid = agent["pane_id"]
+        self._event("action", "action.key", f"{k} sent to {agent.get('agent_name') or pid}",
+                    project=agent.get("project"), agent_id=pid, data={"key": k})
+        try:
+            await self.herdr.call("pane.send_keys", {"pane_id": pid, "keys": [k]})
+        except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
+            raise ActionError(502, f"herdr refused: {e}")
+        return {"ok": True, "agentId": pid}
+
     async def act_focus_layout(self, workspace_id=None, tab_id=None):
         """Bring a herdr workspace or tab forward in Jay's attached herdr client. Changes no layout."""
         target = tab_id or workspace_id

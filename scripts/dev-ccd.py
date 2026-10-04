@@ -22,6 +22,7 @@ import asyncio
 import contextlib
 import copy
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -45,7 +46,7 @@ sys.path[:0] = [str(ROOT / "server")]
 
 import uvicorn  # noqa: E402
 
-from ccd import attachments, config, files, registry, security  # noqa: E402
+from ccd import attachments, config, files, gitops, pty, registry, search, security  # noqa: E402
 from ccd.api import create_app  # noqa: E402
 from ccd.daemon import Daemon, host_snapshot  # noqa: E402
 from ccd.herdr import Herdr  # noqa: E402
@@ -201,11 +202,23 @@ async def main(reseed):
                                                  50 * 1024 * 1024)
     daemon.dev_gate = security.DeveloperGate(security.load_or_create_token(config.DEV_TOKEN_PATH))
     daemon.launcher_dir = Path.home() / ".local" / "share" / "command-center" / "launcher"
+    for key, root in sandbox.items():  # a git repo per sandbox, so Source Control has something to show
+        if not (Path(root) / ".git").exists():
+            subprocess.run(["git", "-C", root, "init", "-q", "-b", "main"], check=False)
+            subprocess.run(["git", "-C", root, "add", "-A"], check=False)
+            subprocess.run(["git", "-C", root, "-c", "user.name=preview", "-c", "user.email=preview@localhost",
+                            "commit", "-q", "-m", "preview sandbox"], check=False)
+    daemon.search = search.Search(daemon.files)
+    daemon.scm = gitops.SourceControl(daemon.files)
+    # Repo shells open in the SANDBOX copies; the server shell is a real shell in $HOME.
+    daemon.ptys = pty.PtyManager(audit=lambda kind, text, data: daemon._event("pty", kind, text, data=data),
+                                 roots={registry.prefix_of(k): r for k, r in sandbox.items()})
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
         daemon.start()
         yield
+        await daemon.ptys.close_all()
         await daemon.stop()
 
     app, _ = create_app(daemon, token, PORT, lifespan=lifespan)

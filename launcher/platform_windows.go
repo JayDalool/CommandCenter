@@ -33,7 +33,10 @@ var (
 	procSetInformationJobObject  = kernel32.NewProc("SetInformationJobObject")
 	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
 	procMessageBoxW              = user32.NewProc("MessageBoxW")
+	procCreateMutexW             = kernel32.NewProc("CreateMutexW")
 )
+
+const errorAlreadyExists = 183
 
 type ioCounters struct {
 	ReadOperationCount, WriteOperationCount, OtherOperationCount uint64
@@ -63,7 +66,8 @@ type jobExtendedLimit struct {
 }
 
 type osPlatform struct {
-	job syscall.Handle // 0 if the job could not be created
+	job   syscall.Handle // 0 if the job could not be created
+	mutex syscall.Handle // held until the process exits
 }
 
 func newPlatform() *osPlatform {
@@ -179,4 +183,25 @@ func (p *osPlatform) AppPath(exe string) string {
 		}
 	}
 	return ""
+}
+
+// FirstInstance creates the named mutex and keeps its handle for the life of
+// the process (Windows releases it on exit or crash). If the mutex already
+// existed another launcher is running. If it cannot be created at all we
+// act as the first instance: worst case is the old behaviour.
+func (p *osPlatform) FirstInstance(name string) bool {
+	n, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return true
+	}
+	h, _, callErr := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(n)))
+	if h == 0 {
+		return true
+	}
+	if errno, ok := callErr.(syscall.Errno); ok && errno == errorAlreadyExists {
+		syscall.CloseHandle(syscall.Handle(h))
+		return false
+	}
+	p.mutex = syscall.Handle(h)
+	return true
 }

@@ -43,8 +43,17 @@ ALLOWED = {
     ("DELETE", "/api/attachments/{aid}"),
     ("GET", "/api/developer"), ("POST", "/api/developer/unlock"), ("POST", "/api/developer/lock"),
     ("GET", "/api/desktop/launcher"), ("GET", "/api/desktop/launcher/download"),
+    # Workstation: explorer ops, search, source control (no push/reset/force), Claude input, terminals
+    ("POST", "/api/files/mkdir"), ("POST", "/api/files/rename"), ("POST", "/api/files/duplicate"),
+    ("POST", "/api/files/remove"), ("GET", "/api/search/files"), ("GET", "/api/search/text"),
+    ("GET", "/api/scm/status"), ("GET", "/api/scm/diff"), ("GET", "/api/scm/ticket-branch"),
+    ("POST", "/api/scm/stage"), ("POST", "/api/scm/unstage"), ("POST", "/api/scm/stage-all"),
+    ("POST", "/api/scm/discard"), ("POST", "/api/scm/commit"), ("POST", "/api/scm/branch"),
+    ("POST", "/api/action/prompt"), ("POST", "/api/action/key"),
+    ("GET", "/api/pty"), ("POST", "/api/pty/close"), ("WS", "/api/pty/{name}"),
 }
-FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec",
+FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec", "push",
+                   "reset", "force", "sudo",
                    "shell", "run", "kill", "restart", "delete", "worktree", "settings")
 
 

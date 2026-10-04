@@ -37,3 +37,9 @@ func (p *osPlatform) StartBrowser(string, []string) (Proc, error) {
 }
 
 func (p *osPlatform) OpenDefault(string) error { return errors.New("only supported on Windows") }
+
+func (p *osPlatform) FirstInstance(string) bool { return true }
+
+func (p *osPlatform) Tray(TrayMenu, <-chan struct{}) error {
+	return errors.New("only supported on Windows")
+}
