@@ -66,3 +66,13 @@ describe("editor", () => {
     expect(languageOf("notes.unknownext")).toBe("plaintext");
   });
 });
+
+describe("editor models", () => {
+  it("gives every opened tab a fresh version and disposes without a mounted editor", async () => {
+    const { nextVersion, disposeModel, hasModel } = await import("../src/workspace/Editor");
+    const a = nextVersion(), b = nextVersion();
+    expect(b).toBeGreaterThan(a);
+    disposeModel("samvision:never-opened.txt");  // no editor mounted: must not throw
+    expect(hasModel("samvision:never-opened.txt")).toBe(false);
+  });
+});

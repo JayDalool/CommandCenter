@@ -28,6 +28,20 @@ export function languageOf(path: string): string {
 const models = new Map<string, { model: Monaco.editor.ITextModel; version: number }>();
 const listeners = new Map<string, (text: string) => void>();
 
+/** Drop a closed tab's model, whether or not the editor is mounted. */
+export function disposeModel(path: string) {
+  models.get(path)?.model.dispose();
+  models.delete(path);
+  listeners.delete(path);
+}
+
+/** A version no other tab has ever had, so a reopened file never matches a leftover model. */
+let versions = 0;
+export function nextVersion() { return ++versions; }
+
+/** For tests. */
+export function hasModel(path: string) { return models.has(path); }
+
 export interface EditorHandle { value(path: string): string | null; dispose(path: string): void }
 
 export function CodeEditor({ path, text, version, onChange, onSave, theme, handle, hidden = false }: {
@@ -56,7 +70,7 @@ export function CodeEditor({ path, text, version, onChange, onSave, theme, handl
       ed.current.addCommand(m.KeyMod.CtrlCmd | m.KeyCode.KeyS, () => save.current());
       handle.current = {
         value: (p) => models.get(p)?.model.getValue() ?? null,
-        dispose: (p) => { models.get(p)?.model.dispose(); models.delete(p); listeners.delete(p); },
+        dispose: disposeModel,
       };
       setReady(true);
     }).catch((e) => setErr(String(e?.message ?? e)));

@@ -19,7 +19,7 @@ import { Dialog } from "../components/Dialog";
 import { DevBadge, unlockDialogOpen, useDevActive } from "../components/DevMode";
 import { bytes } from "../components/Attachments";
 import { ClaudeMirror } from "./Console";
-import { CodeEditor, type EditorHandle } from "../workspace/Editor";
+import { CodeEditor, disposeModel, nextVersion, type EditorHandle } from "../workspace/Editor";
 
 interface Tab { path: string; file: FileRead; text: string; version: number; dirty: boolean; conflict: string | null }
 interface Upload { id: number; project: string; name: string; dir: string; f: number; state: "up" | "done" | "fail" | "ask"; msg?: string; file: File }
@@ -30,6 +30,18 @@ const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
 // Open tabs outlive the screen: going to Tasks and back keeps every file and
 // every unsaved edit (the Monaco models live in workspace/Editor.tsx).
 const tabStore = new Store<{ tabs: Tab[]; active: string | null }>({ tabs: [], active: null });
+
+function usePrefersLight() {
+  const q = typeof window !== "undefined" ? window.matchMedia?.("(prefers-color-scheme: light)") : undefined;
+  const [light, setLight] = useState(!!q?.matches);
+  useEffect(() => {
+    if (!q) return;
+    const on = () => setLight(q.matches);
+    q.addEventListener?.("change", on);
+    return () => q.removeEventListener?.("change", on);
+  }, [q]);
+  return light;
+}
 
 function useProjects() {
   const [rows, setRows] = useState<WorkspaceProject[] | null>(null);
@@ -134,7 +146,7 @@ export function Workspace() {
     try {
       const file = await app.api.readFile(key, path);
       setTabs((ts) => ts.some((t) => t.path === id) ? ts
-        : [...ts, { path: id, file, text: file.text ?? "", version: 1, dirty: false, conflict: null }]);
+        : [...ts, { path: id, file, text: file.text ?? "", version: nextVersion(), dirty: false, conflict: null }]);
       setActive(id);
     } catch (err) { app.toast((err as Error).message, "bad"); }
   };
@@ -143,7 +155,7 @@ export function Workspace() {
   const [lastText, setLastText] = useState<string | null>(null);
   useEffect(() => { if (cur?.file.kind === "text") setLastText(cur.path); }, [cur]);
   const textTab = cur?.file.kind === "text" ? cur : tabs.find((t) => t.path === lastText && t.file.kind === "text") ?? null;
-  const prefersLight = typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: light)").matches;
+  const prefersLight = usePrefersLight();
   const monacoTheme: "dark" | "light" = theme === "light" || (theme === "system" && prefersLight) ? "light" : "dark";
 
   const save = useCallback(async () => {
@@ -169,13 +181,13 @@ export function Workspace() {
     if (t.dirty && !window.confirm(`Discard your unsaved changes to ${t.file.path} and load the version on disk?`)) return;
     try {
       const file = await app.api.readFile(t.file.project, t.file.path);
-      setTabs((ts) => ts.map((x) => x.path === t.path ? { ...x, file, text: file.text ?? "", version: x.version + 1, dirty: false, conflict: null } : x));
+      setTabs((ts) => ts.map((x) => x.path === t.path ? { ...x, file, text: file.text ?? "", version: nextVersion(), dirty: false, conflict: null } : x));
     } catch (e) { app.toast((e as Error).message, "bad"); }
   };
 
   const close = (t: Tab) => {
     if (t.dirty && !window.confirm(`${t.file.path} has unsaved changes. Close it anyway?`)) return;
-    editor.current?.dispose(t.path);
+    disposeModel(t.path);
     tabStore.set((d) => { const rest = d.tabs.filter((x) => x.path !== t.path);
       return { tabs: rest, active: d.active === t.path ? rest[rest.length - 1]?.path ?? null : d.active }; });
   };
