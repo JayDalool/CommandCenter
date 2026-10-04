@@ -121,19 +121,55 @@ class Lifecycle(unittest.TestCase):
             self.assertEqual(calls[0][-1], "cc-pty-repo-TT-y.scope")
         asyncio.run(run())
 
-    def test_an_older_grace_timer_cannot_release_after_a_re_detach(self):
+    def test_release_uses_a_monotonic_clock_and_rearms_for_the_remaining_time(self):
         async def run():
             m = self.manager()
             m.claude_grace = 10.0
+            now = [1000.0]
+            m._mono = lambda: now[0]
             s, _ = await m.open("repo:TT")
-            s.detached_at = time.time()        # a re-detach just now; the first detach's timer fires
+            s.detached_mono = 1000.0
+            now[0] = 1004.0                    # an older timer fires early (re-detach): must not release
             m._release_if_unwatched(s)
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.1)
             self.assertFalse(s.ended)
             self.assertIsNone(s.closing)
-            s.detached_at = time.time() - 11   # genuinely unwatched for the whole grace
+            s.detached_at = time.time() + 3600  # a wall clock stepped around changes nothing
+            now[0] = 1010.5                    # grace really elapsed on the monotonic clock
             m._release_if_unwatched(s)
             await self.until(lambda: s.ended)
+        asyncio.run(run())
+
+    def test_an_early_timer_rearms_instead_of_dropping(self):
+        async def run():
+            m = self.manager()
+            m.claude_grace = 0.3
+            s, _ = await m.open("repo:TT")
+            s.detached_mono = time.monotonic()
+            m._release_if_unwatched(s)         # fires "early": re-armed for the remainder
+            await self.until(lambda: s.ended)
+        asyncio.run(run())
+
+    def test_a_closing_session_does_not_block_opening_another(self):
+        async def run():
+            m = self.manager()
+            old, _ = await m.open("repo:TT")
+            old.closing = "closed"
+            waiter = asyncio.ensure_future(m.open("repo:TT"))
+            await asyncio.sleep(0.2)
+            self.assertFalse(waiter.done())
+            other, created = await asyncio.wait_for(m.open("server"), 2)  # not stalled by the lock
+            self.assertTrue(created)
+            m._ended(old)
+            new, created = await asyncio.wait_for(waiter, 3)
+            self.assertTrue(created)
+            self.assertIsNot(new, old)
+            try:
+                os.killpg(old.pid, signal.SIGKILL)
+                os.waitpid(old.pid, 0)
+            except (ProcessLookupError, ChildProcessError):
+                pass
+            await m.close_all()
         asyncio.run(run())
 
     def test_open_never_returns_a_closing_session(self):
