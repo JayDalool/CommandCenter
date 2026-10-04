@@ -22,9 +22,11 @@ function loadXterm(): Promise<Mods> {
   return mods;
 }
 
-type Conn = "idle" | "connecting" | "live" | "detached" | "ended" | "refused" | "lost";
+type Conn = "idle" | "connecting" | "live" | "detached" | "ended" | "refused" | "lost" | "elsewhere";
 const WORD: Record<Conn, string> = { idle: "NOT CONNECTED", connecting: "CONNECTING", live: "LIVE", detached: "DETACHED",
-  ended: "SESSION ENDED", refused: "REFUSED", lost: "TOO SLOW — DROPPED" };
+  ended: "SESSION ENDED", refused: "REFUSED", lost: "TOO SLOW — DROPPED", elsewhere: "ATTACHED ELSEWHERE" };
+// herdr allows one writable attach per terminal; its refusal text, as the attach client prints it.
+const HERDR_BUSY = "already has an attached client";
 
 // The terminal well is dark in both themes (as the Claude mirror is); its colours come from the tokens.
 function termTheme() {
@@ -34,8 +36,10 @@ function termTheme() {
     selectionBackground: "#2d4a3c" };
 }
 
-export function TerminalView({ name, label, active, theme, onMaximize }: {
+export function TerminalView({ name, label, active, theme, onMaximize, closeText, toolbar }: {
   name: string; label: string; active: boolean; theme: "dark" | "light"; onMaximize?: () => void;
+  /** The CLOSE SESSION confirmation; Claude's says Claude itself keeps running. */
+  closeText?: string; toolbar?: React.ReactNode;
 }) {
   const dev = useDevActive();
   const host = useRef<HTMLDivElement>(null);
@@ -80,11 +84,21 @@ export function TerminalView({ name, label, active, theme, onMaximize }: {
     sock.binaryType = "arraybuffer";
     ws.current = sock;
     let ended = false;
+    let busy = false;
+    const dec = new TextDecoder();
     sock.onmessage = (ev) => {
-      if (typeof ev.data !== "string") { t.write(new Uint8Array(ev.data as ArrayBuffer)); return; }
+      if (typeof ev.data !== "string") {
+        const bytes = new Uint8Array(ev.data as ArrayBuffer);
+        if (!busy && name.startsWith("claude:") && dec.decode(bytes, { stream: true }).includes(HERDR_BUSY)) busy = true;
+        t.write(bytes); return;
+      }
       try {
         const m2 = JSON.parse(ev.data);
         if (m2.t === "hello") { setCwd(m2.cwd); setConn("live"); t.reset(); sendResize(); t.focus(); }
+        else if (m2.t === "exit" && busy) {
+          ended = true; setConn("elsewhere");
+          t.write("\r\n\x1b[33mClaude is attached somewhere else (the native terminal?). Close that one, then Retry.\x1b[0m\r\n");
+        }
         else if (m2.t === "exit") { ended = true; setConn("ended"); t.write(`\r\n\x1b[2m[session ended${m2.code != null ? `, exit ${m2.code}` : ""}]\x1b[0m\r\n`); }
         else if (m2.t === "lost") { ended = true; setConn("lost"); }
       } catch { /* ignore */ }
@@ -117,7 +131,7 @@ export function TerminalView({ name, label, active, theme, onMaximize }: {
 
   const detach = () => { const s = ws.current; ws.current = null; s?.close(); setConn("detached"); };
   const closeSession = async () => {
-    if (!window.confirm(`Close the ${label} session? Anything running in it is stopped.`)) return;
+    if (!window.confirm(closeText ?? `Close the ${label} session? Anything running in it is stopped.`)) return;
     if (await app.action(() => app.api.ptyClose(name), `${label} closed`)) { ws.current?.close(); ws.current = null; setConn("ended"); }
   };
 
@@ -129,16 +143,17 @@ export function TerminalView({ name, label, active, theme, onMaximize }: {
       <button type="button" className="btn is-jay" onClick={unlockDialogOpen}>Unlock</button>
     </div></div>}
     <div className="term-bar" inert={!dev}>
-      <span className={`ro-tag${conn === "live" ? " is-live" : conn === "refused" || conn === "lost" ? " is-off" : ""}`}>{WORD[conn]}</span>
+      <span className={`ro-tag${conn === "live" ? " is-live" : conn === "refused" || conn === "lost" || conn === "elsewhere" ? " is-off" : ""}`}>{WORD[conn]}</span>
       <span className="mono-xs">{name}</span>
       <span className="mono-xs faint trunc" title={cwd ?? ""}>{cwd ?? ""}</span>
       <span className="sl-fill" />
+      {toolbar}
       <input className="input is-sm term-find" value={find} placeholder="Find in output" aria-label={`Find in ${label} output`}
         onChange={(e) => { setFind(e.target.value); if (e.target.value) finder.current?.findNext(e.target.value); }}
         onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); if (e.shiftKey) finder.current?.findPrevious(find); else finder.current?.findNext(find); } }} />
       {conn === "live"
         ? <button type="button" className="btn is-quiet is-sm" onClick={detach} title="Disconnect this view; the shell keeps running">Detach</button>
-        : <button type="button" className="btn is-sm" onClick={() => void connect()}>{conn === "ended" ? "New session" : "Reconnect"}</button>}
+        : <button type="button" className="btn is-sm" onClick={() => void connect()}>{conn === "ended" ? "New session" : conn === "elsewhere" ? "Retry" : "Reconnect"}</button>}
       <button type="button" className="btn is-quiet is-sm" onClick={() => void closeSession()} disabled={conn === "ended"}>Close session</button>
       {onMaximize && <button type="button" className="btn is-quiet is-sm" onClick={onMaximize} title="Maximize terminal (Ctrl+Shift+Enter)">Maximize</button>}
     </div>

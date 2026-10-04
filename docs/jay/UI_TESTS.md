@@ -2,6 +2,8 @@
 
 Screens Jay must check. Newest first. Delete a line when it's done.
 
+- [ ] CC-012 · Claude tab is a live terminal; canary reply appears live · http://127.0.0.1:7777/#/workspace?project=samvision&tab=claude
+- [ ] CC-012 · Close native SamVision Claude tab first (one writer) · docs/adr/0005-native-windows-terminals.md
 - [ ] CC-011 · Workspace: Open Claude terminal attaches to samvision · http://127.0.0.1:7777/#/workspace?project=samvision
 - [ ] CC-011 · Open native repo terminal lands in the repo · http://127.0.0.1:7777/#/workspace?tab=repo
 - [ ] CC-011 · Open native server terminal: normal jay login · http://127.0.0.1:7777/#/workspace?tab=server
