@@ -119,11 +119,46 @@ describe("tasks screen", () => {
     const user = userEvent.setup();
     location.hash = "#/tasks";
     render(<Tasks />);
-    await user.selectOptions(screen.getByRole("combobox", { name: "Project" }), "gauzemate");
+    await user.click(within(screen.getByRole("group", { name: "Project" })).getByRole("button", { name: /^GM/ }));
     const rows = within(screen.getByRole("table", { name: "Tasks" })).getAllByRole("row").slice(1);
     expect(rows.every((r) => /GM-/.test(r.textContent ?? ""))).toBe(true);
     await user.type(screen.getByRole("searchbox"), "lawyer");
     expect(within(screen.getByRole("table", { name: "Tasks" })).getAllByRole("row")).toHaveLength(2);
+  });
+  it("shows ALL projects by default, with live open counts on the project chips", async () => {
+    const user = userEvent.setup();
+    location.hash = "#/tasks";
+    render(<Tasks />);
+    const table = screen.getByRole("table", { name: "Tasks" });
+    for (const k of ["SV-056", "GM-018", "CC-001", "MFE-001", "GYST-012"]) expect(within(table).getByText(k)).toBeInTheDocument();
+    const chips = screen.getByRole("group", { name: "Project" });
+    expect(within(chips).getByRole("button", { name: /^ALL/ })).toHaveAttribute("aria-pressed", "true");
+    expect(within(chips).getAllByRole("button").map((b) => b.textContent?.split(/\s+/)[0])).toEqual(["ALL", "SV", "GM", "MFE", "GYST", "CC"]);
+    const open = (t: string) => within(chips).getByRole("button", { name: new RegExp(`^${t}\\b`) }).textContent;
+    // SV: 031 042 056 011 010 014 open; SV-050 is DONE and not counted
+    expect(open("SV")).toBe("SV 6");
+    expect(open("CC")).toBe("CC 4");
+    await user.click(within(chips).getByRole("button", { name: /^MFE/ }));
+    expect(within(screen.getByRole("table", { name: "Tasks" })).getAllByRole("row")).toHaveLength(2);
+    await user.click(within(chips).getByRole("button", { name: /^ALL/ }));
+    expect(within(screen.getByRole("table", { name: "Tasks" })).getByText("SV-056")).toBeInTheDocument();
+  });
+  it("hides archived history until the toggle is on", async () => {
+    const user = userEvent.setup();
+    const old = { ...tasks().tickets[0], key: "SV-001", project: "samvision", status: "DONE" as const, archived: true, title: "Old finished work" };
+    const spy = vi.spyOn(app, "loadHistory").mockImplementation(async () => { app.store.patch({ archivedTickets: [old] }); });
+    location.hash = "#/tasks";
+    render(<Tasks />);
+    expect(screen.queryByText("SV-001")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Include archived/history" }));
+    expect(spy).toHaveBeenCalled();
+    expect(await screen.findByText("SV-001")).toBeInTheDocument();
+    expect(screen.getByText("SV-050")).toBeInTheDocument();  // closed-but-not-archived shows too
+    // history rows never inflate the open counts
+    expect(within(screen.getByRole("group", { name: "Project" })).getByRole("button", { name: /^SV/ }).textContent).toBe("SV 6");
+    await user.click(screen.getByRole("button", { name: "Include archived/history" }));
+    expect(screen.queryByText("SV-001")).toBeNull();
+    spy.mockRestore();
   });
   it("pipeline shows compact rows per status", () => {
     location.hash = "#/tasks?view=board";

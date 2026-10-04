@@ -67,7 +67,7 @@ export class Api {
   development(project?: string) {
     return this.req<Development>("GET", `/api/development${project ? `?project=${encodeURIComponent(project)}` : ""}`);
   }
-  tasks() { return this.req<TaskList>("GET", "/api/tasks"); }
+  tasks(archived = false) { return this.req<TaskList>("GET", `/api/tasks${archived ? "?archived=1" : ""}`); }
   task(key: string) { return this.req<TicketDetail>("GET", `/api/tasks/${encodeURIComponent(key)}`); }
   createTask(body: { project: string; title: string } & Partial<Record<string, unknown>>) {
     return this.req<TicketDetail>("POST", "/api/tasks", body);
