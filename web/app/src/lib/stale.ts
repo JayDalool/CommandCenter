@@ -26,28 +26,45 @@ export function isChunkLoadError(e: unknown): boolean {
 // Anything (the Workspace) can register "is there unsaved work?".
 const unsaved = new Set<() => boolean>();
 export function registerUnsaved(fn: () => boolean) { unsaved.add(fn); return () => { unsaved.delete(fn); }; }
-export function hasUnsavedWork(): boolean { for (const f of unsaved) if (f()) return true; return false; }
+export function hasUnsavedWork(): boolean {
+  for (const f of unsaved) if (f()) return true;
+  // Anything typed but not sent: a commit message, a Claude message, a new ticket's title…
+  if (typeof document !== "undefined") {
+    for (const el of Array.from(document.querySelectorAll<HTMLTextAreaElement | HTMLInputElement>("textarea, [data-unsaved-guard]"))) {
+      if (el.value && el.value.trim()) return true;
+    }
+  }
+  return false;
+}
 
 const KEY = "cc.reloadedForUpdateAt";
 const WINDOW_MS = 60_000;
 
-/** Reload once if allowed. Returns true when a reload was started. */
-export function reloadOnce(now = Date.now(), storage: Storage | null = safeSession(),
-  reload: () => void = () => location.reload()): boolean {
-  if (hasUnsavedWork()) return false;
-  let last = 0;
-  try { last = Number(storage?.getItem(KEY) ?? 0) || 0; } catch { /* storage unavailable */ }
+/** Reload once if allowed. Returns true when a reload was started.
+ *  Never: over unsaved work; without sessionStorage to remember it (no way to prevent a loop);
+ *  twice within a minute; or when the server does not answer (offline is not an update — the
+ *  offline banner keeps the last data instead of a browser error page). */
+export async function reloadOnce(now = Date.now(), storage: Storage | null = safeSession(),
+  reload: () => void = () => location.reload(), probe: () => Promise<boolean> = serverAnswers): Promise<boolean> {
+  if (hasUnsavedWork() || !storage) return false;
+  let last: number;
+  try { last = Number(storage.getItem(KEY) ?? 0) || 0; } catch { return false; }
   if (now - last < WINDOW_MS) return false;          // we already reloaded for this: don't loop
-  try { storage?.setItem(KEY, String(now)); } catch { /* ignore */ }
+  if (!(await probe())) return false;
+  try { storage.setItem(KEY, String(now)); } catch { return false; }
   reload();
   return true;
+}
+
+async function serverAnswers(): Promise<boolean> {
+  try { return (await fetch("/", { cache: "no-store", credentials: "omit" })).ok; } catch { return false; }
 }
 
 /** Called wherever a lazy import fails. True if it was a stale-build failure (and handled). */
 export function handleChunkError(e: unknown): boolean {
   if (!isChunkLoadError(e)) return false;
   staleBuild.set({ updated: true, detail: e instanceof Error ? e.message : String(e) });
-  reloadOnce();
+  void reloadOnce();
   return true;
 }
 
@@ -55,11 +72,12 @@ function safeSession(): Storage | null {
   try { return sessionStorage; } catch { return null; }
 }
 
-/** Vite fires this when a preloaded dependency of a lazy chunk fails. */
+/** Vite fires this when a preloaded dependency of a lazy chunk fails. We only raise the banner:
+ *  the event is NEVER cancelled — in Vite, preventDefault() makes the import resolve to undefined
+ *  instead of rejecting, which would hide the failure from the loaders (and cache it). */
 export function installStaleBuildHandler() {
   window.addEventListener("vite:preloadError", (ev) => {
-    if (handleChunkError((ev as unknown as { payload?: unknown }).payload ?? "Failed to fetch dynamically imported module")) {
-      ev.preventDefault();
-    }
+    const payload = (ev as unknown as { payload?: unknown }).payload;
+    if (isChunkLoadError(payload ?? "")) staleBuild.set({ updated: true, detail: String((payload as Error)?.message ?? payload) });
   });
 }

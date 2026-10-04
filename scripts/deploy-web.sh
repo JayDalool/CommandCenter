@@ -30,6 +30,13 @@ REL="$BASE/releases/$NAME"
 TMP="$BASE/releases/.building-$NAME"
 
 mkdir -p "$BASE/releases"
+exec 9>"$BASE/.deploy.lock"
+flock -n 9 || { echo "another deploy-web.sh is running" >&2; exit 1; }
+if ! git -C "$REPO" diff --quiet HEAD -- web/app; then
+  REV="$REV-dirty"; NAME="$STAMP-$REV"; REL="$BASE/releases/$NAME"; TMP="$BASE/releases/.building-$NAME"
+fi
+MANIFEST="$TMP.assets"                 # the asset manifest lives NEXT TO a release, never inside the served dir
+trap 'rm -rf "$TMP" "$MANIFEST"' EXIT  # a failed build never leaves a half release behind
 rm -rf "$TMP"
 
 echo "== build $NAME"
@@ -37,17 +44,18 @@ cd "$REPO/web/app"
 npm ci --no-audit --no-fund >/dev/null
 npx tsc -b
 npx vite build --outDir "$TMP" --emptyOutDir --logLevel warn
-( cd "$TMP/assets" && ls -1 ) > "$TMP/own-assets.txt"
+( cd "$TMP/assets" && ls -1 ) > "$MANIFEST"
 
 echo "== carry hashed assets of the last $KEEP_ASSETS releases"
 carried=0
 for prev in $(ls -1d "$BASE"/releases/[0-9]*/ 2>/dev/null | sort -r | head -n "$KEEP_ASSETS"); do
-  [ -f "$prev/own-assets.txt" ] || continue
+  prev="${prev%/}"
+  [ -f "$prev.assets" ] || continue
   while IFS= read -r f; do
     [ -n "$f" ] && [ -f "$prev/assets/$f" ] && [ ! -e "$TMP/assets/$f" ] || continue
     cp -p "$prev/assets/$f" "$TMP/assets/$f"
     carried=$((carried + 1))
-  done < "$prev/own-assets.txt"
+  done < "$prev.assets"
 done
 # Extra asset directories to carry (colon-separated), e.g. the repo's web/app/dist that served
 # the UI before the first release existed, so windows opened on it keep working too.
@@ -60,7 +68,7 @@ for dir in "${extra[@]}"; do
     [[ "$f" =~ -[A-Za-z0-9_-]{8}\.(js|css|woff2?|ttf|svg|png|wasm)$ ]] || continue   # hashed files only
     [ -e "$TMP/assets/$f" ] && continue
     cp -p "$src" "$TMP/assets/$f"
-    echo "$f" >> "$TMP/own-assets.txt"   # seeded files then live as long as this release's own
+    echo "$f" >> "$MANIFEST"   # seeded files then live as long as this release's own
     carried=$((carried + 1))
   done
 done
@@ -85,6 +93,7 @@ if missing or not refs:
 print(f"   index references {len(refs)} files, all present")
 PY
 
+mv -T "$MANIFEST" "$REL.assets"
 mv -T "$TMP" "$REL"
 ln -sfn "releases/$NAME" "$BASE/current.next"
 mv -T "$BASE/current.next" "$BASE/current"     # the atomic switch
@@ -94,5 +103,5 @@ echo "== prune"
 cur="$(readlink "$BASE/current")"
 ls -1d "$BASE"/releases/[0-9]*/ | sort -r | tail -n +"$((KEEP_RELEASES + 1))" | while read -r old; do
   [ "releases/$(basename "$old")" = "$cur" ] && continue
-  rm -rf "$old" && echo "   removed $(basename "$old")"
+  rm -rf "$old" "${old%/}.assets" && echo "   removed $(basename "$old")"
 done

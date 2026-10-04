@@ -86,7 +86,8 @@ scripts/deploy-web.sh        # build → ~/.local/share/command-center/web/relea
 
 ccd serves `~/.local/share/command-center/web/current` when it exists (else
 `web/app/dist`), resolving the link per request, so a UI deploy needs no ccd
-restart. Never `npm run build` into the served directory: Vite empties it, and
+restart — except the very first, because ccd picks the directory when it
+starts: restart ccd once after the first `deploy-web.sh`. Never `npm run build` into the served directory: Vite empties it, and
 windows still running the previous build lose their lazy chunks ("Failed to
 fetch dynamically imported module"). Each release carries the hashed assets of
 the last 3 releases; `index.html` is `Cache-Control: no-cache`, hashed

@@ -185,7 +185,8 @@ class UiFiles:
 
         async def send_with_headers(msg):
             if msg["type"] == "http.response.start":
-                ok = 200 <= msg.get("status", 200) < 300
+                status = msg.get("status", 200)
+                ok = 200 <= status < 300 or status == 304  # a 304 refreshes the stored copy's headers
                 cache = CACHE_IMMUTABLE if (immutable and ok) else CACHE_REVALIDATE if ok else b"no-store"
                 kept = [(k, v) for k, v in msg.get("headers", []) if k.lower() != b"cache-control"]
                 msg = dict(msg, headers=kept + self.headers + [(b"cache-control", cache)])

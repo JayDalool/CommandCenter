@@ -60,6 +60,16 @@ class CachePolicy(unittest.TestCase):
             self.assertNotIn("text/html", r.headers.get("content-type", ""), path)
             self.assertEqual(r.headers["cache-control"], "no-store", path)
 
+    def test_a_304_keeps_the_cache_policy(self):
+        r = self.c.get("/assets/monaco-Zz9_Yy8-.js", headers=HOST)
+        r2 = self.c.get("/assets/monaco-Zz9_Yy8-.js", headers=dict(HOST, **{"if-none-match": r.headers["etag"]}))
+        self.assertEqual(r2.status_code, 304)
+        self.assertEqual(r2.headers["cache-control"], "public, max-age=31536000, immutable")
+        i = self.c.get("/", headers=HOST)
+        i2 = self.c.get("/", headers=dict(HOST, **{"if-none-match": i.headers["etag"]}))
+        self.assertEqual(i2.status_code, 304)
+        self.assertEqual(i2.headers["cache-control"], "no-cache")
+
     def test_unhashed_files_are_revalidated(self):
         with open(os.path.join(self.dir, "favicon.svg"), "w") as f:
             f.write("<svg/>")

@@ -19,21 +19,30 @@ describe("stale build recovery", () => {
     for (const m of ["ccd unreachable", "HTTP 404", "the file changed on disk", ""]) expect(isChunkLoadError(new Error(m))).toBe(false);
   });
 
-  it("reloads once, never in a loop", () => {
+  const up = async () => true, down = async () => false;
+
+  it("reloads once, never in a loop", async () => {
     const s = new Mem();
     let reloads = 0;
-    expect(reloadOnce(1_000_000, s, () => reloads++)).toBe(true);
-    expect(reloadOnce(1_010_000, s, () => reloads++)).toBe(false);   // 10 s later: same failure again → no loop
-    expect(reloadOnce(1_070_001, s, () => reloads++)).toBe(true);    // a later, separate update may reload again
+    expect(await reloadOnce(1_000_000, s, () => reloads++, up)).toBe(true);
+    expect(await reloadOnce(1_010_000, s, () => reloads++, up)).toBe(false);   // same failure again → no loop
+    expect(await reloadOnce(1_070_001, s, () => reloads++, up)).toBe(true);    // a later, separate update
     expect(reloads).toBe(2);
   });
 
-  it("never reloads over unsaved work", () => {
-    const off = registerUnsaved(() => true);
+  it("never reloads over unsaved work, without storage, or when the server is down", async () => {
     let reloads = 0;
-    expect(reloadOnce(5_000_000, new Mem(), () => reloads++)).toBe(false);
-    expect(reloads).toBe(0);
+    const off = registerUnsaved(() => true);
+    expect(await reloadOnce(5_000_000, new Mem(), () => reloads++, up)).toBe(false);
     off();
+    expect(await reloadOnce(5_000_000, null, () => reloads++, up)).toBe(false);         // no way to remember → no auto reload
+    expect(await reloadOnce(5_000_000, new Mem(), () => reloads++, down)).toBe(false);  // offline is not an update
+    const ta = document.createElement("textarea");
+    ta.value = "half-written commit message";
+    document.body.appendChild(ta);
+    expect(await reloadOnce(9_000_000, new Mem(), () => reloads++, up)).toBe(false);
+    ta.remove();
+    expect(reloads).toBe(0);
   });
 
   it("flags the window as updated for the banner", () => {
