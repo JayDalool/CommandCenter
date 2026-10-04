@@ -40,9 +40,9 @@ Command Center's page can then open terminals on the PC through three links, and
 
 | Link | Runs |
 |---|---|
-| `commandcenter://terminal/claude?project=KEY` | `ssh -t <host> -- /srv/server/repos/CommandCenter/scripts/cc-terminal claude KEY` |
-| `commandcenter://terminal/repo?project=KEY` | `ssh -t <host> -- /srv/server/repos/CommandCenter/scripts/cc-terminal repo KEY` |
-| `commandcenter://terminal/server` | `ssh -t <host>` (a plain login) |
+| `commandcenter://terminal/claude?project=KEY` | `ssh -t -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -- <host> /srv/server/repos/CommandCenter/scripts/cc-terminal claude KEY` |
+| `commandcenter://terminal/repo?project=KEY` | `ssh -t -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -- <host> /srv/server/repos/CommandCenter/scripts/cc-terminal repo KEY` |
+| `commandcenter://terminal/server` | `ssh -t -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -- <host>` (a plain login) |
 
 (All with `-o ServerAliveInterval=30 -o ServerAliveCountMax=3`; `--` sits before the host.)
 `KEY` must be 2-6 letters/digits starting with a letter (`SV`, `GZ`, `MFE`, `CC`, `GYST`).

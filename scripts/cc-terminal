@@ -26,6 +26,8 @@ import re
 import shutil
 import subprocess
 import sys
+import termios
+import time
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "server"))
@@ -113,8 +115,13 @@ def main(argv):
         return 2
     sys.stdout.write(f"\x1b]0;{title}\x07")
     sys.stdout.flush()
+    if argv[0] == "claude" and sys.stdin.isatty():
+        # Keys typed while the tab was opening (e.g. Enter after a browser prompt) must not
+        # land in a live Claude pane: drop anything already queued before attaching.
+        time.sleep(0.3)
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
     os.chdir(cwd)
-    os.execvp(exe, args)
+    os.execv(exe, args)
 
 
 if __name__ == "__main__":

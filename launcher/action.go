@@ -172,7 +172,8 @@ func terminalArgv(a Action, cfg Config, wt, ssh, ps string) (string, []string) {
 	title := terminalTitle(a, cfg)
 	sargs := terminalSSHArgs(a, cfg)
 	if wt != "" {
-		args := []string{"-w", wtWindow, "new-tab", "--title", title, "--", ssh}
+		// --suppressApplicationTitle keeps "Claude — SamVision" even when the remote program sets its own title.
+		args := []string{"-w", wtWindow, "new-tab", "--title", title, "--suppressApplicationTitle", "--", ssh}
 		return wt, append(args, sargs...)
 	}
 	return ps, []string{"-NoLogo", "-NoExit", "-Command", psCommand(title, ssh, sargs)}
@@ -299,7 +300,14 @@ func openTerminal(p Platform, log *logger, cfg Config, a Action) error {
 	ps := powerShellPath(p.Getenv)
 	exe, args := terminalArgv(a, cfg, FindWT(p.Getenv, p.Exists, p.LookPath), sshPath, ps)
 	log.Printf("terminal %s %s via %s", a.Kind, a.Project, exe)
-	return p.StartTerminal(exe, args, exe == ps)
+	err := p.StartTerminal(exe, args, exe == ps)
+	if err != nil && exe != ps {
+		// Windows Terminal is there but would not start: fall back to a PowerShell console.
+		log.Printf("windows terminal failed (%v); falling back to powershell", err)
+		exe, args = terminalArgv(a, cfg, "", sshPath, ps)
+		err = p.StartTerminal(exe, args, true)
+	}
+	return err
 }
 
 const actionFail = "Command Center can't open that terminal: "

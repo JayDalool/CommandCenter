@@ -50,6 +50,10 @@ no port, needs no admin, and the browser asks Jay before the first launch.
 - The server helper never takes a path or command from its arguments; it
   resolves the project from the registry and the coordinator from herdr.
 - Any web page could trigger these links. The worst case is an unwanted
-  terminal window to jay-server opening on Jay's PC. Nothing is typed, nothing
-  runs beyond a login shell or an attach, and SSH auth is Jay's own.
+  terminal window to jay-server opening on Jay's PC: nothing runs beyond a
+  login shell or an attach, and SSH auth is Jay's own. The new tab takes focus,
+  so keys Jay is typing at that moment would go into it; for `claude`,
+  cc-terminal discards anything typed before the attach. The browser's
+  per-site "Open CommandCenter.exe?" prompt is the real gate: allow it only for
+  http://127.0.0.1:7777.
 - No credential is in the URI, the launcher or the helper.

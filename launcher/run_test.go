@@ -35,6 +35,7 @@ type fakePlatform struct {
 	mutexes  []string
 
 	terminals  [][]string
+	termFail   int // fail this many StartTerminal calls first
 	newConsole []bool
 
 	sshStart func(n int, stderr io.Writer, p *fakeProc) // optional per-start behaviour
@@ -106,6 +107,10 @@ func (f *fakePlatform) StartTerminal(path string, args []string, newConsole bool
 	defer f.mu.Unlock()
 	f.terminals = append(f.terminals, append([]string{path}, args...))
 	f.newConsole = append(f.newConsole, newConsole)
+	if f.termFail > 0 {
+		f.termFail--
+		return errors.New("wt would not start")
+	}
 	return nil
 }
 

@@ -130,7 +130,7 @@ func TestTerminalArgvWT(t *testing.T) {
 	}
 	for _, c := range cases {
 		exe, args := terminalArgv(c.a, cfg, tWT, tSSH, tPS)
-		want := append([]string{"-w", "CommandCenter", "new-tab", "--title", c.title, "--", tSSH,
+		want := append([]string{"-w", "CommandCenter", "new-tab", "--title", c.title, "--suppressApplicationTitle", "--", tSSH,
 			"-t", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "--", "jay-server"}, c.tail...)
 		if exe != tWT || !reflect.DeepEqual(args, want) {
 			t.Errorf("%+v:\n got %s %q\nwant %q", c.a, exe, args, want)
@@ -156,7 +156,7 @@ func TestTerminalArgvWT(t *testing.T) {
 func TestTerminalCommandLineWT(t *testing.T) {
 	exe, args := terminalArgv(Action{ActionClaude, "SV"}, DefaultConfig(), tWT, tSSH, tPS)
 	got := commandLine(exe, args)
-	want := tWT + ` -w CommandCenter new-tab --title "Claude — SamVision" -- ` + tSSH +
+	want := tWT + ` -w CommandCenter new-tab --title "Claude — SamVision" --suppressApplicationTitle -- ` + tSSH +
 		` -t -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -- jay-server ` + ccTerminal + ` claude SV`
 	if got != want {
 		t.Fatalf("\n got %s\nwant %s", got, want)
@@ -274,7 +274,7 @@ func TestRunActionStartsOnlyATerminal(t *testing.T) {
 	if code := runAction(f, &logger{}, "commandcenter://terminal/claude?project=SV"); code != 0 {
 		t.Fatalf("exit %d alerts %q", code, f.alerts)
 	}
-	want := []string{tWT, "-w", "CommandCenter", "new-tab", "--title", "Claude — SamVision", "--", fakeSSH,
+	want := []string{tWT, "-w", "CommandCenter", "new-tab", "--title", "Claude — SamVision", "--suppressApplicationTitle", "--", fakeSSH,
 		"-t", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "--", "jay-server", ccTerminal, "claude", "SV"}
 	if len(f.terminals) != 1 || !reflect.DeepEqual(f.terminals[0], want) || f.newConsole[0] {
 		t.Fatalf("terminals %q console %v", f.terminals, f.newConsole)
@@ -311,5 +311,20 @@ func TestRunActionNoSSH(t *testing.T) {
 	f.exists = map[string]bool{tWT: true}
 	if code := runAction(f, &logger{}, "commandcenter://terminal/server"); code == 0 || len(f.terminals) != 0 || len(f.alerts) != 1 {
 		t.Fatalf("code %d terminals %q alerts %q", code, f.terminals, f.alerts)
+	}
+}
+
+func TestRunActionFallsBackWhenWTWillNotStart(t *testing.T) {
+	f := newFake()
+	f.exists[tWT] = true
+	f.termFail = 1
+	if code := runAction(f, &logger{}, "commandcenter://terminal/repo?project=GZ"); code != 0 {
+		t.Fatalf("exit %d alerts %q", code, f.alerts)
+	}
+	if len(f.terminals) != 2 || f.terminals[0][0] != tWT || f.terminals[1][0] != tPS || !f.newConsole[1] {
+		t.Fatalf("terminals %q console %v", f.terminals, f.newConsole)
+	}
+	if !strings.Contains(f.terminals[1][len(f.terminals[1])-1], "'repo' 'GZ'") {
+		t.Fatalf("fallback command %q", f.terminals[1])
 	}
 }
