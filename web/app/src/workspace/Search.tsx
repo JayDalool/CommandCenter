@@ -1,4 +1,4 @@
-// SEARCH IN PROJECT (Ctrl+Shift+F) and GO TO FILE (Ctrl+P). Both ask ccd on
+// SEARCH IN PROJECT (the sidebar's Search mode, Ctrl+Shift+F) and GO TO FILE (Ctrl+P). Both ask ccd on
 // demand and are bounded there; typing again or closing cancels the request.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { app } from "../store/app";
@@ -9,7 +9,6 @@ import { useFocusTrap } from "../components/Dialog";
 
 export function SearchPanel({ project, focusKey, onOpen }: { project: string; focusKey: number; onOpen: (path: string, line?: number) => void }) {
   const [q, setQ] = useState("");
-  const [regex, setRegex] = useState(false);
   const [caseS, setCaseS] = useState(false);
   const [glob, setGlob] = useState("");
   const [res, setRes] = useState<SearchResult | null>(null);
@@ -27,7 +26,7 @@ export function SearchPanel({ project, focusKey, onOpen }: { project: string; fo
     const c = new AbortController();
     ctl.current = c;
     setBusy(true); setErr(null);
-    try { setRes(await app.api.searchText(project, q, { regex, caseSensitive: caseS, glob: glob.trim() || undefined }, c.signal)); }
+    try { setRes(await app.api.searchText(project, q, { regex: false, caseSensitive: caseS, glob: glob.trim() || undefined }, c.signal)); }
     catch (e) { if ((e as Error).name !== "AbortError") setErr((e as Error).message); }
     finally { if (ctl.current === c) setBusy(false); }
   };
@@ -37,18 +36,22 @@ export function SearchPanel({ project, focusKey, onOpen }: { project: string; fo
     return [...m.entries()];
   }, [res]);
 
-  return <div className="search">
+  return <div className="wsearch">
     <form className="search-bar" onSubmit={(e) => { e.preventDefault(); void run(); }}>
-      <input ref={input} className="input grow" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search in project (Enter)" aria-label="Search text" />
-      <button type="button" className="btn is-quiet is-sm" aria-pressed={caseS} onClick={() => setCaseS(!caseS)} title="Match case">Aa</button>
-      <button type="button" className="btn is-quiet is-sm" aria-pressed={regex} onClick={() => setRegex(!regex)} title="Regular expression">.*</button>
-      <input className="input is-sm" style={{ width: 130 }} value={glob} onChange={(e) => setGlob(e.target.value)} placeholder="files, e.g. *.py" aria-label="File filter" />
-      {busy ? <button type="button" className="btn is-sm" onClick={() => { ctl.current?.abort(); setBusy(false); }}>Cancel</button>
-        : <button type="submit" className="btn is-sm">Search</button>}
+      <input ref={input} className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search in project (Enter)" aria-label="Search text" />
+      <div className="row" style={{ gap: 4 }}>
+        <button type="button" className="btn is-quiet is-sm" aria-pressed={caseS} onClick={() => setCaseS(!caseS)} title="Match case" aria-label="Match case">Aa</button>
+        {/* ccd refuses a regular expression unless ripgrep is installed on the server, so the toggle stays off. */}
+        <button type="button" className="btn is-quiet is-sm" disabled aria-pressed={false} title="needs ripgrep on the server" aria-label="Regular expression (needs ripgrep on the server)">.*</button>
+        <span className="sl-fill" />
+        {busy ? <button type="button" className="btn is-sm" onClick={() => { ctl.current?.abort(); setBusy(false); }}>Cancel</button>
+          : <button type="submit" className="btn is-sm">Search</button>}
+      </div>
+      <input className="input" value={glob} onChange={(e) => setGlob(e.target.value)} placeholder="files, e.g. *.py" aria-label="File filter" />
     </form>
     <div className="search-meta mono-xs muted">{err ? <span className="bad-t">{err}</span> : res
-      ? `${res.matches.length} matches in ${res.files} files${res.truncated ? " — truncated, narrow the search" : ""} · .git, node_modules, build output and secret files are never searched`
-      : "Searches the project's files on jay-server. Secret-looking files are excluded."}</div>
+      ? `${res.matches.length} matches in ${res.files} files${res.truncated ? " — truncated, narrow the search" : ""}`
+      : "Secret-looking files, .git and node_modules are never searched."}</div>
     <div className="search-res">
       {groups.map(([path, ms]) => <div key={path} className="search-file">
         <button type="button" className="search-path mono-xs" onClick={() => onOpen(path)}>{path} <span className="faint">{ms.length}</span></button>

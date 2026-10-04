@@ -19,6 +19,7 @@ Closed historical work (DONE / DENIED / CANCELLED) is created archived.
 GitHub issues are never closed or edited by this module.
 """
 import hashlib
+import sqlite3
 import os
 import re
 import time
@@ -428,7 +429,7 @@ def apply(projects, gh_data, store, actor="system:import", handoff_dir=None):
                     for d in deps:
                         if d != k and store.exists(d):
                             store.relate(k, "blocked_by", d, actor=actor)
-        except T.TaskError as e:
+        except (T.TaskError, sqlite3.Error) as e:
             errors.append({"project": project, "error": str(e), "rolledBack": len(made)})
             continue
         created += len(made)

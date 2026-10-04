@@ -228,7 +228,7 @@ existing tickets are never edited (`pendingUpdates` counts what differs).
 `task_file:docs/tasks/<file>`, `github_issue:<owner/repo>#<n>`,
 `my_actions:<project>:<sha1 of the normalised line, 12 chars>`. A source whose
 link already exists is reported as `existing`, so a second `--apply` creates
-nothing; a source added later gets the next free number. Kept IDs (SV-056,
+nothing; a source added later gets the next free number. A MY_ACTIONS line with no ticket ID is identified by a hash of its text, so editing such a line and re-running the import creates a second ticket. Kept IDs (SV-056,
 GM-014) never touch the counter's own numbers: it only moves past them.
 
 ## P4B revision: information architecture

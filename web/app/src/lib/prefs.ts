@@ -13,17 +13,30 @@ export interface Prefs {
   lastProject: string | null;
   // Workspace layout (this browser only)
   wsExplorerW: number; wsExplorerOpen: boolean; wsTermH: number; wsTermOpen: boolean;
-  wsMax: "none" | "main" | "term"; wsMain: "editor" | "claude" | "scm" | "search" | "dev";
+  wsMax: "none" | "main" | "term";
+  /** Which mode the one Workspace sidebar shows. wsExplorerOpen is whether the sidebar itself is open. */
+  wsSide: "explorer" | "scm" | "search";
 }
 const KEY = "cc.prefs";
 const DEFAULTS: Prefs = { theme: "dark", density: "comfortable", sshHost: "jay-server", consoleOpen: false,
   consoleAgent: null, consoleTab: "claude", consoleProject: null, consoleFull: false, consoleFollow: true,
   lastProject: null, wsExplorerW: 260, wsExplorerOpen: true, wsTermH: 300, wsTermOpen: true, wsMax: "none",
-  wsMain: "editor" };
+  wsSide: "explorer" };
 
-function load(): Prefs {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? "{}") }; } catch { return { ...DEFAULTS }; }
+const SIDES = ["explorer", "scm", "search"];
+
+/** Stored prefs -> Prefs. The old `wsMain` (center view) is dropped; its scm/search values become the sidebar mode. */
+export function parsePrefs(raw: string | null): Prefs {
+  try {
+    const o = JSON.parse(raw ?? "{}") as Record<string, unknown>;
+    const old = o.wsMain;
+    delete o.wsMain;
+    const p = { ...DEFAULTS, ...o } as Prefs;
+    if (!SIDES.includes(String(o.wsSide))) p.wsSide = old === "scm" || old === "search" ? old : "explorer";
+    return p;
+  } catch { return { ...DEFAULTS }; }
 }
+function load(): Prefs { try { return parsePrefs(localStorage.getItem(KEY)); } catch { return { ...DEFAULTS }; } }
 
 export const prefs = new Store<Prefs>(load());
 prefs.subscribe(() => {
