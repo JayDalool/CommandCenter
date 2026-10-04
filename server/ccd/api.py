@@ -71,7 +71,8 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
+from starlette.exceptions import HTTPException
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -153,8 +154,20 @@ class Guard:
         await _json({"ok": False, "error": problem[1]}, problem[0])(scope, receive, send)
 
 
+# Vite names every built asset after its content (index-ksOa7hZ1.js), so a given /assets/ URL
+# never changes meaning: browsers may keep it for a year. The HTML entry point is what names
+# the current build, so it is always revalidated.
+HASHED_ASSET = re.compile(r"^/assets/[A-Za-z0-9._-]+-[A-Za-z0-9_-]{8}\.(?:js|css|woff2?|ttf|svg|png|wasm)$")
+CACHE_IMMUTABLE = b"public, max-age=31536000, immutable"
+CACHE_REVALIDATE = b"no-cache"
+
+
 class UiFiles:
-    """The built UI with strict headers. Same origin as the API, so no CORS and no proxy."""
+    """The built UI with strict headers. Same origin as the API, so no CORS and no proxy.
+
+    A path that does not exist is a plain 404 — never the app shell — so a stale page asking for
+    a deleted chunk fails loudly as a module load error the UI can recognise, never as HTML
+    parsed as JavaScript."""
 
     def __init__(self, directory, port):
         self.files = StaticFiles(directory=str(directory), html=True)
@@ -164,18 +177,38 @@ class UiFiles:
                 f"connect-src 'self' ws://127.0.0.1:{port} ws://localhost:{port}; font-src 'self'; "
                 "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'").encode()),
             (b"x-frame-options", b"DENY"), (b"referrer-policy", b"no-referrer"),
-            (b"x-content-type-options", b"nosniff"), (b"cache-control", b"no-cache"),
+            (b"x-content-type-options", b"nosniff"),
         ]
 
     async def __call__(self, scope, receive, send):
+        immutable = bool(HASHED_ASSET.match(scope.get("path", "")))
+
         async def send_with_headers(msg):
             if msg["type"] == "http.response.start":
-                msg = dict(msg, headers=list(msg.get("headers", [])) + self.headers)
+                ok = 200 <= msg.get("status", 200) < 300
+                cache = CACHE_IMMUTABLE if (immutable and ok) else CACHE_REVALIDATE if ok else b"no-store"
+                kept = [(k, v) for k, v in msg.get("headers", []) if k.lower() != b"cache-control"]
+                msg = dict(msg, headers=kept + self.headers + [(b"cache-control", cache)])
             await send(msg)
-        await self.files(scope, receive, send_with_headers)
+        try:
+            await self.files(scope, receive, send_with_headers)
+        except HTTPException as e:
+            # A missing file is a plain 404 with our headers — never the SPA shell, never cached.
+            resp = PlainTextResponse("Not Found" if e.status_code == 404 else "Error", status_code=e.status_code)
+            await resp(scope, receive, send_with_headers)
 
 
 def ui_dir():
+    """Where the UI is served from. A deployed release (scripts/deploy-web.sh) lives behind the
+    `current` symlink in ~/.local/share/command-center/web; it is switched atomically, and
+    StaticFiles resolves it per request, so a deploy needs no ccd restart. Without one, the
+    repository's own web/app/dist (development and the preview)."""
+    env = os.environ.get("CCD_UI_DIR")
+    if env:
+        return Path(env)
+    current = Path(os.environ.get("CCD_SHARE_DIR", Path.home() / ".local" / "share" / "command-center")) / "web" / "current"
+    if (current / "index.html").is_file():
+        return current
     return Path(__file__).resolve().parents[2] / "web" / "app" / "dist"
 
 

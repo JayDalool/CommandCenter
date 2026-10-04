@@ -32,6 +32,7 @@ import { ClaudePanel } from "../workspace/ClaudePanel";
 import { TerminalView } from "../workspace/Terminal";
 import { SourceControl } from "../workspace/SourceControl";
 import { GoToFile, SearchPanel } from "../workspace/Search";
+import { registerUnsaved } from "../lib/stale";
 import { NativeButton, NativePanel } from "../workspace/Native";
 import { workspace } from "../workspace/transport";
 import type { Agent } from "../api/types";
@@ -65,6 +66,8 @@ const parentOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")
 // Open tabs outlive the screen: going to Tasks and back keeps every file and
 // every unsaved edit (the Monaco models live in workspace/Editor.tsx).
 const tabStore = new Store<{ tabs: Tab[]; active: string | null }>({ tabs: [], active: null });
+// An automatic "Command Center was updated" reload must never throw away unsaved edits.
+registerUnsaved(() => tabStore.get().tabs.some((t) => t.dirty));
 
 const ICON: Record<string, [string, string]> = {
   py: ["py", "#8db6df"], ts: ["ts", "#8db6df"], tsx: ["tsx", "#8db6df"], js: ["js", "#e5b05a"], jsx: ["jsx", "#e5b05a"],

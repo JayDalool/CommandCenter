@@ -11,6 +11,7 @@ import { QuickConsole } from "./QuickConsole";
 import { CommandPalette } from "./CommandPalette";
 import { NewTicket } from "./NewTicket";
 import { UnlockDialog } from "./DevMode";
+import { hasUnsavedWork, staleBuild } from "../lib/stale";
 
 // One list, in Jay's order (go-live revision). Pull requests live inside
 // Development; the old Console route opens Workspace, which absorbed it. Old
@@ -129,6 +130,18 @@ function TopBar() {
 }
 
 /** OFFLINE / reconnecting: the screen keeps its data and says how old it is. */
+/** "Command Center was updated": shown when this window's build is gone from the server. */
+export function UpdatedBanner() {
+  const s = useSelector(staleBuild, (d) => d);
+  if (!s.updated) return null;
+  return <div className="banner is-warn" role="alert">
+    <span className="caps">Updated</span>
+    <span>Command Center was updated while this window was open. {hasUnsavedWork()
+      ? "Save your open files, then reload." : "Reload to load the new version."}</span>
+    <button type="button" className="btn is-sm is-jay" onClick={() => location.reload()}>Reload</button>
+  </div>;
+}
+
 export function OfflineBanner() {
   useTick(1000);
   const { status, stateAt, attempt, error } = useSelector(app.store, (d) => ({ status: d.conn.status, stateAt: d.stateAt,
@@ -207,6 +220,7 @@ export function AppShell({ children, flush = false }: { children: ReactNode; flu
     <Rail />
     <div className="main">
       <TopBar />
+      <UpdatedBanner />
       <OfflineBanner />
       <main id="main" className={`screen${flush ? " is-flush" : ""}`} tabIndex={-1}>{children}</main>
     </div>

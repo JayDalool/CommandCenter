@@ -2,11 +2,13 @@
 // and undo history. Monaco is imported lazily, so Overview and Tasks never load it.
 import { useEffect, useRef, useState } from "react";
 import type * as Monaco from "monaco-editor";
+import { handleChunkError } from "../lib/stale";
 
 type M = typeof Monaco;
 let loading: Promise<M> | null = null;
 function loadMonaco(): Promise<M> {
-  loading ??= import("./monaco").then((m) => m.monaco as unknown as M);
+  // A failed load is never cached: the next open tries again (after a deploy, or a blip).
+  loading ??= import("./monaco").then((m) => m.monaco as unknown as M).catch((e) => { loading = null; throw e; });
   return loading;
 }
 
@@ -86,7 +88,10 @@ export function CodeEditor({ path, text, version, onChange, onSave, theme, handl
         return true;
       };
       setReady(true);
-    }).catch((e) => setErr(String(e?.message ?? e)));
+    }).catch((e) => {
+      setErr(handleChunkError(e) ? "Command Center was updated while this window was open — reloading to the new version."
+        : String(e?.message ?? e));
+    });
     return () => {
       dead = true;
       ed.current?.dispose();  // the models stay; see `models`
