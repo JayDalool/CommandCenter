@@ -22,7 +22,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import __version__, coordinators, model, registry, sources
+from . import __version__, coordinators, github, model, registry, sources
 from . import herdr as herdr_mod
 from . import importer
 from . import tasks as tasks_mod
@@ -803,6 +803,8 @@ class Daemon:
         """PR number → one flat record, open PRs and recently merged ones alike."""
         g = self.gh.get(project_key) or {}
         data = g.get("data") or {}
+        slug = next((p.get("repo") for p in self.cfg["projects"] if p["key"] == project_key), None) \
+            or registry.github_of(project_key)
         out = {}
         for pr in data.get("prs") if isinstance(data.get("prs"), list) else []:
             if not isinstance(pr, dict) or not isinstance(pr.get("number"), int):
@@ -810,7 +812,7 @@ class Daemon:
             rollup = pr.get("statusCheckRollup")
             out[pr["number"]] = {
                 "number": pr["number"], "state": "DRAFT" if pr.get("isDraft") else "OPEN",
-                "url": pr.get("url"), "title": pr.get("title"), "branch": pr.get("headRefName"),
+                "url": github.pr_url(slug, pr["number"]), "title": pr.get("title"), "branch": pr.get("headRefName"),
                 "ci": self.CI_WORD.get(model.ci_mark(rollup), "NONE"),
                 "review": pr.get("reviewDecision") or "PENDING",
                 "mergedAt": None, "asOf": g.get("asOf"),
@@ -819,7 +821,7 @@ class Daemon:
             if not isinstance(pr, dict) or not isinstance(pr.get("number"), int):
                 continue
             prev = out.get(pr["number"]) or {}
-            out[pr["number"]] = {**prev, "number": pr["number"], "state": "MERGED", "url": pr.get("url"),
+            out[pr["number"]] = {**prev, "number": pr["number"], "state": "MERGED", "url": github.pr_url(slug, pr["number"]),
                                  "title": pr.get("title"), "mergedAt": pr.get("mergedAt"),
                                  "ci": prev.get("ci", "NONE"), "review": prev.get("review", "PENDING"),
                                  "branch": prev.get("branch"), "asOf": g.get("asOf")}
@@ -873,7 +875,7 @@ class Daemon:
                 num = link["ref"].rsplit("#", 1)[-1]
                 rec = prs.get(int(num)) if num.isdigit() else None
                 linked.append(rec or {"number": int(num) if num.isdigit() else None, "state": "UNKNOWN",
-                                      "url": link["url"], "title": link["title"], "ci": "NONE",
+                                      "url": github.pr_ref_url(link["ref"]), "title": link["title"], "ci": "NONE",
                                       "review": "PENDING", "mergedAt": None, "branch": None, "asOf": None})
             pr = linked[0] if linked else None
             merged = bool(pr and pr["state"] == "MERGED")
@@ -907,6 +909,66 @@ class Daemon:
                           "segment is the key, or a PR linked to the ticket. A key mentioned in passing is not "
                           "an association.",
                           "deploy is always unknown: ccd observes no deployments."]}
+
+    BRANCH_RE = re.compile(r"^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$")
+
+    def dev_commits(self, key, limit=50):
+        """The commits on a ticket's branch that its base branch lacks: sha, subject, author, time, URL.
+        Read-only `git log` in the registered checkout; nothing is fetched."""
+        dev = self.development()
+        row = next((r for r in dev["rows"] if r["key"] == str(key).upper()), None)
+        if not row:
+            raise ActionError(404, f"no development activity for {key}")
+        branch = (row.get("branch") or {}).get("name") or ((row.get("pr") or {}).get("branch"))
+        root = registry.root_of(row["project"])
+        cfgp = next((p for p in self.cfg["projects"] if p["key"] == row["project"]), {})
+        base = cfgp.get("branch") or "main"
+        slug = cfgp.get("repo") or registry.github_of(row["project"])
+        out = {"key": row["key"], "branch": branch, "base": base, "commits": [],
+               "branchUrl": github.branch_url(slug, branch) if branch else None}
+        if not branch or not root or not self.BRANCH_RE.match(branch) or not self.BRANCH_RE.match(base):
+            return out
+        try:
+            r = subprocess.run(["git", "-C", root, "log", f"--max-count={int(limit)}", "--no-color",
+                                "--format=%H%x1f%s%x1f%an%x1f%at", f"refs/heads/{base}..refs/heads/{branch}", "--"],
+                               capture_output=True, text=True, timeout=8, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            out["error"] = "git log failed"
+            return out
+        if r.returncode != 0:
+            out["error"] = "branch not found locally"
+            return out
+        for line in r.stdout.splitlines():
+            parts = line.split("\x1f")
+            if len(parts) != 4:
+                continue
+            sha, subject, author, at = parts
+            out["commits"].append({"sha": sha, "short": sha[:7], "message": subject[:300], "author": author[:100],
+                                   "at": int(at) if at.isdigit() else None, "url": github.commit_url(slug, sha)})
+        return out
+
+    def workspace_projects(self):
+        """Every registered project the Workspace can open: identity, root, branch, coordinator.
+        Roots come from the registry only."""
+        views = {v["key"]: v for v in (self.snap or {}).get("projects") or []}
+        out = []
+        for key, reg in sorted(registry.PROJECTS.items()):
+            root = reg.get("root")
+            branch = None
+            if root and os.path.isdir(root):
+                try:
+                    r = subprocess.run(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True,
+                                       text=True, timeout=3, check=False)
+                    branch = r.stdout.strip() if r.returncode == 0 else None
+                except (OSError, subprocess.TimeoutExpired):
+                    branch = None
+            coord = (views.get(key) or {}).get("coordinator") or None
+            out.append({"key": key, "name": reg["name"], "prefix": reg["prefix"], "root": root,
+                        "exists": bool(root and os.path.isdir(root)), "branch": branch,
+                        "github": github.identity(reg.get("github") or ""),
+                        "coordinator": {"id": coord.get("pane_id"), "name": coord.get("agent_name") or coord.get("label"),
+                                        "status": coord.get("status"), "cwd": coord.get("cwd")} if coord else None})
+        return {"projects": out}
 
     def task_context(self, key):
         ctx = self._wrap(self._need_tasks().context, key)
@@ -1019,7 +1081,7 @@ class Daemon:
                     ready = pr.get("reviewDecision") == "APPROVED" and ci in ("✓", "–") and not pr.get("isDraft")
                     for k in keys:
                         if not self.tasks.has_link(k, "github", "pr", ref):
-                            t, _ = self.tasks.link(k, "github", "pr", ref, pr.get("url"), pr.get("title"),
+                            t, _ = self.tasks.link(k, "github", "pr", ref, github.pr_ref_url(ref), pr.get("title"),
                                                    "system:automation", trigger=f"PR #{n} title or branch leads with {k}")
                             self._task_event("task.updated", t, f"linked PR #{n}", {"kind": "links"})
                         t = self.tasks.get(k)

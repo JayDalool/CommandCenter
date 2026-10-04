@@ -72,7 +72,7 @@ class ConfigUsesTheRegistry(unittest.TestCase):
     def test_names_and_prefixes_come_from_the_registry(self):
         path = os.path.join(tempfile.mkdtemp(prefix="cfg-"), "config.json")
         with open(path, "w") as f:
-            f.write('{"projects": [{"key": "gauzemate", "name": "Gauze", "repo": "o/r", "path": "/tmp"}]}')
+            f.write('{"projects": [{"key": "gauzemate", "name": "Gauze", "repo": "git@github.com:JayDalool/GauzeMate.git", "path": "/tmp"}]}')
         cfg = config.load(path)
         p = cfg["projects"][0]
         self.assertEqual((p["name"], p["prefix"], p["legacy_prefixes"]), ("GauzeMate", "GZ", ["GM"]))

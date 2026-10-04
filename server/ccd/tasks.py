@@ -26,7 +26,7 @@ import re
 import sqlite3
 import time
 
-from . import registry
+from . import github, registry
 
 STATUSES = ("INBOX", "PROPOSED", "RESEARCHING", "READY_TO_IMPLEMENT", "IN_PROGRESS", "IN_REVIEW",
             "READY_TO_MERGE", "VERIFYING", "DONE")
@@ -463,7 +463,9 @@ class TaskStore:
         if kind == "pr" and "#" in ref:
             tail = ref.rsplit("#", 1)[1]
             num = int(tail) if tail.isdigit() else None
-        return {"provider": provider, "kind": kind, "ref": ref, "url": url, "title": title, "number": num,
+        # The stored URL is never trusted for GitHub: it is rebuilt from the ref.
+        return {"provider": provider, "kind": kind, "ref": ref, "url": github.link_url(provider, kind, ref, url),
+                "title": title, "number": num,
                 "createdAt": at, "createdBy": by}
 
     def _links_all(self):
@@ -839,6 +841,22 @@ class TaskStore:
             cols = ", ".join(f"{c}=?" for c in sets)
             self.db.execute(f"UPDATE tickets SET {cols} WHERE id=?", (*sets.values(), tid))
         return changes
+
+    def note(self, key, kind, actor="jay", data=None):
+        """One audit row with no field change (attachment added/removed). Names and sizes, never contents."""
+        actor = _actor(actor)
+        if kind not in ("attachment_added", "attachment_removed"):
+            raise TaskError(400, "unknown note kind")
+        at = _now()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            tid = self._id_of(key)
+            self._audit(tid, actor, kind, data=data or {}, at=at)
+            self._touch(tid, at)
+            self.db.execute("COMMIT")
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            raise
 
     def comment(self, key, body, actor="jay"):
         actor = _actor(actor)

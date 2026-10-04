@@ -37,14 +37,15 @@ PORT = ARGS.port
 
 # Point ccd at the dev directories BEFORE any ccd module is imported.
 os.environ.update(CCD_STATE_DIR=str(DEV / "state"), CCD_DATA_DIR=str(DEV / "data"), CCD_HANDOFF=str(DEV / "handoff"),
-                  CCD_TOKEN_FILE=str(DEV / "ccd.token"), CCD_CONFIG=str(DEV / "no-config.json"), CCD_PORT=str(PORT))
+                  CCD_TOKEN_FILE=str(DEV / "ccd.token"), CCD_CONFIG=str(DEV / "no-config.json"), CCD_PORT=str(PORT),
+                  CCD_DEV_TOKEN_FILE=str(DEV / "developer.token"), CCD_SHARE_DIR=str(DEV / "share"))
 for d in ("state", "data", "handoff"):
     (DEV / d).mkdir(parents=True, exist_ok=True, mode=0o700)
 sys.path[:0] = [str(ROOT / "server")]
 
 import uvicorn  # noqa: E402
 
-from ccd import config, security  # noqa: E402
+from ccd import attachments, config, files, registry, security  # noqa: E402
 from ccd.api import create_app  # noqa: E402
 from ccd.daemon import Daemon, host_snapshot  # noqa: E402
 from ccd.herdr import Herdr  # noqa: E402
@@ -61,7 +62,7 @@ def iso(hours_ago):
 
 
 def pr(n, title, branch, ci="SUCCESS", review=None, draft=False, mergeable="MERGEABLE", age=2):
-    return {"number": n, "title": title, "url": f"https://github.com/JayDalool/x/pull/{n}", "isDraft": draft,
+    return {"number": n, "title": title, "url": f"https://x/{n}", "isDraft": draft,  # url never trusted: ccd rebuilds it
             "reviewDecision": review, "mergeable": mergeable, "headRefName": branch, "headRefOid": f"{n:04d}a3f9c21e",
             "updatedAt": iso(age), "labels": [], "statusCheckRollup": [{"state": ci}] if ci else []}
 
@@ -183,6 +184,23 @@ async def main(reseed):
     daemon = Daemon(cfg, store, Herdr(fake.path), github_fn=github, host_fn=host_snapshot, git_fn=git,
                     oom_fn=lambda: 0, tasks=tasks)
     token = security.load_or_create_token(config.TOKEN_PATH)
+    # The preview's Workspace edits a SANDBOX copy per project, never the real checkouts.
+    sandbox = {}
+    for key in registry.PROJECTS:
+        root = DEV / "sandbox" / key
+        if not root.exists():
+            (root / "src").mkdir(parents=True)
+            (root / "docs").mkdir()
+            (root / "README.md").write_text(f"# {registry.name_of(key)} (preview sandbox)\n\nEdit me.\n")
+            (root / "src" / "main.py").write_text("def hello(name):\n    return f'hello {name}'\n")
+            (root / ".env").write_text("NOT_A_REAL_SECRET=1\n")
+            (root / ".env.example").write_text("NOT_A_REAL_SECRET=\n")
+        sandbox[key] = str(root)
+    daemon.files = files.Roots(sandbox)
+    daemon.attachments = attachments.Attachments(config.DATA_DIR / "attachments.db", config.ATTACH_DIR,
+                                                 50 * 1024 * 1024)
+    daemon.dev_gate = security.DeveloperGate(security.load_or_create_token(config.DEV_TOKEN_PATH))
+    daemon.launcher_dir = Path.home() / ".local" / "share" / "command-center" / "launcher"
 
     @contextlib.asynccontextmanager
     async def lifespan(app):

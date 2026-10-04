@@ -31,12 +31,22 @@ import re
 
 # key → identity. `name` is the display name; config.json may override it.
 # `prefix` and `legacy` are authoritative and config.json may not disagree.
+#
+# `root` is the checkout the Workspace explorer, editor and repo shell may touch,
+# and nothing outside it; the browser names a project key, never a path.
+# `github` is the project's one repository identity; every GitHub URL ccd hands
+# out is built from it (ccd/github.py). config.json may repeat both, not change them.
 PROJECTS = {
-    "samvision":     {"name": "SamVision",        "prefix": "SV",   "legacy": ()},
-    "gauzemate":     {"name": "GauzeMate",        "prefix": "GZ",   "legacy": ("GM",)},
-    "mfe":           {"name": "MyFamilyExpenses", "prefix": "MFE",  "legacy": ()},
-    "commandcenter": {"name": "Command Center",   "prefix": "CC",   "legacy": ()},
-    "gyst":          {"name": "GYST / LifeOps",   "prefix": "GYST", "legacy": ()},
+    "samvision":     {"name": "SamVision",        "prefix": "SV",   "legacy": (),
+                      "root": "/srv/server/apps/samvisionai",       "github": "JayDalool/SamVisionAI"},
+    "gauzemate":     {"name": "GauzeMate",        "prefix": "GZ",   "legacy": ("GM",),
+                      "root": "/srv/server/repos/GauzeMate",        "github": "JayDalool/GauzeMate"},
+    "mfe":           {"name": "MyFamilyExpenses", "prefix": "MFE",  "legacy": (),
+                      "root": "/srv/server/repos/MyFamilyExpenses", "github": "JayDalool/MyFamilyExpenses"},
+    "commandcenter": {"name": "Command Center",   "prefix": "CC",   "legacy": (),
+                      "root": "/srv/server/repos/CommandCenter",    "github": "JayDalool/CommandCenter"},
+    "gyst":          {"name": "GYST / LifeOps",   "prefix": "GYST", "legacy": (),
+                      "root": "/srv/server/repos/gyst-lifeops",     "github": "JayDalool/gyst-lifeops"},
 }
 
 # IDs that appear only in sources outside ccd (INDEX.md rows, issue titles).
@@ -139,6 +149,16 @@ def check(key, prefix=None, legacy=()):
         if not WIDE_PREFIX_RE.match(old):
             raise RegistryError(f"bad legacy prefix {old!r} for {key}")
     return prefix
+
+
+def root_of(key):
+    """The registered checkout of a project, or None. The only source of a Workspace root."""
+    return (PROJECTS.get(key) or {}).get("root")
+
+
+def github_of(key):
+    """`owner/repo` of a registered project, or None."""
+    return (PROJECTS.get(key) or {}).get("github")
 
 
 def rows():

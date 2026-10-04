@@ -35,6 +35,14 @@ ALLOWED = {
     ("GET", "/api/tasks/{key}"), ("PATCH", "/api/tasks/{key}"), ("GET", "/api/tasks/{key}/context"),
     ("POST", "/api/tasks/{key}/comments"), ("POST", "/api/tasks/{key}/relations"),
     ("POST", "/api/tasks/{key}/links"),
+    # Workspace: registered roots only; every write needs Developer Unlock too
+    ("GET", "/api/development/{key}/commits"), ("GET", "/api/workspace/projects"),
+    ("GET", "/api/files/list"), ("GET", "/api/files/read"), ("GET", "/api/files/download"),
+    ("POST", "/api/files/save"), ("POST", "/api/files/upload"),
+    ("GET", "/api/attachments"), ("POST", "/api/attachments"), ("GET", "/api/attachments/{aid}/download"),
+    ("DELETE", "/api/attachments/{aid}"),
+    ("GET", "/api/developer"), ("POST", "/api/developer/unlock"), ("POST", "/api/developer/lock"),
+    ("GET", "/api/desktop/launcher"), ("GET", "/api/desktop/launcher/download"),
 }
 FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec",
                    "shell", "run", "kill", "restart", "delete", "worktree", "settings")
@@ -50,6 +58,8 @@ class ApiBase(unittest.TestCase):
         self.daemon = Daemon(self.cfg, self.store, Herdr(self.fake.path, timeout=2.0), github_fn=self.gh,
                              host_fn=fake_host, git_fn=fake_git, oom_fn=lambda: 0, tasks=self.tickets)
         daemon = self.daemon
+        if hasattr(self, "equip"):
+            self.equip(daemon)
 
         @contextlib.asynccontextmanager
         async def lifespan(app):

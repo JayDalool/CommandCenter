@@ -15,7 +15,7 @@ import json
 import os
 from pathlib import Path
 
-from . import registry
+from . import github, registry
 
 LEGACY = Path(os.environ.get("CCBOARD_HOME", Path.home() / "command-center"))
 CONFIG_PATH = Path(os.environ.get("CCD_CONFIG", LEGACY / "board" / "config.json"))
@@ -23,6 +23,11 @@ STATE_DIR = Path(os.environ.get("CCD_STATE_DIR", LEGACY / "state"))
 DATA_DIR = Path(os.environ.get("CCD_DATA_DIR", LEGACY / "data"))
 HANDOFF_DIR = Path(os.environ.get("CCD_HANDOFF", LEGACY / "handoff"))
 TOKEN_PATH = Path(os.environ.get("CCD_TOKEN_FILE", Path.home() / ".config" / "command-center" / "ccd.token"))
+DEV_TOKEN_PATH = Path(os.environ.get("CCD_DEV_TOKEN_FILE",
+                                   Path.home() / ".config" / "command-center" / "developer.token"))
+SHARE_DIR = Path(os.environ.get("CCD_SHARE_DIR", Path.home() / ".local" / "share" / "command-center"))
+ATTACH_DIR = SHARE_DIR / "attachments"
+LAUNCHER_DIR = Path(os.environ.get("CCD_LAUNCHER_DIR", SHARE_DIR / "launcher"))
 HERDR_SOCKET = Path(os.environ.get("CCD_HERDR_SOCKET", Path.home() / ".config" / "herdr" / "herdr.sock"))
 
 HOST = "127.0.0.1"  # owner decision 6: loopback only. Deliberately not configurable.
@@ -45,11 +50,13 @@ DEFAULTS = {
     # Ticket projects beyond the board's own list (they have no repo to poll).
     # Identity comes from the project registry; only the key is named here.
     "task_projects": [{"key": "commandcenter"}],
+    # Workspace uploads and attachments, per file.
+    "upload_max_mb": 50,
 }
 
 # The only project fields that may leave the server.
 PUBLIC_PROJECT_FIELDS = ("key", "name", "repo", "path", "branch", "model", "effort", "links", "index", "prefix",
-                         "legacy_prefixes")
+                         "legacy_prefixes", "github")
 
 
 def load(path=None):
@@ -66,8 +73,15 @@ def load(path=None):
         proj["legacy_prefixes"] = list(registry.legacy_of(key))
         if registry.project(key):
             proj["name"] = registry.name_of(key)
+            slug = registry.github_of(key)
+            given = github.normalize(proj.get("repo")) if proj.get("repo") else None
+            if proj.get("repo") and (given or "").lower() != slug.lower():
+                raise registry.RegistryError(
+                    f"{key}'s repository is {slug} in the project registry; config.json says {proj.get('repo')!r}.")
+            proj["repo"] = slug
         else:
             proj.setdefault("name", key)
+        proj["github"] = github.identity(github.normalize(proj.get("repo") or "") or "")
     for proj in cfg["projects"]:
         proj.setdefault("branch", "main")
         proj.setdefault("session", proj["key"])

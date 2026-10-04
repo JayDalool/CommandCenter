@@ -21,6 +21,28 @@
     POST  /api/tasks/{key}/relations add/remove blocks, blocked_by, related, duplicates
     POST  /api/tasks/{key}/links     add/remove an external link (a PR, a legacy ID)
 
+    GET   /api/development/{key}/commits  the commits on a ticket's branch, with GitHub links
+
+  Workspace (roots come from the project registry; the browser names a key, never a path)
+    GET   /api/workspace/projects    registered projects: root, branch, GitHub identity, coordinator
+    GET   /api/files/list            one folder, lazily (?project=&path=&git=1)
+    GET   /api/files/read            one text file for the editor, with its sha (or metadata if binary/large)
+    GET   /api/files/download        one file, as an attachment
+    POST  /api/files/save            DEVELOPER. atomic replace, refused if changed since opened
+    POST  /api/files/upload          DEVELOPER. octet-stream into a folder; fail/replace/rename on a clash
+    GET   /api/attachments           a ticket's or project's attachments (?owner=ticket|project&key=)
+    POST  /api/attachments           DEVELOPER. octet-stream; stored outside every repository
+    GET   /api/attachments/{id}/download   always application/octet-stream + attachment
+    DELETE /api/attachments/{id}     DEVELOPER. remove (audited; contents never recorded)
+    GET   /api/developer             is this tab's developer session active?
+    POST  /api/developer/unlock      developer token → a short-lived in-memory session id
+    POST  /api/developer/lock        end that session
+    GET   /api/desktop/launcher      the Windows launcher's version, SHA-256 and build commit
+    GET   /api/desktop/launcher/download  CommandCenter.exe, as an attachment
+
+  DEVELOPER routes need the ccd token AND `X-CCD-Developer: <session>` from
+  /api/developer/unlock. The ordinary ccd token alone can never write a file.
+
     GET   /, /assets/*               the built web UI (web/app/dist), when present. Public
                                      code only; every /api path except health needs the token.
 
@@ -30,6 +52,7 @@ asserts this route table exactly, so adding one is a visible, reviewed change.
 """
 import asyncio
 import json
+import os
 import re
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -40,13 +63,21 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from . import security
+from starlette.responses import StreamingResponse
+
+from . import registry, security
+from .attachments import content_disposition
 from .daemon import ActionError
+from .files import FileError
 
 NO_STORE = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
 WS_PROTOCOL = "ccd.v1"
 WS_TOKEN_PREFIX = "ccd-token."
 WRITE_METHODS = ("POST", "PATCH", "PUT", "DELETE")
+# The only routes that take a raw byte body instead of JSON. application/octet-stream
+# is not a CORS-safelisted type either, so a cross-site page still needs a preflight.
+STREAM_PATHS = ("/api/files/upload", "/api/attachments")
+DEV_HEADER = "x-ccd-developer"
 
 
 def ws_token_from_protocols(header):
@@ -91,7 +122,9 @@ class Guard:
             if not security.token_ok(self.token, presented):
                 problem = (401, "token required")
             elif scope["type"] == "http" and scope.get("method") in WRITE_METHODS and \
-                    not headers.get("content-type", "").split(";")[0].strip() == "application/json":
+                    headers.get("content-type", "").split(";")[0].strip() != "application/json" and not (
+                        path in STREAM_PATHS and scope.get("method") == "POST" and
+                        headers.get("content-type", "").split(";")[0].strip() == "application/octet-stream"):
                 problem = (415, "actions take application/json")
         elif scope["type"] == "http" and scope.get("method") not in ("GET", "HEAD"):
             problem = (405, "the UI is read-only files")
@@ -251,6 +284,180 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     async def link_task(request, body):
         return daemon.task_link(request.path_params["key"], body, request.state.actor)
 
+    # ---------- workspace, files, attachments, developer unlock ----------
+
+    files = getattr(daemon, "files", None)
+    attach = getattr(daemon, "attachments", None)
+    gate = getattr(daemon, "dev_gate", None)
+
+    def _err(e):
+        if isinstance(e, FileError):
+            return _json({"ok": False, "error": e.message, **e.extra}, e.status)
+        return _json({"ok": False, "error": e.message}, e.status)
+
+    def developer(request):
+        if gate is None or not gate.check(request.headers.get(DEV_HEADER) or ""):
+            raise ActionError(403, "Developer Unlock required")
+
+    def ws_route(fn, dev=False):
+        async def handler(request):
+            try:
+                if files is None or attach is None:
+                    raise ActionError(503, "workspace is not configured")
+                if dev:
+                    developer(request)
+                request.state.actor = actor_of(request)
+                result = await fn(request)
+                return result if not isinstance(result, dict) else _json(result)
+            except (ActionError, FileError) as e:
+                return _err(e)
+        return handler
+
+    def _stream_fd(fd, size, name, ctype="application/octet-stream"):
+        def gen():
+            with open(fd, "rb", closefd=True) as f:
+                while True:
+                    chunk = f.read(256 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+        return StreamingResponse(gen(), media_type=ctype, headers={
+            **NO_STORE, "Content-Disposition": content_disposition(name), "Content-Length": str(size),
+            "Content-Security-Policy": "default-src 'none'; sandbox", "X-Frame-Options": "DENY"})
+
+    def _length(request):
+        raw = request.headers.get("content-length")
+        return int(raw) if raw and raw.isdigit() else None
+
+    async def ws_projects(request):
+        return await asyncio.to_thread(daemon.workspace_projects)
+
+    async def dev_commits(request):
+        return await asyncio.to_thread(daemon.dev_commits, request.path_params["key"])
+
+    async def files_list(request):
+        q = request.query_params
+        return await asyncio.to_thread(files.list, q.get("project"), q.get("path", ""), q.get("git") == "1")
+
+    async def files_read(request):
+        q = request.query_params
+        return await asyncio.to_thread(files.read, q.get("project"), q.get("path", ""))
+
+    async def files_download(request):
+        q = request.query_params
+        fd, size, name = await asyncio.to_thread(files.open_download, q.get("project"), q.get("path", ""))
+        return _stream_fd(fd, size, name)
+
+    async def files_save(request):
+        body = await _body(request)
+        base = body.get("baseSha")
+        if base is not None and not (isinstance(base, str) and re.match(r"^[0-9a-f]{64}$", base)):
+            raise ActionError(400, "baseSha must be a sha256 or null")
+        out = await asyncio.to_thread(files.save, str(body.get("project") or ""), body.get("path"), body.get("text"),
+                                      base)
+        daemon._event("files", "file.saved", f"{out['project']}: saved {out['path']}"[:300], project=out["project"],
+                      data={"path": out["path"], "size": out["size"]})
+        return out
+
+    async def files_upload(request):
+        q = request.query_params
+        out = await files.upload(q.get("project"), q.get("dir", ""), q.get("name"), request.stream(),
+                                 conflict=q.get("conflict") or "fail", length=_length(request))
+        daemon._event("files", "file.uploaded", f"{out['project']}: uploaded {out['path']}"[:300],
+                      project=out["project"], data={"path": out["path"], "size": out["size"]})
+        return out
+
+    def _owner(q):
+        kind, key = q.get("owner") or "", (q.get("key") or "").strip()
+        if kind == "ticket":
+            ts = daemon._need_tasks()
+            if not ts.exists(key):
+                raise ActionError(404, f"no ticket {key}")
+            return kind, ts.get(key)["key"]
+        if kind == "project":
+            if key not in {p["key"] for p in daemon.cfg["projects"]} | set(registry.PROJECTS):
+                raise ActionError(404, f"no project {key}")
+            return kind, key
+        raise ActionError(400, "owner must be ticket or project")
+
+    async def attach_list(request):
+        kind, key = _owner(request.query_params)
+        return {"owner": kind, "key": key, "attachments": attach.list(kind, key)}
+
+    def _attach_audit(kind, key, verb, row, actor):
+        data = {"id": row["id"], "name": row["name"], "size": row["size"]}
+        if kind == "ticket":
+            daemon.tasks.note(key, f"attachment_{verb}", actor, data)
+            daemon._task_event("task.updated", daemon.tasks.get(key), f"attachment {verb}: {row['name']}"[:200],
+                               {"kind": "attachments"})
+        else:
+            daemon._event("files", f"attachment.{verb}", f"{key}: attachment {verb}: {row['name']}"[:300],
+                          project=key, data=data)
+
+    async def attach_add(request):
+        kind, key = _owner(request.query_params)
+        row = await attach.add(kind, key, request.query_params.get("name"), request.stream(), request.state.actor,
+                               length=_length(request))
+        _attach_audit(kind, key, "added", row, request.state.actor)
+        return row
+
+    async def attach_download(request):
+        fd, row = await asyncio.to_thread(attach.open, request.path_params["aid"])
+        return _stream_fd(fd, row["size"], row["name"])
+
+    async def attach_remove(request):
+        row = attach.get(request.path_params["aid"])
+        attach.remove(row["id"], request.state.actor)
+        _attach_audit(row["ownerKind"], row["ownerKey"], "removed", row, request.state.actor)
+        return {"ok": True, "id": row["id"]}
+
+    async def dev_status(request):
+        sid = request.headers.get(DEV_HEADER) or ""
+        active = bool(gate and gate.check(sid))
+        return _json({"active": active, "expiresIn": gate.expires_in(sid) if active else None,
+                      "configured": gate is not None})
+
+    async def dev_unlock(request):
+        try:
+            body = await _body(request)
+        except ActionError as e:
+            return _err(e)
+        if gate is None:
+            return _json({"ok": False, "error": "developer unlock is not configured"}, 503)
+        sid, problem = gate.unlock(body.get("token"))
+        if not sid:
+            return _json({"ok": False, "error": problem}, 429 if "too many" in problem else 403)
+        daemon._event("security", "developer.unlocked", "Developer Mode unlocked")
+        return _json({"ok": True, "session": sid, "expiresIn": gate.expires_in(sid)})
+
+    async def dev_lock(request):
+        if gate is not None:
+            gate.lock(request.headers.get(DEV_HEADER) or "")
+        return _json({"ok": True})
+
+    def _launcher_meta():
+        d = getattr(daemon, "launcher_dir", None)
+        try:
+            meta = json.loads(Path(d, "launcher.json").read_text()) if d else None
+        except (OSError, ValueError):
+            meta = None
+        exe = Path(d, "CommandCenter.exe") if d else None
+        if not meta or not exe or not exe.is_file():
+            return None, None
+        keep = {k: meta.get(k) for k in ("version", "sha256", "commit", "built_at", "size")}
+        return keep, exe
+
+    async def launcher_info(request):
+        meta, _ = await asyncio.to_thread(_launcher_meta)
+        return _json({"available": bool(meta), **(meta or {})})
+
+    async def launcher_download(request):
+        meta, exe = await asyncio.to_thread(_launcher_meta)
+        if not meta:
+            return _json({"ok": False, "error": "the launcher has not been built on this server"}, 404)
+        fd = os.open(exe, os.O_RDONLY)
+        return _stream_fd(fd, os.fstat(fd).st_size, "CommandCenter.exe")
+
     async def events(ws: WebSocket):
         offered = [p.strip() for p in (ws.headers.get("sec-websocket-protocol") or "").split(",")]
         await ws.accept(subprotocol=WS_PROTOCOL if WS_PROTOCOL in offered else None)
@@ -319,6 +526,22 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/tasks/{key}/comments", guarded(comment_task), methods=["POST"]),
         Route("/api/tasks/{key}/relations", guarded(relate_task), methods=["POST"]),
         Route("/api/tasks/{key}/links", guarded(link_task), methods=["POST"]),
+        Route("/api/development/{key}/commits", ws_route(dev_commits), methods=["GET"]),
+        Route("/api/workspace/projects", ws_route(ws_projects), methods=["GET"]),
+        Route("/api/files/list", ws_route(files_list), methods=["GET"]),
+        Route("/api/files/read", ws_route(files_read), methods=["GET"]),
+        Route("/api/files/download", ws_route(files_download), methods=["GET"]),
+        Route("/api/files/save", ws_route(files_save, dev=True), methods=["POST"]),
+        Route("/api/files/upload", ws_route(files_upload, dev=True), methods=["POST"]),
+        Route("/api/attachments", ws_route(attach_list), methods=["GET"]),
+        Route("/api/attachments", ws_route(attach_add, dev=True), methods=["POST"]),
+        Route("/api/attachments/{aid}/download", ws_route(attach_download), methods=["GET"]),
+        Route("/api/attachments/{aid}", ws_route(attach_remove, dev=True), methods=["DELETE"]),
+        Route("/api/developer", dev_status, methods=["GET"]),
+        Route("/api/developer/unlock", dev_unlock, methods=["POST"]),
+        Route("/api/developer/lock", dev_lock, methods=["POST"]),
+        Route("/api/desktop/launcher", launcher_info, methods=["GET"]),
+        Route("/api/desktop/launcher/download", launcher_download, methods=["GET"]),
     ]
     mounts = []
     ui = ui_dir() if ui is None else ui
