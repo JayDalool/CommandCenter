@@ -2,8 +2,13 @@
 
 Session names are fixed, never paths:
 
-    repo:<PREFIX>   cwd = that project's registered root (registry.root_of)
-    server          cwd = $HOME
+    repo:<PREFIX>   a login shell; cwd = that project's registered root (registry.root_of)
+    server          a login shell; cwd = $HOME
+    claude:<PREFIX> `scripts/cc-terminal claude <PREFIX>`: the herdr attach client for the
+                    project's EXISTING coordinator (herdr agent attach <pane>). Closing this
+                    session ends only the attach client; Claude and its herdr pane live on
+                    (verified against herdr 0.9.3: a killed or hung-up attach client leaves
+                    the pane running and restores the pane's size).
 
 Anything else is refused. Each session is one login shell running as jay in
 its own process group (setsid + controlling tty). Several browser views may
@@ -29,11 +34,14 @@ import secrets
 import shutil
 import signal
 import struct
+import sys
 import termios
 import time
 
 from . import registry
 
+CC_TERMINAL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                           "scripts", "cc-terminal")
 RING_BYTES = 256 * 1024
 CLIENT_QUEUE = 512          # chunks; ~ up to 32 MiB worst case per client before it is dropped
 READ_CHUNK = 64 * 1024
@@ -52,15 +60,15 @@ def session_cwd(name, roots=None, home=None):
     """The cwd for a session name, from the registry only. Raises PtyError otherwise."""
     if name == "server":
         return home or pwd.getpwuid(os.getuid()).pw_dir
-    if isinstance(name, str) and name.startswith("repo:"):
-        prefix = name[5:]
+    if isinstance(name, str) and (name.startswith("repo:") or name.startswith("claude:")):
+        prefix = name.split(":", 1)[1]
         roots = roots if roots is not None else {
             p["prefix"]: p.get("root") for p in registry.PROJECTS.values()}
         root = roots.get(prefix)
         if root and os.path.isdir(root):
             return os.path.realpath(root)
         raise PtyError(404, f"no registered project with prefix {prefix!r}")
-    raise PtyError(400, "session must be repo:<PREFIX> or server")
+    raise PtyError(400, "session must be repo:<PREFIX>, claude:<PREFIX> or server")
 
 
 class Client:
@@ -87,7 +95,8 @@ class Session:
 
 
 class PtyManager:
-    def __init__(self, audit=None, roots=None, home=None, shell=None, env=None, own_scope=False):
+    def __init__(self, audit=None, roots=None, home=None, shell=None, env=None, own_scope=False,
+                 cc_terminal=None, python=None):
         self.sessions = {}
         self.audit = audit or (lambda kind, text, data: None)
         self.roots = roots
@@ -96,6 +105,8 @@ class PtyManager:
         self.shell = shell or pw.pw_shell or "/bin/bash"
         self.user = pw.pw_name
         self.env = env
+        self.cc_terminal = cc_terminal or CC_TERMINAL
+        self.python = python or sys.executable
         # own_scope: start each shell in its own transient systemd user scope, OUTSIDE ccd's
         # cgroup, so a build in a terminal neither shares ccd's MemoryMax nor can get ccd OOM-killed.
         self.own_scope = own_scope and shutil.which("systemd-run") is not None
@@ -122,13 +133,21 @@ class PtyManager:
         # Everything the child needs is built here, BEFORE the fork: after fork in a
         # threaded process the child may only chdir, close and exec.
         env = self._child_env(cwd)
-        argv = [os.path.basename(self.shell), "-l"]
-        shell = self.shell
+        if name.startswith("claude:"):
+            # NOT a Claude process: the herdr attach client for the EXISTING coordinator, resolved
+            # by the one shared helper (scripts/cc-terminal), exactly as the native terminal does.
+            # The browser names only the registered prefix; the helper refuses zero or several
+            # coordinators and never starts or resumes a session.
+            command = [self.python, self.cc_terminal, "claude", name.split(":", 1)[1]]
+        else:
+            command = [self.shell, "-l"]
+        argv = [os.path.basename(command[0])] + command[1:]
+        shell = command[0]
         unit = None
         if self.own_scope:
             unit = f"cc-pty-{name.replace(':', '-')}-{secrets.token_hex(3)}"
             argv = ["systemd-run", "--user", "--scope", "--quiet", "--collect", f"--unit={unit}",
-                    "--description=Command Center terminal " + name, "--", self.shell, "-l"]
+                    "--description=Command Center terminal " + name, "--", *command]
             shell = shutil.which("systemd-run")
         try:
             maxfd = os.sysconf("SC_OPEN_MAX")

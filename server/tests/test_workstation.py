@@ -173,6 +173,15 @@ class PtyApi(_Fixture):
         self.assertEqual(self.refused("server", ["ccd.v1", f"ccd-token.{TOKEN}", f"ccd-dev.{TOKEN}"]), 4403)
         self.assertEqual(self.daemon.ptys.sessions, {})
 
+    def test_claude_terminal_needs_the_same_gates(self):
+        self.assertEqual(self.refused("claude:SV", ["ccd.v1", f"ccd-token.{TOKEN}"]), 4403)
+        sid = self.dev()
+        p = ["ccd.v1", f"ccd-token.{TOKEN}", f"ccd-dev.{sid}"]
+        self.assertEqual(self.refused("claude:SV", p, {"origin": "http://evil.example"}), 4403)
+        self.assertEqual(self.refused("claude:SV", p, {"host": "evil.example:7777"}), 4403)
+        self.assertEqual(self.refused("claude:XX", p), 4404)
+        self.assertNotIn("claude:SV", self.daemon.ptys.sessions)
+
     def test_developer_session_without_ccd_token_refused(self):
         sid = self.dev()
         self.assertEqual(self.refused("server", ["ccd.v1", f"ccd-dev.{sid}"]), 4401)

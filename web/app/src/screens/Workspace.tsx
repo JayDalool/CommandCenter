@@ -33,6 +33,26 @@ import { TerminalView } from "../workspace/Terminal";
 import { SourceControl } from "../workspace/SourceControl";
 import { GoToFile, SearchPanel } from "../workspace/Search";
 import { NativeButton, NativePanel } from "../workspace/Native";
+import { workspace } from "../workspace/transport";
+import type { Agent } from "../api/types";
+import { AgentState } from "../components/ui";
+
+/** One compact line of Claude context above the terminal. */
+function ClaudeHeader({ agent, project, ticket, model }: {
+  agent: Agent | null; project: WorkspaceProject; ticket: string | null; model: string | null;
+}) {
+  const cell = (k: string, v: React.ReactNode, title?: string) => <span className="ch-cell" title={title}><span className="caps muted">{k}</span> {v}</span>;
+  return <div className="claude-hdr" role="group" aria-label="Claude context">
+    {cell("Project", <b>{project.name}</b>)}
+    {cell("Coordinator", <span className="mono">{agent?.agent_name || project.key}</span>)}
+    {cell("Status", agent ? <AgentState status={agent.status} /> : <span className="bad-t">not running</span>)}
+    {agent && cell("Pane", <span className="mono-xs">{agent.id}</span>)}
+    {agent?.session_id && cell("Session", <span className="mono-xs">{String(agent.session_id).slice(0, 8)}…</span>, String(agent.session_id))}
+    {model && cell("Model", <span className="mono-xs">{model}</span>)}
+    {ticket && cell("Ticket", <span className="key">{ticket}</span>)}
+    {agent?.cwd && cell("cwd", <span className="mono-xs trunc">{agent.cwd}</span>, agent.cwd)}
+  </div>;
+}
 
 interface Tab { path: string; file: FileRead; text: string; version: number; dirty: boolean; conflict: string | null }
 interface Upload { id: number; project: string; name: string; dir: string; f: number; state: "up" | "done" | "fail" | "ask"; msg?: string; file: File }
@@ -175,7 +195,9 @@ export function Workspace() {
   const key = route.params.get("project") || ticket?.project || p.consoleProject || "samvision";
   const proj = projects?.find((x) => x.key === key) ?? null;
   const term = ((route.params.get("tab") as Term) || p.consoleTab || "claude") as Term;
-  const main: Main = (route.params.get("view") as Main) || p.wsMain;
+  // Claude lives in the terminal panel now; an old saved "claude" main view falls back to the editor.
+  const mainRaw: Main = (route.params.get("view") as Main) || p.wsMain;
+  const main: Main = mainRaw === "claude" ? "editor" : mainRaw;
   const theme: "dark" | "light" = p.theme === "light" || (p.theme === "system" && prefersLight) ? "light" : "dark";
 
   const [listings, setListings] = useState<Record<string, FileEntry[] | string>>({});
@@ -194,6 +216,7 @@ export function Workspace() {
   const [seenTerms, setSeenTerms] = useState<Set<Term>>(new Set([term]));
   // Native Windows Terminal is the default; a browser shell opens only when Jay asks for one.
   const [browserShell, setBrowserShell] = useState<Set<Term>>(new Set());
+  const [claudeMirror, setClaudeMirror] = useState(false);
   const [{ vw, vh }, setViewport] = useState({ vw: typeof window !== "undefined" ? window.innerWidth : 1400,
     vh: typeof window !== "undefined" ? window.innerHeight : 900 });
   useEffect(() => {
@@ -232,7 +255,14 @@ export function Workspace() {
   };
   const setProject = (k: string) => { prefs.patch({ consoleProject: k }); nav({ project: k, ticket: null }); };
   const setTerm = (t: Term) => { prefs.patch({ consoleTab: t, wsTermOpen: true, wsMax: prefs.get().wsMax === "main" ? "none" : prefs.get().wsMax }); nav({ tab: t }); };
-  const setMain = (m: Main) => { prefs.patch({ wsMain: m, wsMax: prefs.get().wsMax === "term" ? "none" : prefs.get().wsMax }); nav({ view: m }); };
+  const setMain = (m: Main) => {
+    if (m === "claude") {  // one Claude terminal only: it lives in the terminal panel, shown maximized
+      prefs.patch({ consoleTab: "claude", wsTermOpen: true, wsMax: "term" });
+      nav({ tab: "claude" });
+      return;
+    }
+    prefs.patch({ wsMain: m, wsMax: prefs.get().wsMax === "term" ? "none" : prefs.get().wsMax }); nav({ view: m });
+  };
 
   const openFile = async (path: string, e?: FileEntry, line?: number) => {
     if (e?.protected) { app.toast("Protected file: Command Center never opens secret-looking files", "bad"); return; }
@@ -502,8 +532,7 @@ export function Workspace() {
             hidden={cur?.file.kind !== "text"} onSave={() => void save()}
             onChange={(x, text) => setTabs((ts) => ts.map((t) => t.path === x ? { ...t, dirty: text !== t.text } : t))} />}
         </div>
-        {main === "claude" && <div className="ws-view"><ClaudePanel active={mainOpen} prefix={proj?.prefix ?? null} agent={coordinatorAgent} project={proj ? { key: proj.key, name: proj.name } : null}
-          ticket={qt} model={cfg?.model ?? null} onMaximize={() => maximize("main")} /></div>}
+
         {main === "scm" && <div className="ws-view"><SourceControl project={key}
           ticket={scmTicket}
           githubUrl={proj?.github?.url ?? null} prUrl={prUrl} onOpenFile={(x) => void openFile(x)} /></div>}
@@ -532,8 +561,23 @@ export function Workspace() {
       </div>
       <div className="ws-panel-body">
         <div className="ws-term-pane" hidden={term !== "claude"}>
-          {seenTerms.has("claude") && <ClaudePanel compact prefix={proj?.prefix ?? null} active={term === "claude" && termOpen && !(main === "claude" && mainOpen)} agent={coordinatorAgent} project={proj ? { key: proj.key, name: proj.name } : null}
-            ticket={qt} model={cfg?.model ?? null} onMaximize={() => setMain("claude")} />}
+          {seenTerms.has("claude") && proj && <>
+            <ClaudeHeader agent={coordinatorAgent} project={proj} ticket={qt} model={cfg?.model ?? null} />
+            {claudeMirror
+              ? <ClaudePanel compact prefix={proj.prefix} active={term === "claude" && termOpen} agent={coordinatorAgent}
+                project={{ key: proj.key, name: proj.name }} ticket={qt} model={cfg?.model ?? null} />
+              : <TerminalView key={`claude:${proj.prefix}`} name={`claude:${proj.prefix}`} label={`Claude · ${proj.name}`}
+                active={term === "claude" && termOpen} theme={theme} onMaximize={() => maximize("term")}
+                closeText={`Close the Claude terminal for ${proj.name}? Only this attach closes — Claude keeps running in herdr.`}
+                toolbar={<span className="mono-xs faint" title="herdr direct attach: Ctrl+B then q detaches; Ctrl+B Ctrl+B sends a literal Ctrl+B">Ctrl+B q detaches</span>} />}
+            <div className="native-strip">
+              <NativeButton action="claude" prefix={proj.prefix} primary={false} small>Open native terminal</NativeButton>
+              {coordinatorAgent && <button type="button" className="btn is-quiet is-sm" onClick={() => void workspace.focusAgent(coordinatorAgent.id)}>Open in herdr</button>}
+              <button type="button" className="btn is-quiet is-sm" aria-pressed={claudeMirror} onClick={() => setClaudeMirror(!claudeMirror)}
+                title="The old read-only snapshot view (fallback)">{claudeMirror ? "Back to terminal" : "Mirror"}</button>
+              <span className="mono-xs faint">one writer at a time: if the native terminal is attached, the browser is refused (and vice versa)</span>
+            </div>
+          </>}
         </div>
         {/* Terminals stay mounted once opened, so switching tabs never reconnects. */}
         {proj && seenTerms.has("repo") && <div className="ws-term-pane" hidden={term !== "repo"}>

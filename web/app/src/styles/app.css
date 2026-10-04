@@ -696,3 +696,8 @@ tr:focus-visible, .row-btn:focus-visible { outline-offset: -2px; }
 .native-card .btn.is-jay { font-size: 14px; height: 34px; padding: 0 18px; }
 .native-note { margin: 0; }
 .native-strip { display: flex; align-items: center; gap: 10px; padding: 3px 8px; border-bottom: 1px solid var(--line); background: var(--bg-2); flex: none; }
+
+/* Claude context: one dense line, never a tall header */
+.claude-hdr { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 16px; padding: 3px 10px; border-bottom: 1px solid var(--line); background: var(--surface); font-size: var(--fs-sm); flex: none; min-width: 0; }
+.ch-cell { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 40ch; }
+.ws-term-pane > .term-wrap, .ws-term-pane > .claude { flex: 1 1 0; min-height: 0; width: 100%; }
