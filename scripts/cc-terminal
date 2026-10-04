@@ -37,7 +37,8 @@ from ccd import registry  # noqa: E402
 PREFIX_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
 PANE_RE = re.compile(r"^w[0-9A-Za-z]+:p[0-9]+$")
 # `ssh host cmd` gets a non-login PATH; herdr lives in ~/.local/bin, so find it explicitly.
-HERDR = shutil.which("herdr") or os.path.expanduser("~/.local/bin/herdr")
+# Absolute: the exec happens after chdir, so a relative PATH entry must not be left relative.
+HERDR = os.path.abspath(shutil.which("herdr") or os.path.expanduser("~/.local/bin/herdr"))
 
 
 class Refused(Exception):

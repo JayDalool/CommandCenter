@@ -168,10 +168,7 @@ func (p *osPlatform) StartTerminal(path string, args []string, newConsole bool) 
 	if newConsole {
 		c.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNewConsole}
 	}
-	if err := c.Start(); err != nil {
-		return err
-	}
-	return c.Process.Release()
+	return startAndRelease(c.Start, func() error { return c.Process.Release() })
 }
 
 // registerProtocol writes vals under HKCU, skipping values that already hold

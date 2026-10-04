@@ -31,6 +31,23 @@ const WORD: Record<Conn, string> = { idle: "NOT CONNECTED", connecting: "CONNECT
   ended: "SESSION ENDED", refused: "REFUSED", lost: "TOO SLOW — DROPPED", elsewhere: "ATTACHED ELSEWHERE" };
 // herdr allows one writable attach per terminal; its refusal text, as the attach client prints it.
 const HERDR_BUSY = "already has an attached client";
+const PREAMBLE_BYTES = 8 * 1024;
+
+/** Feed it each output chunk; true once the herdr refusal text appeared inside the attach
+ *  preamble (the first PREAMBLE_BYTES). Text Claude prints later never counts. */
+export function busyDetector(limit = PREAMBLE_BYTES): (bytes: Uint8Array) => boolean {
+  const dec = new TextDecoder();
+  let seen = 0, text = "", hit = false;
+  return (bytes) => {
+    if (hit) return true;
+    if (seen >= limit) return false;
+    const take = bytes.subarray(0, limit - seen);
+    seen += take.length;
+    text += dec.decode(take, { stream: true });
+    if (text.includes(HERDR_BUSY)) hit = true;
+    return hit;
+  };
+}
 
 // The terminal well is dark in both themes (as the Claude mirror is); its colours come from the tokens.
 function termTheme() {
@@ -89,11 +106,11 @@ export function TerminalView({ name, label, active, theme, onMaximize, closeText
     ws.current = sock;
     let ended = false;
     let busy = false;
-    const dec = new TextDecoder();
+    const sawBusy = busyDetector();
     sock.onmessage = (ev) => {
       if (typeof ev.data !== "string") {
         const bytes = new Uint8Array(ev.data as ArrayBuffer);
-        if (!busy && name.startsWith("claude:") && dec.decode(bytes, { stream: true }).includes(HERDR_BUSY)) busy = true;
+        if (!busy && name.startsWith("claude:") && sawBusy(bytes)) busy = true;
         t.write(bytes); return;
       }
       try {

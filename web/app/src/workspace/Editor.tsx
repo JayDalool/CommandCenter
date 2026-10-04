@@ -2,7 +2,7 @@
 // and undo history. Monaco is imported lazily, so Overview and Tasks never load it.
 import { useEffect, useRef, useState } from "react";
 import type * as Monaco from "monaco-editor";
-import { handleChunkError } from "../lib/stale";
+import { isChunkLoadError, recoverFromChunkError } from "../lib/stale";
 
 type M = typeof Monaco;
 
@@ -18,6 +18,8 @@ export function lazyOnce<T>(load: () => Promise<T>, ok: (v: T) => boolean = (v) 
     return p;
   };
 }
+export const UPDATED_RELOAD = "Command Center was updated — reload to continue.";
+export const UPDATED_RELOADING = "Command Center was updated while this window was open — reloading to the new version.";
 const loadMonaco = lazyOnce(() => import("./monaco").then((m) => m?.monaco as unknown as M), (m) => !!m?.editor);
 
 const LANG: Record<string, string> = {
@@ -97,8 +99,10 @@ export function CodeEditor({ path, text, version, onChange, onSave, theme, handl
       };
       setReady(true);
     }).catch((e) => {
-      setErr(handleChunkError(e) ? "Command Center was updated while this window was open — reloading to the new version."
-        : String(e?.message ?? e));
+      if (!isChunkLoadError(e)) { setErr(String(e?.message ?? e)); return; }
+      // Say "reloading" only if a reload really started (reloadOnce is async and may decline).
+      setErr(UPDATED_RELOAD);
+      void recoverFromChunkError(e).then((started) => { if (started) setErr(UPDATED_RELOADING); });
     });
     return () => {
       dead = true;

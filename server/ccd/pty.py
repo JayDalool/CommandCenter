@@ -22,6 +22,20 @@ rather than ever stalling the shell. Input and output are never logged or
 stored: the audit trail records session created / attached / detached /
 closed / expired with the session name and client count only.
 
+Lifecycle (every path that ends a session also stops that session's own systemd scope,
+`cc-pty-*.scope`, when ccd runs terminals in their own scope; nothing else is ever stopped):
+
+    shell exits by itself   the session ends; its scope is stopped, so background / nohup
+                            jobs started in it do not linger
+    browser disconnects     no-op for the process (only the client is detached)
+    CLOSE SESSION           SIGHUP the group, SIGKILL after CLOSE_GRACE, stop the scope
+    idle expiry             unattached for IDLE_EXPIRE: same as CLOSE SESSION
+    ccd stops               every session is closed as CLOSE SESSION
+    claude: attach client   released (closed) CLAUDE_GRACE seconds after the LAST view left,
+                            measured from the latest detach; Claude and its herdr pane live on
+    open() of a closing     waits for it to end, then starts a fresh session; an ended one is
+    session                 replaced
+
 This module never talks to herdr: Claude panes are herdr's and are untouched.
 """
 import asyncio
@@ -87,11 +101,14 @@ class Session:
         self.created = time.time()
         self.ring = bytearray()
         self.clients = set()
-        self.detached_at = time.time()
+        self.detached_at = time.time()          # wall clock: idle expiry
+        self.detached_mono = time.monotonic()   # monotonic: the claude: release timer
         self.exit_code = None
         self.pending = bytearray()   # input waiting for the pty to accept it
         self.ended = False
         self.closing = None
+        self.unit = None
+        self.scope_stopped = False
 
     def public(self):
         return {"name": self.name, "cwd": self.cwd, "clients": len(self.clients), "createdAt": self.created,
@@ -119,6 +136,8 @@ class PtyManager:
             logging.getLogger("ccd").warning(json.dumps({"msg": "systemd-run not found: terminals share ccd's cgroup "
                                                                 "and MemoryMax"}))
         self._lock = asyncio.Lock()
+        self._tasks = set()
+        self._mono = time.monotonic   # injectable clock for the release check
 
     # ---------- lifecycle ----------
 
@@ -189,13 +208,26 @@ class PtyManager:
     async def open(self, name, cols=80, rows=24):
         """The session `name`, starting it if needed. Returns (session, created)."""
         cwd = session_cwd(name, self.roots, self.home)
-        async with self._lock:
-            s = self.sessions.get(name)
-            if s and not s.ended:
-                return s, False
-            s = self._spawn(name, cwd, cols, rows)
-            self.sessions[name] = s
-            asyncio.get_running_loop().add_reader(s.fd, self._on_output, s)
+        deadline = time.monotonic() + CLOSE_GRACE + 10.0
+        while True:
+            closing = None
+            async with self._lock:
+                s = self.sessions.get(name)
+                if s and s.closing and not s.ended:
+                    closing = s   # never hand back a closing session; wait OUTSIDE the lock
+                else:
+                    if s and not s.ended:
+                        return s, False
+                    if s:  # replacing an ended session: its scope must be gone too
+                        await self._stop_scope(s)
+                    s = self._spawn(name, cwd, cols, rows)
+                    self.sessions[name] = s
+                    asyncio.get_running_loop().add_reader(s.fd, self._on_output, s)
+                    break
+            while not closing.ended and time.monotonic() < deadline:
+                await asyncio.sleep(0.05)
+            if not closing.ended:
+                raise PtyError(503, "session is still closing; try again")
         self.audit("pty.session.created", f"terminal {name} started", {"session": name})
         return s, True
 
@@ -251,6 +283,10 @@ class PtyManager:
             pass
         if self.sessions.get(s.name) is s:
             del self.sessions[s.name]
+        if s.unit and not s.scope_stopped:  # shell exited by itself: end its background jobs too
+            task = loop.create_task(self._stop_scope(s))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
         for c in list(s.clients):
             try:
                 c.queue.put_nowait(None)
@@ -314,14 +350,25 @@ class PtyManager:
     async def _stop_scope(self, s):
         """CLOSE SESSION ends everything started in that terminal, background and nohup jobs
         included: they live in the session's own scope, which is stopped here. Nothing else is."""
-        if not getattr(s, "unit", None):
+        if not s.unit or s.scope_stopped:
             return
+        s.scope_stopped = True
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 "systemctl", "--user", "stop", "--no-block", f"{s.unit}.scope",
                 stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
             await asyncio.wait_for(proc.wait(), 5)
-        except (OSError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except (ProcessLookupError, AttributeError):
+                pass
+            try:
+                await asyncio.wait_for(proc.wait(), 2)  # reap it: no zombie systemctl
+            except (asyncio.TimeoutError, AttributeError):
+                pass
+        except OSError:
             pass
 
     async def close_all(self):
@@ -356,15 +403,25 @@ class PtyManager:
             s.clients.discard(c)
             if not s.clients:
                 s.detached_at = time.time()
+                s.detached_mono = self._mono()
                 if s.name.startswith("claude:"):
                     asyncio.get_running_loop().call_later(self.claude_grace, self._release_if_unwatched, s)
             self.audit("pty.detached", f"terminal {s.name} detached", {"session": s.name, "clients": len(s.clients)})
 
     def _release_if_unwatched(self, s):
-        if not s.clients and not s.ended and self.sessions.get(s.name) is s:
-            asyncio.get_running_loop().create_task(self._quiet_close(s.name, "expired"))
+        # An older timer must not release early after a re-detach: measure from the latest detach on
+        # the monotonic clock (a wall-clock step cannot strand the slot), and re-arm for the rest.
+        if s.clients or s.ended or s.closing or self.sessions.get(s.name) is not s:
+            return
+        remaining = self.claude_grace - (self._mono() - s.detached_mono)
+        if remaining > 0:
+            asyncio.get_running_loop().call_later(remaining, self._release_if_unwatched, s)
+            return
+        asyncio.get_running_loop().create_task(self._quiet_close(s.name, "expired", only=s))
 
-    async def _quiet_close(self, name, reason):
+    async def _quiet_close(self, name, reason, only=None):
+        if only is not None and self.sessions.get(name) is not only:
+            return  # a replacement session under this name is never closed by an old timer
         try:
             await self.close(name, reason)
         except PtyError:
