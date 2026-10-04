@@ -3,7 +3,7 @@ import { useSyncExternalStore } from "react";
 export interface Route { screen: string; id: string | null; params: URLSearchParams }
 
 export const SCREENS = ["overview", "projects", "tasks", "development", "console", "agents", "server",
-  "activity", "alerts", "settings", "prs", "workspaces"] as const;
+  "activity", "alerts", "settings", "prs", "workspaces", "workspace"] as const;
 export type Screen = (typeof SCREENS)[number];
 
 export function parse(hash: string): Route {

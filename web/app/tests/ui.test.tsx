@@ -85,7 +85,7 @@ describe("global keyboard", () => {
     await user.keyboard("4");
     expect(location.hash).toBe("#/development");
     await user.keyboard("5");
-    expect(location.hash).toBe("#/console");
+    expect(location.hash).toBe("#/workspace");
   });
 });
 

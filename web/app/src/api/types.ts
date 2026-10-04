@@ -47,6 +47,8 @@ export interface ProjectView {
   key: string;
   name: string;
   repo: string;
+  /** https://github.com/<owner>/<repo>, built by ccd from the registry; null when unknown. */
+  repoUrl?: string | null;
   path: string;
   source: string;
   tasks: { ref: string; title: string; stage: string; url: string | null; flags: string[] }[];
@@ -163,6 +165,7 @@ export interface Workspace {
 
 export interface PublicProject {
   key: string; name: string; repo: string; path: string; branch: string;
+  github?: GithubIdentity | null;
   model?: string; effort?: string; index?: string; prefix?: string;
   /** Prefixes this project has retired. Their keys still resolve; new keys never use them. */
   legacy_prefixes?: string[];
@@ -340,3 +343,29 @@ export interface ImportPreview {
 
 export interface Tail { agentId: string; name: string | null; lines: number; text: string; redactions: number;
   truncated: boolean }
+
+// ---------- workspace ----------
+export interface GithubIdentity { owner: string; repo: string; slug: string; url: string }
+export interface WorkspaceProject {
+  key: string; name: string; prefix: string; root: string | null; exists: boolean; branch: string | null;
+  github: GithubIdentity | null;
+  coordinator: { id: string | null; name: string | null; status: string | null; cwd: string | null } | null;
+}
+export interface FileEntry {
+  name: string; kind: "dir" | "file" | "other" | "outside" | "broken"; size: number | null; mtime: number | null;
+  protected: boolean; link: boolean; git?: string | null;
+}
+export interface FileList { project: string; path: string; crumbs: string[]; entries: FileEntry[]; truncated: boolean; git: boolean }
+export interface FileRead {
+  project: string; path: string; size: number; mtime: number; mode: string;
+  kind: "text" | "binary" | "large"; text: string | null; sha: string | null;
+}
+export interface SaveResult { project: string; path: string; sha: string; size: number; mtime: number }
+export interface UploadResult { project: string; path: string; name: string; size: number; sha: string; renamed: boolean }
+export interface Attachment {
+  id: string; ownerKind: "ticket" | "project"; ownerKey: string; name: string; size: number; sha256: string;
+  uploadedAt: number; uploadedBy: string;
+}
+export interface LauncherInfo { available: boolean; version?: string; sha256?: string; commit?: string; built_at?: string; size?: number }
+export interface DevCommit { sha: string; short: string; message: string; author: string; at: number | null; url: string | null }
+export interface DevCommits { key: string; branch: string | null; base: string; branchUrl: string | null; commits: DevCommit[]; error?: string }

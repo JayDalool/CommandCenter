@@ -87,7 +87,7 @@ export function Development() {
           <DevTrail row={r} repo={repoOf(r.project)} />
           <div className="row" style={{ gap: 8, marginTop: 8 }}>
             <a className="btn is-sm" href={href("tasks", r.key)}>Open {r.key}</a>
-            <a className="btn is-sm" href={href("console", null, { project: r.project, ticket: r.key })}>Console</a>
+            <a className="btn is-sm" href={href("workspace", null, { project: r.project, ticket: r.key })}>Workspace</a>
           </div>
         </div>}
         empty={<EmptyState title={dev ? "No ticket has development work yet." : "Loading development…"}

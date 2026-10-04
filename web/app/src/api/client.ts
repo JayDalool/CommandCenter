@@ -1,5 +1,7 @@
 import { getToken } from "./auth";
+import { devExpired, devSession } from "./developer";
 import type {
+  Attachment, DevCommits, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
   Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent,
 } from "./types";
 
@@ -17,6 +19,8 @@ export class Api {
     const headers: Record<string, string> = {};
     const token = getToken();
     if (token) headers["X-CCD-Token"] = token;
+    const dev = devSession();
+    if (dev) headers["X-CCD-Developer"] = dev;
     if (body !== undefined) headers["Content-Type"] = "application/json";
     let res: Response;
     try {
@@ -30,6 +34,11 @@ export class Api {
     let data: unknown = null;
     try { data = await res.json(); } catch { /* empty body */ }
     if (!res.ok) {
+      if (res.status === 403 && data && typeof data === "object" && "error" in data &&
+        String((data as { error: unknown }).error).startsWith("Developer Unlock")) devExpired();
+      if (res.status === 409 && data && typeof data === "object") {
+        throw Object.assign(new ApiError(409, String((data as { error?: unknown }).error ?? "conflict")), { data });
+      }
       const msg = (data && typeof data === "object" && "error" in data) ? String((data as { error: unknown }).error)
         : `HTTP ${res.status}`;
       throw new ApiError(res.status, msg);
@@ -80,6 +89,74 @@ export class Api {
       "GET", `/api/tasks/${encodeURIComponent(key)}/context`);
   }
   importPreview() { return this.req<ImportPreview>("GET", "/api/tasks/import-preview"); }
+
+  devCommits(key: string) { return this.req<DevCommits>("GET", `/api/development/${encodeURIComponent(key)}/commits`); }
+
+  // ---------- workspace ----------
+  workspaceProjects() { return this.req<{ projects: WorkspaceProject[] }>("GET", "/api/workspace/projects"); }
+  listDir(project: string, path: string, git = false) {
+    return this.req<FileList>("GET", `/api/files/list?${new URLSearchParams({ project, path, ...(git ? { git: "1" } : {}) })}`);
+  }
+  readFile(project: string, path: string) {
+    return this.req<FileRead>("GET", `/api/files/read?${new URLSearchParams({ project, path })}`);
+  }
+  saveFile(project: string, path: string, text: string, baseSha: string | null) {
+    return this.req<SaveResult>("POST", "/api/files/save", { project, path, text, baseSha });
+  }
+  attachments(owner: "ticket" | "project", key: string) {
+    return this.req<{ attachments: Attachment[] }>("GET", `/api/attachments?${new URLSearchParams({ owner, key })}`);
+  }
+  removeAttachment(id: string) { return this.req<{ ok: true }>("DELETE", `/api/attachments/${encodeURIComponent(id)}`, {}); }
+  developerStatus() { return this.req<{ active: boolean; expiresIn: number | null }>("GET", "/api/developer"); }
+  unlock(token: string) {
+    return this.req<{ ok: true; session: string; expiresIn: number }>("POST", "/api/developer/unlock", { token });
+  }
+  lock() { return this.req<{ ok: true }>("POST", "/api/developer/lock", {}); }
+  launcher() { return this.req<LauncherInfo>("GET", "/api/desktop/launcher"); }
+
+  /** GET a file with the token header and hand it to the browser as a download. */
+  async download(path: string, fallbackName: string) {
+    const headers: Record<string, string> = {};
+    const token = getToken();
+    if (token) headers["X-CCD-Token"] = token;
+    const res = await this.fetchImpl(this.base + path, { headers, cache: "no-store", credentials: "omit" });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { msg = String((await res.json()).error ?? msg); } catch { /* not json */ }
+      throw new ApiError(res.status, msg);
+    }
+    const cd = res.headers.get("content-disposition") ?? "";
+    const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
+    const name = m ? decodeURIComponent(m[1]) : fallbackName;
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url; a.download = name; a.rel = "noopener";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  }
+}
+
+/** A raw-bytes upload with progress (fetch has no upload progress). */
+export function uploadBytes(path: string, file: Blob, onProgress: (fraction: number) => void): Promise<UploadResult & Attachment> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    const token = getToken();
+    if (token) xhr.setRequestHeader("X-CCD-Token", token);
+    const dev = devSession();
+    if (dev) xhr.setRequestHeader("X-CCD-Developer", dev);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.onerror = () => reject(new ApiError(0, "ccd unreachable"));
+    xhr.onload = () => {
+      let data: Record<string, unknown> = {};
+      try { data = JSON.parse(xhr.responseText); } catch { /* empty */ }
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(data as unknown as UploadResult & Attachment);
+      if (xhr.status === 403 && String(data.error ?? "").startsWith("Developer Unlock")) devExpired();
+      reject(Object.assign(new ApiError(xhr.status, String(data.error ?? `HTTP ${xhr.status}`)), { data }));
+    };
+    xhr.send(file);
+  });
 }
 
 export type { Ticket };

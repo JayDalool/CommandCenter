@@ -11,6 +11,7 @@ import { ActivityRow, meaningful } from "../components/Feed";
 import { NeedsTable } from "./needs";
 import { jayAction } from "./PullRequests";
 import { workspace } from "../workspace/transport";
+import { AttachmentsPanel } from "../components/Attachments";
 
 export function Projects() {
   const route = useRoute();
@@ -65,7 +66,9 @@ function Cockpit({ p }: { p: ProjectView }) {
       <div><span className="caps muted">GitHub</span><span className="row">{p.github.error ? <span className="bad-t trunc" title={p.github.error}>failing</span> : <span className="ok-t">ok</span>}
         <Ago at={p.github.asOf} /><StaleIndicator at={p.github.asOf} limitS={300} /></span></div>
       <div><span className="caps muted">Jay checks</span><span className="mono">{p.tests.ui.open} UI · {p.tests.actions.open} actions</span></div>
-      <div><span className="caps muted">Repo</span><span className="mono-xs trunc" title={p.path}>{p.repo}</span></div>
+      <div><span className="caps muted">Repo</span>{p.repoUrl
+        ? <a className="mono-xs link trunc" href={p.repoUrl} target="_blank" rel="noopener noreferrer" title={`${p.repoUrl} · ${p.path}`}>{p.repo} ↗</a>
+        : <span className="mono-xs trunc" title={p.path}>{p.repo}</span>}</div>
     </div></section>
     {queue.length > 0 && <Panel title="Needs Jay" count={queue.length} jay><NeedsTable items={queue} /></Panel>}
     <div className="grid-2">
@@ -77,7 +80,7 @@ function Cockpit({ p }: { p: ProjectView }) {
         </Panel>
         <Panel title="Pull requests" count={p.prs.length}>
           {p.prs.length ? <table className="tbl"><tbody>{p.prs.map((pr) => { const j = jayAction(pr); return <tr key={pr.number}>
-            <td><a className="mono link" href={pr.url ?? "#"} target="_blank" rel="noopener noreferrer">#{pr.number}</a></td>
+            <td>{pr.url ? <a className="mono link" href={pr.url} target="_blank" rel="noopener noreferrer">#{pr.number}</a> : <span className="mono">#{pr.number}</span>}</td>
             <td className="is-title"><span className="t trunc">{pr.title}</span></td><td><Ci mark={pr.ci} /></td>
             <td><span className={j.cls}>{j.text}</span></td></tr>; })}</tbody></table> : <EmptyState title="No open PRs." />}
         </Panel>
@@ -86,6 +89,7 @@ function Cockpit({ p }: { p: ProjectView }) {
         </Panel>
       </div>
       <div className="stack">
+        <AttachmentsPanel owner="project" ownerKey={p.key} />
         <Panel title="Agents" count={p.panes.length}>
           {p.panes.length ? <table className="tbl"><tbody>{p.panes.map((a) => <tr key={a.id} className="is-click" onClick={() => go("agents", a.id)}>
             <td className="mono">{a.agent_name || a.id}</td><td className="text2">{a.role}</td><td><AgentState status={a.status} /></td>

@@ -9,6 +9,7 @@ import type { TicketDetail, TicketStatus, Priority, TimelineEvent } from "../api
 import { PRIORITIES, ROLES, FLAGS } from "../api/types";
 import { ALL_STATUSES, STATUS_META, PRIORITY_META, FLAG_LABEL, assigneeLabel } from "../tickets/model";
 import { StateText, Assignee, Project, Ci, DetailRow, EmptyState, Ago, AgentState, Kbd, Command } from "../components/ui";
+import { AttachmentsPanel } from "../components/Attachments";
 import { DevTrail } from "../components/DevTrail";
 import { NewTicket } from "../components/NewTicket";
 import { stamp } from "../lib/time";
@@ -126,9 +127,11 @@ function Detail({ t, onClose }: { t: TicketDetail; onClose: () => void }) {
         <DevTrail row={devRow} repo={proj?.repo ?? null} />
         <div className="row" style={{ gap: 8 }}>
           <a className="btn is-sm" href={href("development")}>All development</a>
-          <a className="btn is-sm" href={href("console", null, { project: t.project, ticket: t.key })}>Console</a>
+          <a className="btn is-sm" href={href("workspace", null, { project: t.project, ticket: t.key })}>Workspace</a>
         </div>
       </section>
+
+      <AttachmentsPanel owner="ticket" ownerKey={t.key} />
 
       <section aria-label="Pull request and agent">
         <div className="td-sec-title">Code</div>
@@ -148,8 +151,9 @@ function Detail({ t, onClose }: { t: TicketDetail; onClose: () => void }) {
         <form className="row" onSubmit={(e) => {
           e.preventDefault(); const n = pr.replace(/^#/, "").trim();
           if (!/^\d+$/.test(n) || !proj) return;
-          void app.mutate(() => app.api.link(t.key, { provider: "github", kind: "pr", ref: `${proj.repo}#${n}`,
-            url: `https://github.com/${proj.repo}/pull/${n}` }), `PR #${n} linked`).then(() => setPr(""));
+          // ccd builds the PR's URL from the project's one GitHub identity; the UI never does.
+          void app.mutate(() => app.api.link(t.key, { provider: "github", kind: "pr", ref: `${proj.repo}#${n}` }),
+            `PR #${n} linked`).then(() => setPr(""));
         }}>
           <input className="input" style={{ width: 110 }} value={pr} onChange={(e) => setPr(e.target.value)} placeholder="#PR" aria-label="Link PR number" disabled={!proj} />
           <button type="submit" className="btn is-sm" disabled={!proj || !pr.trim()}>Link PR</button>

@@ -10,15 +10,17 @@ import { Kbd } from "./ui";
 import { QuickConsole } from "./QuickConsole";
 import { CommandPalette } from "./CommandPalette";
 import { NewTicket } from "./NewTicket";
+import { UnlockDialog } from "./DevMode";
 
-// One list, in Jay's order (P4B revision). Pull requests live inside Development
-// and Workspaces inside Console; both keep their routes so old links still work.
+// One list, in Jay's order (go-live revision). Pull requests live inside
+// Development; the old Console route opens Workspace, which absorbed it. Old
+// links keep working.
 export const NAV: { id: (typeof SCREENS)[number]; label: string; title: string }[] = [
   { id: "overview", label: "Overview", title: "Overview" },
   { id: "projects", label: "Projects", title: "Projects" },
   { id: "tasks", label: "Tasks", title: "Tasks" },
   { id: "development", label: "Development", title: "Development" },
-  { id: "console", label: "Console", title: "Console" },
+  { id: "workspace", label: "Workspace", title: "Workspace" },
   { id: "agents", label: "Agents", title: "Agents" },
   { id: "server", label: "Server", title: "Server" },
   { id: "activity", label: "Activity", title: "Activity" },
@@ -172,12 +174,15 @@ function Toast() {
 export function AppShell({ children, flush = false }: { children: ReactNode; flush?: boolean }) {
   const [palette, setPalette] = useState(false);
   const [newTask, setNewTask] = useState(false);
+  const [unlock, setUnlock] = useState(false);
   const consoleOpen = usePrefs((p) => p.consoleOpen);
   useEffect(() => {
     const openPal = () => setPalette(true);
     const openNew = () => setNewTask(true);
     window.addEventListener("cc:palette", openPal);
     window.addEventListener("cc:new-task", openNew);
+    const openUnlock = () => setUnlock(true);
+    window.addEventListener("cc:dev-unlock", openUnlock);
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPalette((v) => !v); return; }
       if (typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -192,7 +197,7 @@ export function AppShell({ children, flush = false }: { children: ReactNode; flu
     };
     window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("cc:palette", openPal);
-      window.removeEventListener("cc:new-task", openNew); };
+      window.removeEventListener("cc:new-task", openNew); window.removeEventListener("cc:dev-unlock", openUnlock); };
   }, []);
   return <div className="shell">
     <a className="sr" href="#main">Skip to content</a>
@@ -207,5 +212,6 @@ export function AppShell({ children, flush = false }: { children: ReactNode; flu
     <Toast />
     {palette && <CommandPalette onClose={() => setPalette(false)} onNewTask={() => { setPalette(false); setNewTask(true); }} />}
     {newTask && <NewTicket onClose={() => setNewTask(false)} />}
+    {unlock && <UnlockDialog onClose={() => setUnlock(false)} />}
   </div>;
 }

@@ -222,7 +222,7 @@ def project_view(p, gh, panes, blocked_min, cfg):
     handoff = (sources.read_text(HANDOFF_DIR / f"{p['key']}.md") or "").strip().splitlines()[:3]
 
     view = {"key": p["key"], "name": p["name"], "repo": p["repo"], "path": p["path"], "source": source,
-            "github": github.identity(p.get("repo") or ""),
+            "repoUrl": github.repo_url(p.get("repo") or ""),
             "tasks": tasks, "prs": pr_rows, "recent": recent, "team": team, "panes": live_panes,
             "all_panes": my_panes, "tests": tests,
             "links": p["links"], "commands": p["commands"], "main_ci": main_ci, "counts": counts,

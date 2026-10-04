@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { app } from "../store/app";
 import { useSelector } from "../lib/store";
 import { go, useRoute } from "../lib/router";
 import { prefs, usePrefs, commands } from "../lib/prefs";
 import { isRemembered } from "../api/auth";
-import type { ImportPreview } from "../api/types";
+import type { ImportPreview, LauncherInfo } from "../api/types";
+import { DevBadge } from "../components/DevMode";
 import { Panel, Seg, Command, DetailRow, EmptyState, Project } from "../components/ui";
 import { stamp } from "../lib/time";
 
@@ -13,11 +14,61 @@ export function Settings() {
   const tab = route.params.get("tab") ?? "general";
   return <div className="stack">
     <Seg label="Settings section" value={tab} onChange={(v) => go("settings", null, { tab: v === "general" ? undefined : v })}
-      options={[{ v: "general", label: "General" }, { v: "connection", label: "Connection" }, { v: "import", label: "Task migration preview" }]} />
+      options={[{ v: "general", label: "General" }, { v: "desktop", label: "Desktop app" }, { v: "developer", label: "Developer mode" },
+        { v: "connection", label: "Connection" }, { v: "import", label: "Task migration preview" }]} />
     {tab === "general" && <General />}
+    {tab === "desktop" && <DesktopApp />}
+    {tab === "developer" && <DeveloperMode />}
     {tab === "connection" && <Connection />}
     {tab === "import" && <ImportPreviewView />}
   </div>;
+}
+
+function DesktopApp() {
+  const [info, setInfo] = useState<LauncherInfo | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { app.api.launcher().then(setInfo).catch((e) => setErr((e as Error).message)); }, []);
+  return <div className="grid-2">
+    <Panel title="Desktop app — Windows launcher" pad>
+      {err ? <div className="bad-t">{err}</div> : !info ? <div className="muted">Loading…</div> : !info.available
+        ? <div className="muted">The launcher has not been built on this server yet (scripts/build-launcher.sh).</div>
+        : <div className="stack" style={{ gap: 10 }}>
+          <button type="button" className="btn is-jay" onClick={() => void app.api.download("/api/desktop/launcher/download", "CommandCenter.exe")
+            .then(() => app.toast("Downloading CommandCenter.exe")).catch((e) => app.toast((e as Error).message, "bad"))}>Download Windows launcher</button>
+          <dl style={{ display: "grid", gap: 6 }}>
+            <DetailRow label="Version"><span className="mono">{info.version}</span></DetailRow>
+            <DetailRow label="Build commit"><span className="mono">{info.commit}</span></DetailRow>
+            <DetailRow label="Built"><span className="mono-xs">{info.built_at}</span></DetailRow>
+            <DetailRow label="Size"><span className="mono-xs">{info.size?.toLocaleString()} bytes</span></DetailRow>
+            <DetailRow label="SHA-256"><span className="mono-xs" style={{ wordBreak: "break-all" }}>{info.sha256}</span></DetailRow>
+          </dl>
+          <div className="mono-xs muted">Check it in PowerShell: Get-FileHash .\CommandCenter.exe</div>
+        </div>}
+    </Panel>
+    <Panel title="Once, then every day" pad>
+      <ol className="text2" style={{ display: "grid", gap: 6, paddingLeft: 18 }}>
+        <li>Download it once and put it on your Desktop.</li>
+        <li>Double-click it. It starts a hidden SSH tunnel to <span className="mono">jay-server</span> (your existing alias and
+          key), waits for ccd, then opens Command Center in its own Edge app window.</li>
+        <li>First time only: paste the ccd token and tick “Remember on this browser” — the window keeps its own browser profile.</li>
+        <li>Closing the window stops only the tunnel it started. Developer Mode always starts locked.</li>
+      </ol>
+      <div className="mono-xs faint" style={{ marginTop: 8 }}>The launcher contains no token, key or password. Built and unit-tested on Linux;
+        Windows CI builds it too.</div>
+    </Panel>
+  </div>;
+}
+
+function DeveloperMode() {
+  return <Panel title="Developer mode" pad>
+    <div className="stack" style={{ gap: 10 }}>
+      <DevBadge />
+      <p className="text2">The ccd token lets this browser read and steer metadata. Saving or uploading repository files and
+        adding or removing attachments also need Developer Unlock, a separate token kept in
+        <span className="mono"> ~/.config/command-center/developer.token</span> on jay-server. The unlock lasts until you lock it,
+        reload the tab, two idle hours pass, or ccd restarts. It is never stored in the browser.</p>
+    </div>
+  </Panel>;
 }
 
 function General() {
@@ -47,6 +98,7 @@ function Connection() {
     </Panel>
     <Panel title="From Windows" pad>
       <div style={{ display: "grid", gap: 8 }}>
+        <div className="muted">Easiest: Settings → Desktop app. Or by hand:</div>
         <div className="muted">1. Tunnel (leave it running)</div><Command cmd={commands.tunnel(host)} />
         <div className="muted">2. Token to the clipboard, once</div><Command cmd={commands.token(host)} />
         <div className="muted">3. Open <span className="mono">http://127.0.0.1:7777</span> and paste it.</div>

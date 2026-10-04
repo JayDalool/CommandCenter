@@ -67,7 +67,7 @@ function Header({ rows }: { rows: { label: string; value: React.ReactNode; title
   </div>;
 }
 
-function ClaudeMirror({ agent, name }: { agent: Agent | null; name: string }) {
+export function ClaudeMirror({ agent, name }: { agent: Agent | null; name: string }) {
   const visible = useVisible();
   const follow = usePrefs((p) => p.consoleFollow);
   const blocked = useSelector(app.store, (d) => d.state?.blocked ?? null);

@@ -2,8 +2,37 @@
 // merge → verify → deploy. Shared by the Development screen and the ticket's
 // own DEVELOPMENT section, so both show the same evidence and say the same
 // "—" where ccd genuinely does not know.
-import type { DevRow } from "../api/types";
+import { useState } from "react";
+import type { DevCommits, DevRow } from "../api/types";
+import { app } from "../store/app";
+import { stamp } from "../lib/time";
 import { DetailRow, StatusDot } from "./ui";
+
+/** The commits on the ticket's branch, fetched only when Jay expands them. */
+function Commits({ ticket }: { ticket: string }) {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState<DevCommits | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !data) {
+      try { setData(await app.api.devCommits(ticket)); setErr(null); } catch (e) { setErr((e as Error).message); }
+    }
+  };
+  return <span className="stack" style={{ gap: 4 }}>
+    <button type="button" className="btn is-quiet is-sm" aria-expanded={open} onClick={() => void toggle()}>
+      {open ? "Hide commits" : "Show commits"}</button>
+    {open && (err ? <span className="bad-t mono-xs">{err}</span> : !data ? <span className="muted mono-xs">reading git…</span>
+      : data.commits.length === 0 ? <span className="muted mono-xs">{data.error ?? "no commits ahead of " + data.base}</span>
+        : <table className="tbl dev-commits"><tbody>{data.commits.map((c) => <tr key={c.sha}>
+          <td>{c.url ? <a className="mono link" href={c.url} target="_blank" rel="noopener noreferrer">{c.short}</a>
+            : <span className="mono">{c.short}</span>}</td>
+          <td className="is-title"><span className="t trunc" title={c.message}>{c.message}</span></td>
+          <td className="mono-xs muted">{c.author}</td>
+          <td className="mono-xs faint">{c.at ? stamp(c.at) : ""}</td></tr>)}</tbody></table>)}
+  </span>;
+}
 
 const CI_TONE: Record<string, string> = { PASS: "ok-t", FAIL: "bad-t", PENDING: "warn-t", NONE: "faint" };
 const REVIEW_WORD: Record<string, string> = { APPROVED: "APPROVED", CHANGES_REQUESTED: "CHANGES REQUESTED",
@@ -53,7 +82,8 @@ export function DevTrail({ row, repo }: { row: DevRow | null; repo?: string | nu
       : <Dash why="no branch names this ticket" />}</DetailRow>
     <DetailRow label="Commits">{b && b.commits != null && b.countOk
       ? <span className="row" style={{ gap: 8 }}><span className="mono">{b.commits}</span>
-        <span className="mono-xs faint">ahead of the default branch{b.head ? ` · ${b.head}` : ""}</span></span>
+        <span className="mono-xs faint">ahead of the default branch{b.head ? ` · ${b.head}` : ""}</span>
+        <Commits ticket={row.key} /></span>
       : <Dash why={b ? "ccd could not count commits against the default branch" : "no branch"} />}</DetailRow>
     <DetailRow label="PR">{pr && pr.number != null
       ? <span className="row" style={{ gap: 8, flexWrap: "wrap" }}>
