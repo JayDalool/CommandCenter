@@ -417,9 +417,11 @@ class PtyManager:
         if remaining > 0:
             asyncio.get_running_loop().call_later(remaining, self._release_if_unwatched, s)
             return
-        asyncio.get_running_loop().create_task(self._quiet_close(s.name, "expired"))
+        asyncio.get_running_loop().create_task(self._quiet_close(s.name, "expired", only=s))
 
-    async def _quiet_close(self, name, reason):
+    async def _quiet_close(self, name, reason, only=None):
+        if only is not None and self.sessions.get(name) is not only:
+            return  # a replacement session under this name is never closed by an old timer
         try:
             await self.close(name, reason)
         except PtyError:

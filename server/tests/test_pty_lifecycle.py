@@ -172,6 +172,18 @@ class Lifecycle(unittest.TestCase):
             await m.close_all()
         asyncio.run(run())
 
+    def test_an_old_release_never_closes_a_replacement_session(self):
+        async def run():
+            m = self.manager()
+            old, _ = await m.open("repo:TT")
+            await m.close("repo:TT")
+            new, _ = await m.open("repo:TT")
+            await m._quiet_close("repo:TT", "expired", only=old)
+            self.assertFalse(new.ended)
+            self.assertIs(m.sessions.get("repo:TT"), new)
+            await m.close_all()
+        asyncio.run(run())
+
     def test_open_never_returns_a_closing_session(self):
         async def run():
             m = self.manager()
