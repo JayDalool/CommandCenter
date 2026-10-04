@@ -1,14 +1,18 @@
 // WORKSPACE — the daily development surface, laid out like an IDE:
 //
-//   ┌ bar: project · ticket · branch · GitHub · Developer Mode ─────────────┐
-//   │ EXPLORER │ MAIN: Editor | Claude | Source control | Search | Development │
-//   ├──────────┴──────────────────────────────────────────────────────────────┤
-//   │ TERMINAL: Claude | Repo shell (repo:<PREFIX>) | Server shell             │
-//   └─────────────────────────────────────────────────────────────────────────┘
+//   ┌ bar: project · ticket · branch · GitHub · Developer Mode ────────────┐
+//   │ ACT │ SIDEBAR            │ MAIN: editor tabs · diff tabs · Development │
+//   │ BAR │ Explorer | Source  │ (no Claude here)                            │
+//   │     │ control | Search   │                                             │
+//   ├─────┴────────────────────┴─────────────────────────────────────────────┤
+//   │ DOCK: Claude | Repo shell (repo:<PREFIX>) | Server shell                │
+//   └────────────────────────────────────────────────────────────────────────┘
 //
-// Explorer width and terminal height drag (or arrow keys on the dividers),
-// either side collapses, and the main area or the terminal can be maximized.
-// The layout is remembered in this browser only.
+// The activity bar picks the sidebar mode; clicking the active mode (or Ctrl+B)
+// collapses the sidebar. A changed file in Source control opens its diff as a tab
+// in the main area. Claude lives only in the dock. Sidebar width and dock height
+// drag (or arrow keys on the dividers); the main area or the dock can be
+// maximized. The layout is remembered in this browser only.
 //
 // The project comes from the registry (/api/workspace/projects); the browser
 // never names a filesystem root. Reading never needs Developer Mode; every
@@ -30,7 +34,7 @@ import { DevTrail } from "../components/DevTrail";
 import { CodeEditor, disposeModel, nextVersion, revealLine, type EditorHandle } from "../workspace/Editor";
 import { ClaudePanel } from "../workspace/ClaudePanel";
 import { TerminalView } from "../workspace/Terminal";
-import { SourceControl } from "../workspace/SourceControl";
+import { DiffView, ScmSidebar } from "../workspace/SourceControl";
 import { GoToFile, SearchPanel } from "../workspace/Search";
 import { registerUnsaved } from "../lib/stale";
 import { NativeButton, NativePanel } from "../workspace/Native";
@@ -56,8 +60,10 @@ function ClaudeHeader({ agent, project, ticket, model }: {
 }
 
 interface Tab { path: string; file: FileRead; text: string; version: number; dirty: boolean; conflict: string | null }
+/** Read-only tabs next to the file tabs: one file's diff, or the Development trail. */
+type ViewTab = { id: string; kind: "diff"; project: string; path: string; staged: boolean } | { id: string; kind: "dev" };
 interface Upload { id: number; project: string; name: string; dir: string; f: number; state: "up" | "done" | "fail" | "ask"; msg?: string; file: File }
-type Main = Prefs["wsMain"];
+type Side = Prefs["wsSide"];
 type Term = "claude" | "repo" | "server";
 
 const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
@@ -65,7 +71,11 @@ const parentOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")
 
 // Open tabs outlive the screen: going to Tasks and back keeps every file and
 // every unsaved edit (the Monaco models live in workspace/Editor.tsx).
-const tabStore = new Store<{ tabs: Tab[]; active: string | null }>({ tabs: [], active: null });
+const tabStore = new Store<{ tabs: Tab[]; views: ViewTab[]; active: string | null }>({ tabs: [], views: [], active: null });
+export const workspaceTabs = tabStore;  // tests reset it
+const DEV_ID = "dev:";
+const diffId = (project: string, path: string, staged: boolean) => `diff:${project}:${staged ? "staged" : "work"}:${path}`;
+const baseName = (p: string) => p.split("/").pop() ?? p;
 // An automatic "Command Center was updated" reload must never throw away unsaved edits.
 registerUnsaved(() => tabStore.get().tabs.some((t) => t.dirty));
 
@@ -183,6 +193,25 @@ function NameDialog({ title, initial, onDone, onClose }: { title: string; initia
   </Dialog>;
 }
 
+const SIDE_MODES: { id: Side; label: string; icon: React.ReactNode }[] = [
+  { id: "explorer", label: "Explorer", icon: <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" /> },
+  { id: "scm", label: "Source control", icon: <><circle cx="6" cy="6" r="2" /><circle cx="6" cy="18" r="2" /><circle cx="18" cy="8" r="2" /><path d="M6 8v8M18 10c0 4-6 3-12 6" /></> },
+  { id: "search", label: "Search", icon: <><circle cx="10.5" cy="10.5" r="5.5" /><path d="M15 15l5 5" /></> },
+];
+
+/** The thin icon strip: three sidebar modes (VS Code style: clicking the active one collapses it) and Development. */
+function ActivityBar({ side, open, onPick, devOpen, onDev }: { side: Side; open: boolean; onPick: (m: Side) => void; devOpen: boolean; onDev: () => void }) {
+  const svg = (icon: React.ReactNode) => <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{icon}</svg>;
+  const keyHint: Record<Side, string> = { explorer: "Ctrl+B", scm: "", search: "Ctrl+Shift+F" };
+  return <nav className="ws-act" aria-label="Activity bar">
+    {SIDE_MODES.map((m) => <button key={m.id} type="button" className="ws-act-btn" aria-label={m.label} aria-pressed={open && side === m.id}
+      title={`${m.label}${keyHint[m.id] ? ` (${keyHint[m.id]})` : ""}${open && side === m.id ? " — click to collapse" : ""}`} onClick={() => onPick(m.id)}>{svg(m.icon)}</button>)}
+    <span className="sl-fill" />
+    <button type="button" className="ws-act-btn" aria-label="Development" aria-pressed={devOpen} title="Development: this ticket's branch, PR and CI trail" onClick={onDev}>
+      {svg(<><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 5l-4 14" /></>)}</button>
+  </nav>;
+}
+
 export function Workspace() {
   const route = useRoute();
   const st = useSelector(app.store, (d) => d.state);
@@ -198,15 +227,13 @@ export function Workspace() {
   const key = route.params.get("project") || ticket?.project || p.consoleProject || "samvision";
   const proj = projects?.find((x) => x.key === key) ?? null;
   const term = ((route.params.get("tab") as Term) || p.consoleTab || "claude") as Term;
-  // Claude lives in the terminal panel now; an old saved "claude" main view falls back to the editor.
-  const mainRaw: Main = (route.params.get("view") as Main) || p.wsMain;
-  const main: Main = mainRaw === "claude" ? "editor" : mainRaw;
+  const side: Side = p.wsSide;
   const theme: "dark" | "light" = p.theme === "light" || (p.theme === "system" && prefersLight) ? "light" : "dark";
 
   const [listings, setListings] = useState<Record<string, FileEntry[] | string>>({});
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [target, setTarget] = useState("");
-  const { tabs, active } = useSelector(tabStore, (d) => d);
+  const { tabs, views, active } = useSelector(tabStore, (d) => d);
   const setTabs = (f: (ts: Tab[]) => Tab[]) => tabStore.set((d) => ({ ...d, tabs: f(d.tabs) }));
   const setActive = (a: string | null) => tabStore.patch({ active: a });
   const [uploads, setUploads] = useState<Upload[]>([]);
@@ -216,6 +243,7 @@ export function Workspace() {
   const [naming, setNaming] = useState<{ title: string; initial: string; done: (v: string) => void } | null>(null);
   const [goto, setGoto] = useState(false);
   const [searchFocus, setSearchFocus] = useState(0);
+  const [seenSides, setSeenSides] = useState<Set<Side>>(new Set([side]));
   const [seenTerms, setSeenTerms] = useState<Set<Term>>(new Set([term]));
   // Native Windows Terminal is the default; a browser shell opens only when Jay asks for one.
   const [browserShell, setBrowserShell] = useState<Set<Term>>(new Set());
@@ -236,6 +264,7 @@ export function Workspace() {
   const inflight = useRef(new Set<string>());
   const pickFile = useRef<HTMLInputElement>(null);
 
+  useEffect(() => { setSeenSides((s) => (s.has(side) ? s : new Set([...s, side]))); }, [side]);
   useEffect(() => { setSeenTerms((s) => (s.has(term) ? s : new Set([...s, term]))); }, [term]);
   useEffect(() => { setListings({}); setOpen(new Set()); setTarget(""); inflight.current.clear(); }, [key]);
   useEffect(() => { void app.refreshDevelopment(); }, []);
@@ -252,26 +281,38 @@ export function Workspace() {
   const invalidate = (dir: string) => setListings((l) => { const n = { ...l }; delete n[dir]; return n; });
   const toggle = (x: string) => setOpen((s) => { const n = new Set(s); if (n.has(x)) n.delete(x); else n.add(x); return n; });
 
-  const nav = (patch: Partial<{ project: string; tab: Term; view: Main; ticket: string | null }>) => {
+  const nav = (patch: Partial<{ project: string; tab: Term; ticket: string | null }>) => {
     go("workspace", null, { project: patch.project ?? key, ticket: (patch.ticket === undefined ? qt : patch.ticket) ?? undefined,
-      tab: patch.tab ?? term, view: patch.view ?? main });
+      tab: patch.tab ?? term });
   };
   const setProject = (k: string) => { prefs.patch({ consoleProject: k }); nav({ project: k, ticket: null }); };
   const setTerm = (t: Term) => { prefs.patch({ consoleTab: t, wsTermOpen: true, wsMax: prefs.get().wsMax === "main" ? "none" : prefs.get().wsMax }); nav({ tab: t }); };
-  const setMain = (m: Main) => {
-    if (m === "claude") {  // one Claude terminal only: it lives in the terminal panel, shown maximized
-      prefs.patch({ consoleTab: "claude", wsTermOpen: true, wsMax: "term" });
-      nav({ tab: "claude" });
-      return;
-    }
-    prefs.patch({ wsMain: m, wsMax: prefs.get().wsMax === "term" ? "none" : prefs.get().wsMax }); nav({ view: m });
+  const unmaxTerm = () => { if (prefs.get().wsMax === "term") prefs.patch({ wsMax: "none" }); };
+  /** Show a sidebar mode. `toggle` (an activity-bar click) collapses the sidebar when that mode is already showing. */
+  const setSide = (m: Side, toggle = false) => {
+    const q = prefs.get();
+    if (toggle && q.wsExplorerOpen && q.wsSide === m) { prefs.patch({ wsExplorerOpen: false }); return; }
+    prefs.patch({ wsSide: m, wsExplorerOpen: true, wsMax: q.wsMax === "term" ? "none" : q.wsMax });
   };
+  const openDiff = (path: string, staged: boolean) => {
+    const id = diffId(key, path, staged);
+    unmaxTerm();
+    tabStore.set((d) => ({ ...d, active: id, views: d.views.some((v) => v.id === id) ? d.views : [...d.views, { id, kind: "diff", project: key, path, staged }] }));
+  };
+  const openDev = () => {
+    unmaxTerm();
+    tabStore.set((d) => ({ ...d, active: DEV_ID, views: d.views.some((v) => v.id === DEV_ID) ? d.views : [...d.views, { id: DEV_ID, kind: "dev" }] }));
+  };
+  const closeView = (id: string) => tabStore.set((d) => {
+    const views = d.views.filter((v) => v.id !== id);
+    return { ...d, views, active: d.active === id ? [...d.tabs.map((t) => t.path), ...views.map((v) => v.id)].pop() ?? null : d.active };
+  });
 
   const openFile = async (path: string, e?: FileEntry, line?: number) => {
     if (e?.protected) { app.toast("Protected file: Command Center never opens secret-looking files", "bad"); return; }
     if (e && e.kind !== "file") { app.toast("Not a regular file inside the project", "bad"); return; }
     const id = `${key}:${path}`;
-    if (main !== "editor") setMain("editor");
+    unmaxTerm();
     if (line) revealLine(id, line);
     if (tabStore.get().tabs.some((t) => t.path === id)) { setActive(id); return; }
     try {
@@ -282,6 +323,7 @@ export function Workspace() {
   };
 
   const cur = tabs.find((t) => t.path === active) ?? null;
+  const curView = views.find((v) => v.id === active) ?? null;
   const [lastText, setLastText] = useState<string | null>(null);
   useEffect(() => { if (cur?.file.kind === "text") setLastText(cur.path); }, [cur]);
   const textTab = cur?.file.kind === "text" ? cur : tabs.find((t) => t.path === lastText && t.file.kind === "text") ?? null;
@@ -315,13 +357,13 @@ export function Workspace() {
     if (t.dirty && !window.confirm(`${t.file.path} has unsaved changes. Close it anyway?`)) return;
     disposeModel(t.path);
     tabStore.set((d) => { const rest = d.tabs.filter((x) => x.path !== t.path);
-      return { tabs: rest, active: d.active === t.path ? rest[rest.length - 1]?.path ?? null : d.active }; });
+      return { ...d, tabs: rest, active: d.active === t.path ? [...rest.map((x) => x.path), ...d.views.map((v) => v.id)].pop() ?? null : d.active }; });
   };
 
   const maximize = (m: "main" | "term") => prefs.patch({ wsMax: prefs.get().wsMax === m ? "none" : m, wsTermOpen: true });
 
   // Keyboard: Ctrl+S save · Ctrl+P go to file · Ctrl+Shift+F search · Ctrl+` terminal · Ctrl+Shift+` repo shell
-  // · Ctrl+B explorer · Ctrl+Shift+Enter maximize terminal · Esc closes menus. Inside a real terminal, Ctrl+P,
+  // · Ctrl+B sidebar · Ctrl+Shift+Enter maximize terminal · Esc closes menus. Inside a real terminal, Ctrl+P,
   // Ctrl+S, Ctrl+B and Ctrl+Shift+F stay the shell's (Ctrl+P is shell history there).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -332,7 +374,7 @@ export function Workspace() {
       const k = e.key.toLowerCase();
       if (k === "s" && !e.shiftKey && !inTerm) { e.preventDefault(); void save(); }
       else if (k === "p" && !e.shiftKey && !inTerm) { e.preventDefault(); setGoto(true); }
-      else if (k === "f" && e.shiftKey && !inTerm) { e.preventDefault(); setMain("search"); setSearchFocus((n) => n + 1); }
+      else if (k === "f" && e.shiftKey && !inTerm) { e.preventDefault(); setSide("search"); setSearchFocus((n) => n + 1); }
       else if (e.code === "Backquote" && !e.shiftKey) { e.preventDefault(); prefs.patch({ wsTermOpen: !prefs.get().wsTermOpen, wsMax: "none" }); }
       else if (e.code === "Backquote" && e.shiftKey) { e.preventDefault(); setTerm("repo"); }
       else if (k === "b" && !e.shiftKey && !inTerm) { e.preventDefault(); prefs.patch({ wsExplorerOpen: !prefs.get().wsExplorerOpen }); }
@@ -350,11 +392,14 @@ export function Workspace() {
   // The command palette steers the Workspace with events.
   useEffect(() => {
     const onCmd = (e: Event) => {
-      const d = (e as CustomEvent).detail as { main?: Main; term?: Term; goto?: boolean; search?: boolean };
-      if (d.main) setMain(d.main);
+      const d = (e as CustomEvent).detail as { side?: Side; term?: Term; goto?: boolean; dev?: boolean; search?: boolean;
+        main?: "editor" | "scm" | "search" | "dev" };  // `main` is the old spelling
+      const sd = d.side ?? (d.main === "scm" || d.main === "search" ? d.main : undefined);
+      if (sd) setSide(sd);
+      if (d.search || sd === "search") setSearchFocus((n) => n + 1);
+      if (d.dev || d.main === "dev") openDev();
       if (d.term) setTerm(d.term);
       if (d.goto) setGoto(true);
-      if (d.search) { setMain("search"); setSearchFocus((n) => n + 1); }
     };
     window.addEventListener("cc:workspace", onCmd);
     return () => window.removeEventListener("cc:workspace", onCmd);
@@ -434,13 +479,14 @@ export function Workspace() {
   const termOpen = (p.wsTermOpen || p.wsMax === "term") && p.wsMax !== "main";
   const mainOpen = p.wsMax !== "term";
   const termLabel = (t: Term) => (t === "claude" ? "Claude" : t === "repo" ? `Repo shell · repo:${proj?.prefix ?? "?"}` : "Server shell");
-  const MAIN_TABS: { id: Main; label: string }[] = [{ id: "editor", label: "Editor" }, { id: "claude", label: "Claude" },
-    { id: "scm", label: "Source control" }, { id: "search", label: "Search" }, { id: "dev", label: "Development" }];
   // Stored sizes are clamped to THIS window, so a size saved on a big monitor never squeezes a laptop to nothing.
   const maxTerm = Math.max(140, vh - 260);
   const termH = Math.min(p.wsTermH, maxTerm);
   const maxExplorer = Math.max(200, Math.min(640, vw * 0.4));
+  const narrow = vw < 900;
   const explorerW = Math.min(p.wsExplorerW, maxExplorer);
+  const actW = 44;
+  const cols = exOpen ? `${actW}px ${explorerW}px 6px minmax(0,1fr)` : `${actW}px 0 0 minmax(0,1fr)`;
   const rows = !mainOpen ? "auto 0 0 minmax(0,1fr)" : termOpen ? `auto minmax(0,1fr) 6px ${termH}px` : "auto minmax(0,1fr) 0 0";
 
   return <div className="ws2" style={{ gridTemplateRows: rows }}>
@@ -459,58 +505,76 @@ export function Workspace() {
       <DevBadge />
     </div>
 
-    <div className="ws2-main" style={{ gridTemplateColumns: exOpen ? `${explorerW}px 6px minmax(0,1fr)` : "28px 0 minmax(0,1fr)" }} hidden={!mainOpen}>
-      {exOpen ? <aside className={`ws-explorer${over ? " is-over" : ""}`} aria-label="Explorer"
-        onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setOver(true); } }}
+    <div className="ws2-main" style={{ "--ws-cols": cols } as React.CSSProperties} hidden={!mainOpen}>
+      <ActivityBar side={side} open={exOpen} onPick={(m) => setSide(m, true)} devOpen={active === DEV_ID} onDev={openDev} />
+      <aside className={`ws-sidebar${over ? " is-over" : ""}`} aria-label="Sidebar" hidden={!exOpen}
+        onDragOver={(e) => { if (side === "explorer" && e.dataTransfer.types.includes("Files")) { e.preventDefault(); setOver(true); } }}
         onDragLeave={(e) => { if (e.currentTarget === e.target) setOver(false); }}
-        onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files.length) dropFiles(target, e.dataTransfer.files); }}>
-        <div className="ws-ex-head">
-          <span className="caps muted">Explorer</span><span className="sl-fill" />
-          <button type="button" className="btn is-quiet is-sm" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); openMenu({ x: r.left, y: r.bottom, path: target, entry: null }); }}
-            title="New file, folder or upload" aria-label="New file, folder or upload">+</button>
-          <button type="button" className="btn is-quiet is-sm" aria-pressed={git} onClick={() => { setGit(!git); refresh(); }} title="Show git status">git</button>
-          <button type="button" className="btn is-quiet is-sm" onClick={refresh} aria-label="Refresh explorer">↻</button>
-          <button type="button" className="btn is-quiet is-sm" onClick={() => prefs.patch({ wsExplorerOpen: false })} aria-label="Collapse explorer (Ctrl+B)">«</button>
+        onDrop={(e) => { if (side !== "explorer") return; e.preventDefault(); if (e.dataTransfer.files.length) dropFiles(target, e.dataTransfer.files); }}>
+        <div className="ws-side-pane ws-explorer" aria-label="Explorer" role="region" hidden={side !== "explorer"}>
+          <div className="ws-ex-head">
+            <span className="caps muted">Explorer</span><span className="sl-fill" />
+            <button type="button" className="btn is-quiet is-sm" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); openMenu({ x: r.left, y: r.bottom, path: target, entry: null }); }}
+              title="New file, folder or upload" aria-label="New file, folder or upload">+</button>
+            <button type="button" className="btn is-quiet is-sm" aria-pressed={git} onClick={() => { setGit(!git); refresh(); }} title="Show git status">git</button>
+            <button type="button" className="btn is-quiet is-sm" onClick={refresh} aria-label="Refresh explorer">↻</button>
+          </div>
+          <nav className="ws-crumbs mono-xs" aria-label="Current folder">
+            <button type="button" className="link" onClick={() => setTarget("")}>{proj?.name ?? key}</button>
+            {crumbs.map((c, i) => <span key={i}> / <button type="button" className="link" onClick={() => setTarget(crumbs.slice(0, i + 1).join("/"))}>{c}</button></span>)}
+          </nav>
+          <div className="ws-tree" role="tree" aria-label={`${proj?.name ?? key} files`}
+            onContextMenu={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); openMenu({ x: e.clientX, y: e.clientY, path: target, entry: null }); } }}>
+            {proj && !proj.exists ? <div className="muted ws-row">checkout not found on the server</div>
+              : <Folder path="" depth={0} open={open} toggle={toggle} onOpen={(x, e) => void openFile(x, e)}
+                selected={cur?.file.project === key ? cur.file.path : null} target={target} setTarget={setTarget}
+                listings={listings} load={load} onDropFiles={dropFiles} onMenu={openMenu} />}
+          </div>
+          <div className="ws-drop mono-xs">{dev ? <>Drop files to upload into <b>{target || "/"}</b></> : <>Changing files needs <button type="button" className="link" onClick={unlockDialogOpen}>Developer Unlock</button></>}</div>
+          {uploads.length > 0 && <div className="ws-uploads" aria-live="polite">
+            {uploads.map((u) => <div key={u.id} className="row mono-xs">
+              <span className="trunc" title={join(u.dir, u.name)}>{u.name}</span>
+              {u.state === "up" ? <progress max={1} value={u.f} aria-label={`Uploading ${u.name}`} />
+                : <span className={u.state === "done" ? "ok-t" : u.state === "ask" ? "warn-t" : "bad-t"}>{u.state === "ask" ? "exists" : u.msg}</span>}
+              {u.state !== "up" && <button type="button" className="btn is-quiet is-sm" aria-label="Dismiss" onClick={() => setUploads((us) => us.filter((x) => x.id !== u.id))}>×</button>}
+            </div>)}
+          </div>}
+          <input ref={pickFile} type="file" multiple hidden onChange={(e) => { if (e.target.files?.length) dropFiles(target, e.target.files); e.target.value = ""; }} />
         </div>
-        <nav className="ws-crumbs mono-xs" aria-label="Current folder">
-          <button type="button" className="link" onClick={() => setTarget("")}>{proj?.name ?? key}</button>
-          {crumbs.map((c, i) => <span key={i}> / <button type="button" className="link" onClick={() => setTarget(crumbs.slice(0, i + 1).join("/"))}>{c}</button></span>)}
-        </nav>
-        <div className="ws-tree" role="tree" aria-label={`${proj?.name ?? key} files`}
-          onContextMenu={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); openMenu({ x: e.clientX, y: e.clientY, path: target, entry: null }); } }}>
-          {proj && !proj.exists ? <div className="muted ws-row">checkout not found on the server</div>
-            : <Folder path="" depth={0} open={open} toggle={toggle} onOpen={(x, e) => void openFile(x, e)}
-              selected={cur?.file.project === key ? cur.file.path : null} target={target} setTarget={setTarget}
-              listings={listings} load={load} onDropFiles={dropFiles} onMenu={openMenu} />}
-        </div>
-        <div className="ws-drop mono-xs">{dev ? <>Drop files to upload into <b>{target || "/"}</b></> : <>Changing files needs <button type="button" className="link" onClick={unlockDialogOpen}>Developer Unlock</button></>}</div>
-        {uploads.length > 0 && <div className="ws-uploads" aria-live="polite">
-          {uploads.map((u) => <div key={u.id} className="row mono-xs">
-            <span className="trunc" title={join(u.dir, u.name)}>{u.name}</span>
-            {u.state === "up" ? <progress max={1} value={u.f} aria-label={`Uploading ${u.name}`} />
-              : <span className={u.state === "done" ? "ok-t" : u.state === "ask" ? "warn-t" : "bad-t"}>{u.state === "ask" ? "exists" : u.msg}</span>}
-            {u.state !== "up" && <button type="button" className="btn is-quiet is-sm" aria-label="Dismiss" onClick={() => setUploads((us) => us.filter((x) => x.id !== u.id))}>×</button>}
-          </div>)}
+        {(seenSides.has("scm") || side === "scm") && <div className="ws-side-pane" role="region" aria-label="Source control" hidden={side !== "scm"}>
+          <div className="ws-ex-head"><span className="caps muted">Source control</span></div>
+          <ScmSidebar project={key} ticket={scmTicket} githubUrl={proj?.github?.url ?? null} prUrl={prUrl}
+            onOpenFile={(x) => void openFile(x)} onOpenDiff={openDiff}
+            selected={curView?.kind === "diff" && curView.project === key ? { path: curView.path, staged: curView.staged } : null} />
         </div>}
-        <input ref={pickFile} type="file" multiple hidden onChange={(e) => { if (e.target.files?.length) dropFiles(target, e.target.files); e.target.value = ""; }} />
-      </aside> : <button type="button" className="ws-ex-rail" onClick={() => prefs.patch({ wsExplorerOpen: true })} aria-label="Show explorer (Ctrl+B)" title="Explorer (Ctrl+B)">»</button>}
-      {exOpen ? <Splitter axis="x" className="ws2-xsplit" value={explorerW} min={180} max={maxExplorer} onChange={(v) => prefs.patch({ wsExplorerW: v })} label="Explorer width" /> : <span className="ws2-xsplit" />}
+        {(seenSides.has("search") || side === "search") && <div className="ws-side-pane" role="region" aria-label="Search" hidden={side !== "search"}>
+          <div className="ws-ex-head"><span className="caps muted">Search</span><span className="sl-fill" /><span className="mono-xs faint">Go to file <Kbd>Ctrl P</Kbd></span></div>
+          <SearchPanel project={key} focusKey={searchFocus} onOpen={(x, line) => void openFile(x, undefined, line)} />
+        </div>}
+      </aside>
+      {exOpen && !narrow ? <Splitter axis="x" className="ws2-xsplit" value={explorerW} min={180} max={maxExplorer} onChange={(v) => prefs.patch({ wsExplorerW: v })} label="Sidebar width" /> : <span className="ws2-xsplit" />}
 
       <section className="ws-center" aria-label="Main area">
-        <div className="ws-maintabs" role="tablist" aria-label="Main view">
-          {MAIN_TABS.map((t) => <button key={t.id} type="button" role="tab" aria-selected={main === t.id} className="tab" onClick={() => setMain(t.id)}>{t.label}</button>)}
-          <span className="sl-fill" />
-          <button type="button" className="btn is-quiet is-sm" aria-pressed={p.wsMax === "main"} onClick={() => maximize("main")}>{p.wsMax === "main" ? "Restore" : "Maximize"}</button>
-          {!termOpen && <button type="button" className="btn is-quiet is-sm" onClick={() => prefs.patch({ wsTermOpen: true, wsMax: "none" })}>Terminal <Kbd>Ctrl `</Kbd></button>}
-        </div>
-        <div className="ws-view" hidden={main !== "editor"}>
-          <div className="ws-tabs" role="tablist" aria-label="Open files">
+        <div className="ws-tabbar">
+          <div className="ws-tabs" role="tablist" aria-label="Open files and diffs">
             {tabs.map((t) => <span key={t.path} role="tab" aria-selected={t.path === active} className={`ws-tab${t.path === active ? " is-active" : ""}`}>
               <button type="button" className="ws-tab-name" onClick={() => setActive(t.path)} title={`${t.file.project}: ${t.file.path}`}>
                 <FileIcon name={t.file.path} dir={false} />{t.file.path.split("/").pop()}{t.dirty && <span className="ws-dirty" aria-label="unsaved"> ●</span>}</button>
               <button type="button" className="ws-tab-x" aria-label={`Close ${t.file.path}`} onClick={() => close(t)}>×</button>
             </span>)}
+            {views.map((v) => {
+              const label = v.kind === "dev" ? "Development" : `${baseName(v.path)} (${v.staged ? "staged" : "diff"})`;
+              return <span key={v.id} role="tab" aria-selected={v.id === active} className={`ws-tab${v.id === active ? " is-active" : ""}`}>
+                <button type="button" className="ws-tab-name" onClick={() => setActive(v.id)} title={v.kind === "dev" ? "Development trail" : `${v.project}: ${v.path} — ${v.staged ? "staged" : "working tree"} diff`}>
+                  <span className="fi" aria-hidden>{v.kind === "dev" ? "dev" : "±"}</span>{label}</button>
+                <button type="button" className="ws-tab-x" aria-label={`Close ${label}`} onClick={() => closeView(v.id)}>×</button>
+              </span>;
+            })}
           </div>
+          <button type="button" className="btn is-quiet is-sm" aria-pressed={p.wsMax === "main"} onClick={() => maximize("main")}>{p.wsMax === "main" ? "Restore" : "Maximize"}</button>
+          {!termOpen && <button type="button" className="btn is-quiet is-sm" onClick={() => prefs.patch({ wsTermOpen: true, wsMax: "none" })}>Dock <Kbd>Ctrl `</Kbd></button>}
+        </div>
+        <div className="ws-view" hidden={curView !== null}>
           {cur ? <>
             <div className="ws-filebar">
               <span className="mono-xs trunc" title={cur.file.path}><span className="faint">{cur.file.project} / </span>{cur.file.path.split("/").join(" / ")}</span>
@@ -530,17 +594,14 @@ export function Workspace() {
               hint={`${bytes(cur.file.size)} — download it instead. The editor opens UTF-8 text up to 2 MB.`} /></div>}
           </> : <div className="ws-editor-wrap is-empty"><EmptyState title="Open a file from the explorer"
             hint="Ctrl+P go to file · Ctrl+Shift+F search · Ctrl+S save (Developer Mode) · drop files from Windows onto a folder" /></div>}
-          {/* Mounted while any text tab is open, so switching to a binary tab never drops another tab's edits. */}
+          {/* Mounted while any text tab is open, so switching to a binary or diff tab never drops another tab's edits. */}
           {textTab && <CodeEditor path={textTab.path} text={textTab.text} version={textTab.version} theme={theme} handle={editor}
             hidden={cur?.file.kind !== "text"} onSave={() => void save()}
             onChange={(x, text) => setTabs((ts) => ts.map((t) => t.path === x ? { ...t, dirty: text !== t.text } : t))} />}
         </div>
 
-        {main === "scm" && <div className="ws-view"><SourceControl project={key}
-          ticket={scmTicket}
-          githubUrl={proj?.github?.url ?? null} prUrl={prUrl} onOpenFile={(x) => void openFile(x)} /></div>}
-        {main === "search" && <div className="ws-view"><SearchPanel project={key} focusKey={searchFocus} onOpen={(x, line) => void openFile(x, undefined, line)} /></div>}
-        {main === "dev" && <div className="ws-view ws-devview">
+        {curView?.kind === "diff" && <div className="ws-view"><DiffView key={curView.id} project={curView.project} path={curView.path} staged={curView.staged} /></div>}
+        {curView?.kind === "dev" && <div className="ws-view ws-devview">
           {qt ? <><div className="td-sec-title">{qt} · development</div><DevTrail row={devRow} repo={proj?.github?.slug ?? null} /></>
             : <div className="muted mono-xs">Open Workspace from a ticket (or pick one below) to see its trail here.</div>}
           <div className="td-sec-title" style={{ marginTop: 14 }}>{proj?.name} · tickets with development work</div>
