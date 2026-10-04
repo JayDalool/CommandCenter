@@ -133,6 +133,45 @@ describe("claude only in the dock", () => {
   });
 });
 
+describe("diff freshness", () => {
+  it("a diff tab re-reads after stage and after unstage", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(app, "action").mockImplementation(async (fn: () => Promise<unknown>) => { await fn(); return true; });
+    vi.spyOn(app.api, "scm").mockResolvedValue({} as never);
+    app.store.patch({});
+    const { setDevSession } = await import("../src/api/developer");
+    setDevSession("s".repeat(43), 3600);
+    await ready();
+    await user.click(screen.getByRole("button", { name: "Source control" }));
+    await user.click(await within(sidebar()).findByRole("button", { name: /a\.py/ }));
+    await within(mainArea()).findByLabelText("Diff of a.py");
+    const calls = () => (app.api.scmDiff as unknown as { mock: { calls: unknown[][] } }).mock.calls.length;
+    const before = calls();
+    await user.click(within(sidebar()).getByRole("button", { name: "Stage" }));
+    await waitFor(() => expect(calls()).toBeGreaterThan(before));
+    const mid = calls();
+    await user.click(within(sidebar()).getAllByRole("button", { name: "Unstage" })[0]);
+    await waitFor(() => expect(calls()).toBeGreaterThan(mid));
+    setDevSession(null);
+  });
+});
+
+describe("legacy events and addresses", () => {
+  const send = (detail: Record<string, unknown>) => act(() => { window.dispatchEvent(new CustomEvent("cc:workspace", { detail })); });
+  it("{main:'scm'} opens Source control and {main:'dev'} opens Development", async () => {
+    await ready();
+    send({ main: "scm" });
+    expect(prefs.get().wsSide).toBe("scm");
+    send({ main: "dev" });
+    expect(await within(mainArea()).findByRole("tab", { name: /Development/ })).toBeInTheDocument();
+  });
+  it("?view=search opens the Search sidebar", async () => {
+    location.hash = "#/workspace?project=samvision&view=search";
+    await ready();
+    await waitFor(() => expect(prefs.get().wsSide).toBe("search"));
+  });
+});
+
 describe("palette events", () => {
   const send = (detail: Record<string, unknown>) => act(() => { window.dispatchEvent(new CustomEvent("cc:workspace", { detail })); });
   it("routes side, search, dev, term and goto", async () => {

@@ -7,6 +7,7 @@ import { Dialog } from "../components/Dialog";
 import { unlockDialogOpen, useDevActive } from "../components/DevMode";
 
 /** Bumped after every status refresh, so an open diff tab re-reads its diff after a stage/unstage/commit. */
+export const bumpScm = () => scmRev.patch({ rev: scmRev.get().rev + 1 });
 const scmRev = new Store<{ rev: number }>({ rev: 0 });
 
 /** The diff of one file, read-only, for a tab in the main area. */
@@ -43,7 +44,7 @@ export function ScmSidebar({ project, ticket, githubUrl, prUrl, onOpenFile, onOp
   const [suggest, setSuggest] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    try { setSt(await app.api.scmStatus(project)); setErr(null); scmRev.patch({ rev: scmRev.get().rev + 1 }); } catch (e) { setErr((e as Error).message); }
+    try { setSt(await app.api.scmStatus(project)); setErr(null); bumpScm(); } catch (e) { setErr((e as Error).message); }
   }, [project]);
   useEffect(() => { setSt(null); void refresh(); }, [refresh]);
   const tKey = ticket?.key, tBranch = ticket?.branch;

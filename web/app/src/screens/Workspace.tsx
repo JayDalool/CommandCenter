@@ -34,7 +34,7 @@ import { DevTrail } from "../components/DevTrail";
 import { CodeEditor, disposeModel, nextVersion, revealLine, type EditorHandle } from "../workspace/Editor";
 import { ClaudePanel } from "../workspace/ClaudePanel";
 import { TerminalView } from "../workspace/Terminal";
-import { DiffView, ScmSidebar } from "../workspace/SourceControl";
+import { DiffView, ScmSidebar, bumpScm } from "../workspace/SourceControl";
 import { GoToFile, SearchPanel } from "../workspace/Search";
 import { registerUnsaved } from "../lib/stale";
 import { NativeButton, NativePanel } from "../workspace/Native";
@@ -207,7 +207,7 @@ function ActivityBar({ side, open, onPick, devOpen, onDev }: { side: Side; open:
     {SIDE_MODES.map((m) => <button key={m.id} type="button" className="ws-act-btn" aria-label={m.label} aria-pressed={open && side === m.id}
       title={`${m.label}${keyHint[m.id] ? ` (${keyHint[m.id]})` : ""}${open && side === m.id ? " — click to collapse" : ""}`} onClick={() => onPick(m.id)}>{svg(m.icon)}</button>)}
     <span className="sl-fill" />
-    <button type="button" className="ws-act-btn" aria-label="Development" aria-pressed={devOpen} title="Development: this ticket's branch, PR and CI trail" onClick={onDev}>
+    <button type="button" className="ws-act-btn" aria-label="Development" aria-current={devOpen ? "page" : undefined} title="Development: this ticket's branch, PR and CI trail" onClick={onDev}>
       {svg(<><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 5l-4 14" /></>)}</button>
   </nav>;
 }
@@ -264,6 +264,9 @@ export function Workspace() {
   const inflight = useRef(new Set<string>());
   const pickFile = useRef<HTMLInputElement>(null);
 
+  // An old ?view=scm|search address opens that sidebar mode (the same mapping as the prefs migration).
+  const legacyView = route.params.get("view");
+  useEffect(() => { if (legacyView === "scm" || legacyView === "search") setSide(legacyView); }, [legacyView]);  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setSeenSides((s) => (s.has(side) ? s : new Set([...s, side]))); }, [side]);
   useEffect(() => { setSeenTerms((s) => (s.has(term) ? s : new Set([...s, term]))); }, [term]);
   useEffect(() => { setListings({}); setOpen(new Set()); setTarget(""); inflight.current.clear(); }, [key]);
@@ -338,6 +341,7 @@ export function Workspace() {
       const now = editor.current?.value(t.path) ?? text;  // keys typed while saving stay dirty
       tabStore.set((d) => ({ ...d, tabs: d.tabs.map((x) => x.path === t.path ? { ...x, text, dirty: now !== text, conflict: null,
         file: { ...x.file, sha: r.sha, size: r.size, mtime: r.mtime } } : x) }));
+      bumpScm();
       app.toast(`Saved ${t.file.path}`);
     } catch (e) {
       const msg = (e as Error).message;
@@ -411,6 +415,7 @@ export function Workspace() {
       const r = await uploadBytes(`/api/files/upload?${new URLSearchParams({ project: u.project, dir: u.dir, name: u.name, conflict })}`,
         u.file, (f) => setUploads((us) => us.map((x) => x.id === u.id ? { ...x, f } : x)));
       setUploads((us) => us.map((x) => x.id === u.id ? { ...x, state: "done", f: 1, msg: r.renamed ? `saved as ${r.name}` : "uploaded" } : x));
+      bumpScm();
       if (keyRef.current === u.project) invalidate(u.dir);
     } catch (e) {
       const err = e as ApiError & { data?: { exists?: boolean } };
