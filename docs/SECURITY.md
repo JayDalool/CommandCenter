@@ -199,6 +199,20 @@ Mode closes open terminal views within seconds. The audit trail records
 created / attached / detached / closed / expired with the session name and
 viewer count — never input, output or commands.
 
+**PTY session lifecycle.** Every way a session ends also stops that session's
+own `cc-pty-*` systemd scope (never any other unit), so background and `nohup`
+jobs started in a terminal do not outlive it.
+
+| Event | Process | Scope |
+| --- | --- | --- |
+| Shell exits by itself (`exit`, Ctrl+D) | already gone | stopped at once |
+| Browser disconnects / DETACH | keeps running | untouched |
+| CLOSE SESSION | HUP to its group, KILL after 2 s | stopped |
+| Idle expiry (unattached 12 h) | same as CLOSE SESSION | stopped |
+| ccd stops | every session closed as CLOSE SESSION | stopped |
+| `claude:` attach, nobody viewing for 60 s (counted from the last detach) | attach client closed; Claude and its herdr pane live on | stopped |
+| Open while that session is closing | waits for it to end, then starts a fresh one | old one stopped |
+
 **Source control** (`/api/scm/*`) runs plain git in a registered root with no
 pager, prompt or editor and a timeout. Paths are single files (a folder is
 refused, so a folder pathspec cannot reach protected files), passed after `--`

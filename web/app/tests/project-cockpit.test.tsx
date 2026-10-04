@@ -1,8 +1,9 @@
-import { render, screen, waitFor, act, within } from "@testing-library/react";
+import { render, screen, waitFor, act, within, fireEvent } from "@testing-library/react";
 import { vi } from "vitest";
 import { app, initial } from "../src/store/app";
 import { Projects, resetRegistryCache } from "../src/screens/Projects";
 import { AppShell } from "../src/components/Shell";
+import { prefs } from "../src/lib/prefs";
 import { state, tasks } from "./helpers";
 
 const reg = [{ key: "commandcenter", name: "Command Center", prefix: "CC", root: "/srv/cc", exists: true, branch: "main",
@@ -58,12 +59,32 @@ it("commandcenter: same bar from the registry, fetched once", async () => {
   expect(app.api.workspaceProjects).toHaveBeenCalledTimes(1);
 });
 
-it("New ticket preselects the project; a plain cc:new-task event still works", async () => {
+it("New ticket preselects the project; a plain cc:new-task falls back; a second detail retargets", async () => {
   location.hash = "#/tasks";
   render(<AppShell><div /></AppShell>);
+  const select = () => within(screen.getByRole("dialog")).getByLabelText("Project") as HTMLSelectElement;
   act(() => { window.dispatchEvent(new CustomEvent("cc:new-task", { detail: { project: "commandcenter" } })); });
-  const dlg = await screen.findByRole("dialog");
-  expect((within(dlg).getByLabelText("Project") as HTMLSelectElement).value).toBe("commandcenter");
+  await screen.findByRole("dialog");
+  expect(select().value).toBe("commandcenter");
+  const other = app.store.get().taskProjects.find((p) => p.key !== "commandcenter")!.key;
+  act(() => { window.dispatchEvent(new CustomEvent("cc:new-task", { detail: { project: other } })); });
+  expect(select().value).toBe(other);
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  prefs.patch({ lastProject: null } as never);
   act(() => { window.dispatchEvent(new Event("cc:new-task")); });
-  expect(screen.getAllByRole("dialog").length).toBeGreaterThan(0);
+  await screen.findByRole("dialog");
+  expect(select().value).toBe(app.store.get().taskProjects[0].key);
+});
+
+it("commandcenter: live coordinator status comes from /api/state, not the registry; registry failure shows an error", async () => {
+  vi.mocked(app.api.workspaceProjects).mockRejectedValue(new Error("boom"));
+  const s = state();
+  s.coordinators.commandcenter = { name: "cc-live", status: "working", paneId: "w:9" } as never;
+  app.store.set({ ...app.store.get(), state: s });
+  location.hash = "#/projects/commandcenter";
+  render(<Projects />);
+  expect(screen.getByText("cc-live")).toBeTruthy();
+  expect(await screen.findByRole("alert")).toHaveTextContent("boom");
+  expect(screen.queryByRole("link", { name: "GitHub ↗" })).toBeNull();
 });

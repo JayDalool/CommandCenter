@@ -1,5 +1,5 @@
 // Capture in under five seconds: N, type a title, Enter. Project remembers the last one.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { app } from "../store/app";
 import { useSelector } from "../lib/store";
 import { prefs } from "../lib/prefs";
@@ -13,6 +13,7 @@ export function NewTicket({ onClose, defaults }: { onClose: () => void; defaults
   const route = useRoute();
   const routeProject = route.screen === "projects" ? route.id : route.params.get("project");
   const [project, setProject] = useState(defaults?.project ?? routeProject ?? prefs.get().lastProject ?? projects[0]?.key ?? "");
+  useEffect(() => { if (defaults?.project) setProject(defaults.project); }, [defaults?.project]);
   const [title, setTitle] = useState("");
   const [priority, setPriority] = useState<Priority>("NO_PRIORITY");
   const [assignee, setAssignee] = useState("");

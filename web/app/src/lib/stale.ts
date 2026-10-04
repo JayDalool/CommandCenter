@@ -26,11 +26,13 @@ export function isChunkLoadError(e: unknown): boolean {
 // Anything (the Workspace) can register "is there unsaved work?".
 const unsaved = new Set<() => boolean>();
 export function registerUnsaved(fn: () => boolean) { unsaved.add(fn); return () => { unsaved.delete(fn); }; }
+const HELPER_TEXTAREAS = ".monaco-editor textarea, .xterm-helper-textarea, .xterm textarea";
 export function hasUnsavedWork(): boolean {
   for (const f of unsaved) if (f()) return true;
   // Anything typed but not sent: a commit message, a Claude message, a new ticket's title…
   if (typeof document !== "undefined") {
     for (const el of Array.from(document.querySelectorAll<HTMLTextAreaElement | HTMLInputElement>("textarea, [data-unsaved-guard]"))) {
+      if (el.matches(HELPER_TEXTAREAS)) continue;  // Monaco's and xterm's hidden input sinks are not Jay's drafts
       if (el.value && el.value.trim()) return true;
     }
   }
@@ -63,9 +65,17 @@ async function serverAnswers(): Promise<boolean> {
 /** Called wherever a lazy import fails. True if it was a stale-build failure (and handled). */
 export function handleChunkError(e: unknown): boolean {
   if (!isChunkLoadError(e)) return false;
-  staleBuild.set({ updated: true, detail: e instanceof Error ? e.message : String(e) });
-  void reloadOnce();
+  void recoverFromChunkError(e);
   return true;
+}
+
+/** Like handleChunkError, but says what happened: null = not a stale-build failure, true = a
+ *  reload was started, false = the banner is up and the reload was declined (unsaved work,
+ *  already reloaded, offline, no storage). */
+export async function recoverFromChunkError(e: unknown, reload?: () => Promise<boolean>): Promise<boolean | null> {
+  if (!isChunkLoadError(e)) return null;
+  staleBuild.set({ updated: true, detail: e instanceof Error ? e.message : String(e) });
+  return await (reload ?? (() => reloadOnce()))();
 }
 
 function safeSession(): Storage | null {

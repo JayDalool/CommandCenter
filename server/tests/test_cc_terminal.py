@@ -59,3 +59,26 @@ class Plan(unittest.TestCase):
                      ["server", "SV"], ["repo", "SV\n"]):
             with self.assertRaises(cct.Refused, msg=repr(argv)):
                 self.plan(*argv)
+
+
+class HerdrPathIsAbsolute(unittest.TestCase):
+    def test_a_relative_path_entry_is_made_absolute_so_exec_after_chdir_works(self):
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            os.mkdir(os.path.join(d, "bin"))
+            exe = os.path.join(d, "bin", "herdr")
+            with open(exe, "w") as f:
+                f.write("#!/bin/sh\n")
+            os.chmod(exe, 0o755)
+            old = os.getcwd()
+            os.chdir(d)
+            try:
+                with mock.patch.dict(os.environ, {"PATH": "bin"}):
+                    loader = importlib.machinery.SourceFileLoader("cc_terminal_rel", _PATH)
+                    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("cc_terminal_rel", loader))
+                    loader.exec_module(mod)
+            finally:
+                os.chdir(old)
+            self.assertTrue(os.path.isabs(mod.HERDR))
+            self.assertEqual(os.path.realpath(mod.HERDR), os.path.realpath(exe))

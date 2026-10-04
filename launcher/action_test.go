@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -326,5 +327,16 @@ func TestRunActionFallsBackWhenWTWillNotStart(t *testing.T) {
 	}
 	if !strings.Contains(f.terminals[1][len(f.terminals[1])-1], "'repo' 'GZ'") {
 		t.Fatalf("fallback command %q", f.terminals[1])
+	}
+}
+
+func TestStartAndReleaseIsNilOnceStartedSoPowerShellNeverDoubleOpens(t *testing.T) {
+	if err := startAndRelease(func() error { return nil }, func() error { return errors.New("handle gone") }); err != nil {
+		t.Fatalf("release failure after a successful start must not be an error, got %v", err)
+	}
+	boom := errors.New("cannot start")
+	released := false
+	if err := startAndRelease(func() error { return boom }, func() error { released = true; return nil }); err != boom || released {
+		t.Fatalf("a failed start is returned and nothing is released: err=%v released=%v", err, released)
 	}
 }

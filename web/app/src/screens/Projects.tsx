@@ -39,18 +39,27 @@ export function Projects() {
   </Panel>;
 }
 
-// The registry (/api/workspace/projects) is fetched once and shared: it carries the identity of projects ccd
-// does not poll (Command Center itself).
-let registry: Promise<WorkspaceProject[]> | null = null;
-function useRegistry(): WorkspaceProject[] | null {
-  const [rows, setRows] = useState<WorkspaceProject[] | null>(null);
+// The registry (/api/workspace/projects) supplies stable identity only (GitHub url, root) for projects ccd does not
+// poll. It is cached with a short TTL; live coordinator status and pane come from /api/state, never from here.
+const REGISTRY_TTL_MS = 30_000;
+let registry: { at: number; p: Promise<WorkspaceProject[]> } | null = null;
+function loadRegistry(): Promise<WorkspaceProject[]> {
+  if (!registry || Date.now() - registry.at > REGISTRY_TTL_MS) {
+    const entry = { at: Date.now(), p: app.api.workspaceProjects().then((r) => r.projects) };
+    entry.p.catch(() => { if (registry === entry) registry = null; });
+    registry = entry;
+  }
+  return registry.p;
+}
+function useRegistry(): { rows: WorkspaceProject[] | null; error: string | null } {
+  const [res, setRes] = useState<{ rows: WorkspaceProject[] | null; error: string | null }>({ rows: null, error: null });
   useEffect(() => {
     let live = true;
-    registry ??= app.api.workspaceProjects().then((r) => r.projects).catch((e) => { registry = null; throw e; });
-    registry.then((r) => { if (live) setRows(r); }, () => {});
+    loadRegistry().then((rows) => { if (live) setRes({ rows, error: null }); },
+      (e) => { if (live) setRes({ rows: null, error: (e as Error).message || "request failed" }); });
     return () => { live = false; };
   }, []);
-  return rows;
+  return res;
 }
 export function resetRegistryCache() { registry = null; }
 
@@ -152,13 +161,16 @@ function Cockpit({ p }: { p: ProjectView }) {
 
 function TicketOnlyProject({ k, name }: { k: string; name: string }) {
   const all = useSelector(app.store, (d) => d.tickets);
-  const coords = useSelector(app.store, (d) => d.state?.coordinators);
-  const reg = useRegistry()?.find((r) => r.key === k) ?? null;
+  const st = useSelector(app.store, (d) => d.state);
+  const { rows, error } = useRegistry();
+  const reg = rows?.find((r) => r.key === k) ?? null;
   const tickets = all.filter((t) => t.project === k && !t.archived);
-  const c = coords?.[k];
+  const c = st?.coordinators?.[k];
+  const live = c?.paneId ? st?.agents.find((a) => a.id === c.paneId) : st?.agents.find((a) => a.project === k && a.role === "coordinator");
   return <div className="stack">
-    <ActionBar k={k} github={reg?.github?.url ?? null} paneId={c?.paneId ?? reg?.coordinator?.id ?? null}
-      coordName={c?.name ?? reg?.coordinator?.name ?? null} coordStatus={c?.status ?? reg?.coordinator?.status ?? null} />
+    <ActionBar k={k} github={reg?.github?.url ?? null} paneId={live?.id ?? c?.paneId ?? null}
+      coordName={c?.name ?? live?.agent_name ?? reg?.coordinator?.name ?? null} coordStatus={live?.status ?? c?.status ?? null} />
+    {error && <div className="warn-t mono-xs" role="alert">Project registry unavailable ({error}) — GitHub link and checkout path are hidden.</div>}
     <Panel title={name} count={tickets.length} meta="ticket project — ccd polls no pull requests or CI for it">
       <div className="panel-body is-pad" style={{ display: "grid", gap: 4 }}>
         {reg?.root && <span className="mono-xs muted">checkout {reg.root}</span>}

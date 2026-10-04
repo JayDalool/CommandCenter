@@ -11,6 +11,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	stdlog "log"
 	"regexp"
 	"strings"
 )
@@ -356,4 +357,18 @@ func protocolRegistry(exe string) ([]regValue, error) {
 		{k + `\DefaultIcon`, "", q + ",0"},
 		{k + `\shell\open\command`, "", q + ` "%1"`},
 	}, nil
+}
+
+// startAndRelease runs start, then lets the process go. Once start has succeeded the window
+// exists, so the result is nil whatever release says: a Release error is logged, never
+// returned, because an error here would make openTerminal fall back to PowerShell and open a
+// SECOND window.
+func startAndRelease(start, release func() error) error {
+	if err := start(); err != nil {
+		return err
+	}
+	if err := release(); err != nil {
+		stdlog.Printf("terminal started; releasing its process handle failed: %v", err)
+	}
+	return nil
 }
