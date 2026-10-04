@@ -32,6 +32,7 @@ import { ClaudePanel } from "../workspace/ClaudePanel";
 import { TerminalView } from "../workspace/Terminal";
 import { SourceControl } from "../workspace/SourceControl";
 import { GoToFile, SearchPanel } from "../workspace/Search";
+import { NativeButton, NativePanel } from "../workspace/Native";
 
 interface Tab { path: string; file: FileRead; text: string; version: number; dirty: boolean; conflict: string | null }
 interface Upload { id: number; project: string; name: string; dir: string; f: number; state: "up" | "done" | "fail" | "ask"; msg?: string; file: File }
@@ -191,6 +192,8 @@ export function Workspace() {
   const [goto, setGoto] = useState(false);
   const [searchFocus, setSearchFocus] = useState(0);
   const [seenTerms, setSeenTerms] = useState<Set<Term>>(new Set([term]));
+  // Native Windows Terminal is the default; a browser shell opens only when Jay asks for one.
+  const [browserShell, setBrowserShell] = useState<Set<Term>>(new Set());
   const [{ vw, vh }, setViewport] = useState({ vw: typeof window !== "undefined" ? window.innerWidth : 1400,
     vh: typeof window !== "undefined" ? window.innerHeight : 900 });
   useEffect(() => {
@@ -499,7 +502,7 @@ export function Workspace() {
             hidden={cur?.file.kind !== "text"} onSave={() => void save()}
             onChange={(x, text) => setTabs((ts) => ts.map((t) => t.path === x ? { ...t, dirty: text !== t.text } : t))} />}
         </div>
-        {main === "claude" && <div className="ws-view"><ClaudePanel active={mainOpen} agent={coordinatorAgent} project={proj ? { key: proj.key, name: proj.name } : null}
+        {main === "claude" && <div className="ws-view"><ClaudePanel active={mainOpen} prefix={proj?.prefix ?? null} agent={coordinatorAgent} project={proj ? { key: proj.key, name: proj.name } : null}
           ticket={qt} model={cfg?.model ?? null} onMaximize={() => maximize("main")} /></div>}
         {main === "scm" && <div className="ws-view"><SourceControl project={key}
           ticket={scmTicket}
@@ -529,15 +532,25 @@ export function Workspace() {
       </div>
       <div className="ws-panel-body">
         <div className="ws-term-pane" hidden={term !== "claude"}>
-          {seenTerms.has("claude") && <ClaudePanel compact active={term === "claude" && termOpen && !(main === "claude" && mainOpen)} agent={coordinatorAgent} project={proj ? { key: proj.key, name: proj.name } : null}
+          {seenTerms.has("claude") && <ClaudePanel compact prefix={proj?.prefix ?? null} active={term === "claude" && termOpen && !(main === "claude" && mainOpen)} agent={coordinatorAgent} project={proj ? { key: proj.key, name: proj.name } : null}
             ticket={qt} model={cfg?.model ?? null} onMaximize={() => setMain("claude")} />}
         </div>
         {/* Terminals stay mounted once opened, so switching tabs never reconnects. */}
         {proj && seenTerms.has("repo") && <div className="ws-term-pane" hidden={term !== "repo"}>
-          <TerminalView key={`repo:${proj.prefix}`} name={`repo:${proj.prefix}`} label={termLabel("repo")} active={term === "repo" && termOpen} theme={theme} onMaximize={() => maximize("term")} />
+          {browserShell.has("repo") ? <>
+            <div className="native-strip"><NativeButton action="repo" prefix={proj.prefix} small>Open native repo terminal</NativeButton>
+              <span className="mono-xs faint">recommended · this browser shell is the fallback</span></div>
+            <TerminalView key={`repo:${proj.prefix}`} name={`repo:${proj.prefix}`} label={termLabel("repo")} active={term === "repo" && termOpen} theme={theme} onMaximize={() => maximize("term")} />
+          </> : <NativePanel action="repo" prefix={proj.prefix} label={`repo · ${proj.name}`} detail={`opens in ${proj.root ?? "the registered checkout"}`}
+            onBrowser={() => setBrowserShell((s) => new Set([...s, "repo"]))} />}
         </div>}
         {seenTerms.has("server") && <div className="ws-term-pane" hidden={term !== "server"}>
-          <TerminalView name="server" label="Server shell" active={term === "server" && termOpen} theme={theme} onMaximize={() => maximize("term")} />
+          {browserShell.has("server") ? <>
+            <div className="native-strip"><NativeButton action="server" small>Open native server terminal</NativeButton>
+              <span className="mono-xs faint">recommended · this browser shell is the fallback</span></div>
+            <TerminalView name="server" label="Server shell" active={term === "server" && termOpen} theme={theme} onMaximize={() => maximize("term")} />
+          </> : <NativePanel action="server" label="server · jay-server" detail="a normal jay login in /home/jay — no sudo is ever automated"
+            onBrowser={() => setBrowserShell((s) => new Set([...s, "server"]))} />}
         </div>}
       </div>
     </section>

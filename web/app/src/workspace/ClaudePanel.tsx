@@ -15,6 +15,7 @@ import type { Agent, Tail } from "../api/types";
 import { AgentState, EmptyState } from "../components/ui";
 import { unlockDialogOpen, useDevActive } from "../components/DevMode";
 import { workspace } from "./transport";
+import { NativeButton } from "./Native";
 
 const MIRROR_MS = 2000;
 const LINES = 200;
@@ -44,9 +45,9 @@ function highlight(text: string, q: string) {
   return out;
 }
 
-export function ClaudePanel({ agent, project, ticket, model, compact = false, onMaximize, active = true }: {
+export function ClaudePanel({ agent, project, ticket, model, compact = false, onMaximize, active = true, prefix = null }: {
   agent: Agent | null; project: { key: string; name: string } | null; ticket: string | null; model?: string | null;
-  compact?: boolean; onMaximize?: () => void; active?: boolean;
+  compact?: boolean; onMaximize?: () => void; active?: boolean; prefix?: string | null;
 }) {
   const visible = useVisible();
   const dev = useDevActive();
@@ -80,7 +81,7 @@ export function ClaudePanel({ agent, project, ticket, model, compact = false, on
 
   if (!agent) {
     return <div className="claude is-empty"><EmptyState title={`No coordinator running for ${project?.name ?? "this project"}`}
-      hint="herdr owns Claude panes. Start the coordinator in herdr; Command Center never starts one." /></div>;
+      hint="herdr owns Claude panes. Start the coordinator in herdr; Command Center never starts one — nor does Open Claude terminal." /></div>;
   }
   const question = blocked?.find((b) => b.pane_id === agent.id);
   const status = agent.status;
@@ -108,7 +109,8 @@ export function ClaudePanel({ agent, project, ticket, model, compact = false, on
       <span><span className="caps muted">herdr</span> <span className={herdrOk ? "ok-t" : "bad-t"}>{herdrOk ? "connected" : "unreachable"}</span></span>
     </div>}
     <div className="claude-bar">
-      <span className="ro-tag" title="herdr gives ccd the pane's recent text, not a live byte stream">MIRROR · CONTROL</span>
+      <NativeButton action="claude" prefix={prefix} small>Open Claude terminal</NativeButton>
+      <span className="ro-tag" title="herdr gives ccd the pane's recent text, not a live byte stream. For real interactive work use Open Claude terminal.">MIRROR</span>
       {compact && <><span className="mono-xs">{name}</span><AgentState status={status} /></>}
       <span className="sl-fill" />
       <input className="input is-sm" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search output" aria-label="Search Claude output" />

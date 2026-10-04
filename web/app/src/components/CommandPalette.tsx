@@ -8,6 +8,7 @@ import { useFocusTrap } from "./Dialog";
 import { NAV } from "./Shell";
 import { workspace } from "../workspace/transport";
 import { STATUS_META } from "../tickets/model";
+import { nativeUri } from "../workspace/Native";
 
 export type PalKind = "ACTION" | "GO" | "PROJECT" | "AGENT" | "TASK" | "PR" | "SPACE";
 export interface PalItem { id: string; kind: PalKind; label: string; hint?: string; keywords?: string; key?: string; run: () => void }
@@ -29,6 +30,16 @@ export function buildItems(onNewTask: () => void): PalItem[] {
     ] as [string, Record<string, unknown>, string][]).map(([label, detail, kw], i) => ({ id: `w:${i}`, kind: "ACTION" as const, label,
       hint: label === "Go to file" ? "Ctrl P" : label === "Search in project" ? "Ctrl ⇧ F" : undefined, keywords: `workspace ${kw}`,
       run: () => { if (!location.hash.startsWith("#/workspace")) go("workspace"); setTimeout(() => window.dispatchEvent(new CustomEvent("cc:workspace", { detail })), 50); } })),
+    // Native Windows Terminal (CommandCenter.exe 0.3.0): allowlisted actions only.
+    ...(() => {
+      const key = prefs.get().consoleProject ?? st?.projects[0]?.key ?? null;
+      const prefix = st?.projectsConfig.find((p) => p.key === key)?.prefix ?? null;
+      const name = st?.projects.find((p) => p.key === key)?.name ?? key ?? "";
+      return ([["Open native Claude terminal", nativeUri("claude", prefix), name], ["Open native repo terminal", nativeUri("repo", prefix), name],
+        ["Open native server terminal", nativeUri("server"), "jay-server"]] as [string, string | null, string][])
+        .filter(([, uri]) => uri).map(([label, uri, hint], i) => ({ id: `nt:${i}`, kind: "ACTION" as const, label, hint,
+          keywords: "native windows terminal ssh wt", run: () => { location.href = uri!; } }));
+    })(),
     ...NAV.map((s, i) => ({ id: `go:${s.id}`, kind: "GO" as const, label: s.label, hint: String(i < 9 ? i + 1 : 0), run: () => go(s.id) })),
   ];
   for (const p of st?.projects ?? []) {

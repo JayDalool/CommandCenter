@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -87,6 +88,16 @@ func TestTrayStopsOnRequest(t *testing.T) {
 			t.Logf("tray run %d: %v", i, err)
 		case <-time.After(10 * time.Second):
 			t.Fatal("tray did not stop")
+		}
+	}
+}
+
+// escapeArg must match the real syscall.EscapeArg that os/exec uses.
+func TestEscapeArgMatchesSyscall(t *testing.T) {
+	for _, s := range []string{"", "a", "a b", `a"b`, `C:\a b\`, `x\\"y`, "tab\tx", "Claude — SamVision",
+		`$Host.UI.RawUI.WindowTitle='x'; & 'C:\P F\J''s\ssh.exe' '-t'`} {
+		if got, want := escapeArg(s), syscall.EscapeArg(s); got != want {
+			t.Errorf("%q: got %s want %s", s, got, want)
 		}
 	}
 }
