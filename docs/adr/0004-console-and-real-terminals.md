@@ -1,6 +1,6 @@
 # 0004 — Console: herdr mirrors Claude, a scoped PTY service owns the shells
 
-Date: 2026-10-03 · Status: proposed (phases 1–2 implemented; phase 3 needs Jay)
+Date: 2026-10-03 · Status: accepted — phases 1–3 implemented (phase 3 authorized by Jay 2026-10-03, CC-002)
 
 Supersedes the "rejected" list of [ADR 0002](0002-workspaces-browser-and-tauri.md):
 Jay has decided Command Center should become his main interface into jay-server,
@@ -77,7 +77,13 @@ no second user, no allowlist of commands Jay may type in his own shell.
 | 2 | Claude tab mirror on the existing read-only, redacted `/api/agents/{id}/tail`; refresh while visible | read-only, existing route |
 | 3 | PTY service + `WS /api/pty/{session}` + xterm.js + input into the Claude pane | **new capability — needs Jay, and a fresh security review** |
 
-Phase 3 is where ccd gains the ability to run commands. It is not implemented.
+Phase 3 is where ccd gains the ability to run commands. It is implemented
+(server/ccd/pty.py, `WS /api/pty/{name}`), with one change from the design
+below: opening, attaching to or closing a terminal needs **Developer Unlock**
+on top of the ccd token, so a leaked ccd token alone still cannot run anything.
+Claude input is herdr's `agent.prompt` (idle agents) and `pane.send_keys`
+limited to esc and Enter, also behind Developer Unlock. Terminals end when ccd
+stops (they are ccd's children); Claude panes, being herdr's, never do.
 
 ## Phase 3 design, for that review
 

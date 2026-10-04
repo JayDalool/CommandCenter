@@ -26,10 +26,13 @@ type Conn = "idle" | "connecting" | "live" | "detached" | "ended" | "refused" | 
 const WORD: Record<Conn, string> = { idle: "NOT CONNECTED", connecting: "CONNECTING", live: "LIVE", detached: "DETACHED",
   ended: "SESSION ENDED", refused: "REFUSED", lost: "TOO SLOW — DROPPED" };
 
-const THEMES = {
-  dark: { background: "#0d1013", foreground: "#dfe4e2", cursor: "#86c7a3", selectionBackground: "#2d4a3c" },
-  light: { background: "#fbfbf8", foreground: "#1c2326", cursor: "#2f7a55", selectionBackground: "#cfe6d8" },
-};
+// The terminal well is dark in both themes (as the Claude mirror is); its colours come from the tokens.
+function termTheme() {
+  const css = getComputedStyle(document.documentElement);
+  const v = (n: string, d: string) => css.getPropertyValue(n).trim() || d;
+  return { background: v("--term-bg", "#0b0e10"), foreground: v("--term-text", "#c9d4cf"), cursor: v("--accent", "#86c7a3"),
+    selectionBackground: "#2d4a3c" };
+}
 
 export function TerminalView({ name, label, active, theme, onMaximize }: {
   name: string; label: string; active: boolean; theme: "dark" | "light"; onMaximize?: () => void;
@@ -59,7 +62,7 @@ export function TerminalView({ name, label, active, theme, onMaximize }: {
     const m = await loadXterm();
     if (!term.current && host.current) {
       const t = new m.Terminal({ fontFamily: '"Cascadia Mono", "JetBrains Mono", Consolas, monospace', fontSize: 13,
-        cursorBlink: true, scrollback: 5000, allowProposedApi: false, theme: THEMES[theme], convertEol: false });
+        cursorBlink: true, scrollback: 5000, allowProposedApi: false, theme: termTheme(), convertEol: false });
       const f = new m.FitAddon(), sa = new m.SearchAddon();
       t.loadAddon(f); t.loadAddon(sa);
       t.open(host.current);
@@ -97,7 +100,7 @@ export function TerminalView({ name, label, active, theme, onMaximize }: {
   // Connect when first shown with Developer Mode on; never on its own otherwise.
   useEffect(() => { if (active && dev && conn === "idle") void connect(); }, [active, dev, conn, connect]);
   useEffect(() => { if (!dev && ws.current) { ws.current.close(); setConn("refused"); } }, [dev]);
-  useEffect(() => { if (term.current) term.current.options.theme = THEMES[theme]; }, [theme]);
+  useEffect(() => { if (term.current) term.current.options.theme = termTheme(); }, [theme]);
   useEffect(() => {
     if (!host.current) return;
     const ro = new ResizeObserver(() => sendResize());

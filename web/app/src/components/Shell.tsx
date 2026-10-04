@@ -184,7 +184,10 @@ export function AppShell({ children, flush = false }: { children: ReactNode; flu
     const openUnlock = () => setUnlock(true);
     window.addEventListener("cc:dev-unlock", openUnlock);
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPalette((v) => !v); return; }
+      // Inside a real terminal, Ctrl+K is the shell's (kill to end of line); the palette opens from anywhere else.
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && !(e.target as HTMLElement | null)?.closest?.(".xterm")) {
+        e.preventDefault(); setPalette((v) => !v); return;
+      }
       if (typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
       if (document.querySelector("[role=dialog]")) return;
       if (e.key === "n" || e.key === "N") { e.preventDefault(); setNewTask(true); }
