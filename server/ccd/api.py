@@ -639,9 +639,9 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
                 if msg["type"] == "websocket.disconnect":
                     return
                 now = asyncio.get_running_loop().time()
-                if now - last_check > 30:
+                if now - last_check > 30:  # typing keeps the developer session alive
                     last_check = now
-                    if not gate.check(dev):  # Developer Mode locked or expired: stop typing
+                    if not gate.check(dev):
                         await ws.close(code=4403)
                         return
                 if msg.get("bytes") is not None:
@@ -664,7 +664,15 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
                     await ptys.close(s.name)
                     return
 
-        tasks_ = [asyncio.create_task(pump_out()), asyncio.create_task(pump_in())]
+        async def watchdog():
+            # Developer Mode locked or expired: this view stops at once, output and input alike.
+            while True:
+                await asyncio.sleep(3)
+                if dev not in gate.sessions:
+                    await ws.close(code=4403)
+                    return
+
+        tasks_ = [asyncio.create_task(pump_out()), asyncio.create_task(pump_in()), asyncio.create_task(watchdog())]
         try:
             await asyncio.wait(tasks_, return_when=asyncio.FIRST_COMPLETED)
         except (WebSocketDisconnect, RuntimeError, ConnectionError, PtyError):

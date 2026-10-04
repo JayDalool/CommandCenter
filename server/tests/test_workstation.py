@@ -387,3 +387,44 @@ class RaceHardening(unittest.TestCase):
         with self.assertRaises(FileError):
             self.r.delete("p", "sub/victim")
         self.assertTrue(os.path.isdir(os.path.join(self.outside, "victim")))
+
+
+class SecurityFixes(_Fixture):
+    def test_regex_search_without_ripgrep_is_refused_and_plain_search_is_linear(self):
+        if search._rg():
+            self.skipTest("ripgrep installed: regex runs in a killable subprocess")
+        r = self.get("/api/search/text?project=samvision&q=(a%7Ca)*b&regex=1")
+        self.assertEqual(r.status_code, 400)
+        with open(os.path.join(self.root, "long.txt"), "w") as f:
+            f.write("a" * 2_000_000 + "\n")
+        t0 = time.monotonic()
+        r = self.get("/api/search/text?project=samvision&q=aaaa")
+        self.assertEqual(r.status_code, 200)
+        self.assertLess(time.monotonic() - t0, 10)
+        self.assertLessEqual(len(r.json()["matches"][0]["ranges"]), 10)
+
+    def test_source_control_refuses_folders(self):
+        os.makedirs(os.path.join(self.root, "conf"))
+        with open(os.path.join(self.root, "conf", "secrets.json"), "w") as f:
+            f.write("{}")
+        self.assertEqual(self.get("/api/scm/diff?project=samvision&path=conf").status_code, 400)
+        h = dict(JSON, **{"x-ccd-developer": self.dev()})
+        r = self.client.post("/api/scm/stage", content=json.dumps({"project": "samvision", "paths": ["conf"]}), headers=h)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.get("/api/scm/status?project=samvision").json()["staged"], [])
+
+
+class PtyFdIsolation(unittest.TestCase):
+    def test_a_shell_never_inherits_another_terminals_master(self):
+        async def run():
+            m = pty_mod.PtyManager(roots={"SV": tempfile.mkdtemp(), "GZ": tempfile.mkdtemp()}, shell="/bin/sh")
+            a, _ = await m.open("repo:SV")
+            b, _ = await m.open("repo:GZ")
+            await asyncio.sleep(0.3)
+            links = {x: os.readlink(f"/proc/{b.pid}/fd/{x}") for x in os.listdir(f"/proc/{b.pid}/fd")}
+            # its own tty (/dev/pts/N) may appear more than once (dash keeps a copy); a master never may
+            self.assertFalse([v for v in links.values() if "ptmx" in v], links)
+            self.assertFalse([v for k, v in links.items() if int(k) > 2 and not (v.startswith("/dev/pts/") or v == "/dev/tty")], links)
+            self.assertFalse(os.get_inheritable(a.fd))
+            await m.close_all()
+        asyncio.run(run())

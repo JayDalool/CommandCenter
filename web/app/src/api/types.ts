@@ -369,3 +369,15 @@ export interface Attachment {
 export interface LauncherInfo { available: boolean; version?: string; sha256?: string; commit?: string; built_at?: string; size?: number }
 export interface DevCommit { sha: string; short: string; message: string; author: string; at: number | null; url: string | null }
 export interface DevCommits { key: string; branch: string | null; base: string; branchUrl: string | null; commits: DevCommit[]; error?: string }
+
+// ---------- workstation ----------
+export interface SearchMatch { path: string; line: number; text: string; ranges: [number, number][] }
+export interface SearchResult { project: string; query: string; matches: SearchMatch[]; files: number; truncated: boolean }
+export interface ScmFile { path: string; orig: string | null; code: string; status: string; protected: boolean }
+export interface ScmStatus {
+  project: string; clean: boolean;
+  branch: { head: string | null; upstream: string | null; ahead: number; behind: number; oid: string | null };
+  staged: ScmFile[]; unstaged: ScmFile[]; untracked: ScmFile[]; conflicts: ScmFile[];
+}
+export interface ScmDiff { project: string; path: string; staged: boolean; diff: string; truncated: boolean; binary: boolean }
+export interface PtySession { name: string; cwd: string; clients: number; createdAt: number; alive: boolean }

@@ -106,14 +106,24 @@ class PtyManager:
         return keep
 
     def _spawn(self, name, cwd, cols, rows):
+        # Everything the child needs is built here, BEFORE the fork: after fork in a
+        # threaded process the child may only chdir, close and exec.
+        env = self._child_env(cwd)
+        argv = [os.path.basename(self.shell), "-l"]
+        shell = self.shell
+        try:
+            maxfd = os.sysconf("SC_OPEN_MAX")
+        except (ValueError, OSError):
+            maxfd = 4096
         pid, fd = os.forkpty()
-        if pid == 0:  # child: a new session, the pty is its controlling tty
+        if pid == 0:  # child: a new session, the pty is its controlling tty (fds 0-2)
             try:
+                os.closerange(3, maxfd)  # no other terminal's master, no ccd socket or db leaks in
                 os.chdir(cwd)
-                env = self._child_env(cwd)
-                os.execve(self.shell, [os.path.basename(self.shell), "-l"], env)
+                os.execve(shell, argv, env)
             finally:
                 os._exit(127)
+        os.set_inheritable(fd, False)
         self._winsize(fd, cols, rows)
         os.set_blocking(fd, False)
         return Session(name, cwd, pid, fd)
@@ -177,7 +187,10 @@ class PtyManager:
         if s.exit_code is None:
             try:
                 pid, status = os.waitpid(s.pid, os.WNOHANG)
-                s.exit_code = os.waitstatus_to_exitcode(status) if pid else -1
+                if pid:
+                    s.exit_code = os.waitstatus_to_exitcode(status)
+                else:
+                    loop.create_task(self._reap_later(s))  # the pty closed a moment before the shell exited
             except ChildProcessError:
                 s.exit_code = -1
         try:
@@ -193,6 +206,15 @@ class PtyManager:
                 pass
         kind = {"expired": "pty.session.expired"}.get(reason, "pty.session.closed")
         self.audit(kind, f"terminal {s.name} {reason}", {"session": s.name, "clients": len(s.clients)})
+
+    async def _reap_later(self, s):
+        """Never leave a zombie: wait for the exited shell, and SIGKILL its group if it lingers."""
+        if not await self._reaped(s, 5.0):
+            try:
+                os.killpg(s.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await self._reaped(s, 2.0)
 
     async def _reaped(self, s, wait):
         deadline = time.monotonic() + wait

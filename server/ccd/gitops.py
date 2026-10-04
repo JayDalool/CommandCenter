@@ -64,6 +64,15 @@ class SourceControl:
         self.roots = roots  # files.Roots
         self._lock = asyncio.Lock()
 
+    def _file(self, key, rel):
+        """One FILE path (it may no longer exist: a deletion). A folder is refused: a folder
+        pathspec would reach protected files inside it, for diff, stage or discard alike."""
+        path = _path(rel)
+        full = os.path.join(self.roots.root(key), path)
+        if os.path.isdir(full):
+            raise FileError(400, "source control acts on single files; pick a file, not a folder")
+        return path
+
     async def status(self, key):
         root = self.roots.root(key)
         out, _ = await git(root, "status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all",
@@ -116,7 +125,7 @@ class SourceControl:
 
     async def diff(self, key, rel, staged=False):
         root = self.roots.root(key)
-        path = _path(rel)
+        path = self._file(key, rel)
         args = ["diff", "--no-ext-diff", "--no-color", "--find-renames"]
         if staged:
             args.append("--cached")
@@ -137,7 +146,7 @@ class SourceControl:
 
     async def stage(self, key, paths):
         root = self.roots.root(key)
-        clean = [_path(p) for p in paths][:500]
+        clean = [self._file(key, p) for p in paths][:500]
         if not clean:
             raise FileError(400, "nothing to stage")
         async with self._lock:
@@ -155,7 +164,7 @@ class SourceControl:
 
     async def unstage(self, key, paths):
         root = self.roots.root(key)
-        clean = [_path(p) for p in paths][:500]
+        clean = [self._file(key, p) for p in paths][:500]
         if not clean:
             raise FileError(400, "nothing to unstage")
         async with self._lock:
@@ -174,7 +183,7 @@ class SourceControl:
         """Throw away unstaged changes to one path. Tracked: restore from the index.
         Untracked: delete the file (descriptor-safe, via files.Roots.delete). The UI confirms first."""
         root = self.roots.root(key)
-        path = _path(rel)
+        path = self._file(key, rel)
         async with self._lock:
             out, _ = await git(root, "ls-files", "--error-unmatch", "--", _spec(path), ok=(0, 1))
             if out.strip():

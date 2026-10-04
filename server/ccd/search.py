@@ -85,15 +85,13 @@ async def _git_files(root):
     return [p for p in raw.decode("utf-8", "replace").split("\x00") if p], truncated
 
 
-def _py_grep(root, paths, query, regex, case, glob):
-    """Bounded text search in Python: no symlinks followed, ≤ 2 MB per file, MATCH_MAX hits, TIMEOUT seconds."""
+def _py_grep(root, paths, query, case, glob):
+    """Bounded FIXED-STRING search in Python (the fallback when ripgrep is absent): no symlinks
+    followed, ≤ 2 MB per file, ≤ 10 hits per line, MATCH_MAX hits, TIMEOUT seconds. Plain substring
+    search is linear; a user regex is never run in-process, where backtracking would hold the GIL."""
     import fnmatch
-    import re as _re
-    flags = 0 if case or (not regex and query != query.lower()) else _re.IGNORECASE
-    try:
-        pat = _re.compile(query if regex else _re.escape(query), flags)
-    except _re.error as e:
-        raise FileError(400, f"bad regular expression: {e}")
+    smart = case or query != query.lower()
+    needle = query if smart else query.lower()
     deadline = time.monotonic() + TIMEOUT
     matches, files, truncated = [], set(), False
     for rel in paths:
@@ -117,10 +115,17 @@ def _py_grep(root, paths, query, regex, case, glob):
             continue
         per_file = 0
         for n, line in enumerate(data.decode("utf-8", "replace").splitlines(), 1):
-            m = list(pat.finditer(line))
-            if not m:
+            if time.monotonic() > deadline:
+                return matches, files, True
+            hay = line if smart else line.lower()
+            at = hay.find(needle)
+            if at < 0:
                 continue
-            matches.append({"path": rel, "line": n, "text": line[:400], "ranges": [(x.start(), x.end()) for x in m[:10]]})
+            ranges = []
+            while at >= 0 and len(ranges) < 10:
+                ranges.append((at, at + len(needle)))
+                at = hay.find(needle, at + max(1, len(needle)))
+            matches.append({"path": rel, "line": n, "text": line[:400], "ranges": ranges})
             files.add(rel)
             per_file += 1
             if per_file >= 50:
@@ -169,10 +174,12 @@ class Search:
             raise FileError(400, "bad file filter")
         rg = _rg()
         if not rg:
+            if regex:
+                raise FileError(400, "regular-expression search needs ripgrep on the server; plain text search works")
             listed, _ = await _git_files(root)
             listed = [p for p in listed if not _excluded(p)]
-            m, f, truncated = await asyncio.to_thread(_py_grep, os.path.realpath(root), listed, query, regex, case,
-                                                      glob if isinstance(glob, str) and ".." not in glob else None)
+            m, f, truncated = await asyncio.to_thread(_py_grep, os.path.realpath(root), listed, query, case,
+                                                      glob or None)
             return {"project": key, "query": query, "matches": m, "files": len(f), "truncated": truncated,
                     "engine": "python"}
         args = [rg, "--json", "--hidden", "--no-follow", "--no-messages", "--max-filesize", "2M",
