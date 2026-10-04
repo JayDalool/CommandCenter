@@ -107,7 +107,7 @@ def main(argv):
             return 0
     except Refused as e:
         sys.stderr.write(f"\n  Command Center: {e}\n\n")
-        if sys.stdin.isatty():
+        if sys.stdin.isatty() and not os.environ.get("CC_TERMINAL_NONINTERACTIVE"):
             try:
                 input("  Press Enter to close. ")
             except EOFError:

@@ -3,7 +3,12 @@ which attaches (`herdr agent attach <pane>`) to the EXISTING coordinator. Never 
 
 A fake `herdr` on PATH stands in for the real one: `agent list` returns coordinators, `agent attach`
 echoes what it was given and then mirrors input, and a separate long-running process plays the
-coordinator so the tests can prove closing/killing the attach side never touches it.
+coordinator so the tests can prove closing/killing the attach side never signals it.
+
+What a fake cannot prove is herdr's own behaviour: that a killed or hung-up `herdr agent attach`
+leaves the real pane running. That was verified against herdr 0.9.3 in an isolated lab session
+(docs/adr/0005-native-windows-terminals.md, addendum) and on jay-server with the live gauzemate
+coordinator (process count and session ids unchanged).
 """
 import asyncio
 import json
@@ -154,27 +159,29 @@ class ClaudeAttachPty(unittest.TestCase):
 
     def test_the_spawned_command_is_the_shared_helper_and_nothing_else(self):
         m = pty_mod.PtyManager(shell="/bin/sh")
-        seen = {}
-
-        def fake_forkpty():
-            raise RuntimeError("stop")
-        real = os.forkpty
-        try:
-            os.forkpty = fake_forkpty
-            orig_env = m._child_env
-
-            def spy(cwd):
-                seen["cwd"] = cwd
-                return orig_env(cwd)
-            m._child_env = spy
-            with self.assertRaises(RuntimeError):
-                m._spawn("claude:SV", ROOTS["samvision"], 80, 24)
-        finally:
-            os.forkpty = real
+        exe, argv = m.exec_plan("claude:SV")
+        self.assertEqual(exe, sys.executable)
+        self.assertEqual(argv[1:], [m.cc_terminal, "claude", "SV"])
         self.assertTrue(m.cc_terminal.endswith(os.path.join("scripts", "cc-terminal")))
         self.assertTrue(os.access(m.cc_terminal, os.X_OK))
-        self.assertEqual(seen["cwd"], ROOTS["samvision"])
+        exe, argv = m.exec_plan("claude:GZ", unit="cc-pty-claude-GZ-abc123")
+        self.assertTrue(exe.endswith("systemd-run"))
+        self.assertEqual(argv[:6], ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit=cc-pty-claude-GZ-abc123"])
+        self.assertEqual(argv[argv.index("--") + 1:], [sys.executable, m.cc_terminal, "claude", "GZ"])
+        self.assertEqual(m.exec_plan("repo:SV")[1], ["sh", "-l"])
 
+    def test_a_refusal_exits_at_once_instead_of_waiting_for_enter(self):
+        async def run():
+            m = self.manager([])
+            s, _ = await m.open("claude:SV")
+            c, _ = m.attach(s)
+            out = await self.read_until(c, b"no running")
+            self.assertIn(b"no running", out)
+            deadline = time.monotonic() + 5
+            while "claude:SV" in m.sessions and time.monotonic() < deadline:
+                await asyncio.sleep(0.1)
+            self.assertNotIn("claude:SV", m.sessions)   # ended by itself: a later Open starts fresh
+        asyncio.run(run())
 
 @unittest.skipUnless(HAVE_ROOTS, "needs the registered checkouts (jay-server)")
 class ClaudeWriterSlot(ClaudeAttachPty):

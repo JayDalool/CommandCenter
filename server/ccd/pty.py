@@ -139,21 +139,9 @@ class PtyManager:
         # threaded process the child may only chdir, close and exec.
         env = self._child_env(cwd)
         if name.startswith("claude:"):
-            # NOT a Claude process: the herdr attach client for the EXISTING coordinator, resolved
-            # by the one shared helper (scripts/cc-terminal), exactly as the native terminal does.
-            # The browser names only the registered prefix; the helper refuses zero or several
-            # coordinators and never starts or resumes a session.
-            command = [self.python, self.cc_terminal, "claude", name.split(":", 1)[1]]
-        else:
-            command = [self.shell, "-l"]
-        argv = [os.path.basename(command[0])] + command[1:]
-        shell = command[0]
-        unit = None
-        if self.own_scope:
-            unit = f"cc-pty-{name.replace(':', '-')}-{secrets.token_hex(3)}"
-            argv = ["systemd-run", "--user", "--scope", "--quiet", "--collect", f"--unit={unit}",
-                    "--description=Command Center terminal " + name, "--", *command]
-            shell = shutil.which("systemd-run")
+            env["CC_TERMINAL_NONINTERACTIVE"] = "1"  # a refusal exits at once; the view shows it
+        unit = f"cc-pty-{name.replace(':', '-')}-{secrets.token_hex(3)}" if self.own_scope else None
+        shell, argv = self.exec_plan(name, unit)
         try:
             maxfd = os.sysconf("SC_OPEN_MAX")
         except (ValueError, OSError):
@@ -172,6 +160,25 @@ class PtyManager:
         s = Session(name, cwd, pid, fd)
         s.unit = unit
         return s
+
+    def command_for(self, name):
+        """The fixed command for a validated session name. Nothing from the browser but the prefix."""
+        if name.startswith("claude:"):
+            # NOT a Claude process: the herdr attach client for the EXISTING coordinator, resolved
+            # by the one shared helper (scripts/cc-terminal), exactly as the native terminal does.
+            # The browser names only the registered prefix; the helper refuses zero or several
+            # coordinators and never starts or resumes a session.
+            return [self.python, self.cc_terminal, "claude", name.split(":", 1)[1]]
+        return [self.shell, "-l"]
+
+    def exec_plan(self, name, unit=None):
+        """(executable, argv) as execve will receive them, with or without the systemd scope."""
+        command = self.command_for(name)
+        if unit:
+            return shutil.which("systemd-run"), [
+                "systemd-run", "--user", "--scope", "--quiet", "--collect", f"--unit={unit}",
+                "--description=Command Center terminal " + name, "--", *command]
+        return command[0], [os.path.basename(command[0])] + command[1:]
 
     @staticmethod
     def _winsize(fd, cols, rows):
