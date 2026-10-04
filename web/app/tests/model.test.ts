@@ -71,7 +71,7 @@ describe("assignees", () => {
   it("links an agent to its ticket", () => {
     const st = state();
     const gm = st.agents.find((a) => a.agent_name === "gauzemate")!;
-    expect(ticketForAgent(all, gm)?.key).toBe("GM-026");
+    expect(ticketForAgent(all, gm)?.key).toBe("GZ-903");
   });
 });
 

@@ -567,7 +567,7 @@
     "prs": [
      {
       "number": 26,
-      "ref": "GM-020",
+      "ref": "GZ-901",
       "title": "Contrast and touch target audit",
       "ci": "\u2713",
       "ready": false,
@@ -577,12 +577,12 @@
       "age_h": 9.000284007222222,
       "review": "CHANGES_REQUESTED",
       "mergeable": "MERGEABLE",
-      "branch": "gm-020-contrast",
+      "branch": "gz-901-contrast",
       "updatedAt": "2026-10-02T23:28:41Z"
      },
      {
       "number": 25,
-      "ref": "GM-018",
+      "ref": "GZ-902",
       "title": "TASKS.md: mark PR 8, 9 and 10 merged",
       "ci": "\u2713",
       "ready": true,
@@ -592,7 +592,7 @@
       "age_h": 4.000284019722223,
       "review": "APPROVED",
       "mergeable": "MERGEABLE",
-      "branch": "gm-018-tasks",
+      "branch": "gz-902-tasks",
       "updatedAt": "2026-10-03T04:28:41Z"
      }
     ],
@@ -876,7 +876,7 @@
    },
    {
     "project": "gauzemate",
-    "ref": "GM-020",
+    "ref": "GZ-901",
     "text": "Contrast and touch target audit",
     "kind": "ticket",
     "url": null,
@@ -2230,9 +2230,9 @@
   "tickets": [
    {
     "id": 9,
-    "key": "GM-018",
+    "key": "GZ-902",
     "project": "gauzemate",
-    "number": 18,
+    "number": 902,
     "title": "TASKS.md: mark PR 8, 9 and 10 merged",
     "status": "READY_TO_MERGE",
     "priority": "LOW",
@@ -2243,7 +2243,7 @@
     "agentPaneId": null,
     "agentSessionId": null,
     "parent": null,
-    "branch": "gm-018-tasks",
+    "branch": "gz-902-tasks",
     "createdAt": 1791016121.6686852,
     "updatedAt": 1791016122.0756633,
     "startedAt": null,
@@ -2259,7 +2259,7 @@
       "kind": "pr",
       "ref": "JayDalool/GauzeMate#25",
       "url": "https://github.com/JayDalool/x/pull/25",
-      "title": "GM-018: TASKS.md: mark PR 8, 9 and 10 merged",
+      "title": "GZ-902: TASKS.md: mark PR 8, 9 and 10 merged",
       "number": 25,
       "createdAt": 1791016122.0669253,
       "createdBy": "system:automation"
@@ -2276,9 +2276,9 @@
    },
    {
     "id": 8,
-    "key": "GM-020",
+    "key": "GZ-901",
     "project": "gauzemate",
-    "number": 20,
+    "number": 901,
     "title": "Contrast and touch target audit",
     "status": "IN_REVIEW",
     "priority": "MEDIUM",
@@ -2289,7 +2289,7 @@
     "agentPaneId": null,
     "agentSessionId": null,
     "parent": null,
-    "branch": "gm-020-contrast",
+    "branch": "gz-901-contrast",
     "createdAt": 1791016121.666979,
     "updatedAt": 1791016122.0631135,
     "startedAt": null,
@@ -2307,7 +2307,7 @@
       "kind": "pr",
       "ref": "JayDalool/GauzeMate#26",
       "url": "https://github.com/JayDalool/x/pull/26",
-      "title": "GM-020: Contrast and touch target audit",
+      "title": "GZ-901: Contrast and touch target audit",
       "number": 26,
       "createdAt": 1791016122.0603192,
       "createdBy": "system:automation"
@@ -2733,9 +2733,9 @@
    },
    {
     "id": 11,
-    "key": "GM-026",
+    "key": "GZ-903",
     "project": "gauzemate",
-    "number": 26,
+    "number": 903,
     "title": "Barcode / QR scanner for a medication",
     "status": "IN_PROGRESS",
     "priority": "HIGH",

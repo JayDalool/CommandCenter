@@ -12,7 +12,8 @@ is declared here, once, and every other layer reads it from here:
 
 Three kinds of prefix, deliberately separate:
 
-  prefix       the live one. New keys use it, and only it (GauzeMate → GZ-027)
+  prefix       the live one. New keys use it, and only it (GauzeMate: GM-001…GM-014 are
+               its history; GZ-015 was the first key minted after the move to GZ)
   legacy       a prefix this project once minted keys with. Those keys keep
                working — they are looked up, resolved and shown as history —
                but nothing new is ever minted with them (GM-014 stays GM-014)
