@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { app } from "../store/app";
 import { prefs } from "../lib/prefs";
-import { go } from "../lib/router";
+import { go, parse } from "../lib/router";
 import { scoreAll } from "../lib/fuzzy";
 import { useFocusTrap } from "./Dialog";
 import { NAV } from "./Shell";
@@ -12,6 +12,15 @@ import { nativeUri } from "../workspace/Native";
 
 export type PalKind = "ACTION" | "GO" | "PROJECT" | "AGENT" | "TASK" | "PR" | "SPACE";
 export interface PalItem { id: string; kind: PalKind; label: string; hint?: string; keywords?: string; key?: string; run: () => void }
+
+/** The ticket and project the Workspace is showing, read from the address when the command runs. */
+function currentWorkspace(): { project: string | null; ticket: string | null } {
+  const r = parse(location.hash);
+  const onWs = r.screen === "workspace" || r.screen === "console";
+  const ticket = onWs ? r.params.get("ticket") : null;
+  const t = ticket ? app.data.tickets.find((x) => x.key === ticket) : null;
+  return { ticket, project: (onWs && r.params.get("project")) || t?.project || prefs.get().consoleProject || app.data.state?.projects[0]?.key || null };
+}
 
 export function buildItems(onNewTask: () => void): PalItem[] {
   const d = app.data, st = d.state;
@@ -23,13 +32,25 @@ export function buildItems(onNewTask: () => void): PalItem[] {
     { id: "a:needs", kind: "ACTION", label: "Show what needs Jay", keywords: "needs jay queue", run: () => go("tasks", null, { view: "jay" }) },
     { id: "a:import", kind: "ACTION", label: "Task migration preview (read-only)", keywords: "import migrate", run: () => go("settings", null, { tab: "import" }) },
     // Workspace: keyboard-first development
-    ...([["Open Workspace", {}, "workspace ide editor"], ["Open Claude", { main: "claude" }, "coordinator herdr"],
-      ["Open Repo shell", { term: "repo" }, "terminal pty bash"], ["Open Server shell", { term: "server" }, "terminal pty bash home"],
-      ["Go to file", { goto: true }, "ctrl+p file open"], ["Search in project", { search: true }, "ctrl+shift+f grep find text"],
-      ["Source control", { main: "scm" }, "git diff stage commit branch"], ["Development (ticket trail)", { main: "dev" }, "commits pr ci"],
+    ...([["Open Workspace", {}, "workspace ide editor"], ["Explorer", { side: "explorer" }, "files tree sidebar"],
+      ["Source control", { side: "scm" }, "git diff stage commit branch sidebar"], ["Search in project", { side: "search", search: true }, "ctrl+shift+f grep find text sidebar"],
+      ["Go to file", { goto: true }, "ctrl+p file open"], ["Claude", { term: "claude" }, "coordinator herdr dock terminal"],
+      ["Repo shell", { term: "repo" }, "terminal pty bash dock"], ["Server shell", { term: "server" }, "terminal pty bash home dock"],
+      ["Development", { dev: true }, "ticket trail commits pr ci"],
     ] as [string, Record<string, unknown>, string][]).map(([label, detail, kw], i) => ({ id: `w:${i}`, kind: "ACTION" as const, label,
-      hint: label === "Go to file" ? "Ctrl P" : label === "Search in project" ? "Ctrl ⇧ F" : undefined, keywords: `workspace ${kw}`,
+      hint: label === "Go to file" ? "Ctrl P" : label === "Search in project" ? "Ctrl ⇧ F" : i > 0 ? "Workspace" : undefined, keywords: `workspace ${kw}`,
       run: () => { if (!location.hash.startsWith("#/workspace")) go("workspace"); setTimeout(() => window.dispatchEvent(new CustomEvent("cc:workspace", { detail })), 50); } })),
+    // The Workspace's current ticket or project (from the address, then the last project used).
+    { id: "w:gh", kind: "ACTION", label: "Open GitHub", hint: "current project", keywords: "workspace github repo", run: () => {
+      const cur = currentWorkspace(), url = st?.projects.find((x) => x.key === cur.project)?.repoUrl;
+      if (url) window.open(url, "_blank", "noopener,noreferrer"); else app.toast("No GitHub repository for this project", "bad");
+    } },
+    { id: "w:pr", kind: "ACTION", label: "Open PR", hint: "current ticket", keywords: "workspace pull request github", run: () => {
+      const cur = currentWorkspace();
+      const url = (cur.ticket ? d.development?.rows.find((r) => r.key === cur.ticket)?.pr?.url : null)
+        ?? (cur.ticket ? st?.projects.flatMap((x) => x.prs).find((pr) => pr.branch && pr.branch === d.tickets.find((t) => t.key === cur.ticket)?.branch)?.url : null);
+      if (url) window.open(url, "_blank", "noopener,noreferrer"); else app.toast(cur.ticket ? `${cur.ticket} has no PR yet` : "Open Workspace from a ticket to open its PR", "bad");
+    } },
     // Native Windows Terminal (CommandCenter.exe 0.3.0): allowlisted actions only.
     ...(() => {
       const key = prefs.get().consoleProject ?? st?.projects[0]?.key ?? null;

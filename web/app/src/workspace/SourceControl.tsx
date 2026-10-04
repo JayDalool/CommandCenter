@@ -1,47 +1,52 @@
-// SOURCE CONTROL — status, diff, stage, unstage, discard (confirmed), commit
-// (message + file list + confirm), and a ticket branch. Plain git through ccd:
-// no push, pull, reset, force or history rewriting exists here or in ccd.
 import { useCallback, useEffect, useState } from "react";
 import { app } from "../store/app";
+import { Store, useSelector } from "../lib/store";
 import type { ScmDiff, ScmFile, ScmStatus } from "../api/types";
 import { EmptyState } from "../components/ui";
 import { Dialog } from "../components/Dialog";
 import { unlockDialogOpen, useDevActive } from "../components/DevMode";
 
-function DiffView({ d }: { d: ScmDiff | null }) {
-  if (!d) return <EmptyState title="Select a changed file" hint="Its diff shows here." />;
-  if (d.binary) return <EmptyState title="Binary file changed" />;
-  if (!d.diff) return <EmptyState title="No textual difference" />;
-  return <pre className="diff" aria-label={`Diff of ${d.path}`}>{d.diff.split("\n").map((l, i) =>
-    <div key={i} className={l.startsWith("@@") ? "d-hunk" : l.startsWith("+") && !l.startsWith("+++") ? "d-add"
-      : l.startsWith("-") && !l.startsWith("---") ? "d-del" : l.startsWith("diff ") || l.startsWith("index ") || l.startsWith("+++") || l.startsWith("---") ? "d-meta" : ""}>{l || " "}</div>)}
-    {d.truncated && <div className="d-meta">… diff truncated</div>}</pre>;
+/** Bumped after every status refresh, so an open diff tab re-reads its diff after a stage/unstage/commit. */
+export const bumpScm = () => scmRev.patch({ rev: scmRev.get().rev + 1 });
+const scmRev = new Store<{ rev: number }>({ rev: 0 });
+
+/** The diff of one file, read-only, for a tab in the main area. */
+export function DiffView({ project, path, staged }: { project: string; path: string; staged: boolean }) {
+  const rev = useSelector(scmRev, (d) => d.rev);
+  const [d, setD] = useState<ScmDiff | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;  // a slow answer for a file Jay already left is dropped
+    app.api.scmDiff(project, path, staged).then((r) => { if (live) { setD(r); setErr(null); } })
+      .catch((e) => { if (live) setErr((e as Error).message); });
+    return () => { live = false; };
+  }, [project, path, staged, rev]);
+  const body = err ? <EmptyState title="Diff unavailable" hint={err} /> : !d ? <EmptyState title="Reading diff…" />
+    : d.binary ? <EmptyState title="Binary file changed" /> : !d.diff ? <EmptyState title="No textual difference" />
+    : <pre className="diff" aria-label={`Diff of ${d.path}`}>{d.diff.split("\n").map((l, i) =>
+      <div key={i} className={l.startsWith("@@") ? "d-hunk" : l.startsWith("+") && !l.startsWith("+++") ? "d-add"
+        : l.startsWith("-") && !l.startsWith("---") ? "d-del" : l.startsWith("diff ") || l.startsWith("index ") || l.startsWith("+++") || l.startsWith("---") ? "d-meta" : ""}>{l || " "}</div>)}
+      {d.truncated && <div className="d-meta">… diff truncated</div>}</pre>;
+  return <div className="scm-diff"><div className="scm-diff-head mono-xs">{path}{staged ? " (staged)" : ""} · read-only diff</div>{body}</div>;
 }
 
-export function SourceControl({ project, ticket, githubUrl, prUrl, onOpenFile }: {
+/** Source control for the sidebar: branch, ticket branch, file lists, commit. A file click opens its diff in the main area. */
+export function ScmSidebar({ project, ticket, githubUrl, prUrl, onOpenFile, onOpenDiff, selected }: {
   project: string; ticket: { key: string; title: string; branch: string | null } | null;
   githubUrl: string | null; prUrl: string | null; onOpenFile: (path: string) => void;
+  onOpenDiff: (path: string, staged: boolean) => void; selected: { path: string; staged: boolean } | null;
 }) {
   const dev = useDevActive();
   const [st, setSt] = useState<ScmStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [sel, setSel] = useState<{ path: string; staged: boolean } | null>(null);
-  const [diff, setDiff] = useState<ScmDiff | null>(null);
   const [msg, setMsg] = useState("");
   const [confirmCommit, setConfirmCommit] = useState(false);
   const [suggest, setSuggest] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    try { setSt(await app.api.scmStatus(project)); setErr(null); } catch (e) { setErr((e as Error).message); }
+    try { setSt(await app.api.scmStatus(project)); setErr(null); bumpScm(); } catch (e) { setErr((e as Error).message); }
   }, [project]);
-  useEffect(() => { setSt(null); setSel(null); setDiff(null); void refresh(); }, [refresh]);
-  useEffect(() => {
-    if (!sel) { setDiff(null); return; }
-    let live = true;  // a slow answer for a file Jay already left is dropped
-    app.api.scmDiff(project, sel.path, sel.staged).then((d) => { if (live) setDiff(d); })
-      .catch((e) => { if (live) app.toast((e as Error).message, "bad"); });
-    return () => { live = false; };
-  }, [sel, project, st]);
+  useEffect(() => { setSt(null); void refresh(); }, [refresh]);
   const tKey = ticket?.key, tBranch = ticket?.branch;
   useEffect(() => {
     setSuggest(null);
@@ -59,8 +64,8 @@ export function SourceControl({ project, ticket, githubUrl, prUrl, onOpenFile }:
   if (!st) return <div className="scm"><EmptyState title="Reading git status…" /></div>;
   const head = st.branch.head;
   const row = (f: ScmFile, staged: boolean) => <li key={`${staged}:${f.path}`}
-    className={`scm-row${sel?.path === f.path && sel.staged === staged ? " is-sel" : ""}`}>
-    <button type="button" className="scm-file" onClick={() => setSel({ path: f.path, staged })} title={f.orig ? `${f.orig} → ${f.path}` : f.path}>
+    className={`scm-row${selected?.path === f.path && selected.staged === staged ? " is-sel" : ""}`}>
+    <button type="button" className="scm-file" onClick={() => onOpenDiff(f.path, staged)} title={f.orig ? `${f.orig} → ${f.path}` : f.path}>
       <span className={`scm-code is-${f.code === "?" ? "new" : f.code === "D" ? "del" : f.code === "A" ? "new" : "mod"}`}>{f.code === "?" ? "U" : f.code}</span>
       <span className="trunc">{f.path}</span><span className="mono-xs faint">{f.status}</span>
       {f.protected && <span title="protected file: no diff, never staged by Stage all">🔒</span>}
@@ -112,7 +117,6 @@ export function SourceControl({ project, ticket, githubUrl, prUrl, onOpenFile }:
         <span className="mono-xs faint">A normal git commit. Nothing is pushed.</span>
       </form>
     </div>
-    <div className="scm-diff"><div className="scm-diff-head mono-xs">{sel ? `${sel.path}${sel.staged ? " (staged)" : ""}` : ""}</div><DiffView d={diff} /></div>
     {confirmCommit && <Dialog title="Commit these files?" onClose={() => setConfirmCommit(false)}>
       <p className="text2">On <b className="mono">{head}</b>. Message:</p>
       <pre className="mono-xs" style={{ whiteSpace: "pre-wrap" }}>{msg}</pre>
