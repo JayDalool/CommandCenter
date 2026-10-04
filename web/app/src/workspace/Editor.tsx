@@ -23,16 +23,20 @@ export function languageOf(path: string): string {
   return LANG[name.split(".").pop() ?? ""] ?? "plaintext";
 }
 
+// Open files' models outlive the component: leaving Workspace, or viewing a
+// binary tab, must never drop unsaved text. A model goes only when its tab closes.
+const models = new Map<string, { model: Monaco.editor.ITextModel; version: number }>();
+const listeners = new Map<string, (text: string) => void>();
+
 export interface EditorHandle { value(path: string): string | null; dispose(path: string): void }
 
-export function CodeEditor({ path, text, version, onChange, onSave, theme, handle }: {
-  path: string; text: string; version: number; onChange: (path: string, text: string) => void; onSave: () => void;
+export function CodeEditor({ path, text, version, onChange, onSave, theme, handle, hidden = false }: {
+  path: string; text: string; version: number; hidden?: boolean; onChange: (path: string, text: string) => void; onSave: () => void;
   theme: "dark" | "light"; handle: React.RefObject<EditorHandle | null>;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const ed = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const mon = useRef<M | null>(null);
-  const models = useRef(new Map<string, { model: Monaco.editor.ITextModel; version: number }>());
   const save = useRef(onSave);
   save.current = onSave;
   const change = useRef(onChange);
@@ -51,16 +55,14 @@ export function CodeEditor({ path, text, version, onChange, onSave, theme, handl
       });
       ed.current.addCommand(m.KeyMod.CtrlCmd | m.KeyCode.KeyS, () => save.current());
       handle.current = {
-        value: (p) => models.current.get(p)?.model.getValue() ?? null,
-        dispose: (p) => { models.current.get(p)?.model.dispose(); models.current.delete(p); },
+        value: (p) => models.get(p)?.model.getValue() ?? null,
+        dispose: (p) => { models.get(p)?.model.dispose(); models.delete(p); listeners.delete(p); },
       };
       setReady(true);
     }).catch((e) => setErr(String(e?.message ?? e)));
     return () => {
       dead = true;
-      ed.current?.dispose();
-      models.current.forEach((m) => m.model.dispose());
-      models.current.clear();
+      ed.current?.dispose();  // the models stay; see `models`
       handle.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -72,21 +74,23 @@ export function CodeEditor({ path, text, version, onChange, onSave, theme, handl
   useEffect(() => {
     const m = mon.current, e = ed.current;
     if (!m || !e) return;
-    let rec = models.current.get(path);
+    listeners.set(path, (t) => change.current(path, t));
+    let rec = models.get(path);
     if (!rec) {
       const model = m.editor.createModel(text, languageOf(path));
-      model.onDidChangeContent(() => change.current(path, model.getValue()));
+      model.onDidChangeContent(() => listeners.get(path)?.(model.getValue()));
       rec = { model, version };
-      models.current.set(path, rec);
+      models.set(path, rec);
     } else if (rec.version !== version) {
       rec.model.setValue(text);
       rec.version = version;
     }
     if (e.getModel() !== rec.model) e.setModel(rec.model);
   }, [path, text, version, ready]);
+  useEffect(() => { if (!hidden) ed.current?.layout(); }, [hidden]);
 
   if (err) return <div className="ws-editor is-empty"><span className="bad-t">Editor failed to load: {err}</span></div>;
-  return <div className="ws-editor-wrap">
+  return <div className={`ws-editor-wrap${hidden ? " is-hidden" : ""}`}>
     {!ready && <span className="muted ws-loading">Loading editor…</span>}
     <div className="ws-editor" ref={host} aria-label={`Editor: ${path}`} />
   </div>;

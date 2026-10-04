@@ -24,9 +24,11 @@ own; when ccd is down, it builds locally exactly as before.
   The Windows client will reach it with `ssh -L 7777:127.0.0.1:7777 jay-server`.
 - **No dangerous endpoints.** There is no API for merge, deploy, production,
   secrets, Docker, destructive git, or config/rule changes, and no interactive
-  shell: the Console's Claude tab is a read-only mirror of a herdr pane, and the
-  repo/server shells are designed but not built (see
-  [ADR 0004](docs/adr/0004-console-and-real-terminals.md)). A test asserts the
+  shell: the Workspace's Claude tab mirrors a herdr pane, and the repo/server
+  shells are designed but not built (see
+  [ADR 0004](docs/adr/0004-console-and-real-terminals.md)). Editing and
+  uploading files inside a registered project needs a second credential,
+  Developer Unlock ([docs/SECURITY.md](docs/SECURITY.md)). A test asserts the
   route table exactly. See [docs/API.md](docs/API.md).
 - **One project registry.** A project's name, ticket prefix and retired prefixes
   live in `server/ccd/registry.py` and nowhere else. GauzeMate is `GZ`; `GM-*`

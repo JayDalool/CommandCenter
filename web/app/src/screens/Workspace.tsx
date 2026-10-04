@@ -8,7 +8,7 @@
 // a conflict to resolve, never an overwrite.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { app } from "../store/app";
-import { useSelector } from "../lib/store";
+import { Store, useSelector } from "../lib/store";
 import { go, href, useRoute } from "../lib/router";
 import { prefs, usePrefs, commands } from "../lib/prefs";
 import { ApiError, uploadBytes } from "../api/client";
@@ -22,10 +22,14 @@ import { ClaudeMirror } from "./Console";
 import { CodeEditor, type EditorHandle } from "../workspace/Editor";
 
 interface Tab { path: string; file: FileRead; text: string; version: number; dirty: boolean; conflict: string | null }
-interface Upload { id: number; name: string; dir: string; f: number; state: "up" | "done" | "fail" | "ask"; msg?: string; file: File }
+interface Upload { id: number; project: string; name: string; dir: string; f: number; state: "up" | "done" | "fail" | "ask"; msg?: string; file: File }
 type Panel = "claude" | "repo" | "server";
 
 const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
+
+// Open tabs outlive the screen: going to Tasks and back keeps every file and
+// every unsaved edit (the Monaco models live in workspace/Editor.tsx).
+const tabStore = new Store<{ tabs: Tab[]; active: string | null }>({ tabs: [], active: null });
 
 function useProjects() {
   const [rows, setRows] = useState<WorkspaceProject[] | null>(null);
@@ -44,7 +48,7 @@ function Folder({ project, path, depth, open, toggle, onOpen, selected, target, 
 }) {
   const rows = listings[path];
   useEffect(() => { if (rows === undefined) load(path); }, [rows, path, load]);
-  if (rows === undefined) return <div className="ws-row muted" style={{ paddingLeft: 10 + depth * 14 }}>…</div>;
+  if (rows === undefined) return <div className="ws-row muted" style={{ paddingLeft: 10 + depth * 14 }}>loading…</div>;
   if (typeof rows === "string") return <div className="ws-row bad-t" style={{ paddingLeft: 10 + depth * 14 }}>{rows}</div>;
   return <>{rows.map((e) => {
     const p = join(path, e.name);
@@ -93,8 +97,11 @@ export function Workspace() {
   const [listings, setListings] = useState<Record<string, FileEntry[] | string>>({});
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [target, setTarget] = useState("");
-  const [tabs, setTabs] = useState<Tab[]>([]);
-  const [active, setActive] = useState<string | null>(null);
+  const { tabs, active } = useSelector(tabStore, (d) => d);
+  const setTabs = (f: (ts: Tab[]) => Tab[]) => tabStore.set((d) => ({ ...d, tabs: f(d.tabs) }));
+  const setActive = (a: string | null) => tabStore.patch({ active: a });
+  const keyRef = useRef(key);
+  keyRef.current = key;
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [over, setOver] = useState(false);
   const [git, setGit] = useState(true);
@@ -102,14 +109,18 @@ export function Workspace() {
   const upId = useRef(0);
 
   // A different project is a different tree. Unsaved tabs are kept until closed.
-  useEffect(() => { setListings({}); setOpen(new Set()); setTarget(""); }, [key]);
+  useEffect(() => { setListings({}); setOpen(new Set()); setTarget(""); inflight.current.clear(); }, [key]);
 
+  const inflight = useRef(new Set<string>());
   const load = useCallback((path: string) => {
-    setListings((l) => ({ ...l, [path]: l[path] ?? [] }));
-    app.api.listDir(key, path, git).then((r) => setListings((l) => ({ ...l, [path]: r.entries })))
-      .catch((e) => setListings((l) => ({ ...l, [path]: (e as Error).message })));
+    const want = key, tag = `${want}:${path}`;
+    if (inflight.current.has(tag)) return;
+    inflight.current.add(tag);
+    // A response for a project Jay has since left is dropped, never shown in the new tree.
+    const put = (v: FileEntry[] | string) => { inflight.current.delete(tag); if (keyRef.current === want) setListings((l) => ({ ...l, [path]: v })); };
+    app.api.listDir(want, path, git).then((r) => put(r.entries)).catch((e) => put((e as Error).message));
   }, [key, git]);
-  const refresh = () => { setListings({}); };
+  const refresh = () => { inflight.current.clear(); setListings({}); };
   const toggle = (p: string) => setOpen((s) => { const n = new Set(s); if (n.has(p)) n.delete(p); else n.add(p); return n; });
 
   const setProject = (k: string) => { prefs.patch({ consoleProject: k }); go("workspace", null, { project: k, tab: panel }); };
@@ -119,15 +130,21 @@ export function Workspace() {
     if (e?.protected) { app.toast("Protected file: Command Center never opens secret-looking files", "bad"); return; }
     if (e && e.kind !== "file") { app.toast("Not a regular file inside the project", "bad"); return; }
     const id = `${key}:${path}`;
-    if (tabs.some((t) => t.path === id)) { setActive(id); return; }
+    if (tabStore.get().tabs.some((t) => t.path === id)) { setActive(id); return; }
     try {
       const file = await app.api.readFile(key, path);
-      setTabs((ts) => [...ts, { path: id, file, text: file.text ?? "", version: 1, dirty: false, conflict: null }]);
+      setTabs((ts) => ts.some((t) => t.path === id) ? ts
+        : [...ts, { path: id, file, text: file.text ?? "", version: 1, dirty: false, conflict: null }]);
       setActive(id);
     } catch (err) { app.toast((err as Error).message, "bad"); }
   };
 
   const cur = tabs.find((t) => t.path === active) ?? null;
+  const [lastText, setLastText] = useState<string | null>(null);
+  useEffect(() => { if (cur?.file.kind === "text") setLastText(cur.path); }, [cur]);
+  const textTab = cur?.file.kind === "text" ? cur : tabs.find((t) => t.path === lastText && t.file.kind === "text") ?? null;
+  const prefersLight = typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: light)").matches;
+  const monacoTheme: "dark" | "light" = theme === "light" || (theme === "system" && prefersLight) ? "light" : "dark";
 
   const save = useCallback(async () => {
     const t = tabs.find((x) => x.path === active);
@@ -136,7 +153,9 @@ export function Workspace() {
     const text = editor.current?.value(t.path) ?? t.text;
     try {
       const r = await app.api.saveFile(t.file.project, t.file.path, text, t.file.sha);
-      setTabs((ts) => ts.map((x) => x.path === t.path ? { ...x, text, dirty: false, conflict: null,
+      // Keys typed while the save was in flight stay dirty.
+      const now = editor.current?.value(t.path) ?? text;
+      setTabs((ts) => ts.map((x) => x.path === t.path ? { ...x, text, dirty: now !== text, conflict: null,
         file: { ...x.file, sha: r.sha, size: r.size, mtime: r.mtime } } : x));
       app.toast(`Saved ${t.file.path}`);
     } catch (e) {
@@ -157,7 +176,8 @@ export function Workspace() {
   const close = (t: Tab) => {
     if (t.dirty && !window.confirm(`${t.file.path} has unsaved changes. Close it anyway?`)) return;
     editor.current?.dispose(t.path);
-    setTabs((ts) => { const rest = ts.filter((x) => x.path !== t.path); if (active === t.path) setActive(rest[rest.length - 1]?.path ?? null); return rest; });
+    tabStore.set((d) => { const rest = d.tabs.filter((x) => x.path !== t.path);
+      return { tabs: rest, active: d.active === t.path ? rest[rest.length - 1]?.path ?? null : d.active }; });
   };
 
   // Ctrl+S anywhere on the page (Monaco handles it inside the editor too).
@@ -177,10 +197,10 @@ export function Workspace() {
   const sendUpload = async (u: Upload, conflict: "fail" | "replace" | "rename") => {
     setUploads((us) => us.map((x) => x.id === u.id ? { ...x, state: "up", f: 0, msg: undefined } : x));
     try {
-      const r = await uploadBytes(`/api/files/upload?${new URLSearchParams({ project: key, dir: u.dir, name: u.name, conflict })}`,
+      const r = await uploadBytes(`/api/files/upload?${new URLSearchParams({ project: u.project, dir: u.dir, name: u.name, conflict })}`,
         u.file, (f) => setUploads((us) => us.map((x) => x.id === u.id ? { ...x, f } : x)));
       setUploads((us) => us.map((x) => x.id === u.id ? { ...x, state: "done", f: 1, msg: r.renamed ? `saved as ${r.name}` : "uploaded" } : x));
-      setListings((l) => { const n = { ...l }; delete n[u.dir]; return n; });
+      if (keyRef.current === u.project) setListings((l) => { const n = { ...l }; delete n[u.dir]; return n; });
     } catch (e) {
       const err = e as ApiError & { data?: { exists?: boolean } };
       setUploads((us) => us.map((x) => x.id === u.id ? { ...x, state: err.status === 409 && err.data?.exists ? "ask" : "fail", msg: err.message } : x));
@@ -189,7 +209,7 @@ export function Workspace() {
   const dropFiles = (dir: string, files: FileList) => {
     setOver(false);
     if (!dev) { unlockDialogOpen(); return; }
-    const list = Array.from(files).map((file) => ({ id: ++upId.current, name: file.name, dir, f: 0, state: "up" as const, file }));
+    const list = Array.from(files).map((file) => ({ id: ++upId.current, project: key, name: file.name, dir, f: 0, state: "up" as const, file }));
     setUploads((us) => [...us.filter((x) => x.state !== "done"), ...list]);
     list.forEach((u) => void sendUpload(u, "fail"));
   };
@@ -271,13 +291,14 @@ export function Workspace() {
             <button type="button" className="btn is-sm" onClick={() => void reload(cur)}>Load disk version (discard mine)</button>
             <button type="button" className="btn is-sm" onClick={() => setTabs((ts) => ts.map((x) => x.path === cur.path ? { ...x, conflict: null } : x))}>Keep editing</button>
           </div>}
-          {cur.file.kind === "text"
-            ? <CodeEditor path={cur.path} text={cur.text} version={cur.version} theme={theme === "light" ? "light" : "dark"} handle={editor}
-              onSave={() => void save()} onChange={(p, text) => setTabs((ts) => ts.map((x) => x.path === p ? { ...x, dirty: text !== x.text } : x))} />
-            : <div className="ws-editor-wrap is-empty"><EmptyState title={cur.file.kind === "large" ? "Too large for the editor" : "Binary file"}
+          {cur.file.kind !== "text" && <div className="ws-editor-wrap is-empty"><EmptyState title={cur.file.kind === "large" ? "Too large for the editor" : "Binary file"}
               hint={`${bytes(cur.file.size)} — download it instead. The editor opens UTF-8 text up to 2 MB.`} /></div>}
         </> : <div className="ws-editor-wrap is-empty"><EmptyState title="Open a file from the explorer"
           hint="Ctrl+S saves (Developer Mode). Drag files from Windows onto a folder to upload." /></div>}
+        {/* Mounted while any text tab is open, so switching to a binary tab never drops another tab's edits. */}
+        {textTab && <CodeEditor path={textTab.path} text={textTab.text} version={textTab.version} theme={monacoTheme} handle={editor}
+          hidden={cur?.file.kind !== "text"} onSave={() => void save()}
+          onChange={(p, text) => setTabs((ts) => ts.map((x) => x.path === p ? { ...x, dirty: text !== x.text } : x))} />}
       </section>
     </div>
     <section className="ws-panel" aria-label="Terminal panel">
@@ -302,7 +323,7 @@ export function Workspace() {
       </div>
     </section>
     {ask && <Dialog title={`${ask.name} already exists`} onClose={() => setUploads((us) => us.map((x) => x.id === ask.id ? { ...x, state: "fail", msg: "skipped" } : x))}>
-      <p className="text2">A file named <span className="mono">{ask.name}</span> is already in <span className="mono">{ask.dir || "/"}</span>. Nothing was overwritten.</p>
+      <p className="text2">A file named <span className="mono">{ask.name}</span> is already in <span className="mono">{ask.project}/{ask.dir || ""}</span>. Nothing was overwritten.</p>
       <div className="row" style={{ marginTop: 10 }}>
         <button type="button" className="btn is-jay" onClick={() => void sendUpload(ask, "replace")}>Replace</button>
         <button type="button" className="btn" data-autofocus onClick={() => void sendUpload(ask, "rename")}>Keep both (rename)</button>

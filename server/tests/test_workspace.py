@@ -363,3 +363,34 @@ class WorkspaceApi(ApiBase):
         self.assertEqual(d.content, b"MZ..")
         self.assertIn('filename="CommandCenter.exe"', d.headers["content-disposition"])
         self.assertEqual(self.client.get("/api/desktop/launcher/download", headers=HOST).status_code, 401)
+
+
+class DevCommits(unittest.TestCase):
+    def test_git_log_range_links_and_bad_branches(self):
+        import subprocess
+        from ccd.daemon import Daemon
+        root = tempfile.mkdtemp(prefix="gitrepo-")
+        g = lambda *a: subprocess.run(["git", "-C", root, *a], check=True, capture_output=True)  # noqa: E731
+        g("init", "-q", "-b", "main")
+        g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
+        g("checkout", "-q", "-b", "SV-056-x")
+        g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "SV-056: one")
+        d = Daemon.__new__(Daemon)
+
+        def plan(branch, base="main"):
+            return {"out": {"key": "SV-056", "branch": branch, "base": base, "commits": [], "branchUrl": None},
+                    "root": root, "slug": "JayDalool/SamVisionAI", "limit": 50}
+        out = d.dev_commits_run(plan("SV-056-x"))
+        self.assertEqual([c["message"] for c in out["commits"]], ["SV-056: one"])
+        self.assertTrue(out["commits"][0]["url"].startswith("https://github.com/JayDalool/SamVisionAI/commit/"))
+        self.assertEqual(d.dev_commits_run(plan("nope"))["error"], "branch not found locally")
+        for bad in ("--output=/tmp/x", "a..b", None):
+            self.assertEqual(d.dev_commits_run(plan(bad))["commits"], [])
+        shutil.rmtree(root)
+
+
+class Hardening(unittest.TestCase):
+    def test_bidi_and_control_characters_dropped_from_attachment_names(self):
+        self.assertEqual(attach_mod.display_name("invoice\u202efdp.exe"), "invoicefdp.exe")
+        self.assertEqual(attach_mod.display_name("a\x07b\u200b.txt"), "ab.txt")
+        self.assertEqual(attach_mod.display_name("C:\\Users\\jay\\notes.pdf"), "notes.pdf")

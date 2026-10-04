@@ -78,6 +78,7 @@ WRITE_METHODS = ("POST", "PATCH", "PUT", "DELETE")
 # is not a CORS-safelisted type either, so a cross-site page still needs a preflight.
 STREAM_PATHS = ("/api/files/upload", "/api/attachments")
 DEV_HEADER = "x-ccd-developer"
+JSON_MAX = 3 * 1024 * 1024  # the editor's 2 MB text, JSON-escaped, with room
 
 
 def ws_token_from_protocols(header):
@@ -196,8 +197,16 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
             return _json({"ok": False, "error": e.message}, e.status)
 
     async def _body(request):
+        raw = request.headers.get("content-length")
+        if raw and raw.isdigit() and int(raw) > JSON_MAX:
+            raise ActionError(413, "body too large")
         try:
-            data = await request.json()
+            body = b""
+            async for chunk in request.stream():
+                body += chunk
+                if len(body) > JSON_MAX:
+                    raise ActionError(413, "body too large")
+            data = json.loads(body)
         except (json.JSONDecodeError, UnicodeDecodeError):
             raise ActionError(400, "body must be JSON")
         if not isinstance(data, dict):
@@ -333,7 +342,10 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         return await asyncio.to_thread(daemon.workspace_projects)
 
     async def dev_commits(request):
-        return await asyncio.to_thread(daemon.dev_commits, request.path_params["key"])
+        # The development row is read on the loop (the tasks connection is the loop's);
+        # only `git log` runs in a worker thread.
+        plan = daemon.dev_commits_plan(request.path_params["key"])
+        return await asyncio.to_thread(daemon.dev_commits_run, plan)
 
     async def files_list(request):
         q = request.query_params
@@ -387,7 +399,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     def _attach_audit(kind, key, verb, row, actor):
         data = {"id": row["id"], "name": row["name"], "size": row["size"]}
         if kind == "ticket":
-            daemon.tasks.note(key, f"attachment_{verb}", actor, data)
+            daemon.tasks.note(key, f"attachment_{verb}", actor, data, row["name"])
             daemon._task_event("task.updated", daemon.tasks.get(key), f"attachment {verb}: {row['name']}"[:200],
                                {"kind": "attachments"})
         else:

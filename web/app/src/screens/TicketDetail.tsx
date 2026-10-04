@@ -276,6 +276,8 @@ export function describe(e: TimelineEvent): string {
     case "unlinked": return `unlinked ${e.field} ${v(e.from)}`;
     case "parent": return e.to ? `parent → ${v(e.to)}` : "parent cleared";
     case "archived": return e.to === "true" ? "archived" : "restored";
+    case "attachment_added": return `attached ${v(e.to)}`;
+    case "attachment_removed": return `removed attachment ${v(e.from)}`;
     default:
       if (e.field === "description") return "edited the description";
       if (e.field === "title") return `renamed to “${v(e.to)}”`;

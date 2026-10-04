@@ -87,3 +87,28 @@ agent as the actor (default `jay`); it is self-asserted.
 
 Still not in the API: deleting a ticket (archive instead), applying the import,
 closing or editing GitHub issues.
+
+
+## Workspace (go-live)
+
+DEV = also needs `X-CCD-Developer: <session>` from `/api/developer/unlock`.
+
+| | |
+|---|---|
+| `GET /api/workspace/projects` | `{projects[{key,name,prefix,root,exists,branch,github{owner,repo,slug,url},coordinator}]}`. Roots come from `ccd/registry.py` only |
+| `GET /api/files/list?project=&path=&git=1` | one folder: `{entries[{name,kind,size,mtime,protected,link,git?}], crumbs, truncated}`; `.git` never listed |
+| `GET /api/files/read?project=&path=` | `{kind: text|binary|large, text, sha, size, mtime, mode}`; text ≤ 2 MB UTF-8 |
+| `GET /api/files/download?project=&path=` | the file, `application/octet-stream`, attachment |
+| `POST /api/files/save` DEV | `{project, path, text, baseSha|null}` → atomic save; 409 if changed since `baseSha`, or if `null` and the name exists |
+| `POST /api/files/upload?project=&dir=&name=&conflict=fail|replace|rename` DEV | raw `application/octet-stream`; 409 `{exists:true}` on a clash; 413 over the cap |
+| `GET /api/attachments?owner=ticket|project&key=` | `{attachments[{id,name,size,sha256,uploadedAt,uploadedBy}]}` |
+| `POST /api/attachments?owner=&key=&name=` DEV | raw `application/octet-stream` |
+| `GET /api/attachments/{id}/download` | always `application/octet-stream`, attachment, sandboxed |
+| `DELETE /api/attachments/{id}` DEV | remove (audited) |
+| `GET /api/developer` · `POST /api/developer/unlock {token}` · `POST /api/developer/lock` | Developer Unlock |
+| `GET /api/development/{key}/commits` | `{branch, base, branchUrl, commits[{sha,short,message,author,at,url}]}` |
+| `GET /api/desktop/launcher` · `GET /api/desktop/launcher/download` | Windows launcher metadata (`version, sha256, commit, built_at, size`) and the exe |
+
+Every GitHub URL ccd returns (repo, PR, issue, commit, branch) is rebuilt from
+the project's registry identity on `https://github.com`; a stored URL string is
+never trusted.

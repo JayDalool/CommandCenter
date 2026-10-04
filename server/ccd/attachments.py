@@ -41,7 +41,8 @@ def display_name(name):
     if not isinstance(name, str):
         raise FileError(400, "bad file name")
     name = unicodedata.normalize("NFC", name).replace("\\", "/").rsplit("/", 1)[-1]
-    name = re.sub(r"[\x00-\x1f\x7f]", "", name).strip()
+    # Control and format characters (incl. bidi overrides like U+202E) could disguise a name.
+    name = "".join(c for c in name if unicodedata.category(c) not in ("Cc", "Cf")).strip()
     if not name or name in (".", ".."):
         raise FileError(400, "bad file name")
     while len(name.encode()) > NAME_MAX:

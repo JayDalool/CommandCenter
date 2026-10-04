@@ -126,3 +126,57 @@ only — never keystrokes, command lines or output, which can contain secrets.
 No new listener, no port, no herdr socket bridge, and no allowlist of commands
 Jay may type in his own shell: the terminal is Jay's shell. UI buttons outside a
 terminal stay under the existing safe-action rules.
+
+
+## Workspace, files and Developer Unlock (go-live)
+
+Two credentials, two powers:
+
+| Credential | Where | Allows |
+|---|---|---|
+| ccd token | `~/.config/command-center/ccd.token` (0600) | everything that reads, plus ticket metadata and the guarded herdr actions |
+| developer token | `~/.config/command-center/developer.token` (0600, created on first start, must differ from the ccd token) | **also** saving and uploading repository files, adding and removing attachments |
+
+The browser sends the developer token once to `POST /api/developer/unlock` and
+gets a random session id that lives only in ccd's memory and the tab's memory
+(never localStorage, sessionStorage, a URL or the page). Sessions end on LOCK,
+2 h idle, 8 h total, or a ccd restart. Five wrong tokens in five minutes lock
+unlocking for five minutes. Write routes answer 403 to the ccd token alone.
+
+**Roots.** The explorer, editor and uploads reach only a registered project's
+`root` in `ccd/registry.py`. The browser sends a project key and a relative
+path, never a root. Every path is refused if it holds NUL, control characters,
+a backslash, an absolute path, `..`, or a percent-encoded `.`/`..`/separator;
+symlinks are resolved and anything whose real path leaves the root is refused.
+`.git` is hidden and unwritable at any depth.
+
+**Protected files** (listed with a lock, never read, downloaded, saved or
+uploaded; checked on the requested path and again on the resolved path;
+case-insensitive). The exact lists live in `ccd/files.py`:
+
+- directories `.git .ssh .gnupg .aws .azure .kube .docker .password-store`
+- dotenv files and every variant of them, except the `.example`, `.sample`,
+  `.template` and `.dist` variants
+- private-key names (`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`), netrc,
+  npmrc, pypirc, git-credentials, pgpass, htpasswd, `credentials`,
+  `credentials.json`, `token`, `token.txt`, `secrets.{json,yaml,yml,toml}`
+- extensions `.pem .key .p12 .pfx .jks .keystore .kdbx .gpg .asc .token`
+
+**Writes.** Saves are atomic (temp file in the same folder, fsync, rename), keep
+the file's mode, refuse symlinks and non-UTF-8/NUL files, and refuse if the
+file's SHA-256 changed since it was opened (409). Uploads are raw
+`application/octet-stream` (still a CORS-preflighted type), capped at
+`upload_max_mb` (default 50), and never overwrite silently: the default fails
+on a clash, `rename` and the default place the file with a hard link that
+cannot clobber, and `replace` must be chosen explicitly.
+
+**Attachments** live in `~/.local/share/command-center/attachments/` (0700),
+named by a random 128-bit id; the original name is display metadata in
+`~/command-center/data/attachments.db`. They never enter a repository. Downloads
+are always `application/octet-stream`, `Content-Disposition: attachment`,
+`CSP: default-src 'none'; sandbox`, so HTML/SVG are saved, never rendered.
+The ticket audit trail records `attachment_added` / `attachment_removed` with
+name and size only, never contents.
+
+**Not built:** browser PTY shells (ADR 0004 phase 3). The Workspace shows them
+as NOT ENABLED.

@@ -81,6 +81,7 @@ def build(cfg=None):
     if hmac.compare_digest(dev_secret, token):
         sys.exit("developer.token must differ from ccd.token")
     daemon.dev_gate = security.DeveloperGate(dev_secret)
+    daemon.secret_values = (token, dev_secret)
     daemon.launcher_dir = config.LAUNCHER_DIR
 
     @contextlib.asynccontextmanager

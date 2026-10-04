@@ -915,6 +915,9 @@ class Daemon:
     def dev_commits(self, key, limit=50):
         """The commits on a ticket's branch that its base branch lacks: sha, subject, author, time, URL.
         Read-only `git log` in the registered checkout; nothing is fetched."""
+        return self.dev_commits_run(self.dev_commits_plan(key, limit))
+
+    def dev_commits_plan(self, key, limit=50):
         dev = self.development()
         row = next((r for r in dev["rows"] if r["key"] == str(key).upper()), None)
         if not row:
@@ -926,6 +929,11 @@ class Daemon:
         slug = cfgp.get("repo") or registry.github_of(row["project"])
         out = {"key": row["key"], "branch": branch, "base": base, "commits": [],
                "branchUrl": github.branch_url(slug, branch) if branch else None}
+        return {"out": out, "root": root, "slug": slug, "limit": int(limit)}
+
+    def dev_commits_run(self, plan):
+        out, root, slug, limit = plan["out"], plan["root"], plan["slug"], plan["limit"]
+        branch, base = out["branch"], out["base"]
         if not branch or not root or not self.BRANCH_RE.match(branch) or not self.BRANCH_RE.match(base):
             return out
         try:
@@ -1173,6 +1181,11 @@ class Daemon:
         lines = max(1, min(int(lines), 200))
         got = await self.herdr.read_tail(agent["pane_id"], lines)
         text, n = redact(got["text"])
+        # ccd's own credentials have no recognisable shape; redact their exact values.
+        for secret in getattr(self, "secret_values", ()) or ():
+            if secret and secret in text:
+                n += text.count(secret)
+                text = text.replace(secret, "[redacted]")
         return {"agentId": agent["pane_id"], "name": agent.get("agent_name") or None, "lines": lines,
                 "text": text, "redactions": n, "truncated": got["truncated"]}
 

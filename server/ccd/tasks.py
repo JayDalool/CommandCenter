@@ -842,7 +842,7 @@ class TaskStore:
             self.db.execute(f"UPDATE tickets SET {cols} WHERE id=?", (*sets.values(), tid))
         return changes
 
-    def note(self, key, kind, actor="jay", data=None):
+    def note(self, key, kind, actor="jay", data=None, name=None):
         """One audit row with no field change (attachment added/removed). Names and sizes, never contents."""
         actor = _actor(actor)
         if kind not in ("attachment_added", "attachment_removed"):
@@ -851,7 +851,9 @@ class TaskStore:
         self.db.execute("BEGIN IMMEDIATE")
         try:
             tid = self._id_of(key)
-            self._audit(tid, actor, kind, data=data or {}, at=at)
+            added = kind == "attachment_added"
+            self._audit(tid, actor, kind, field="attachment", frm=None if added else name, to=name if added else None,
+                        data=data or {}, at=at)
             self._touch(tid, at)
             self.db.execute("COMMIT")
         except BaseException:
