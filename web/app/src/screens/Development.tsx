@@ -19,7 +19,7 @@ export function Development() {
   const projects = useSelector(app.store, (d) => d.state?.projectsConfig ?? null);
   const seq = useSelector(app.store, (d) => d.state?.seq ?? 0);
   const [open, setOpen] = useState<string | null>(null);
-  const [filter, setFilter] = useState<string>("all");
+  const [filter, setFilter] = useState<string>(route.params.get("project") || "all");
   const view = (route.params.get("view") as View) || "tickets";
 
   // Loaded on demand and refreshed whenever ccd's state moves, so a merged PR
@@ -72,7 +72,7 @@ export function Development() {
     <div className="row" style={{ flexWrap: "wrap", gap: 10 }}>
       {head}
       <Seg label="Project" value={filter} onChange={setFilter}
-        options={[{ v: "all", label: "All" }, ...(projects ?? []).map((p) => ({ v: p.key, label: p.name }))]} />
+        options={[{ v: "all", label: "All" }, ...(filter !== "all" && !projects?.some((p) => p.key === filter) ? [{ v: filter, label: filter }] : []), ...(projects ?? []).map((p) => ({ v: p.key, label: p.name }))]} />
     </div>
     <Panel title="Ticket development" count={rows.length}
       meta={<>{waiting ? <b className="jay-t">{waiting} waiting for Jay to merge</b> : "git as of "}

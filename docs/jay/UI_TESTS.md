@@ -2,6 +2,7 @@
 
 Screens Jay must check. Newest first. Delete a line when it's done.
 
+- [ ] CC-015 · Project page: action bar opens Workspace, Claude, shells, GitHub · http://127.0.0.1:7777/#/projects/samvision
 - [ ] CC-008 · Tasks shows ALL projects; chips and archive toggle work · http://127.0.0.1:7777/#/tasks
 - [ ] CC-014 · Workspace sidebar: Explorer / Source control / Search, diffs open in main · http://127.0.0.1:7777/#/workspace?project=samvision
 - [ ] CC-013 · Open .py/.ts/.md files, save, refresh, reopen — no import error · http://127.0.0.1:7777/#/workspace

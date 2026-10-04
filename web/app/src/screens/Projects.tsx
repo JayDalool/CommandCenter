@@ -1,12 +1,12 @@
 // A project's cockpit: state, agents, tickets, PRs, activity, worktrees, health, workspace access.
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { app } from "../store/app";
 import { useSelector } from "../lib/store";
 import { go, href, useRoute } from "../lib/router";
-import type { ProjectView, Ticket } from "../api/types";
+import type { ProjectView, Ticket, WorkspaceProject } from "../api/types";
 import { CLOSED, jayQueue, sortTickets } from "../tickets/model";
 import { DataTable, type Column } from "../components/DataTable";
-import { Panel, Project, AgentState, Ci, EmptyState, StateText, PriorityMark, Assignee, Command, Ago, StaleIndicator, DetailRow, Flags } from "../components/ui";
+import { Panel, Project, AgentState, Ci, EmptyState, StateText, PriorityMark, Assignee, Ago, StaleIndicator, DetailRow, Flags } from "../components/ui";
 import { ActivityRow, meaningful } from "../components/Feed";
 import { NeedsTable } from "./needs";
 import { jayAction } from "./PullRequests";
@@ -39,6 +39,44 @@ export function Projects() {
   </Panel>;
 }
 
+// The registry (/api/workspace/projects) is fetched once and shared: it carries the identity of projects ccd
+// does not poll (Command Center itself).
+let registry: Promise<WorkspaceProject[]> | null = null;
+function useRegistry(): WorkspaceProject[] | null {
+  const [rows, setRows] = useState<WorkspaceProject[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    registry ??= app.api.workspaceProjects().then((r) => r.projects).catch((e) => { registry = null; throw e; });
+    registry.then((r) => { if (live) setRows(r); }, () => {});
+    return () => { live = false; };
+  }, []);
+  return rows;
+}
+export function resetRegistryCache() { registry = null; }
+
+function ActionBar({ k, github, paneId, coordName, coordStatus, asOf }: {
+  k: string; github: string | null; paneId: string | null; coordName: string | null; coordStatus: string | null; asOf?: number | null;
+}) {
+  const ws = (extra: Record<string, string>) => href("workspace", null, { project: k, ...extra });
+  return <section className="panel" aria-label="Project actions"><div className="panel-body is-pad" style={{ display: "grid", gap: 8 }}>
+    <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+      <a className="btn is-jay is-sm" href={ws({})}>Open Workspace</a>
+      <a className="btn is-sm" href={ws({ tab: "claude" })}>Claude</a>
+      <a className="btn is-sm" href={ws({ tab: "repo" })}>Repo shell</a>
+      <a className="btn is-sm" href={ws({ view: "scm" })}>Source control</a>
+      <a className="btn is-sm" href={href("development", null, { project: k })}>Development</a>
+      {github && <a className="btn is-sm" href={github} target="_blank" rel="noopener noreferrer">GitHub ↗</a>}
+      <button type="button" className="btn is-sm" onClick={() => window.dispatchEvent(new Event("cc:new-task"))}>New ticket</button>
+      {paneId && <button type="button" className="btn is-quiet is-sm" onClick={() => void workspace.focusAgent(paneId)}>Focus coordinator in herdr</button>}
+    </div>
+    <div className="row mono-xs muted" style={{ flexWrap: "wrap", gap: 12 }}>
+      <span className="row">coordinator <span className="mono">{coordName ?? "—"}</span><AgentState status={coordStatus ?? "offline"} /></span>
+      {paneId && <span>pane <span className="mono">{paneId}</span></span>}
+      {asOf != null && <span className="row">GitHub as of <Ago at={asOf} /><StaleIndicator at={asOf} limitS={300} /></span>}
+    </div>
+  </div></section>;
+}
+
 function Cockpit({ p }: { p: ProjectView }) {
   const st = useSelector(app.store, (d) => d.state)!;
   const tickets = useSelector(app.store, (d) => d.tickets);
@@ -47,7 +85,6 @@ function Cockpit({ p }: { p: ProjectView }) {
   const queue = jayQueue(st).filter((j) => j.project === p.key);
   const wts = (st.worktrees?.[p.key] ?? []).slice(1);
   const stale = st.stale.filter((s) => s.project === p.key);
-  const spaces = (st.workspaces ?? []).filter((w) => w.project === p.key);
   const coord = st.coordinators[p.key];
   const cfg = st.projectsConfig.find((c) => c.key === p.key);
   const tcols: Column<Ticket>[] = [
@@ -59,6 +96,7 @@ function Cockpit({ p }: { p: ProjectView }) {
     { id: "pr", header: "PR", cell: (t) => t.prNumber ? <span className="mono">#{t.prNumber}</span> : <span className="faint">—</span> },
   ];
   return <div className="stack">
+    <ActionBar k={p.key} github={p.repoUrl ?? null} paneId={coord?.paneId ?? null} coordName={coord?.name ?? null} coordStatus={coord?.status ?? null} asOf={p.github.asOf} />
     <section className="panel" aria-label="Project state"><div className="kv" style={{ gridTemplateColumns: "repeat(6, minmax(0,1fr))" }}>
       <div><span className="caps muted">State</span><span className="trunc">{p.summary}</span></div>
       <div><span className="caps muted">Coordinator</span><span className="row"><span className="mono">{coord?.name ?? "—"}</span><AgentState status={coord?.status ?? "offline"} /></span></div>
@@ -97,16 +135,6 @@ function Cockpit({ p }: { p: ProjectView }) {
           {p.team.filter((m) => !m.pane_id).length > 0 && <div className="panel-body is-pad mono-xs muted" style={{ borderTop: "1px solid var(--line)" }}>
             team via coordinator: {p.team.filter((m) => !m.pane_id).map((m) => `${m.name} (${m.model})`).join(" · ")}</div>}
         </Panel>
-        <Panel title="Workspace access">
-          <div className="panel-body is-pad" style={{ display: "grid", gap: 8 }}>
-            <div className="row" style={{ flexWrap: "wrap" }}>
-              {spaces.map((w) => <button key={w.id} type="button" className="btn is-sm" onClick={() => go("workspaces", w.id)}>Open {w.label || w.id}</button>)}
-              {coord?.paneId && <button type="button" className="btn is-sm" onClick={() => workspace.focusAgent(coord.paneId!)}>Focus coordinator</button>}
-              {!spaces.length && !coord?.paneId && <span className="muted">No herdr workspace for this project right now.</span>}
-            </div>
-            {coord?.paneId && <Command cmd={workspace.attachCommand(coord.name)} />}
-          </div>
-        </Panel>
         <Panel title="Branches & worktrees" count={wts.length}>
           <div className="panel-body is-pad" style={{ display: "grid", gap: 4 }}>
             <dl><DetailRow label="checkout"><span className="mono-xs">{p.path}</span></DetailRow></dl>
@@ -124,8 +152,18 @@ function Cockpit({ p }: { p: ProjectView }) {
 
 function TicketOnlyProject({ k, name }: { k: string; name: string }) {
   const all = useSelector(app.store, (d) => d.tickets);
+  const coords = useSelector(app.store, (d) => d.state?.coordinators);
+  const reg = useRegistry()?.find((r) => r.key === k) ?? null;
   const tickets = all.filter((t) => t.project === k && !t.archived);
-  return <Panel title={name} count={tickets.length} meta="tickets only — no repository is polled for this project">
-    <div className="panel-body is-pad"><a className="goto" href={href("tasks", null, { project: k })}>Open its tickets →</a></div>
-  </Panel>;
+  const c = coords?.[k];
+  return <div className="stack">
+    <ActionBar k={k} github={reg?.github?.url ?? null} paneId={c?.paneId ?? reg?.coordinator?.id ?? null}
+      coordName={c?.name ?? reg?.coordinator?.name ?? null} coordStatus={c?.status ?? reg?.coordinator?.status ?? null} />
+    <Panel title={name} count={tickets.length} meta="ticket project — ccd polls no pull requests or CI for it">
+      <div className="panel-body is-pad" style={{ display: "grid", gap: 4 }}>
+        {reg?.root && <span className="mono-xs muted">checkout {reg.root}</span>}
+        <a className="goto" href={href("tasks", null, { project: k })}>Open its tickets →</a>
+      </div>
+    </Panel>
+  </div>;
 }
