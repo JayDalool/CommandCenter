@@ -13,6 +13,7 @@ import { getToken } from "../api/auth";
 import { devSession } from "../api/developer";
 import { app } from "../store/app";
 import { handleChunkError } from "../lib/stale";
+import { installClipboard, makeInputSender } from "./termClipboard";
 import { unlockDialogOpen, useDevActive } from "../components/DevMode";
 
 type Mods = { Terminal: typeof XTerm; FitAddon: typeof FitAddon; SearchAddon: typeof SearchAddon };
@@ -92,7 +93,16 @@ export function TerminalView({ name, label, active, theme, onMaximize, closeText
       t.loadAddon(f); t.loadAddon(sa);
       t.open(host.current);
       term.current = t; fit.current = f; finder.current = sa;
-      t.onData((d) => { const s = ws.current; if (s?.readyState === WebSocket.OPEN) s.send(JSON.stringify({ t: "i", d })); });
+      // Paste (Ctrl+V, Ctrl+Shift+V, Shift+Insert) and copy-on-selection; see termClipboard.ts.
+      installClipboard(t);
+      // Everything typed or pasted goes out in order, large pastes in paced chunks.
+      const sendInput = makeInputSender((d) => {
+        const s = ws.current;
+        if (s?.readyState !== WebSocket.OPEN) return false;
+        s.send(JSON.stringify({ t: "i", d }));
+        return true;
+      }, (msg) => t.write(msg));
+      t.onData(sendInput);
       t.onBinary((d) => { const s = ws.current; if (s?.readyState === WebSocket.OPEN) s.send(enc.current.encode(d)); });
     }
     ws.current?.close();

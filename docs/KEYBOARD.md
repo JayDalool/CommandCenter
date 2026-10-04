@@ -14,6 +14,8 @@
 | Ctrl+` | Workspace | show / hide the terminal panel |
 | Ctrl+Shift+` | Workspace | open the repo shell |
 | Ctrl+Shift+Enter | Workspace | maximize / restore the dock (Claude, Repo shell, Server shell) |
+| Ctrl+V, Ctrl+Shift+V, Shift+Insert | a browser terminal | paste (the program's bracketed-paste mode is honoured; nothing is sent until you press Enter in a shell) |
+| Ctrl+C | a browser terminal | copy when text is selected; otherwise ^C (interrupt) |
 | Shift+F10 or the Menu key | explorer row | context menu |
 | ← → / ↑ ↓ (Shift = bigger) | a focused divider | resize the sidebar / dock |
 
