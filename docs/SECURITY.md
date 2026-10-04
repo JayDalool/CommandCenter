@@ -178,5 +178,43 @@ are always `application/octet-stream`, `Content-Disposition: attachment`,
 The ticket audit trail records `attachment_added` / `attachment_removed` with
 name and size only, never contents.
 
-**Not built:** browser PTY shells (ADR 0004 phase 3). The Workspace shows them
-as NOT ENABLED.
+**Terminals (ADR 0004 phase 3).** `WS /api/pty/{name}` needs the ccd token
+(subprotocol `ccd-token.<t>`), a Developer Unlock session (subprotocol
+`ccd-dev.<id>`), a Host of `127.0.0.1:7777`/`localhost:7777` and an Origin that
+is present and the same. Names are `repo:<PREFIX>` (cwd = the registry root) or
+`server` (cwd = `$HOME`); nothing from the browser becomes a path. Each is one
+login shell as jay in its own process group, started with a reduced
+environment (PATH, LANG, LC_ALL, TZ, HOME, USER, SHELL, TERM) and with every
+inherited descriptor above 2 closed, so no ccd socket, database or other
+terminal leaks in. Output is a 256 KiB ring plus bounded per-viewer queues; a
+viewer that falls behind is dropped, never the shell. A browser leaving only
+detaches; CLOSE SESSION signals that one process group (HUP, then KILL), an
+unattached shell ends after 12 h, and all end when ccd stops. Each shell runs
+in its own transient systemd user scope (`cc-pty-<name>-<id>`), outside ccd's
+cgroup, so a build in a terminal neither shares ccd's 256 MB MemoryMax nor can
+get ccd OOM-killed. ccd's unit sets `NoNewPrivileges=yes`, which the shells
+inherit: `sudo` cannot work in a Command Center terminal — by design, there is
+no privilege escalation from the browser. Use an SSH session for sudo. Locking Developer
+Mode closes open terminal views within seconds. The audit trail records
+created / attached / detached / closed / expired with the session name and
+viewer count — never input, output or commands.
+
+**Source control** (`/api/scm/*`) runs plain git in a registered root with no
+pager, prompt or editor and a timeout. Paths are single files (a folder is
+refused, so a folder pathspec cannot reach protected files), passed after `--`
+as `:(literal)` pathspecs. Stage all stages only the non-protected paths that
+status lists — never `git add -A`. A commit needs the exact staged file list
+the browser showed. There is no push, pull, fetch, reset, rebase, force or
+hook bypass; repository hooks run as they would in a shell.
+
+**Search** runs ripgrep when installed; otherwise a Python fallback does
+fixed-string search only (a user regex is never run in-process, where
+backtracking could stall ccd), bounded per file, per line, in hits and time.
+
+**Writes are descriptor-relative.** After validation, every write walks the
+resolved path from the root with `O_NOFOLLOW|O_DIRECTORY` and acts on the final
+name through that directory descriptor, so a folder swapped for a symlink after
+the check cannot redirect it (closes the L1 finding). New names are placed with
+`link()`, which cannot clobber. Rename and folder delete check-then-act under
+ccd's write lock: atomic against other ccd requests, not against an agent
+editing the same tree at that instant.

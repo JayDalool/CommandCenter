@@ -15,7 +15,7 @@ import sys
 
 import uvicorn
 
-from . import __version__, attachments, config, files, security
+from . import __version__, attachments, config, files, gitops, pty, search, security
 from .api import create_app
 from .daemon import Daemon
 from .herdr import Herdr
@@ -65,6 +65,15 @@ def setup_logging():
     logging.getLogger("uvicorn.access").disabled = True
 
 
+async def _expire_ptys(ptys):
+    while True:
+        await asyncio.sleep(300)
+        try:
+            await ptys.expire_idle()
+        except Exception as e:  # noqa: BLE001 — housekeeping must never take ccd down
+            logging.getLogger("ccd").warning(json.dumps({"msg": "pty expiry failed", "error": repr(e)[:200]}))
+
+
 def build(cfg=None):
     cfg = cfg or config.load()
     store = Store(config.STATE_DIR / "ccd.db")
@@ -83,15 +92,22 @@ def build(cfg=None):
     daemon.dev_gate = security.DeveloperGate(dev_secret)
     daemon.secret_values = (token, dev_secret)
     daemon.launcher_dir = config.LAUNCHER_DIR
+    daemon.search = search.Search(daemon.files)
+    daemon.scm = gitops.SourceControl(daemon.files)
+    daemon.ptys = pty.PtyManager(audit=lambda kind, text, data: daemon._event("pty", kind, text, data=data),
+                                 own_scope=True)
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
         daemon.start()
+        expiry = asyncio.create_task(_expire_ptys(daemon.ptys))
         logging.getLogger("ccd").info(json.dumps({"msg": "started", "version": __version__, "pid": os.getpid(),
                                                   "bind": f"{config.HOST}:{config.PORT}"}))
         try:
             yield
         finally:
+            expiry.cancel()
+            await daemon.ptys.close_all()  # terminals end with ccd; herdr's Claude panes are untouched
             await daemon.stop()
             store.close()
             tasks.close()

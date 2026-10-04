@@ -1,7 +1,7 @@
 import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
 import type {
-  Attachment, DevCommits, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
+  Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
   Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent,
 } from "./types";
 
@@ -113,6 +113,51 @@ export class Api {
   }
   lock() { return this.req<{ ok: true }>("POST", "/api/developer/lock", {}); }
   launcher() { return this.req<LauncherInfo>("GET", "/api/desktop/launcher"); }
+
+  // ---------- explorer operations (Developer Mode) ----------
+  mkdir(project: string, dir: string, name: string) { return this.req<{ path: string }>("POST", "/api/files/mkdir", { project, dir, name }); }
+  renamePath(project: string, path: string, name: string) { return this.req<{ path: string }>("POST", "/api/files/rename", { project, path, name }); }
+  duplicate(project: string, path: string) { return this.req<{ path: string; name: string }>("POST", "/api/files/duplicate", { project, path }); }
+  removePath(project: string, path: string) { return this.req<{ path: string; deleted: string }>("POST", "/api/files/remove", { project, path }); }
+
+  // ---------- search ----------
+  searchFiles(project: string, signal?: AbortSignal) {
+    return this.reqAbortable<{ files: string[]; truncated: boolean }>(`/api/search/files?${new URLSearchParams({ project })}`, signal);
+  }
+  searchText(project: string, q: string, opts: { regex?: boolean; caseSensitive?: boolean; glob?: string }, signal?: AbortSignal) {
+    const p = new URLSearchParams({ project, q });
+    if (opts.regex) p.set("regex", "1");
+    if (opts.caseSensitive) p.set("case", "1");
+    if (opts.glob) p.set("glob", opts.glob);
+    return this.reqAbortable<SearchResult>(`/api/search/text?${p}`, signal);
+  }
+
+  // ---------- source control ----------
+  scmStatus(project: string) { return this.req<ScmStatus>("GET", `/api/scm/status?${new URLSearchParams({ project })}`); }
+  scmDiff(project: string, path: string, staged: boolean) {
+    return this.req<ScmDiff>("GET", `/api/scm/diff?${new URLSearchParams({ project, path, ...(staged ? { staged: "1" } : {}) })}`);
+  }
+  scmTicketBranch(ticket: string) { return this.req<{ ticket: string; existing: string | null; suggested: string }>("GET", `/api/scm/ticket-branch?${new URLSearchParams({ ticket })}`); }
+  scm(op: "stage" | "unstage" | "stage-all" | "discard" | "commit" | "branch", body: Record<string, unknown>) {
+    return this.req<Record<string, unknown>>("POST", `/api/scm/${op}`, body);
+  }
+
+  // ---------- Claude input (Developer Mode) and terminals ----------
+  prompt(agentId: string, text: string) { return this.req<{ ok: true }>("POST", "/api/action/prompt", { agentId, text }); }
+  key(agentId: string, key: "esc" | "enter") { return this.req<{ ok: true }>("POST", "/api/action/key", { agentId, key }); }
+  ptyList() { return this.req<{ sessions: PtySession[]; enabled: boolean }>("GET", "/api/pty"); }
+  ptyClose(name: string) { return this.req<{ ok: true }>("POST", "/api/pty/close", { name }); }
+
+  private async reqAbortable<T>(path: string, signal?: AbortSignal): Promise<T> {
+    const headers: Record<string, string> = {};
+    const token = getToken();
+    if (token) headers["X-CCD-Token"] = token;
+    const res = await this.fetchImpl(this.base + path, { headers, cache: "no-store", credentials: "omit", signal });
+    let data: unknown = null;
+    try { data = await res.json(); } catch { /* empty */ }
+    if (!res.ok) throw new ApiError(res.status, data && typeof data === "object" && "error" in data ? String((data as { error: unknown }).error) : `HTTP ${res.status}`);
+    return data as T;
+  }
 
   /** GET a file with the token header and hand it to the browser as a download. */
   async download(path: string, fallbackName: string) {

@@ -21,10 +21,22 @@ export function buildItems(onNewTask: () => void): PalItem[] {
     { id: "a:density", kind: "ACTION", label: "Toggle compact rows (28 px)", run: () => prefs.patch({ density: prefs.get().density === "compact" ? "comfortable" : "compact" }) },
     { id: "a:needs", kind: "ACTION", label: "Show what needs Jay", keywords: "needs jay queue", run: () => go("tasks", null, { view: "jay" }) },
     { id: "a:import", kind: "ACTION", label: "Task migration preview (read-only)", keywords: "import migrate", run: () => go("settings", null, { tab: "import" }) },
+    // Workspace: keyboard-first development
+    ...([["Open Workspace", {}, "workspace ide editor"], ["Open Claude", { main: "claude" }, "coordinator herdr"],
+      ["Open Repo shell", { term: "repo" }, "terminal pty bash"], ["Open Server shell", { term: "server" }, "terminal pty bash home"],
+      ["Go to file", { goto: true }, "ctrl+p file open"], ["Search in project", { search: true }, "ctrl+shift+f grep find text"],
+      ["Source control", { main: "scm" }, "git diff stage commit branch"], ["Development (ticket trail)", { main: "dev" }, "commits pr ci"],
+    ] as [string, Record<string, unknown>, string][]).map(([label, detail, kw], i) => ({ id: `w:${i}`, kind: "ACTION" as const, label,
+      hint: label === "Go to file" ? "Ctrl P" : label === "Search in project" ? "Ctrl ⇧ F" : undefined, keywords: `workspace ${kw}`,
+      run: () => { if (!location.hash.startsWith("#/workspace")) go("workspace"); setTimeout(() => window.dispatchEvent(new CustomEvent("cc:workspace", { detail })), 50); } })),
     ...NAV.map((s, i) => ({ id: `go:${s.id}`, kind: "GO" as const, label: s.label, hint: String(i < 9 ? i + 1 : 0), run: () => go(s.id) })),
   ];
   for (const p of st?.projects ?? []) {
     items.push({ id: `p:${p.key}`, kind: "PROJECT", label: p.name, hint: p.key, keywords: `${p.key} ${p.repo}`, run: () => go("projects", p.key) });
+    items.push({ id: `pw:${p.key}`, kind: "ACTION", label: `Workspace: ${p.name}`, hint: p.key, keywords: `${p.key} workspace open project`,
+      run: () => { prefs.patch({ consoleProject: p.key }); go("workspace", null, { project: p.key }); } });
+    if (p.repoUrl) items.push({ id: `gh:${p.key}`, kind: "ACTION", label: `Open ${p.name} on GitHub`, hint: p.repo, keywords: `${p.key} github repo`,
+      run: () => window.open(p.repoUrl!, "_blank", "noopener,noreferrer") });
     const c = st?.coordinators[p.key];
     if (c?.paneId) {
       items.push({ id: `fc:${p.key}`, kind: "ACTION", label: `Focus ${p.name} coordinator`, hint: c.name,
@@ -44,11 +56,16 @@ export function buildItems(onNewTask: () => void): PalItem[] {
     if (t.archived) continue;
     items.push({ id: `t:${t.key}`, kind: "TASK", label: `${t.key} ${t.title}`, hint: STATUS_META[t.status]?.label, key: t.key,
       keywords: `${t.project} ${t.labels.join(" ")}`, run: () => go("tasks", t.key) });
+    if (["IN_PROGRESS", "IN_REVIEW", "READY_TO_IMPLEMENT", "VERIFYING"].includes(t.status))
+      items.push({ id: `tw:${t.key}`, kind: "ACTION", label: `Work on ${t.key} in Workspace`, hint: t.title,
+        keywords: `${t.project} workspace`, run: () => go("workspace", null, { project: t.project, ticket: t.key }) });
   }
   for (const p of st?.projects ?? []) {
     for (const pr of p.prs) {
       items.push({ id: `pr:${p.key}:${pr.number}`, kind: "PR", label: `#${pr.number} ${pr.title}`, hint: p.name, key: `#${pr.number}`,
         keywords: `${p.key} ${pr.ref} ${pr.branch ?? ""}`, run: () => go("prs", `${p.key}#${pr.number}`) });
+      if (pr.url) items.push({ id: `prg:${p.key}:${pr.number}`, kind: "ACTION", label: `Open PR #${pr.number} on GitHub`, hint: p.name,
+        keywords: `${p.key} pr github ${pr.title}`, run: () => window.open(pr.url!, "_blank", "noopener,noreferrer") });
     }
   }
   return items;

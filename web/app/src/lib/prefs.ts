@@ -11,11 +11,15 @@ export interface Prefs {
   consoleFull: boolean;
   consoleFollow: boolean;
   lastProject: string | null;
+  // Workspace layout (this browser only)
+  wsExplorerW: number; wsExplorerOpen: boolean; wsTermH: number; wsTermOpen: boolean;
+  wsMax: "none" | "main" | "term"; wsMain: "editor" | "claude" | "scm" | "search" | "dev";
 }
 const KEY = "cc.prefs";
 const DEFAULTS: Prefs = { theme: "dark", density: "comfortable", sshHost: "jay-server", consoleOpen: false,
   consoleAgent: null, consoleTab: "claude", consoleProject: null, consoleFull: false, consoleFollow: true,
-  lastProject: null };
+  lastProject: null, wsExplorerW: 260, wsExplorerOpen: true, wsTermH: 300, wsTermOpen: true, wsMax: "none",
+  wsMain: "editor" };
 
 function load(): Prefs {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? "{}") }; } catch { return { ...DEFAULTS }; }

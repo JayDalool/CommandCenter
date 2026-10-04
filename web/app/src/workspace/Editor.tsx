@@ -39,6 +39,13 @@ export function disposeModel(path: string) {
 let versions = 0;
 export function nextVersion() { return ++versions; }
 
+// A line to show once a path's model is on screen (search results, Go to File).
+const pendingReveal = new Map<string, number>();
+let revealNow: ((path: string, line: number) => boolean) | null = null;
+export function revealLine(path: string, line: number) {
+  if (!revealNow?.(path, line)) pendingReveal.set(path, line);
+}
+
 /** For tests. */
 export function hasModel(path: string) { return models.has(path); }
 
@@ -72,11 +79,18 @@ export function CodeEditor({ path, text, version, onChange, onSave, theme, handl
         value: (p) => models.get(p)?.model.getValue() ?? null,
         dispose: disposeModel,
       };
+      revealNow = (p, line) => {
+        const e = ed.current;
+        if (!e || e.getModel() !== models.get(p)?.model) return false;
+        e.revealLineInCenter(line); e.setPosition({ lineNumber: line, column: 1 }); e.focus();
+        return true;
+      };
       setReady(true);
     }).catch((e) => setErr(String(e?.message ?? e)));
     return () => {
       dead = true;
       ed.current?.dispose();  // the models stay; see `models`
+      revealNow = null;
       handle.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -100,6 +114,8 @@ export function CodeEditor({ path, text, version, onChange, onSave, theme, handl
       rec.version = version;
     }
     if (e.getModel() !== rec.model) e.setModel(rec.model);
+    const line = pendingReveal.get(path);
+    if (line) { pendingReveal.delete(path); e.revealLineInCenter(line); e.setPosition({ lineNumber: line, column: 1 }); e.focus(); }
   }, [path, text, version, ready]);
   useEffect(() => { if (!hidden) ed.current?.layout(); }, [hidden]);
 

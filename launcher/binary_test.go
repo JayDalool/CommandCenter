@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,6 +59,14 @@ func TestBinaryHasNoSecrets(t *testing.T) {
 	}
 	if !bytes.HasPrefix(data, []byte("MZ")) {
 		t.Fatal("not a PE file")
+	}
+	// Double-click must not flash a console: IMAGE_SUBSYSTEM_WINDOWS_GUI (2).
+	pe := int(binary.LittleEndian.Uint32(data[0x3c:]))
+	if string(data[pe:pe+4]) != "PE\x00\x00" {
+		t.Fatal("no PE signature")
+	}
+	if sub := binary.LittleEndian.Uint16(data[pe+24+68:]); sub != 2 {
+		t.Fatalf("subsystem %d, want 2 (Windows GUI)", sub)
 	}
 	// the scanner itself must work
 	if len(ScanForbidden([]byte("x "+forbidden[0]+" y"))) != 1 {

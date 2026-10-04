@@ -37,6 +37,19 @@
     GET   /api/developer             is this tab's developer session active?
     POST  /api/developer/unlock      developer token → a short-lived in-memory session id
     POST  /api/developer/lock        end that session
+    POST  /api/files/mkdir|rename|duplicate|remove   DEVELOPER. explorer operations, descriptor-safe
+    GET   /api/search/files          every searchable path in a project (Go to File)
+    GET   /api/search/text           ripgrep in a project (Search in Project); bounded, timed
+    GET   /api/scm/status            branch, staged, unstaged, untracked, conflicts
+    GET   /api/scm/diff              one path's diff (staged or not)
+    POST  /api/scm/stage|unstage|stage-all|discard|commit|branch   DEVELOPER. no push, reset or force
+    GET   /api/scm/ticket-branch     the deterministic branch name for a ticket
+    POST  /api/action/prompt         DEVELOPER. send a message to an idle Claude pane (herdr agent.prompt)
+    POST  /api/action/key            DEVELOPER. esc or enter into a Claude pane
+    GET   /api/pty                   live terminal sessions (names, cwd, clients)
+    POST  /api/pty/close             DEVELOPER. CLOSE SESSION: ends that one shell's process group
+    WS    /api/pty/{name}            DEVELOPER. attach to repo:<PREFIX> or server (created on first attach);
+                                     developer session as subprotocol `ccd-dev.<session>`; Origin required
     GET   /api/desktop/launcher      the Windows launcher's version, SHA-256 and build commit
     GET   /api/desktop/launcher/download  CommandCenter.exe, as an attachment
 
@@ -69,6 +82,8 @@ from . import registry, security
 from .attachments import content_disposition
 from .daemon import ActionError
 from .files import FileError
+from .gitops import ticket_branch_name
+from .pty import PtyError, session_cwd
 
 NO_STORE = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
 WS_PROTOCOL = "ccd.v1"
@@ -78,6 +93,7 @@ WRITE_METHODS = ("POST", "PATCH", "PUT", "DELETE")
 # is not a CORS-safelisted type either, so a cross-site page still needs a preflight.
 STREAM_PATHS = ("/api/files/upload", "/api/attachments")
 DEV_HEADER = "x-ccd-developer"
+DEV_WS_PREFIX = "ccd-dev."
 JSON_MAX = 3 * 1024 * 1024  # the editor's 2 MB text, JSON-escaped, with room
 
 
@@ -470,6 +486,217 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         fd = os.open(exe, os.O_RDONLY)
         return _stream_fd(fd, os.fstat(fd).st_size, "CommandCenter.exe")
 
+    srch = getattr(daemon, "search", None)
+    scm = getattr(daemon, "scm", None)
+    ptys = getattr(daemon, "ptys", None)
+
+    def _paths(body):
+        p = body.get("paths")
+        if not isinstance(p, list) or not all(isinstance(x, str) for x in p):
+            raise ActionError(400, "paths must be a list of strings")
+        return p
+
+    async def files_op(request):
+        body = await _body(request)
+        op = request.url.path.rsplit("/", 1)[-1]
+        key = str(body.get("project") or "")
+        if op == "mkdir":
+            out = await asyncio.to_thread(files.mkdir, key, body.get("dir", ""), body.get("name"))
+        elif op == "rename":
+            out = await asyncio.to_thread(files.rename, key, body.get("path"), body.get("name"))
+        elif op == "duplicate":
+            out = await asyncio.to_thread(files.duplicate, key, body.get("path"))
+        elif op == "remove":
+            out = await asyncio.to_thread(files.delete, key, body.get("path"))
+        else:
+            raise ActionError(404, "unknown operation")
+        daemon._event("files", f"file.{op}", f"{key}: {op} {out['path']}"[:300], project=key,
+                      data={"path": out["path"]})
+        return out
+
+    async def search_files(request):
+        if srch is None:
+            raise ActionError(503, "search is not configured")
+        return await srch.files(request.query_params.get("project"))
+
+    async def search_text(request):
+        if srch is None:
+            raise ActionError(503, "search is not configured")
+        q = request.query_params
+        return await srch.text(q.get("project"), q.get("q"), regex=q.get("regex") == "1", case=q.get("case") == "1",
+                               glob=q.get("glob") or None)
+
+    def _need_scm():
+        if scm is None:
+            raise ActionError(503, "source control is not configured")
+        return scm
+
+    async def scm_status(request):
+        return await _need_scm().status(request.query_params.get("project"))
+
+    async def scm_diff(request):
+        q = request.query_params
+        return await _need_scm().diff(q.get("project"), q.get("path"), staged=q.get("staged") == "1")
+
+    async def scm_ticket_branch(request):
+        key = request.query_params.get("ticket") or ""
+        t = daemon.task_get(key)
+        return {"ticket": t["key"], "existing": t.get("branch"), "suggested": ticket_branch_name(t["key"], t["title"])}
+
+    async def scm_op(request):
+        body = await _body(request)
+        op = request.url.path.rsplit("/", 1)[-1]
+        key = str(body.get("project") or "")
+        sc = _need_scm()
+        if op == "stage":
+            out = await sc.stage(key, _paths(body))
+        elif op == "unstage":
+            out = await sc.unstage(key, _paths(body))
+        elif op == "stage-all":
+            out = await sc.stage_all(key)
+        elif op == "discard":
+            if body.get("confirm") is not True:
+                raise ActionError(400, "discard needs confirm: true")
+            out = await sc.discard(key, body.get("path"), files)
+        elif op == "commit":
+            out = await sc.commit(key, body.get("message"), body.get("files"))
+        elif op == "branch":
+            ticket = body.get("ticket")
+            if ticket:
+                daemon.task_get(str(ticket))  # an unknown ticket is refused BEFORE the repository changes
+            out = await sc.create_branch(key, body.get("name"), switch=body.get("switch", True) is not False)
+            if ticket:
+                daemon.task_update(str(ticket), {"branch": out["branch"]}, request.state.actor)
+        else:
+            raise ActionError(404, "unknown operation")
+        daemon._event("files", f"scm.{op}", f"{key}: {op}"[:300], project=key,
+                      data={k: out[k] for k in ("branch", "sha") if k in out})
+        return out
+
+    async def claude_prompt(request):
+        body = await _body(request)
+        return await daemon.act_prompt(str(body.get("agentId", "")), body.get("text"))
+
+    async def claude_key(request):
+        body = await _body(request)
+        return await daemon.act_key(str(body.get("agentId", "")), body.get("key"))
+
+    async def pty_list(request):
+        return {"sessions": ptys.list() if ptys else [], "enabled": ptys is not None}
+
+    async def pty_close(request):
+        if ptys is None:
+            raise ActionError(503, "terminals are not configured")
+        body = await _body(request)
+        try:
+            return await ptys.close(str(body.get("name") or ""))
+        except PtyError as e:
+            raise ActionError(e.status, e.message)
+
+    async def pty_ws(ws: WebSocket):
+        """One view of a named terminal. Auth: the Guard already checked Host, Origin and the ccd
+        token; here the developer session (subprotocol ccd-dev.<id>) and a present Origin are
+        required too. Binary frames out are terminal output; text frames are JSON control."""
+        offered = [p.strip() for p in (ws.headers.get("sec-websocket-protocol") or "").split(",")]
+        dev = next((p[len(DEV_WS_PREFIX):] for p in offered if p.startswith(DEV_WS_PREFIX)), "")
+        name = ws.path_params["name"]
+        if ptys is None or gate is None:
+            await ws.close(code=4403, reason="terminals are not configured")
+            return
+        if not ws.headers.get("origin"):
+            await ws.close(code=4403, reason="origin required")
+            return
+        if not gate.check(dev):
+            await ws.close(code=4403, reason="Developer Unlock required")
+            return
+        try:
+            session_cwd(name, ptys.roots, ptys.home)
+            cols = int(ws.query_params.get("cols", "80"))
+            rows = int(ws.query_params.get("rows", "24"))
+        except PtyError as e:
+            await ws.close(code=4404 if e.status == 404 else 4400)
+            return
+        except ValueError:
+            await ws.close(code=4400)
+            return
+        s, created = await ptys.open(name, cols, rows)
+        await ws.accept(subprotocol=WS_PROTOCOL if WS_PROTOCOL in offered else None)
+        client, replay = ptys.attach(s)
+        closing = asyncio.Event()
+
+        async def pump_out():
+            await ws.send_json({"t": "hello", "name": s.name, "cwd": s.cwd, "created": created})
+            if replay:
+                await ws.send_bytes(replay)
+            while True:
+                data = await client.queue.get()
+                if data is None:
+                    if client.lost:
+                        await ws.send_json({"t": "lost"})
+                        await ws.close(code=4408)
+                    else:
+                        await ws.send_json({"t": "exit", "code": s.exit_code})
+                        await ws.close(code=1000)
+                    return
+                await ws.send_bytes(data)
+
+        async def pump_in():
+            last_check = asyncio.get_running_loop().time()
+            while True:
+                msg = await ws.receive()
+                if msg["type"] == "websocket.disconnect":
+                    return
+                now = asyncio.get_running_loop().time()
+                if now - last_check > 30:  # typing keeps the developer session alive
+                    last_check = now
+                    if not gate.check(dev):
+                        await ws.close(code=4403)
+                        return
+                if msg.get("bytes") is not None:
+                    ptys.write(s, msg["bytes"])
+                    continue
+                try:
+                    m = json.loads(msg.get("text") or "{}")
+                except ValueError:
+                    continue
+                t = m.get("t")
+                if t == "i" and isinstance(m.get("d"), str):
+                    ptys.write(s, m["d"].encode("utf-8", "replace"))
+                elif t == "r":
+                    try:
+                        ptys.resize(s, int(m.get("c")), int(m.get("r")))
+                    except (TypeError, ValueError):
+                        pass
+                elif t == "close":
+                    closing.set()
+                    await ptys.close(s.name)
+                    return
+
+        async def watchdog():
+            # Developer Mode locked or expired: this view stops at once, output and input alike.
+            while True:
+                await asyncio.sleep(3)
+                if not gate.expires_in(dev):  # locked, idle-expired or past its TTL
+                    await ws.close(code=4403)
+                    return
+
+        tasks_ = [asyncio.create_task(pump_out()), asyncio.create_task(pump_in()), asyncio.create_task(watchdog())]
+        try:
+            await asyncio.wait(tasks_, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for t in tasks_:
+                t.cancel()
+            for t in tasks_:  # collect every outcome: a closed socket or refused input just ends this view
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001 — whatever ended the view, detach
+                    pass
+            ptys.detach(s, client)
+            try:
+                await ws.close(code=1000)
+            except RuntimeError:
+                pass
+
     async def events(ws: WebSocket):
         offered = [p.strip() for p in (ws.headers.get("sec-websocket-protocol") or "").split(",")]
         await ws.accept(subprotocol=WS_PROTOCOL if WS_PROTOCOL in offered else None)
@@ -552,6 +779,20 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/developer", dev_status, methods=["GET"]),
         Route("/api/developer/unlock", dev_unlock, methods=["POST"]),
         Route("/api/developer/lock", dev_lock, methods=["POST"]),
+        *[Route(f"/api/files/{op}", ws_route(files_op, dev=True), methods=["POST"])
+          for op in ("mkdir", "rename", "duplicate", "remove")],
+        Route("/api/search/files", ws_route(search_files), methods=["GET"]),
+        Route("/api/search/text", ws_route(search_text), methods=["GET"]),
+        Route("/api/scm/status", ws_route(scm_status), methods=["GET"]),
+        Route("/api/scm/diff", ws_route(scm_diff), methods=["GET"]),
+        Route("/api/scm/ticket-branch", ws_route(scm_ticket_branch), methods=["GET"]),
+        *[Route(f"/api/scm/{op}", ws_route(scm_op, dev=True), methods=["POST"])
+          for op in ("stage", "unstage", "stage-all", "discard", "commit", "branch")],
+        Route("/api/action/prompt", ws_route(claude_prompt, dev=True), methods=["POST"]),
+        Route("/api/action/key", ws_route(claude_key, dev=True), methods=["POST"]),
+        Route("/api/pty", ws_route(pty_list), methods=["GET"]),
+        Route("/api/pty/close", ws_route(pty_close, dev=True), methods=["POST"]),
+        WebSocketRoute("/api/pty/{name}", pty_ws),
         Route("/api/desktop/launcher", launcher_info, methods=["GET"]),
         Route("/api/desktop/launcher/download", launcher_download, methods=["GET"]),
     ]

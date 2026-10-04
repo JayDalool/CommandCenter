@@ -33,6 +33,7 @@ import hashlib
 import os
 import re
 import secrets as _secrets
+import shutil
 import stat
 import subprocess
 import threading
@@ -214,17 +215,89 @@ class Roots:
         return {"project": key, "path": here, "crumbs": parts, "entries": entries, "truncated": truncated,
                 "git": status is not None}
 
-    def _open_regular(self, real):
-        fd = os.open(real, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    # ---------- descriptor-relative access (the TOCTOU defence) ----------
+    #
+    # `resolve` validates a path and returns its symlink-free real path. Every
+    # open, create, rename, link and unlink then happens relative to a directory
+    # descriptor reached by walking that real path from the root one component at
+    # a time with O_NOFOLLOW|O_DIRECTORY. If any folder on the way is swapped for
+    # a symlink after validation, the walk fails (ELOOP/ENOTDIR) instead of
+    # following it, and once a directory descriptor is held, renaming its path
+    # cannot redirect the write: it stays inside the inode that was validated.
+
+    _DIR = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+
+    def _dirfd(self, root, parts):
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
+        try:
+            for p in parts:
+                if p.lower() == ".git" or is_protected_name(p):
+                    raise FileError(403, "protected path", protected=True)
+                nfd = os.open(p, self._DIR, dir_fd=fd)
+                os.close(fd)
+                fd = nfd
+        except FileError:
+            os.close(fd)
+            raise
+        except FileNotFoundError:
+            os.close(fd)
+            raise FileError(404, "no such folder")
+        except OSError:
+            os.close(fd)
+            raise FileError(403, "that path changed or leaves the project")
+        return fd
+
+    def _real_parts(self, root, real):
+        return [] if real == root else os.path.relpath(real, root).split(os.sep)
+
+    def _parent(self, key, rel):
+        """(dir_fd, name, shown_dir_parts) for the LAST component of `rel`, which may not exist yet.
+        The folder is validated and walked descriptor-relative; the name itself is never followed."""
+        parts = split_rel(rel)
+        if not parts:
+            raise FileError(400, "bad path")
+        name = parts[-1]
+        if name.lower() == ".git" or is_protected_name(name):
+            raise FileError(403, "protected file", protected=True)
+        root, real_dir, dparts = self.resolve(key, "/".join(parts[:-1]))
+        if not os.path.isdir(real_dir):
+            raise FileError(400, "destination is not a folder")
+        return self._dirfd(root, self._real_parts(root, real_dir)), name, dparts
+
+    def _lstat(self, dfd, name):
+        try:
+            return os.stat(name, dir_fd=dfd, follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+
+    def _open_regular_at(self, dfd, name):
+        try:
+            fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0), dir_fd=dfd)
+        except FileNotFoundError:
+            raise FileError(404, "no such file")
+        except OSError:
+            raise FileError(403, "refusing to follow a symlink")
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             os.close(fd)
             raise FileError(400, "not a regular file")
         return fd, st
 
+    def _open_existing(self, key, rel):
+        """Open an existing regular file by its validated real path, descriptor-relative."""
+        root, real, parts = self.resolve(key, rel)
+        rp = self._real_parts(root, real)
+        if not rp:
+            raise FileError(400, "not a regular file")
+        dfd = self._dirfd(root, rp[:-1])
+        try:
+            fd, st = self._open_regular_at(dfd, rp[-1])
+        finally:
+            os.close(dfd)
+        return fd, st, parts
+
     def read(self, key, rel):
-        _, real, parts = self.resolve(key, rel)
-        fd, st = self._open_regular(real)
+        fd, st, parts = self._open_existing(key, rel)
         meta = {"project": key, "path": "/".join(parts), "size": st.st_size, "mtime": st.st_mtime,
                 "mode": oct(st.st_mode & 0o7777)}
         with os.fdopen(fd, "rb") as f:
@@ -238,27 +311,21 @@ class Roots:
 
     def open_download(self, key, rel):
         """(fd, size, name) of a regular file. The caller streams it and closes fd."""
-        _, real, parts = self.resolve(key, rel)
-        fd, st = self._open_regular(real)
+        fd, st, parts = self._open_existing(key, rel)
         return fd, st.st_size, parts[-1] if parts else "file"
 
     # ---------- writing ----------
 
-    def _tmp_in(self, folder, mode):
+    def _tmp_at(self, dfd, mode):
         for _ in range(5):
-            tmp = os.path.join(folder, f".ccd-{_secrets.token_hex(6)}.tmp")
+            tmp = f".ccd-{_secrets.token_hex(6)}.tmp"
             try:
-                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), mode)
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) |
+                             getattr(os, "O_CLOEXEC", 0), mode, dir_fd=dfd)
                 return fd, tmp
             except FileExistsError:
                 continue
         raise FileError(500, "could not create a temporary file")
-
-    def _writable_dir(self, key, rel_dir):
-        root, real_dir, parts = self.resolve(key, rel_dir)
-        if not os.path.isdir(real_dir):
-            raise FileError(400, "destination is not a folder")
-        return root, real_dir, parts
 
     def save(self, key, rel, text, base_sha):
         """Atomic replace of a text file, refused if it changed since `base_sha`.
@@ -268,48 +335,45 @@ class Roots:
         data = text.encode("utf-8")
         if len(data) > TEXT_MAX:
             raise FileError(413, "file too large for the editor")
-        parts = split_rel(rel)
-        if not parts:
-            raise FileError(400, "bad path")
-        name = parts[-1]
-        if is_protected_name(name):
-            raise FileError(403, "protected file", protected=True)
-        _, folder, dparts = self._writable_dir(key, "/".join(parts[:-1]))
-        target = os.path.join(folder, name)
-        with self._write:
-            mode = 0o644
-            if os.path.lexists(target):
-                st = os.lstat(target)
-                if stat.S_ISLNK(st.st_mode):
-                    raise FileError(403, "refusing to write through a symlink")
-                if not stat.S_ISREG(st.st_mode):
-                    raise FileError(400, "not a regular file")
-                if base_sha is None:
-                    raise FileError(409, "a file with that name already exists", conflict=True)
-                with open(target, "rb") as f:
-                    current = f.read(TEXT_MAX + 1)
-                cur_sha = hashlib.sha256(current).hexdigest()
-                if cur_sha != base_sha:
-                    raise FileError(409, "the file changed on disk since you opened it", conflict=True,
-                                    currentSha=cur_sha, mtime=st.st_mtime)
-                if not _is_text(current):
-                    raise FileError(400, "not a text file; the editor will not overwrite it")
-                mode = stat.S_IMODE(st.st_mode)
-            elif base_sha is not None:
-                raise FileError(409, "the file was deleted on disk since you opened it", conflict=True)
-            fd, tmp = self._tmp_in(folder, mode)
-            try:
-                with os.fdopen(fd, "wb") as f:
-                    f.write(data)
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.chmod(tmp, mode)
-                os.replace(tmp, target)
-            except BaseException:
-                with contextlib.suppress(OSError):
-                    os.unlink(tmp)
-                raise
-            st = os.stat(target)
+        dfd, name, dparts = self._parent(key, rel)
+        try:
+            with self._write:
+                mode = 0o644
+                st = self._lstat(dfd, name)
+                if st is not None:
+                    if stat.S_ISLNK(st.st_mode):
+                        raise FileError(403, "refusing to write through a symlink")
+                    if not stat.S_ISREG(st.st_mode):
+                        raise FileError(400, "not a regular file")
+                    if base_sha is None:
+                        raise FileError(409, "a file with that name already exists", conflict=True)
+                    cfd, _ = self._open_regular_at(dfd, name)
+                    with os.fdopen(cfd, "rb") as f:
+                        current = f.read(TEXT_MAX + 1)
+                    cur_sha = hashlib.sha256(current).hexdigest()
+                    if cur_sha != base_sha:
+                        raise FileError(409, "the file changed on disk since you opened it", conflict=True,
+                                        currentSha=cur_sha, mtime=st.st_mtime)
+                    if not _is_text(current):
+                        raise FileError(400, "not a text file; the editor will not overwrite it")
+                    mode = stat.S_IMODE(st.st_mode)
+                elif base_sha is not None:
+                    raise FileError(409, "the file was deleted on disk since you opened it", conflict=True)
+                fd, tmp = self._tmp_at(dfd, mode)
+                try:
+                    with os.fdopen(fd, "wb") as f:
+                        f.write(data)
+                        f.flush()
+                        os.fchmod(f.fileno(), mode)
+                        os.fsync(f.fileno())
+                    os.replace(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+                except BaseException:
+                    with contextlib.suppress(OSError):
+                        os.unlink(tmp, dir_fd=dfd)
+                    raise
+                st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+        finally:
+            os.close(dfd)
         return {"project": key, "path": "/".join(dparts + [name]), "sha": hashlib.sha256(data).hexdigest(),
                 "size": len(data), "mtime": st.st_mtime}
 
@@ -320,47 +384,156 @@ class Roots:
             raise FileError(400, "conflict must be fail, replace or rename")
         if length is not None and length > self.upload_max:
             raise FileError(413, f"file is larger than the {self.upload_max // (1024 * 1024)} MB upload limit")
-        _, folder, dparts = self._writable_dir(key, rel_dir)
-        fd, tmp = self._tmp_in(folder, 0o644)
+        root, real_dir, dparts = self.resolve(key, rel_dir)
+        if not os.path.isdir(real_dir):
+            raise FileError(400, "destination is not a folder")
+        dfd = self._dirfd(root, self._real_parts(root, real_dir))
         size = 0
         h = hashlib.sha256()
         try:
-            with os.fdopen(fd, "wb") as f:
-                async for chunk in chunks:
-                    size += len(chunk)
-                    if size > self.upload_max:
-                        raise FileError(413, f"file is larger than the {self.upload_max // (1024 * 1024)} MB "
-                                             "upload limit")
-                    h.update(chunk)
-                    f.write(chunk)
-                f.flush()
-                os.fsync(f.fileno())
-            final = self._place(folder, name, tmp, conflict)
+            fd, tmp = self._tmp_at(dfd, 0o644)
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    async for chunk in chunks:
+                        size += len(chunk)
+                        if size > self.upload_max:
+                            raise FileError(413, f"file is larger than the {self.upload_max // (1024 * 1024)} MB "
+                                                 "upload limit")
+                        h.update(chunk)
+                        f.write(chunk)
+                    f.flush()
+                    os.fsync(f.fileno())
+                final = self._place(dfd, name, tmp, conflict)
+            finally:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp, dir_fd=dfd)
         finally:
-            with contextlib.suppress(OSError):
-                os.unlink(tmp)
+            os.close(dfd)
         return {"project": key, "path": "/".join(dparts + [final]), "name": final, "size": size,
                 "sha": h.hexdigest(), "renamed": final != name}
 
-    def _place(self, folder, name, tmp, conflict):
+    def _link_free(self, dfd, tmp, candidates):
+        for cand in candidates:
+            try:
+                os.link(tmp, cand, src_dir_fd=dfd, dst_dir_fd=dfd, follow_symlinks=False)  # never clobbers
+                return cand
+            except FileExistsError:
+                continue
+        return None
+
+    def _place(self, dfd, name, tmp, conflict):
         with self._write:
-            target = os.path.join(folder, name)
-            if conflict == "replace" and os.path.lexists(target):
-                st = os.lstat(target)
-                if not stat.S_ISREG(st.st_mode):
-                    raise FileError(409, "only a regular file can be replaced", conflict=True)
-                os.chmod(tmp, stat.S_IMODE(st.st_mode))
-                os.replace(tmp, target)
-                return name
+            if conflict == "replace":
+                st = self._lstat(dfd, name)
+                if st is not None:
+                    if not stat.S_ISREG(st.st_mode):
+                        raise FileError(409, "only a regular file can be replaced", conflict=True)
+                    os.chmod(tmp, stat.S_IMODE(st.st_mode), dir_fd=dfd)
+                    os.replace(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+                    return name
             candidates = [name]
             if conflict == "rename":
                 stem, ext = os.path.splitext(name)
                 candidates += [f"{stem} ({i}){ext}" for i in range(1, 100)]
-            for cand in candidates:
-                try:
-                    os.link(tmp, os.path.join(folder, cand))  # never clobbers
-                    return cand
-                except FileExistsError:
-                    continue
-            raise FileError(409, f"{name} already exists", conflict=True, exists=True)
+            got = self._link_free(dfd, tmp, candidates)
+            if got is None:
+                raise FileError(409, f"{name} already exists", conflict=True, exists=True)
+            return got
 
+    # ---------- explorer operations (all need Developer Unlock at the API) ----------
+
+    def mkdir(self, key, rel_dir, name):
+        check_name(name)
+        root, real_dir, dparts = self.resolve(key, rel_dir)
+        if not os.path.isdir(real_dir):
+            raise FileError(400, "destination is not a folder")
+        dfd = self._dirfd(root, self._real_parts(root, real_dir))
+        try:
+            os.mkdir(name, 0o755, dir_fd=dfd)
+        except FileExistsError:
+            raise FileError(409, f"{name} already exists", conflict=True, exists=True)
+        finally:
+            os.close(dfd)
+        return {"project": key, "path": "/".join(dparts + [name])}
+
+    def rename(self, key, rel, new_name):
+        """Rename within the same folder. Never replaces an existing name."""
+        check_name(new_name)
+        dfd, name, dparts = self._parent(key, rel)
+        try:
+            with self._write:
+                if self._lstat(dfd, name) is None:
+                    raise FileError(404, "no such file")
+                if self._lstat(dfd, new_name) is not None:
+                    raise FileError(409, f"{new_name} already exists", conflict=True, exists=True)
+                os.rename(name, new_name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        finally:
+            os.close(dfd)
+        return {"project": key, "path": "/".join(dparts + [new_name])}
+
+    def duplicate(self, key, rel):
+        dfd, name, dparts = self._parent(key, rel)
+        try:
+            sfd, st = self._open_regular_at(dfd, name)
+            if st.st_size > self.upload_max:
+                os.close(sfd)
+                raise FileError(413, "file too large to duplicate here")
+            fd, tmp = self._tmp_at(dfd, stat.S_IMODE(st.st_mode))
+            try:
+                with os.fdopen(sfd, "rb") as src, os.fdopen(fd, "wb") as dst:
+                    while True:
+                        chunk = src.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        dst.write(chunk)
+                    dst.flush()
+                    os.fsync(dst.fileno())
+                stem, ext = os.path.splitext(name)
+                with self._write:
+                    got = self._link_free(dfd, tmp, [f"{stem} copy{ext}"] + [f"{stem} copy {i}{ext}" for i in range(2, 100)])
+                if got is None:
+                    raise FileError(409, "too many copies already", conflict=True)
+            finally:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp, dir_fd=dfd)
+        finally:
+            os.close(dfd)
+        return {"project": key, "path": "/".join(dparts + [got]), "name": got}
+
+    DELETE_MAX = 20000
+
+    def _scan_for_delete(self, dfd, name, count=0):
+        """Walk a folder without following symlinks; refuse if it holds .git or a protected file."""
+        fd = os.open(name, self._DIR, dir_fd=dfd)
+        try:
+            with os.scandir(fd) as it:
+                for e in it:
+                    count += 1
+                    if count > self.DELETE_MAX:
+                        raise FileError(413, f"folder has more than {self.DELETE_MAX} entries; delete it in a shell")
+                    if e.name.lower() == ".git" or is_protected_name(e.name):
+                        raise FileError(403, f"folder contains a protected file ({e.name}); not deleted",
+                                        protected=True)
+                    if e.is_dir(follow_symlinks=False):
+                        count = self._scan_for_delete(fd, e.name, count)
+        finally:
+            os.close(fd)
+        return count
+
+    def delete(self, key, rel):
+        dfd, name, dparts = self._parent(key, rel)
+        try:
+            with self._write:
+                st = self._lstat(dfd, name)
+                if st is None:
+                    raise FileError(404, "no such file")
+                if stat.S_ISDIR(st.st_mode):
+                    n = self._scan_for_delete(dfd, name)
+                    shutil.rmtree(name, dir_fd=dfd)  # fd-based: symlink-attack resistant
+                    kind = f"folder ({n} entries)"
+                else:
+                    os.unlink(name, dir_fd=dfd)  # a symlink is removed, never followed
+                    kind = "file"
+        finally:
+            os.close(dfd)
+        return {"project": key, "path": "/".join(dparts + [name]), "deleted": kind}
