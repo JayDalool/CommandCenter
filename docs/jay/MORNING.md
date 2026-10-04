@@ -41,4 +41,4 @@ All four are blocked only on you:
 ## Anything risky
 - **Regex search** stays off: ripgrep isn't installed, and installing it needs sudo. Plain-text search works.
 - **Old chunks expire.** Each UI release keeps the last 3 releases' chunks. A window left open across 4+ deploys shows "Command Center was updated" and reloads once.
-- **Rollback.** Backups are in `~/command-center/backups/golive-20261004-*`. Before the import there's also `tasks.db.bak-import-20261004T194024Z`, with its report in `~/command-center/state/import-apply-20261004.json`.
+- **Rollback.** Backups are in `~/command-center/backups/golive-20261004-*`. Before the import there's also `~/command-center/data/tasks.db.bak-import-20261004T194024Z`, with its report in `~/command-center/state/import-apply-20261004.json`.
