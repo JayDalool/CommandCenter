@@ -121,7 +121,7 @@ describe("tasks screen", () => {
     render(<Tasks />);
     await user.click(within(screen.getByRole("group", { name: "Project" })).getByRole("button", { name: /^GZ/ }));
     const rows = within(screen.getByRole("table", { name: "Tasks" })).getAllByRole("row").slice(1);
-    expect(rows.every((r) => /GM-/.test(r.textContent ?? ""))).toBe(true);
+    expect(rows.every((r) => /\bG[MZ]-\d/.test(r.textContent ?? ""))).toBe(true);
     await user.type(screen.getByRole("searchbox"), "lawyer");
     expect(within(screen.getByRole("table", { name: "Tasks" })).getAllByRole("row")).toHaveLength(2);
   });
@@ -130,7 +130,7 @@ describe("tasks screen", () => {
     location.hash = "#/tasks";
     render(<Tasks />);
     const table = screen.getByRole("table", { name: "Tasks" });
-    for (const k of ["SV-056", "GM-018", "CC-001", "MFE-001", "GYST-012"]) expect(within(table).getByText(k)).toBeInTheDocument();
+    for (const k of ["SV-056", "GZ-902", "CC-001", "MFE-001", "GYST-012"]) expect(within(table).getByText(k)).toBeInTheDocument();
     const chips = screen.getByRole("group", { name: "Project" });
     expect(within(chips).getByRole("button", { name: /^ALL/ })).toHaveAttribute("aria-pressed", "true");
     expect(within(chips).getAllByRole("button").map((b) => b.textContent?.split(/\s+/)[0])).toEqual(["ALL", "SV", "GZ", "MFE", "GYST", "CC"]);

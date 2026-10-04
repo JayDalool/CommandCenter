@@ -76,8 +76,8 @@ GH = {
         "merged": [{"number": 90, "title": "SV-050: Net sheet rounding", "url": "https://github.com/x/pull/90", "mergedAt": iso(3)}],
         "closed": [], "ci": [{"conclusion": "success", "status": "completed", "workflowName": "checks", "url": "", "createdAt": ""}]},
     "gauzemate": {"issues": [], "prs": [
-        pr(26, "GM-020: Contrast and touch target audit", "gm-020-contrast", review="CHANGES_REQUESTED", age=9),
-        pr(25, "GM-018: TASKS.md: mark PR 8, 9 and 10 merged", "gm-018-tasks", review="APPROVED", age=4)],
+        pr(26, "GZ-901: Contrast and touch target audit", "gz-901-contrast", review="CHANGES_REQUESTED", age=9),
+        pr(25, "GZ-902: TASKS.md: mark PR 8, 9 and 10 merged", "gz-902-tasks", review="APPROVED", age=4)],
         "merged": [], "closed": [], "ci": [{"conclusion": "success", "status": "completed", "workflowName": "checks", "url": "", "createdAt": ""}]},
     "gyst": {"issues": [], "prs": [pr(31, "UI-11: Galaxy keyboard navigation", "ui-11-galaxy", draft=True, age=20)],
              "merged": [], "closed": [], "ci": [{"conclusion": "failure", "status": "completed", "workflowName": "checks", "url": "", "createdAt": ""}]},
@@ -96,8 +96,8 @@ BRANCHES = {
                   "sv-042-rotate": {"commits": 2, "head": "2f10bd8", "at": time.time() - 18000, "countOk": True},
                   "sv-031-prune": {"commits": 7, "head": "71aa0c5", "at": time.time() - 216000, "countOk": True},
                   "follow-up-to-SV-056": {"commits": 11, "head": "badbadb", "at": time.time(), "countOk": True}},
-    "gauzemate": {"gm-020-contrast": {"commits": 3, "head": "4dd9e71", "at": time.time() - 32400, "countOk": True},
-                  "gz-027-scanner-retry": {"commits": 1, "head": "0ab77c3", "at": time.time() - 900, "countOk": True}},
+    "gauzemate": {"gz-901-contrast": {"commits": 3, "head": "4dd9e71", "at": time.time() - 32400, "countOk": True},
+                  "gz-904-scanner-retry": {"commits": 1, "head": "0ab77c3", "at": time.time() - 900, "countOk": True}},
     "gyst": {"ui-11-galaxy": {"commits": 5, "head": "cc0191f", "at": time.time() - 72000, "countOk": True}},
     "mfe": {},
 }
@@ -111,8 +111,8 @@ def seed(ts):
     if ts.list(include_archived=True):
         return
     def mk(project, title, number=None, actor="jay", **f):
-        t, _ = ts.create(project, title, actor, number=number, **{k: v for k, v in f.items() if k in ("status",)})
-        rest = {k: v for k, v in f.items() if k != "status"}
+        t, _ = ts.create(project, title, actor, number=number, **{k: v for k, v in f.items() if k in ("status", "prefix")})
+        rest = {k: v for k, v in f.items() if k not in ("status", "prefix")}
         if rest:
             ts.update(t["key"], rest, actor)
         return t["key"]
@@ -128,15 +128,17 @@ def seed(ts):
     mk("samvision", "Overview workspace refinement", 10, status="PROPOSED", priority="MEDIUM", type="DESIGN")
     mk("samvision", "Global quick-search research", 11, status="RESEARCHING", priority="LOW", type="RESEARCH", assignee="role:PLANNER")
     mk("samvision", "Net sheet rounding", 50, status="DONE", priority="MEDIUM", type="BUG")
-    mk("gauzemate", "Contrast and touch target audit", 20, status="IN_REVIEW", priority="MEDIUM", type="DESIGN", needs_ui_review=True)
-    mk("gauzemate", "TASKS.md: mark PR 8, 9 and 10 merged", 18, status="READY_TO_IMPLEMENT", priority="LOW", type="DOCS")
-    mk("gauzemate", "Book Manitoba health-tech lawyer", 4, status="INBOX", type="OWNER_ACTION", assignee="jay", needs_jay=True)
-    mk("gauzemate", "Barcode / QR scanner for a medication", 26, status="IN_PROGRESS", priority="HIGH", type="FEATURE",
+    # GauzeMate's real history is GM-001…GM-014 (retired prefix) and its live prefix is GZ.
+    # The preview shows one real history key (GM-004) beside clearly synthetic GZ-9xx keys,
+    # so no preview number can be mistaken for a real GauzeMate ticket.
+    mk("gauzemate", "Book Manitoba health-tech lawyer", 4, status="INBOX", type="OWNER_ACTION", assignee="jay", needs_jay=True,
+       prefix="GM")
+    mk("gauzemate", "Contrast and touch target audit", 901, status="IN_REVIEW", priority="MEDIUM", type="DESIGN", needs_ui_review=True)
+    mk("gauzemate", "TASKS.md: mark PR 8, 9 and 10 merged", 902, status="READY_TO_IMPLEMENT", priority="LOW", type="DOCS")
+    mk("gauzemate", "Barcode / QR scanner for a medication", 903, status="IN_PROGRESS", priority="HIGH", type="FEATURE",
        assignee="agent:gauzemate")
-    # The first ticket minted after the GM → GZ rename, so the preview shows both
-    # the retired prefix (history) and the live one side by side.
     mk("gauzemate", "Scanner retry on a blurred barcode", status="IN_PROGRESS", priority="MEDIUM", type="BUG",
-       assignee="agent:gauzemate", branch="gz-027-scanner-retry")
+       assignee="agent:gauzemate", branch="gz-904-scanner-retry")
     mk("gyst", "Galaxy keyboard navigation", 11, status="IN_PROGRESS", priority="MEDIUM", type="FEATURE", assignee="role:IMPLEMENTER")
     mk("gyst", "Production foreign-key audit", None, status="PROPOSED", priority="HIGH", type="MAINTENANCE")
     mk("mfe", "Run prisma migrate deploy, then check a receipt total", None, status="INBOX", type="OWNER_ACTION", needs_jay=True,
