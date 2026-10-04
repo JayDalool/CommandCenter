@@ -581,9 +581,18 @@ tr:focus-visible, .row-btn:focus-visible { outline-offset: -2px; }
 /* ---------- WORKSPACE v2: resizable IDE layout ---------- */
 [hidden] { display: none !important; }
 .ws2 { display: grid; height: 100%; min-height: 0; min-width: 0; overflow: hidden; }
+/* Every region owns its row, so a hidden region never shifts another into a 0px track. */
+.ws2 > .ws-bar { grid-row: 1; }
+.ws2 > .ws2-main { grid-row: 2; }
+.ws2 > .ws2-split { grid-row: 3; }
+.ws2 > .ws-panel { grid-row: 4; }
+.ws2-main > .ws-explorer, .ws2-main > .ws-ex-rail { grid-column: 1; }
+.ws2-main > .ws2-xsplit { grid-column: 2; }
+.ws2-main > .ws-center { grid-column: 3; }
+.ctx-wrap { position: relative; }
 .ws2-main { display: grid; min-height: 0; min-width: 0; }
 .split { background: var(--line); position: relative; z-index: 2; touch-action: none; }
-.split.is-x { cursor: col-resize; width: 6px; }
+.split.is-x { cursor: col-resize; width: 6px; height: 100%; }
 .split.is-y { cursor: row-resize; height: 6px; }
 .split:hover, .split:focus-visible { background: var(--accent); outline: none; }
 .ws-ex-rail { border: 0; border-right: 1px solid var(--line); background: var(--bg); color: var(--muted); cursor: pointer; font: 600 13px var(--font-mono); }
@@ -619,7 +628,8 @@ tr:focus-visible, .row-btn:focus-visible { outline-offset: -2px; }
 
 /* real terminals */
 .term-wrap { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; background: var(--term-bg); }
-.term-wrap.is-empty { display: grid; place-items: center; }
+.term-wrap { position: relative; }
+.term-lock { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; background: var(--term-bg); }
 .term-bar { display: flex; align-items: center; gap: 8px; padding: 3px 8px; border-bottom: 1px solid var(--line); background: var(--bg-2); flex: none; min-width: 0; }
 .term-find { width: 150px; }
 .term-host { flex: 1 1 0; min-height: 0; padding: 4px 0 0 8px; overflow: hidden; }
@@ -670,8 +680,10 @@ tr:focus-visible, .row-btn:focus-visible { outline-offset: -2px; }
 .ctx-item.is-danger { color: var(--bad); }
 
 @media (max-width: 900px) {
-  .ws2-main { grid-template-columns: 1fr !important; grid-template-rows: 200px 0 minmax(0, 1fr); }
-  .ws2-main > .split, .ws-ex-rail { display: none; }
+  .ws2-main { display: flex !important; flex-direction: column; }
+  .ws2-main > .ws-explorer { flex: 0 0 200px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .ws2-main > .ws2-xsplit, .ws2-main > .ws-ex-rail { display: none; }
+  .ws2-main > .ws-center { flex: 1 1 0; }
   .scm { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
   .claude-head { display: none; }
 }

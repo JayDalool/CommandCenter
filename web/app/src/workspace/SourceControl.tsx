@@ -37,12 +37,16 @@ export function SourceControl({ project, ticket, githubUrl, prUrl, onOpenFile }:
   useEffect(() => { setSt(null); setSel(null); setDiff(null); void refresh(); }, [refresh]);
   useEffect(() => {
     if (!sel) { setDiff(null); return; }
-    app.api.scmDiff(project, sel.path, sel.staged).then(setDiff).catch((e) => app.toast((e as Error).message, "bad"));
+    let live = true;  // a slow answer for a file Jay already left is dropped
+    app.api.scmDiff(project, sel.path, sel.staged).then((d) => { if (live) setDiff(d); })
+      .catch((e) => { if (live) app.toast((e as Error).message, "bad"); });
+    return () => { live = false; };
   }, [sel, project, st]);
+  const tKey = ticket?.key, tBranch = ticket?.branch;
   useEffect(() => {
     setSuggest(null);
-    if (ticket && !ticket.branch) app.api.scmTicketBranch(ticket.key).then((r) => setSuggest(r.suggested)).catch(() => undefined);
-  }, [ticket]);
+    if (tKey && !tBranch) app.api.scmTicketBranch(tKey).then((r) => setSuggest(r.suggested)).catch(() => undefined);
+  }, [tKey, tBranch]);
 
   const run = async (op: Parameters<typeof app.api.scm>[0], body: Record<string, unknown>, ok: string) => {
     if (!dev) { unlockDialogOpen(); return false; }

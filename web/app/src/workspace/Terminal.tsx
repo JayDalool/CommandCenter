@@ -92,14 +92,15 @@ export function TerminalView({ name, label, active, theme, onMaximize }: {
     sock.onclose = (ev) => {
       if (ws.current !== sock) return;
       if (ended) return;
-      if (ev.code === 4403 || ev.code === 4401) setConn("refused");
+      if (ev.code === 4403 || ev.code === 4401 || ev.code === 4404 || ev.code === 4400) setConn("refused");
       else setConn((c) => (c === "live" || c === "connecting" ? "detached" : c));
     };
   }, [name, theme, sendResize]);
 
   // Connect when first shown with Developer Mode on; never on its own otherwise.
   useEffect(() => { if (active && dev && conn === "idle") void connect(); }, [active, dev, conn, connect]);
-  useEffect(() => { if (!dev && ws.current) { ws.current.close(); setConn("refused"); } }, [dev]);
+  // Locking Developer Mode ends this view; unlocking again reconnects when the tab is showing.
+  useEffect(() => { if (!dev) { const s = ws.current; ws.current = null; s?.close(); setConn("idle"); } }, [dev]);
   useEffect(() => { if (term.current) term.current.options.theme = termTheme(); }, [theme]);
   useEffect(() => {
     if (!host.current) return;
@@ -117,14 +118,13 @@ export function TerminalView({ name, label, active, theme, onMaximize }: {
     if (await app.action(() => app.api.ptyClose(name), `${label} closed`)) { ws.current?.close(); ws.current = null; setConn("ended"); }
   };
 
-  if (!dev) {
-    return <div className="term-wrap is-empty"><div className="con-notyet">
+  // The xterm host is ALWAYS mounted (the terminal lives in it); the lock notice is an overlay.
+  return <div className="term-wrap">
+    {!dev && <div className="term-lock"><div className="con-notyet">
       <div className="row" style={{ gap: 8 }}><span className="ro-tag is-off">DEVELOPER MODE LOCKED</span><span className="caps muted">{label}</span></div>
       <p className="text2">A real shell runs commands as jay on jay-server, so it needs Developer Unlock as well as the ccd token.</p>
       <button type="button" className="btn is-jay" onClick={unlockDialogOpen}>Unlock</button>
-    </div></div>;
-  }
-  return <div className="term-wrap">
+    </div></div>}
     <div className="term-bar">
       <span className={`ro-tag${conn === "live" ? " is-live" : conn === "refused" || conn === "lost" ? " is-off" : ""}`}>{WORD[conn]}</span>
       <span className="mono-xs">{name}</span>

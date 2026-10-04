@@ -19,6 +19,7 @@ export function SearchPanel({ project, focusKey, onOpen }: { project: string; fo
   const ctl = useRef<AbortController | null>(null);
   useEffect(() => { input.current?.focus(); input.current?.select(); }, [focusKey]);
   useEffect(() => () => ctl.current?.abort(), []);
+  useEffect(() => { ctl.current?.abort(); setRes(null); setErr(null); setBusy(false); }, [project]);
 
   const run = async () => {
     ctl.current?.abort();

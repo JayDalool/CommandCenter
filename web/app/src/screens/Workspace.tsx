@@ -78,12 +78,13 @@ function useProjects() {
 }
 
 /** A drag/keyboard divider. `axis` x resizes a width, y a height. */
-function Splitter({ axis, value, min, max, onChange, label, invert = false }: {
+function Splitter({ axis, value, min, max, onChange, label, invert = false, className = "" }: {
   axis: "x" | "y"; value: number; min: number; max: number; onChange: (v: number) => void; label: string; invert?: boolean;
+  className?: string;
 }) {
   const clamp = (v: number) => Math.round(Math.max(min, Math.min(max, v)));
   return <div role="separator" aria-orientation={axis === "x" ? "vertical" : "horizontal"} aria-label={label}
-    aria-valuenow={value} aria-valuemin={min} aria-valuemax={max} tabIndex={0} className={`split is-${axis}`}
+    aria-valuenow={value} aria-valuemin={min} aria-valuemax={max} tabIndex={0} className={`split is-${axis} ${className}`}
     onPointerDown={(e) => {
       e.preventDefault();
       const start = axis === "x" ? e.clientX : e.clientY, v0 = value;
@@ -190,6 +191,15 @@ export function Workspace() {
   const [goto, setGoto] = useState(false);
   const [searchFocus, setSearchFocus] = useState(0);
   const [seenTerms, setSeenTerms] = useState<Set<Term>>(new Set([term]));
+  const [{ vw, vh }, setViewport] = useState({ vw: typeof window !== "undefined" ? window.innerWidth : 1400,
+    vh: typeof window !== "undefined" ? window.innerHeight : 900 });
+  useEffect(() => {
+    const on = () => setViewport({ vw: window.innerWidth, vh: window.innerHeight });
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  const menuRef = useRef<HTMLUListElement>(null);
+  const menuReturn = useRef<HTMLElement | null>(null);
   const editor = useRef<EditorHandle | null>(null);
   const upId = useRef(0);
   const keyRef = useRef(key);
@@ -281,7 +291,7 @@ export function Workspace() {
     const onKey = (e: KeyboardEvent) => {
       const inTerm = (e.target as HTMLElement | null)?.closest?.(".xterm");
       const mod = e.ctrlKey || e.metaKey;
-      if (e.key === "Escape" && menu) { setMenu(null); return; }
+      if (e.key === "Escape" && menu) { setMenu(null); menuReturn.current?.focus(); return; }
       if (!mod) return;
       const k = e.key.toLowerCase();
       if (k === "s" && !e.shiftKey && !inTerm) { e.preventDefault(); void save(); }
@@ -375,6 +385,11 @@ export function Workspace() {
   const projectRows = development?.rows.filter((r) => r.project === key) ?? [];
   const prUrl = devRow?.pr?.url ?? null;
   const ask = uploads.find((u) => u.state === "ask");
+  const scmTicket = useMemo(() => (ticket ? { key: ticket.key, title: ticket.title, branch: ticket.branch || null } : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ticket?.key, ticket?.title, ticket?.branch]);
+
+  const openMenu = (m: Menu) => { menuReturn.current = document.activeElement as HTMLElement | null; setMenu(m); };
 
   if (projErr) return <EmptyState title="Workspace unavailable" hint={projErr} />;
   if (!projects) return <EmptyState title="Loading projects…" />;
@@ -385,7 +400,12 @@ export function Workspace() {
   const termLabel = (t: Term) => (t === "claude" ? "Claude" : t === "repo" ? `Repo shell · repo:${proj?.prefix ?? "?"}` : "Server shell");
   const MAIN_TABS: { id: Main; label: string }[] = [{ id: "editor", label: "Editor" }, { id: "claude", label: "Claude" },
     { id: "scm", label: "Source control" }, { id: "search", label: "Search" }, { id: "dev", label: "Development" }];
-  const rows = !mainOpen ? "auto 0 0 minmax(0,1fr)" : termOpen ? `auto minmax(0,1fr) 6px ${p.wsTermH}px` : "auto minmax(0,1fr) 0 0";
+  // Stored sizes are clamped to THIS window, so a size saved on a big monitor never squeezes a laptop to nothing.
+  const maxTerm = Math.max(140, vh - 260);
+  const termH = Math.min(p.wsTermH, maxTerm);
+  const maxExplorer = Math.max(200, Math.min(640, vw * 0.4));
+  const explorerW = Math.min(p.wsExplorerW, maxExplorer);
+  const rows = !mainOpen ? "auto 0 0 minmax(0,1fr)" : termOpen ? `auto minmax(0,1fr) 6px ${termH}px` : "auto minmax(0,1fr) 0 0";
 
   return <div className="ws2" style={{ gridTemplateRows: rows }}>
     <div className="ws-bar">
@@ -403,14 +423,14 @@ export function Workspace() {
       <DevBadge />
     </div>
 
-    <div className="ws2-main" style={{ gridTemplateColumns: exOpen ? `${p.wsExplorerW}px 6px minmax(0,1fr)` : "28px 0 minmax(0,1fr)" }} hidden={!mainOpen}>
+    <div className="ws2-main" style={{ gridTemplateColumns: exOpen ? `${explorerW}px 6px minmax(0,1fr)` : "28px 0 minmax(0,1fr)" }} hidden={!mainOpen}>
       {exOpen ? <aside className={`ws-explorer${over ? " is-over" : ""}`} aria-label="Explorer"
         onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setOver(true); } }}
         onDragLeave={(e) => { if (e.currentTarget === e.target) setOver(false); }}
         onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files.length) dropFiles(target, e.dataTransfer.files); }}>
         <div className="ws-ex-head">
           <span className="caps muted">Explorer</span><span className="sl-fill" />
-          <button type="button" className="btn is-quiet is-sm" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.left, y: r.bottom, path: target, entry: null }); }}
+          <button type="button" className="btn is-quiet is-sm" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); openMenu({ x: r.left, y: r.bottom, path: target, entry: null }); }}
             title="New file, folder or upload" aria-label="New file, folder or upload">+</button>
           <button type="button" className="btn is-quiet is-sm" aria-pressed={git} onClick={() => { setGit(!git); refresh(); }} title="Show git status">git</button>
           <button type="button" className="btn is-quiet is-sm" onClick={refresh} aria-label="Refresh explorer">↻</button>
@@ -421,11 +441,11 @@ export function Workspace() {
           {crumbs.map((c, i) => <span key={i}> / <button type="button" className="link" onClick={() => setTarget(crumbs.slice(0, i + 1).join("/"))}>{c}</button></span>)}
         </nav>
         <div className="ws-tree" role="tree" aria-label={`${proj?.name ?? key} files`}
-          onContextMenu={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, path: target, entry: null }); } }}>
+          onContextMenu={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); openMenu({ x: e.clientX, y: e.clientY, path: target, entry: null }); } }}>
           {proj && !proj.exists ? <div className="muted ws-row">checkout not found on the server</div>
             : <Folder path="" depth={0} open={open} toggle={toggle} onOpen={(x, e) => void openFile(x, e)}
               selected={cur?.file.project === key ? cur.file.path : null} target={target} setTarget={setTarget}
-              listings={listings} load={load} onDropFiles={dropFiles} onMenu={setMenu} />}
+              listings={listings} load={load} onDropFiles={dropFiles} onMenu={openMenu} />}
         </div>
         <div className="ws-drop mono-xs">{dev ? <>Drop files to upload into <b>{target || "/"}</b></> : <>Changing files needs <button type="button" className="link" onClick={unlockDialogOpen}>Developer Unlock</button></>}</div>
         {uploads.length > 0 && <div className="ws-uploads" aria-live="polite">
@@ -438,7 +458,7 @@ export function Workspace() {
         </div>}
         <input ref={pickFile} type="file" multiple hidden onChange={(e) => { if (e.target.files?.length) dropFiles(target, e.target.files); e.target.value = ""; }} />
       </aside> : <button type="button" className="ws-ex-rail" onClick={() => prefs.patch({ wsExplorerOpen: true })} aria-label="Show explorer (Ctrl+B)" title="Explorer (Ctrl+B)">»</button>}
-      {exOpen ? <Splitter axis="x" value={p.wsExplorerW} min={180} max={640} onChange={(v) => prefs.patch({ wsExplorerW: v })} label="Explorer width" /> : <span />}
+      {exOpen ? <Splitter axis="x" className="ws2-xsplit" value={explorerW} min={180} max={maxExplorer} onChange={(v) => prefs.patch({ wsExplorerW: v })} label="Explorer width" /> : <span className="ws2-xsplit" />}
 
       <section className="ws-center" aria-label="Main area">
         <div className="ws-maintabs" role="tablist" aria-label="Main view">
@@ -479,10 +499,10 @@ export function Workspace() {
             hidden={cur?.file.kind !== "text"} onSave={() => void save()}
             onChange={(x, text) => setTabs((ts) => ts.map((t) => t.path === x ? { ...t, dirty: text !== t.text } : t))} />}
         </div>
-        {main === "claude" && <div className="ws-view"><ClaudePanel agent={coordinatorAgent} project={proj ? { key: proj.key, name: proj.name } : null}
+        {main === "claude" && <div className="ws-view"><ClaudePanel active agent={coordinatorAgent} project={proj ? { key: proj.key, name: proj.name } : null}
           ticket={qt} model={cfg?.model ?? null} onMaximize={() => maximize("main")} /></div>}
         {main === "scm" && <div className="ws-view"><SourceControl project={key}
-          ticket={ticket ? { key: ticket.key, title: ticket.title, branch: ticket.branch || null } : null}
+          ticket={scmTicket}
           githubUrl={proj?.github?.url ?? null} prUrl={prUrl} onOpenFile={(x) => void openFile(x)} /></div>}
         {main === "search" && <div className="ws-view"><SearchPanel project={key} focusKey={searchFocus} onOpen={(x, line) => void openFile(x, undefined, line)} /></div>}
         {main === "dev" && <div className="ws-view ws-devview">
@@ -498,8 +518,8 @@ export function Workspace() {
       </section>
     </div>
 
-    {termOpen && mainOpen ? <Splitter axis="y" value={p.wsTermH} min={120} max={Math.max(200, (typeof window !== "undefined" ? window.innerHeight : 900) - 220)}
-      onChange={(v) => prefs.patch({ wsTermH: v })} label="Terminal height" invert /> : <span />}
+    {termOpen && mainOpen ? <Splitter axis="y" className="ws2-split" value={termH} min={120} max={maxTerm}
+      onChange={(v) => prefs.patch({ wsTermH: v })} label="Terminal height" invert /> : <span className="ws2-split" />}
     <section className="ws-panel" aria-label="Terminal panel" hidden={!termOpen}>
       <div className="tabs ws-termtabs" role="tablist" aria-label="Terminal">
         {(["claude", "repo", "server"] as Term[]).map((t) => <button key={t} type="button" role="tab" aria-selected={term === t} className="tab" onClick={() => setTerm(t)}>{termLabel(t)}</button>)}
@@ -509,7 +529,7 @@ export function Workspace() {
       </div>
       <div className="ws-panel-body">
         <div className="ws-term-pane" hidden={term !== "claude"}>
-          {seenTerms.has("claude") && <ClaudePanel compact agent={coordinatorAgent} project={proj ? { key: proj.key, name: proj.name } : null}
+          {seenTerms.has("claude") && <ClaudePanel compact active={term === "claude" && termOpen && !(main === "claude" && mainOpen)} agent={coordinatorAgent} project={proj ? { key: proj.key, name: proj.name } : null}
             ticket={qt} model={cfg?.model ?? null} onMaximize={() => setMain("claude")} />}
         </div>
         {/* Terminals stay mounted once opened, so switching tabs never reconnects. */}
@@ -523,8 +543,17 @@ export function Workspace() {
     </section>
 
     {menu && <div className="ctx-scrim" onMouseDown={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }}>
-      <ul className="ctx" role="menu" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - 280) }}
-        onMouseDown={(e) => e.stopPropagation()}>
+      <ul className="ctx" role="menu" ref={menuRef} aria-label={`Actions for ${menu.path || "the project root"}`}
+        style={{ left: Math.max(4, Math.min(menu.x, vw - 220)), top: Math.max(4, Math.min(menu.y, vh - (menuItems(menu).length * 32 + 48))) }}
+        onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>("button[role=menuitem]") ?? []);
+          const i = items.indexOf(document.activeElement as HTMLButtonElement);
+          const to = e.key === "ArrowDown" ? (i + 1) % items.length : e.key === "ArrowUp" ? (i - 1 + items.length) % items.length
+            : e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : -1;
+          if (to >= 0) { e.preventDefault(); items[to]?.focus(); }
+          if (e.key === "Tab") { e.preventDefault(); setMenu(null); menuReturn.current?.focus(); }
+        }}>
         <li className="ctx-head mono-xs faint">{menu.path || "/"}</li>
         {menuItems(menu).map((it, i) => <li key={it.label} role="none"><button type="button" role="menuitem" autoFocus={i === 0}
           className={`ctx-item${it.danger ? " is-danger" : ""}`} onClick={() => { setMenu(null); it.run(); }}>{it.label}</button></li>)}

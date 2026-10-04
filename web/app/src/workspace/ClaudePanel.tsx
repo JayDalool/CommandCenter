@@ -44,9 +44,9 @@ function highlight(text: string, q: string) {
   return out;
 }
 
-export function ClaudePanel({ agent, project, ticket, model, compact = false, onMaximize }: {
+export function ClaudePanel({ agent, project, ticket, model, compact = false, onMaximize, active = true }: {
   agent: Agent | null; project: { key: string; name: string } | null; ticket: string | null; model?: string | null;
-  compact?: boolean; onMaximize?: () => void;
+  compact?: boolean; onMaximize?: () => void; active?: boolean;
 }) {
   const visible = useVisible();
   const dev = useDevActive();
@@ -68,11 +68,11 @@ export function ClaudePanel({ agent, project, ticket, model, compact = false, on
     catch (e) { setErr((e as Error).message); }
   }, [id]);
   useEffect(() => {
-    if (!id || !visible || !follow) return;
+    if (!id || !visible || !follow || !active) return;  // a hidden copy never polls
     void read();
     const t = setInterval(() => void read(), MIRROR_MS);
     return () => clearInterval(t);
-  }, [id, visible, follow, read]);
+  }, [id, visible, follow, read, active]);
   useEffect(() => { setTail(null); setErr(null); }, [id]);
   // Trailing blank lines from the pane are noise.
   const text = useMemo(() => (tail?.text ?? "").replace(/\s+$/, ""), [tail]);
