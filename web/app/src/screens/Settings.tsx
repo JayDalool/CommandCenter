@@ -52,6 +52,8 @@ function DesktopApp() {
           key), waits for ccd, then opens Command Center in its own Edge app window.</li>
         <li>First time only: paste the ccd token and tick “Remember on this browser” — the window keeps its own browser profile.</li>
         <li>Closing the window stops only the tunnel it started. Developer Mode always starts locked.</li>
+        <li>Version 0.3.0 adds native terminals: Workspace's “Open Claude / repo / server terminal” buttons open Windows Terminal
+          tabs over your SSH. The first click asks to open CommandCenter.exe — allow it.</li>
       </ol>
       <div className="mono-xs faint" style={{ marginTop: 8 }}>The launcher contains no token, key or password. Built and unit-tested on Linux;
         Windows CI builds it too.</div>

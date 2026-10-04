@@ -689,3 +689,10 @@ tr:focus-visible, .row-btn:focus-visible { outline-offset: -2px; }
   .scm { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
   .claude-head { display: none; }
 }
+
+/* native terminals: recommended first */
+.native { flex: 1 1 0; min-height: 0; display: grid; place-items: center; background: var(--term-bg); padding: 16px; overflow: auto; }
+.native-card { display: grid; gap: 10px; justify-items: start; max-width: 560px; }
+.native-card .btn.is-jay { font-size: 14px; height: 34px; padding: 0 18px; }
+.native-note { margin: 0; }
+.native-strip { display: flex; align-items: center; gap: 10px; padding: 3px 8px; border-bottom: 1px solid var(--line); background: var(--bg-2); flex: none; }

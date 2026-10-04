@@ -2,6 +2,9 @@
 
 Screens Jay must check. Newest first. Delete a line when it's done.
 
+- [ ] CC-011 · Workspace: Open Claude terminal attaches to samvision · http://127.0.0.1:7777/#/workspace?project=samvision
+- [ ] CC-011 · Open native repo terminal lands in the repo · http://127.0.0.1:7777/#/workspace?tab=repo
+- [ ] CC-011 · Open native server terminal: normal jay login · http://127.0.0.1:7777/#/workspace?tab=server
 - [ ] CC-009 · Workspace: drag dividers, collapse, maximize, no empty space · http://127.0.0.1:7777/#/workspace
 - [ ] CC-005 · Claude fills the panel; Send, Esc, Open in herdr · http://127.0.0.1:7777/#/workspace?view=claude
 - [ ] CC-002 · Repo shell: run git status, vim, Ctrl+C, resize · http://127.0.0.1:7777/#/workspace?tab=repo

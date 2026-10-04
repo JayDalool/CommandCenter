@@ -47,6 +47,7 @@ const (
 	cmdOpen      = 1
 	cmdReconnect = 2
 	cmdQuit      = 3
+	cmdTerminal  = 4
 )
 
 var (
@@ -313,6 +314,9 @@ func (w *trayWin) showMenu() {
 	}
 	add(cmdOpen, "Open Command Center")
 	add(cmdReconnect, "Reconnect")
+	if w.menu.Terminal != nil {
+		add(cmdTerminal, "Open server terminal")
+	}
 	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
 	add(cmdQuit, "Quit (stop the tunnel)")
 	procSetMenuDefaultItem.Call(menu, cmdOpen, 0)
@@ -331,6 +335,10 @@ func (w *trayWin) showMenu() {
 		go w.menu.Open()
 	case cmdReconnect:
 		go w.menu.Reconnect()
+	case cmdTerminal:
+		if w.menu.Terminal != nil {
+			go w.menu.Terminal()
+		}
 	case cmdQuit:
 		procPostMessageW.Call(w.hwnd, wmClose, 0, 0)
 	}

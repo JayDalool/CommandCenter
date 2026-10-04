@@ -18,6 +18,9 @@ type Platform interface {
 	Alert(msg string, isError bool)
 	StartSSH(path string, args []string, stderr io.Writer) (Proc, error) // hidden, inside the kill-on-close job
 	StartBrowser(path string, args []string) (Proc, error)
+	// StartTerminal starts a visible terminal that outlives the launcher (not
+	// in the job). newConsole asks for a new console window (PowerShell).
+	StartTerminal(path string, args []string, newConsole bool) error
 	OpenDefault(url string) error
 	// FirstInstance takes a per-user named mutex for the life of the process.
 	// false means another launcher already holds it.
@@ -28,12 +31,14 @@ type Platform interface {
 	Tray(m TrayMenu, stop <-chan struct{}) error
 }
 
-// TrayMenu is the tray icon's tooltip and actions. Open and Reconnect run on
-// their own goroutine; they must not block the tray's message loop.
+// TrayMenu is the tray icon's tooltip and actions. Open, Reconnect and
+// Terminal run on their own goroutine; they must not block the tray's message
+// loop. A nil Terminal hides "Open server terminal".
 type TrayMenu struct {
 	Tip       string
 	Open      func()
 	Reconnect func()
+	Terminal  func()
 }
 
 const title = "Command Center"
@@ -240,6 +245,12 @@ func (a *app) waitForUser(cfg Config, url, profile string, t *tunnel, stop <-cha
 		Reconnect: func() {
 			a.log.Printf("tray: reconnect")
 			t.Reconnect()
+		},
+		Terminal: func() {
+			if err := openTerminal(a.p, a.log, cfg, Action{Kind: ActionServer}); err != nil {
+				a.log.Printf("tray terminal: %v", err)
+				a.p.Alert(actionFail+err.Error(), true)
+			}
 		},
 	}, stop)
 	if err == nil {

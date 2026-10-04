@@ -6,7 +6,10 @@
 // It carries and reads no credentials; ssh uses Jay's existing key setup.
 package main
 
-import "os"
+import (
+	"os"
+	"path/filepath"
+)
 
 var (
 	version = "dev"
@@ -16,8 +19,24 @@ var (
 func main() {
 	p := newPlatform()
 	log := openLog(logPath(p))
-	log.Printf("start version=%s commit=%s", version, commit)
-	code := run(p, log)
+	args := os.Args[1:]
+	var code int
+	if hasActionURI(args) {
+		// Native terminal action: no mutex, no tunnel, no browser.
+		log.Printf("action version=%s commit=%s", version, commit)
+		if len(args) != 1 {
+			p.Alert(actionFail+"expected exactly one commandcenter: link.", true)
+			code = 2
+		} else {
+			code = runAction(p, log, args[0])
+		}
+	} else {
+		log.Printf("start version=%s commit=%s", version, commit)
+		if len(args) == 0 {
+			registerSelf(log)
+		}
+		code = run(p, log)
+	}
 	log.Printf("exit %d", code)
 	log.Close()
 	p.Shutdown() // closes the job: any ssh we started dies with us
@@ -30,4 +49,24 @@ func logPath(p Platform) string {
 		return ""
 	}
 	return winJoin(dir, "launcher.log")
+}
+
+// registerSelf (re)points the per-user commandcenter: protocol at this exe.
+// A failure is only logged: the launcher works without it.
+func registerSelf(log *logger) {
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.Abs(exe)
+	}
+	if err != nil {
+		log.Printf("protocol: no exe path: %v", err)
+		return
+	}
+	vals, err := protocolRegistry(exe)
+	if err == nil {
+		err = registerProtocol(vals)
+	}
+	if err != nil {
+		log.Printf("protocol registration failed: %v", err)
+	}
 }

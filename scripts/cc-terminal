@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""cc-terminal — what a native Windows Terminal tab runs on jay-server.
+
+CommandCenter.exe opens `ssh -t jay-server -- <this file> <action> <PREFIX>`.
+The Windows side only ever names an action and a project PREFIX; everything
+else — the path, the coordinator, the command — is resolved here, on the
+server, from the one project registry (server/ccd/registry.py).
+
+    cc-terminal repo <PREFIX>     cd <registered root> && exec <login shell> -l
+    cc-terminal claude <PREFIX>   exec herdr agent attach <the coordinator's pane>
+    cc-terminal --dry-run …       print what it would run, run nothing
+
+`claude` attaches to the coordinator herdr already runs. It never starts,
+resumes or restarts a Claude session: no coordinator means a clear message and
+nothing else. A coordinator is the one live claude pane whose title is the
+project key (samvision, gauzemate) AND whose cwd is the registered root; zero
+or several matches are refused, never guessed.
+
+Anything not matching exactly is refused. No argument becomes a path or a
+command.
+"""
+import json
+import os
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+import termios
+import time
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "server"))
+
+from ccd import registry  # noqa: E402
+
+PREFIX_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
+PANE_RE = re.compile(r"^w[0-9A-Za-z]+:p[0-9]+$")
+# `ssh host cmd` gets a non-login PATH; herdr lives in ~/.local/bin, so find it explicitly.
+HERDR = shutil.which("herdr") or os.path.expanduser("~/.local/bin/herdr")
+
+
+class Refused(Exception):
+    pass
+
+
+def project_for(prefix):
+    """(key, root) for a live registry prefix, else Refused."""
+    if not isinstance(prefix, str) or not PREFIX_RE.match(prefix):
+        raise Refused("project must be a registered prefix such as SV, GZ, MFE, CC or GYST")
+    for key, p in registry.PROJECTS.items():
+        if p["prefix"] == prefix:
+            root = p.get("root")
+            if not root or not os.path.isdir(root):
+                raise Refused(f"{prefix}: the registered checkout {root} is not on this server")
+            return key, os.path.realpath(root)
+    raise Refused(f"{prefix} is not a registered project")
+
+
+def coordinator_pane(key, root, agents):
+    """The pane id of `key`'s running coordinator, from `herdr agent list` output."""
+    hits = [a for a in agents
+            if a.get("agent") == "claude"
+            and (a.get("terminal_title_stripped") or "").strip() == key
+            and os.path.realpath(a.get("cwd") or "") == root
+            and PANE_RE.match(a.get("pane_id") or "")]
+    if not hits:
+        raise Refused(f"no running {key} coordinator in herdr. Command Center never starts one; "
+                      f"start it in herdr, then open this terminal again.")
+    if len(hits) > 1:
+        raise Refused(f"{len(hits)} panes look like the {key} coordinator ({', '.join(h['pane_id'] for h in hits)}); "
+                      f"refusing to guess. Rename the extra one in herdr.")
+    return hits[0]["pane_id"]
+
+
+def herdr_agents(run=subprocess.run):
+    out = run([HERDR, "agent", "list"], capture_output=True, text=True, timeout=10, check=False)
+    try:
+        data = json.loads(out.stdout or "{}")
+    except ValueError:
+        raise Refused("herdr did not answer `agent list`; is herdr running?")
+    return ((data.get("result") or {}).get("agents")) or []
+
+
+def plan(argv, agents_fn=herdr_agents):
+    """(executable, args, cwd, title) for the request, or Refused. Pure apart from agents_fn."""
+    if len(argv) != 2 or argv[0] not in ("repo", "claude"):
+        raise Refused("usage: cc-terminal repo|claude <PREFIX>")
+    action, prefix = argv
+    key, root = project_for(prefix)
+    name = registry.name_of(key)
+    if action == "repo":
+        shell = pwd.getpwuid(os.getuid()).pw_shell or "/bin/bash"
+        return shell, [os.path.basename(shell), "-l"], root, f"Repo — {name}"
+    pane = coordinator_pane(key, root, agents_fn())
+    return HERDR, ["herdr", "agent", "attach", pane], root, f"Claude — {name}"
+
+
+def main(argv):
+    dry = argv[:1] == ["--dry-run"]
+    if dry:
+        argv = argv[1:]
+    try:
+        exe, args, cwd, title = plan(argv)
+        if dry:
+            print(json.dumps({"exe": exe, "args": args, "cwd": cwd, "title": title}))
+            return 0
+    except Refused as e:
+        sys.stderr.write(f"\n  Command Center: {e}\n\n")
+        if sys.stdin.isatty():
+            try:
+                input("  Press Enter to close. ")
+            except EOFError:
+                pass
+        return 2
+    sys.stdout.write(f"\x1b]0;{title}\x07")
+    sys.stdout.flush()
+    if argv[0] == "claude" and sys.stdin.isatty():
+        # Keys typed while the tab was opening (e.g. Enter after a browser prompt) must not
+        # land in a live Claude pane: drop anything already queued before attaching.
+        time.sleep(0.3)
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+    os.chdir(cwd)
+    os.execv(exe, args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

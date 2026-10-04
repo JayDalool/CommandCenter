@@ -36,6 +36,12 @@ func (p *osPlatform) StartBrowser(string, []string) (Proc, error) {
 	return nil, errors.New("only supported on Windows")
 }
 
+func (p *osPlatform) StartTerminal(string, []string, bool) error {
+	return errors.New("only supported on Windows")
+}
+
+func registerProtocol([]regValue) error { return errors.New("only supported on Windows") }
+
 func (p *osPlatform) OpenDefault(string) error { return errors.New("only supported on Windows") }
 
 func (p *osPlatform) FirstInstance(string) bool { return true }

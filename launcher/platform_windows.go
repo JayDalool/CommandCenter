@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 
 const (
 	createNoWindow               = 0x08000000
+	createNewConsole             = 0x00000010
 	jobObjectExtendedLimitInfo   = 9
 	jobObjectLimitKillOnJobClose = 0x00002000
 	processSetQuota              = 0x0100
@@ -23,12 +25,18 @@ const (
 	mbIconInformation            = 0x00000040
 	mbSetForeground              = 0x00010000
 	keyRead                      = 0x20019
+	keyQueryValue                = 0x0001
+	keySetValue                  = 0x0002
+	keyCreateSubKey              = 0x0004
 )
 
 // kernel32 and user32 are KnownDLLs, so loading them by name cannot be hijacked.
 var (
 	kernel32                     = syscall.NewLazyDLL("kernel32.dll")
 	user32                       = syscall.NewLazyDLL("user32.dll")
+	advapi32                     = syscall.NewLazyDLL("advapi32.dll")
+	procRegCreateKeyExW          = advapi32.NewProc("RegCreateKeyExW")
+	procRegSetValueExW           = advapi32.NewProc("RegSetValueExW")
 	procCreateJobObjectW         = kernel32.NewProc("CreateJobObjectW")
 	procSetInformationJobObject  = kernel32.NewProc("SetInformationJobObject")
 	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
@@ -102,6 +110,11 @@ func (p *osPlatform) Getenv(k string) string { return os.Getenv(k) }
 
 func (p *osPlatform) Exists(path string) bool {
 	st, err := os.Stat(path)
+	if err != nil {
+		// App execution aliases (e.g. WindowsApps\wt.exe) are reparse points
+		// that Stat may not follow; they still start fine.
+		st, err = os.Lstat(path)
+	}
 	return err == nil && !st.IsDir()
 }
 
@@ -146,6 +159,65 @@ func (p *osPlatform) StartBrowser(path string, args []string) (Proc, error) {
 		return nil, err
 	}
 	return cmdProc{c}, nil
+}
+
+// StartTerminal starts a visible window and lets it go: it is not put in the
+// kill-on-close job, so it outlives the launcher.
+func (p *osPlatform) StartTerminal(path string, args []string, newConsole bool) error {
+	c := exec.Command(path, args...)
+	if newConsole {
+		c.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNewConsole}
+	}
+	if err := c.Start(); err != nil {
+		return err
+	}
+	return c.Process.Release()
+}
+
+// registerProtocol writes vals under HKCU, skipping values that already hold
+// the same data, so a normal launch leaves the registry alone when nothing changed.
+func registerProtocol(vals []regValue) error {
+	for _, v := range vals {
+		if err := setRegString(v); err != nil {
+			return fmt.Errorf(`HKCU\%s [%s]: %v`, v.Key, v.Name, err)
+		}
+	}
+	return nil
+}
+
+func setRegString(v regValue) error {
+	sub, err := syscall.UTF16PtrFromString(v.Key)
+	if err != nil {
+		return err
+	}
+	name, err := syscall.UTF16PtrFromString(v.Name)
+	if err != nil {
+		return err
+	}
+	data, err := syscall.UTF16FromString(v.Data)
+	if err != nil {
+		return err
+	}
+	var k syscall.Handle
+	r, _, _ := procRegCreateKeyExW.Call(uintptr(syscall.HKEY_CURRENT_USER), uintptr(unsafe.Pointer(sub)), 0, 0, 0,
+		keyQueryValue|keySetValue|keyCreateSubKey, 0, uintptr(unsafe.Pointer(&k)), 0)
+	if r != 0 {
+		return syscall.Errno(r)
+	}
+	defer syscall.RegCloseKey(k)
+	buf := make([]uint16, len(data)+16)
+	n := uint32(len(buf) * 2)
+	var typ uint32
+	if syscall.RegQueryValueEx(k, name, nil, &typ, (*byte)(unsafe.Pointer(&buf[0])), &n) == nil &&
+		typ == syscall.REG_SZ && syscall.UTF16ToString(buf[:n/2]) == v.Data {
+		return nil
+	}
+	r, _, _ = procRegSetValueExW.Call(uintptr(k), uintptr(unsafe.Pointer(name)), 0, syscall.REG_SZ,
+		uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)*2))
+	if r != 0 {
+		return syscall.Errno(r)
+	}
+	return nil
 }
 
 func (p *osPlatform) OpenDefault(url string) error {

@@ -34,6 +34,10 @@ type fakePlatform struct {
 	trays    int
 	mutexes  []string
 
+	terminals  [][]string
+	termFail   int // fail this many StartTerminal calls first
+	newConsole []bool
+
 	sshStart func(n int, stderr io.Writer, p *fakeProc) // optional per-start behaviour
 	tray     func(m TrayMenu, stop <-chan struct{}) error
 }
@@ -96,6 +100,18 @@ func (f *fakePlatform) StartBrowser(path string, args []string) (Proc, error) {
 	}
 	f.browser = append(f.browser, p)
 	return p, nil
+}
+
+func (f *fakePlatform) StartTerminal(path string, args []string, newConsole bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.terminals = append(f.terminals, append([]string{path}, args...))
+	f.newConsole = append(f.newConsole, newConsole)
+	if f.termFail > 0 {
+		f.termFail--
+		return errors.New("wt would not start")
+	}
+	return nil
 }
 
 func (f *fakePlatform) OpenDefault(url string) error {
@@ -341,6 +357,7 @@ func TestRunDefaultBrowserTray(t *testing.T) {
 	f.tray = func(m TrayMenu, stop <-chan struct{}) error {
 		tip = m.Tip
 		m.Open()
+		m.Terminal()
 		m.Reconnect()
 		f.waitSSH(t, 2)
 		return nil // Quit
@@ -354,6 +371,10 @@ func TestRunDefaultBrowserTray(t *testing.T) {
 	}
 	if len(f.defaults) != 2 {
 		t.Fatalf("default browser opened %d times", len(f.defaults))
+	}
+	// "Open server terminal": a plain login, nothing project-specific.
+	if len(f.terminals) != 1 || !strings.HasSuffix(f.terminals[0][len(f.terminals[0])-1], "'-t' '-o' 'ServerAliveInterval=30' '-o' 'ServerAliveCountMax=3' '--' 'jay-server'") {
+		t.Fatalf("tray terminal %q", f.terminals)
 	}
 	if len(f.ssh) != 2 || f.ssh[0].kill != 1 || f.ssh[1].kill != 1 {
 		t.Fatalf("ssh %d", len(f.ssh))
