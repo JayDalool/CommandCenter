@@ -206,9 +206,30 @@ value plus its poller; the ticket tables do not change.
 preview) reads INDEX.md tables, per-task files, cached issues, MY_ACTIONS.md and
 handoffs, and reports would-create / would-update / ambiguous / duplicates /
 skipped. It writes nothing. Existing IDs are kept (SV-056 stays SV-056); new keys
-start after the highest ID any source used. Applying it is a separate,
-Jay-approved step that is not implemented yet. GitHub issues are never closed or
+start after the highest ID any source used. GitHub issues are never closed or
 edited by it.
+
+**Running the import (CC-008).** Applying is a CLI step, never an HTTP route:
+
+    cd server
+    .venv/bin/python -m ccd.import_tasks --out report.json          # dry run (read-only)
+    .venv/bin/python -m ccd.import_tasks --apply --out report.json  # after Jay approves the dry run
+
+`--apply` first copies tasks.db with SQLite's backup API to
+`<db>.bak-import-<UTC timestamp>` and prints that path. It then runs the same
+preview and creates every would-create ticket, one transaction per project (an
+error rolls that project back whole). DONE / DENIED / CANCELLED history is
+created archived, so the default Tasks view stays clean; tick "Include
+archived/history" to see it. Ambiguous items are reported, never guessed;
+existing tickets are never edited (`pendingUpdates` counts what differs).
+
+*Provenance and idempotency.* Each created ticket carries a
+`legacy / import_source` link per source: `index:<file>#<ID>`,
+`task_file:docs/tasks/<file>`, `github_issue:<owner/repo>#<n>`,
+`my_actions:<project>:<sha1 of the normalised line, 12 chars>`. A source whose
+link already exists is reported as `existing`, so a second `--apply` creates
+nothing; a source added later gets the next free number. A MY_ACTIONS line with no ticket ID is identified by a hash of its text, so editing such a line and re-running the import creates a second ticket. Kept IDs (SV-056,
+GM-014) never touch the counter's own numbers: it only moves past them.
 
 ## P4B revision: information architecture
 

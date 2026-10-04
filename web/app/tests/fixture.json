@@ -2956,7 +2956,10 @@
    {
     "key": "gauzemate",
     "name": "GauzeMate",
-    "prefix": "GM",
+    "prefix": "GZ",
+    "legacyPrefixes": [
+     "GM"
+    ],
     "nextNumber": 27
    },
    {

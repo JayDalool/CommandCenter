@@ -66,6 +66,8 @@ export interface TicketFilter {
   hasPr?: boolean;
   noPr?: boolean;
   includeClosed?: boolean;
+  /** History: archived tickets too, and closed ones. */
+  includeArchived?: boolean;
 }
 
 /** Search: key prefix, words in title, label, branch. Cheap enough to run on every keystroke. */
@@ -82,12 +84,22 @@ export function isBlocked(t: Ticket, byKey: Map<string, Ticket>): boolean {
   return t.blockedBy.some((k) => { const o = byKey.get(k); return !o || !CLOSED.has(o.status); });
 }
 
+/** Project chips: SV · GZ · MFE · GYST · CC, by project key; anything else follows alphabetically. */
+export const PROJECT_CHIP_ORDER = ["samvision", "gauzemate", "mfe", "gyst", "commandcenter"];
+
+/** Open tickets per project key: not archived and not DONE / DENIED / CANCELLED. */
+export function openCounts(all: Ticket[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const t of all) if (!t.archived && !CLOSED.has(t.status)) m.set(t.project, (m.get(t.project) ?? 0) + 1);
+  return m;
+}
+
 export function filterTickets(all: Ticket[], f: TicketFilter): Ticket[] {
   const byKey = new Map(all.map((t) => [t.key, t]));
   const inSet = <T,>(v: T, set?: T[]) => !set || set.length === 0 || set.includes(v);
   return all.filter((t) =>
-    !t.archived
-    && (f.includeClosed || f.status?.length || !CLOSED.has(t.status))
+    (f.includeArchived || !t.archived)
+    && (f.includeClosed || f.includeArchived || f.status?.length || !CLOSED.has(t.status))
     && inSet(t.project, f.project)
     && inSet(t.status, f.status)
     && inSet(t.priority, f.priority)

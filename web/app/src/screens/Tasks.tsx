@@ -7,7 +7,7 @@ import { typing } from "../components/Shell";
 import type { Ticket, TicketStatus, Priority } from "../api/types";
 import { PRIORITIES } from "../api/types";
 import { filterTickets, sortTickets, groupByStatus, stepStatus, PIPELINE, OFF, ALL_STATUSES, STATUS_META, PRIORITY_META,
-  jayQueue, type TicketFilter } from "../tickets/model";
+  jayQueue, openCounts, PROJECT_CHIP_ORDER, type TicketFilter } from "../tickets/model";
 import { DataTable, type Column } from "../components/DataTable";
 import { StateText, PriorityMark, Assignee, Project, Flags, Ago, EmptyState, Seg, Kbd } from "../components/ui";
 import { TicketDetailPane } from "./TicketDetail";
@@ -28,6 +28,8 @@ export function Tasks() {
     project: route.params.get("project") ? [route.params.get("project")!] : [],
     status: route.params.get("status") ? [route.params.get("status") as TicketStatus] : [],
   }));
+  const archivedTickets = useSelector(app.store, (d) => d.archivedTickets);
+  const [history, setHistory] = useState(false);
   const [sel, setSel] = useState<string | null>(openKey);
   const search = useRef<HTMLInputElement>(null);
 
@@ -43,11 +45,23 @@ export function Tasks() {
     go("tasks", patch.key === undefined ? openKey : patch.key, p);
   };
 
+  useEffect(() => { if (history) void app.loadHistory().catch(() => {}); }, [history]);
+  // ALL projects by default; History adds archived (and closed) tickets to the same list.
+  const pool = useMemo(() => {
+    if (!history) return tickets;
+    const seen = new Set(tickets.map((t) => t.key));
+    return [...tickets, ...archivedTickets.filter((t) => !seen.has(t.key))];
+  }, [tickets, archivedTickets, history]);
   const base = useMemo(() => {
-    const ff: TicketFilter = { ...f };
+    const ff: TicketFilter = { ...f, includeArchived: history };
     if (view === "inbox") ff.status = ["INBOX", "PROPOSED"];
-    return filterTickets(tickets, ff);
-  }, [tickets, f, view]);
+    return filterTickets(pool, ff);
+  }, [pool, f, view, history]);
+  const open = useMemo(() => openCounts(tickets), [tickets]);
+  const chips = useMemo(() => {
+    const rank = (p: { key: string }) => { const i = PROJECT_CHIP_ORDER.indexOf(p.key); return i < 0 ? 99 : i; };
+    return [...projects].sort((a, b) => rank(a) - rank(b) || a.prefix.localeCompare(b.prefix));
+  }, [projects]);
   const rows = useMemo(() => sortTickets(base, "status"), [base]);
   const labels = useMemo(() => [...new Set(tickets.flatMap((t) => t.labels))].sort(), [tickets]);
   const assignees = useMemo(() => [...new Set(tickets.map((t) => t.assignee ?? "none"))].sort(), [tickets]);
@@ -103,8 +117,12 @@ export function Tasks() {
         <Kbd>Enter</Kbd> open <Kbd>⇧←→</Kbd> status <Kbd>N</Kbd> new</span>
     </div>
     {view !== "jay" && <div className="filters" role="group" aria-label="Filters">
-      <select className={`fsel${f.project?.length ? " is-on" : ""}`} value={f.project?.[0] ?? ""} onChange={(e) => pick("project", e.target.value)} aria-label="Project">
-        <option value="">All projects</option>{projects.map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}</select>
+      <span className="row" role="group" aria-label="Project" style={{ gap: 4 }}>
+        <button type="button" className="fchip" aria-pressed={!f.project?.length} onClick={() => pick("project", "")}>
+          ALL <span className="mono-xs">{[...open.values()].reduce((a, b) => a + b, 0)}</span></button>
+        {chips.map((p) => <button key={p.key} type="button" className="fchip" aria-pressed={f.project?.[0] === p.key}
+          title={p.name} onClick={() => pick("project", p.key)}>{p.prefix} <span className="mono-xs">{open.get(p.key) ?? 0}</span></button>)}
+      </span>
       {view !== "inbox" && <select className={`fsel${f.status?.length ? " is-on" : ""}`} value={f.status?.[0] ?? ""} onChange={(e) => pick("status", e.target.value)} aria-label="Status">
         <option value="">Open statuses</option>{ALL_STATUSES.map((s) => <option key={s} value={s}>{STATUS_META[s].label}</option>)}</select>}
       <select className={`fsel${f.priority?.length ? " is-on" : ""}`} value={f.priority?.[0] ?? ""} onChange={(e) => pick("priority", e.target.value)} aria-label="Priority">
@@ -120,7 +138,8 @@ export function Tasks() {
       <button type="button" className="fchip" aria-pressed={!!f.hasPr} onClick={() => setF((x) => ({ ...x, hasPr: !x.hasPr, noPr: false }))}>has PR</button>
       <button type="button" className="fchip" aria-pressed={!!f.noPr} onClick={() => setF((x) => ({ ...x, noPr: !x.noPr, hasPr: false }))}>no PR</button>
       <button type="button" className="fchip" aria-pressed={!!f.includeClosed} onClick={() => toggle("includeClosed", true)}>show closed</button>
-      {active > 0 && <button type="button" className="btn is-quiet is-sm" onClick={() => setF({})}>Clear</button>}
+      <button type="button" className="fchip" aria-pressed={history} onClick={() => setHistory((h) => !h)}>Include archived/history</button>
+      {(active > 0 || history) && <button type="button" className="btn is-quiet is-sm" onClick={() => { setF({}); setHistory(false); }}>Clear</button>}
     </div>}
     <div className={`tasks-body${openKey ? " has-detail" : ""}`}>
       <div className="tasks-list">

@@ -9,11 +9,17 @@ Sources, per project:
                                                                 or a new OWNER_ACTION ticket
     handoff notes         ~/command-center/handoff/*.md       → skipped: context, not tasks
 
-Nothing here writes anything. The preview says what an import WOULD do,
-sorted into would_create / would_update / ambiguous / duplicates / skipped,
-and Jay reviews it. The apply step is deliberately not implemented in P4B.
+preview() writes nothing. It says what an import WOULD do, sorted into
+would_create / would_update / existing / ambiguous / duplicates / skipped.
+apply() runs the same preview and creates every would_create ticket, one
+transaction per project. Every created ticket gets a provenance link
+(legacy / import_source / <stable source id>), and a source whose link already
+exists is reported as `existing`, so a second apply creates nothing.
+Closed historical work (DONE / DENIED / CANCELLED) is created archived.
 GitHub issues are never closed or edited by this module.
 """
+import hashlib
+import sqlite3
 import os
 import re
 import time
@@ -112,11 +118,17 @@ def _norm(title):
     return re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
 
 
+def _action_id(project, a):
+    """Stable id of a MY_ACTIONS line: its wording, not its line number."""
+    text = _norm(f"{a['id'] or ''} {a['what']}")
+    return f"my_actions:{project}:{hashlib.sha1(text.encode()).hexdigest()[:12]}"
+
+
 def preview(projects, gh_data, store, handoff_dir=None):
     """What an import would do, without doing any of it."""
     started = time.time()
     tprojects = {p["key"]: p for p in store.projects()}
-    sources, create, update, ambiguous, duplicates, skipped = [], [], [], [], [], []
+    sources, create, update, ambiguous, duplicates, skipped, existing = [], [], [], [], [], [], []
     next_num = {k: v["nextNumber"] for k, v in tprojects.items()}
 
     for p in projects:
@@ -133,6 +145,20 @@ def preview(projects, gh_data, store, handoff_dir=None):
         prx = "(?:" + "|".join(re.escape(x) for x in sorted(accepted, key=len, reverse=True)) + ")"
         cands = {}  # proposed key → candidate
         by_legacy = {}
+
+        def imported(src_id, ref):
+            """A source an earlier import already turned into a ticket (found by its provenance link)."""
+            k = store.ticket_by_link("legacy", "import_source", src_id)
+            if k:
+                existing.append({"project": key, "key": k, "source": src_id, "ref": ref,
+                                 "reason": "already imported (provenance link present)"})
+            return k
+
+        def stub(k):
+            """An already-imported ticket later sources may still attach to, never re-create."""
+            cur = store.get(k)
+            return cands.setdefault(k, {"proposedKey": k, "existing": True, "project": key, "title": cur["title"],
+                                        "flags": [], "links": [], "sources": []})
 
         def add(cand, source_ref):
             k = cand["proposedKey"]
@@ -183,7 +209,8 @@ def preview(projects, gh_data, store, handoff_dir=None):
             for r in rows or []:
                 m = re.match(rf"^({prx})-(\d+)$", r["id"])
                 status, note = _status_of(r["status"])
-                src = {"kind": "index", "ref": f"{p['index']}:{r['line']}"}
+                src = {"kind": "index", "ref": f"{p['index']}:{r['line']}",
+                       "id": f"index:{p['index']}#{r['id']}"}
                 if not m:
                     ambiguous.append({"project": key, "source": "index", "ref": r["id"], "title": r["title"],
                                       "reason": f"ID does not use the {' or '.join(accepted)} prefix",
@@ -215,7 +242,7 @@ def preview(projects, gh_data, store, handoff_dir=None):
             for s in skip:
                 skipped.append(dict(s, project=key, source="task_files"))
             for f in files:
-                src = {"kind": "task_file", "ref": f"docs/tasks/{f['file']}"}
+                src = {"kind": "task_file", "ref": f"docs/tasks/{f['file']}", "id": f"task_file:docs/tasks/{f['file']}"}
                 status, note = _status_of(f["status"])
                 if not f["id"]:
                     ambiguous.append({"project": key, "source": "task_file", "ref": f["file"], "title": f["title"],
@@ -226,6 +253,10 @@ def preview(projects, gh_data, store, handoff_dir=None):
                                       "reason": "no Status line" if not f["status"] else
                                       f"status '{f['status'][:60]}' is not a pipeline status",
                                       "suggestion": "import as PROPOSED and review"})
+                    continue
+                done = imported(src["id"], src["ref"])
+                if done:
+                    by_legacy[f["id"]] = stub(done)
                     continue
                 k, n = new_key()
                 cand = add({"proposedKey": k, "number": n, "keepsId": False, "project": key, "title": f["title"][:300],
@@ -243,7 +274,10 @@ def preview(projects, gh_data, store, handoff_dir=None):
             by_title = {_norm(c["title"]): c for c in cands.values()}
             for it in issues:
                 labels = [l["name"] if isinstance(l, dict) else l for l in it.get("labels", [])]
-                src = {"kind": "github_issue", "ref": f"{p.get('repo')}#{it['number']}"}
+                src = {"kind": "github_issue", "ref": f"{p.get('repo')}#{it['number']}",
+                       "id": f"github_issue:{p.get('repo')}#{it['number']}"}
+                if imported(src["id"], src["ref"]):
+                    continue
                 link = {"provider": "github", "kind": "issue", "ref": src["ref"], "url": it.get("url")}
                 flags = [LABEL_FLAGS[l] for l in labels if l in LABEL_FLAGS]
                 status = next((LABEL_STATUS[l] for l in labels if l in LABEL_STATUS), "PROPOSED")
@@ -287,7 +321,7 @@ def preview(projects, gh_data, store, handoff_dir=None):
             sources.append({"project": key, "kind": "my_actions", "ref": p.get("actions") or "docs/jay/MY_ACTIONS.md",
                             "count": len(lines), "error": None})
             for a in lines:
-                src = {"kind": "my_actions", "ref": f"MY_ACTIONS.md:{a['line']}"}
+                src = {"kind": "my_actions", "ref": f"MY_ACTIONS.md:{a['line']}", "id": _action_id(key, a)}
                 tid = (a["id"] or "").strip()
                 m = re.match(rf"^({prx})-(\d+)$", tid)
                 k = f"{m.group(1)}-{int(m.group(2)):03d}" if m else None
@@ -298,6 +332,8 @@ def preview(projects, gh_data, store, handoff_dir=None):
                     cands.setdefault(k, {"proposedKey": k, "existing": True, "project": key, "flags": [],
                                          "links": [], "sources": []})
                     add({"proposedKey": k, "flags": ["needs_jay"], "links": [], "sources": [src]}, src)
+                    continue
+                if imported(src["id"], src["ref"]):
                     continue
                 if k:
                     kk, n, keeps = k, int(m.group(2)), True
@@ -326,8 +362,8 @@ def preview(projects, gh_data, store, handoff_dir=None):
                 if changes:
                     update.append({"key": k, "project": key, "changes": changes, "sources": c["sources"]})
                 else:
-                    skipped.append({"project": key, "source": c["sources"][0]["kind"] if c["sources"] else "-",
-                                    "ref": k, "reason": "already imported, nothing differs"})
+                    existing.append({"project": key, "key": k, "source": c["sources"][0]["id"] if c["sources"] else "-",
+                                     "ref": k, "reason": "ticket already exists, nothing differs"})
             else:
                 create.append(c)
 
@@ -339,12 +375,70 @@ def preview(projects, gh_data, store, handoff_dir=None):
     create.sort(key=lambda c: (c["project"], c["number"]))
     return {
         "mode": "preview", "applied": False, "generatedAt": time.time(), "tookMs": round((time.time() - started) * 1000),
-        "summary": {"wouldCreate": len(create), "wouldUpdate": len(update), "ambiguous": len(ambiguous),
+        "summary": {"wouldCreate": len(create), "wouldUpdate": len(update), "existing": len(existing), "ambiguous": len(ambiguous),
                     "duplicates": len(duplicates), "skipped": len(skipped)},
-        "sources": sources, "wouldCreate": create, "wouldUpdate": update, "ambiguous": ambiguous,
+        "sources": sources, "wouldCreate": create, "wouldUpdate": update, "existing": existing, "ambiguous": ambiguous,
         "duplicates": duplicates, "skipped": skipped,
         "notes": ["Nothing was written. GitHub issues are not closed, edited or deleted by an import.",
                   "IDs that already use the project prefix, live or retired, are kept (SV-056 stays SV-056, "
                   "GM-014 stays GM-014) and the counter moves past them, so no key is ever reused.",
                   "P0/P1/P2/P3 in INDEX.md map to URGENT/HIGH/MEDIUM/LOW."],
+    }
+
+
+def apply(projects, gh_data, store, actor="system:import", handoff_dir=None):
+    """Create every would-create ticket the preview lists. Returns the report.
+
+    One transaction per project: an error rolls that project back whole and is
+    listed under `errors`; other projects are unaffected. Existing tickets are
+    never edited (wouldUpdate is reported, not applied), ambiguous items are
+    never guessed, and a second run finds every provenance link and creates
+    nothing.
+    """
+    pv = preview(projects, gh_data, store, handoff_dir)
+    source_counts = {}
+    for s in pv["sources"]:
+        source_counts.setdefault(s["project"], {})[s["kind"]] = s["count"]
+    by_project = {}
+    for c in pv["wouldCreate"]:
+        by_project.setdefault(c["project"], []).append(c)
+    created, archived, keys, errors = 0, 0, [], []
+    for project, cands in sorted(by_project.items()):
+        made = []
+        try:
+            with store.batch():
+                for c in cands:
+                    closed = c["status"] in T.CLOSED
+                    fields = {"priority": c.get("priority") or "NO_PRIORITY", "type": c.get("type"),
+                              "flags": {f: True for f in c.get("flags") or []}}
+                    if c.get("note"):
+                        fields["description"] = c["note"]
+                    if closed:
+                        fields["archived"] = True
+                    kw = {"number": c["number"]}
+                    if c.get("keepsId"):
+                        kw["prefix"] = c["proposedKey"].rsplit("-", 1)[0]
+                    store.create(project, c["title"], actor, status=c["status"], **kw, **fields)
+                    k = c["proposedKey"]
+                    for src in c["sources"]:
+                        store.link(k, "legacy", "import_source", src["id"], actor=actor)
+                    for l in c.get("links") or []:
+                        store.link(k, l["provider"], l["kind"], l["ref"], url=l.get("url"), actor=actor)
+                    made.append((k, closed, c.get("blockedBy") or []))
+                for k, _closed, deps in made:
+                    for d in deps:
+                        if d != k and store.exists(d):
+                            store.relate(k, "blocked_by", d, actor=actor)
+        except (T.TaskError, sqlite3.Error) as e:
+            errors.append({"project": project, "error": str(e), "rolledBack": len(made)})
+            continue
+        created += len(made)
+        archived += sum(1 for _k, closed, _d in made if closed)
+        keys += [k for k, _c, _d in made]
+    return {
+        "mode": "apply", "applied": True, "generatedAt": time.time(), "sourceCounts": source_counts,
+        "created": created, "updated": 0, "archived": archived, "existing": len(pv["existing"]),
+        "duplicate": len(pv["duplicates"]), "ambiguous": len(pv["ambiguous"]), "skipped": len(pv["skipped"]),
+        "pendingUpdates": len(pv["wouldUpdate"]), "errors": errors, "keys": keys,
+        "ambiguousItems": pv["ambiguous"], "duplicateItems": pv["duplicates"], "skippedItems": pv["skipped"],
     }

@@ -21,6 +21,7 @@ Rules the schema enforces, not just the code:
 
 One writer (the daemon's event loop). Reads are cheap enough to run per request.
 """
+import contextlib
 import json
 import re
 import sqlite3
@@ -295,6 +296,44 @@ class TaskStore:
 
     def close(self):
         self.db.close()
+
+    # One transaction around several writes (the import): while a batch is open,
+    # create/link/relate join it instead of opening their own, and any error
+    # rolls the whole batch back.
+    _batch_depth = 0
+
+    def _begin(self):
+        if not self._batch_depth:
+            self.db.execute("BEGIN IMMEDIATE")
+
+    def _commit(self):
+        if not self._batch_depth:
+            self.db.execute("COMMIT")
+
+    def _rollback(self):
+        if not self._batch_depth:
+            self.db.execute("ROLLBACK")
+
+    @contextlib.contextmanager
+    def batch(self):
+        if self._batch_depth:
+            raise TaskError(500, "batches do not nest")
+        self.db.execute("BEGIN IMMEDIATE")
+        self._batch_depth = 1
+        try:
+            yield self
+            self._batch_depth = 0
+            self.db.execute("COMMIT")
+        except BaseException:
+            self._batch_depth = 0
+            self.db.execute("ROLLBACK")
+            raise
+
+    def ticket_by_link(self, provider, kind, ref):
+        """The key of a ticket (archived or not) holding this exact link, else None."""
+        r = self.db.execute("SELECT t.key FROM ticket_links l JOIN tickets t ON t.id=l.ticket_id WHERE l.provider=? "
+                            "AND l.kind=? AND l.ref=? ORDER BY t.id LIMIT 1", (provider, kind, ref)).fetchone()
+        return r[0] if r else None
 
     def reader(self):
         """A read-only TaskStore on the same file (a :memory: store reads itself)."""
@@ -653,7 +692,7 @@ class TaskStore:
         if status not in ALL_STATUSES:
             raise TaskError(400, f"status must be one of {', '.join(ALL_STATUSES)}")
         at = _now()
-        self.db.execute("BEGIN IMMEDIATE")
+        self._begin()
         try:
             pkey, live, nxt = self._project(project)
             use = live
@@ -661,7 +700,12 @@ class TaskStore:
                 if number is None:
                     raise TaskError(400, "a retired prefix can only keep an existing number, never take a new one")
                 if self.aliases().get(prefix) != pkey:
-                    raise TaskError(400, f"{prefix} is not a retired prefix of {pkey}")
+                    if prefix not in registry.legacy_of(pkey):
+                        raise TaskError(400, f"{prefix} is not a retired prefix of {pkey}")
+                    # The registry lists it as legacy but this file never saw the
+                    # move (created on the live prefix): record it as history now.
+                    self.db.execute("INSERT OR IGNORE INTO task_project_aliases(prefix, project, retired_at) "
+                                    "VALUES (?,?,?)", (prefix, pkey, at))
                 use = prefix
             if number is not None:
                 if not isinstance(number, int) or isinstance(number, bool):
@@ -683,9 +727,9 @@ class TaskStore:
                 self.db.execute("UPDATE tickets SET started_at=? WHERE id=?", (at, tid))
             if status in CLOSED:
                 self.db.execute("UPDATE tickets SET completed_at=? WHERE id=?", (at, tid))
-            self.db.execute("COMMIT")
+            self._commit()
         except BaseException:
-            self.db.execute("ROLLBACK")
+            self._rollback()
             raise
         self.last_change = at
         return self.get(key), changes
@@ -885,7 +929,7 @@ class TaskStore:
         if kind not in RELATION_KINDS + ("blocked_by",):
             raise TaskError(400, f"kind must be one of {', '.join(RELATION_KINDS + ('blocked_by',))}")
         at = _now()
-        self.db.execute("BEGIN IMMEDIATE")
+        self._begin()
         try:
             a, b = self._id_of(key), self._id_of(target)
             if a == b:
@@ -916,9 +960,9 @@ class TaskStore:
                             frm=key.upper() if remove else None, at=at)
                 self._touch(a, at)
                 self._touch(b, at)
-            self.db.execute("COMMIT")
+            self._commit()
         except BaseException:
-            self.db.execute("ROLLBACK")
+            self._rollback()
             raise
         return self.get(key), changed
 
@@ -927,8 +971,8 @@ class TaskStore:
         actor = _actor(actor)
         if provider not in LINK_PROVIDERS:
             raise TaskError(400, f"provider must be one of {', '.join(LINK_PROVIDERS)}")
-        if kind not in ("pr", "issue", "legacy_id", "commit", "url"):
-            raise TaskError(400, "kind must be pr, issue, legacy_id, commit or url")
+        if kind not in ("pr", "issue", "legacy_id", "commit", "url", "import_source"):
+            raise TaskError(400, "kind must be pr, issue, legacy_id, commit, url or import_source")
         ref = _printable(str(ref or "").strip(), 300, "ref")
         if not ref:
             raise TaskError(400, "ref is required")
@@ -939,7 +983,7 @@ class TaskStore:
         if title is not None:
             title = _printable(str(title), 300, "title")
         at = _now()
-        self.db.execute("BEGIN IMMEDIATE")
+        self._begin()
         try:
             tid = self._id_of(key)
             row = self.db.execute("SELECT id FROM ticket_links WHERE ticket_id=? AND provider=? AND kind=? AND ref=?",
@@ -958,9 +1002,9 @@ class TaskStore:
                 changed = True
             if changed:
                 self._touch(tid, at)
-            self.db.execute("COMMIT")
+            self._commit()
         except BaseException:
-            self.db.execute("ROLLBACK")
+            self._rollback()
             raise
         return self.get(key), changed
 

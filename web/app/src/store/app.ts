@@ -16,6 +16,8 @@ export interface AppData {
   error: string | null;
   tickets: Ticket[];
   ticketsLoaded: boolean;
+  /** Archived (history) tickets: fetched only when the Tasks history toggle is on. */
+  archivedTickets: Ticket[];
   taskProjects: TaskProject[];
   meta: TaskMeta | null;
   details: Record<string, TicketDetail>;
@@ -29,7 +31,7 @@ export interface AppData {
 export const initial: AppData = {
   auth: "checking", authError: null, state: null, stateAt: null,
   conn: { status: "offline", lastMessageAt: null, attempt: 0 }, error: null,
-  tickets: [], ticketsLoaded: false, taskProjects: [], meta: null, details: {}, activity: [],
+  tickets: [], ticketsLoaded: false, archivedTickets: [], taskProjects: [], meta: null, details: {}, activity: [],
   development: null, developmentAt: null, toast: null,
 };
 
@@ -114,6 +116,11 @@ export class App {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       if (this.data.conn.status === "live") this.scheduleState(0);
     }, IDLE_REFRESH_MS);
+  }
+
+  async loadHistory() {
+    const tl = await this.api.tasks(true);
+    this.store.patch({ archivedTickets: tl.tickets.filter((t) => t.archived) });
   }
 
   async loadAll() {
