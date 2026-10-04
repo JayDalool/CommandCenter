@@ -17,6 +17,12 @@ describe("terminal key decisions", () => {
     expect(terminalKeyAction(key("V", { ctrlKey: true, shiftKey: true }), false)).toBe("native-paste");
     expect(terminalKeyAction(key("Insert", { shiftKey: true }), false)).toBe("native-paste");
   });
+  it("works on a non-Latin layout (Arabic): the physical V/C key decides", () => {
+    expect(terminalKeyAction(key("ر", { ctrlKey: true }, "KeyV"), false)).toBe("native-paste");
+    expect(terminalKeyAction(key("ؤ", { ctrlKey: true }, "KeyC"), true)).toBe("copy");
+    expect(terminalKeyAction(key("ؤ", { ctrlKey: true }, "KeyC"), false)).toBe("xterm");
+    expect(terminalKeyAction(key("ر", {}, "KeyV"), false)).toBe("xterm");          // plain typing untouched
+  });
   it("copies with a selection, interrupts without one", () => {
     expect(terminalKeyAction(key("c", { ctrlKey: true }), true)).toBe("copy");
     expect(terminalKeyAction(key("c", { ctrlKey: true }), false)).toBe("xterm");          // ^C reaches the PTY
@@ -75,6 +81,7 @@ describe("input pacing", () => {
     expect(parts.join("")).toBe(text);
     for (const p of parts) expect(/^[\udc00-\udfff]/.test(p)).toBe(false);
     expect(chunkInput(multiline)).toEqual([multiline]);
+    expect(chunkInput("👋👋", 1).join("")).toBe("👋👋");                               // no infinite loop at size 1
   });
   it("sends multiline, Unicode and long input intact, in order, with no Enter added", async () => {
     const sent: string[] = [];

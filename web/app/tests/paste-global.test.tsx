@@ -40,7 +40,7 @@ describe("Ctrl+V outside the terminal is never hijacked", () => {
   it("the command palette input keeps Ctrl+V", async () => {
     render(<AppShell flush><div /></AppShell>);
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
-    const input = await screen.findByRole("combobox").catch(() => screen.getByPlaceholderText(/./));
+    const input = await screen.findByRole("combobox");
     expect(fireEvent.keyDown(input, ctrlV)).toBe(true);
   });
 });

@@ -19,12 +19,13 @@ export type KeyAction = "native-paste" | "copy" | "xterm";
 export function terminalKeyAction(e: Pick<KeyboardEvent, "type" | "key" | "code" | "ctrlKey" | "shiftKey" | "altKey" | "metaKey">,
   hasSelection: boolean): KeyAction {
   if (e.type !== "keydown") return "xterm";
-  const k = e.key.toLowerCase();
+  // On a non-Latin layout (Arabic, Russian…) e.key is the layout's character, but xterm still
+  // maps the physical key to a control byte, so fall back to the physical key (e.code).
+  const k = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : e.key.toLowerCase();
   const ctrlOnly = e.ctrlKey && !e.altKey && !e.metaKey;
   if (ctrlOnly && k === "v") return "native-paste";                                  // Ctrl+V, Ctrl+Shift+V
   if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key === "Insert") return "native-paste"; // Shift+Insert
   if (ctrlOnly && (k === "c" || e.key === "Insert") && hasSelection) return "copy";   // Ctrl+C / Ctrl+Insert with a selection
-  if (ctrlOnly && e.shiftKey && k === "c") return hasSelection ? "copy" : "xterm";
   return "xterm";                                                                    // everything else, incl. Ctrl+C with no selection
 }
 
@@ -61,14 +62,16 @@ export function chunkInput(data: string, size = CHUNK_CHARS): string[] {
   while (i < data.length) {
     let end = Math.min(i + size, data.length);
     const c = data.charCodeAt(end - 1);
-    if (end < data.length && c >= 0xd800 && c <= 0xdbff) end--;   // don't split a high surrogate from its pair
+    if (end < data.length && end - i > 1 && c >= 0xd800 && c <= 0xdbff) end--;   // don't split a high surrogate from its pair
     out.push(data.slice(i, end));
     i = end;
   }
   return out;
 }
 
-/** An ordered sender: typing and pastes go out in order; large input is paced. */
+/** An ordered sender: typing and pastes go out in order; large input is paced.
+ *  One FIFO: keys typed during a paced paste (Ctrl+C too) go out after it — at most ~4 s for
+ *  a 1 MiB paste. Chunks still queued when the socket is replaced go to the new socket. */
 export function makeInputSender(send: (d: string) => boolean, note: (msg: string) => void,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))) {
   const queue: string[] = [];
