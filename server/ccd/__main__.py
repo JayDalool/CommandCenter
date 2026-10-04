@@ -94,7 +94,8 @@ def build(cfg=None):
     daemon.launcher_dir = config.LAUNCHER_DIR
     daemon.search = search.Search(daemon.files)
     daemon.scm = gitops.SourceControl(daemon.files)
-    daemon.ptys = pty.PtyManager(audit=lambda kind, text, data: daemon._event("pty", kind, text, data=data))
+    daemon.ptys = pty.PtyManager(audit=lambda kind, text, data: daemon._event("pty", kind, text, data=data),
+                                 own_scope=True)
 
     @contextlib.asynccontextmanager
     async def lifespan(app):

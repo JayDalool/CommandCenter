@@ -64,13 +64,25 @@ class SourceControl:
         self.roots = roots  # files.Roots
         self._lock = asyncio.Lock()
 
-    def _file(self, key, rel):
+    async def _file(self, key, rel):
         """One FILE path (it may no longer exist: a deletion). A folder is refused: a folder
-        pathspec would reach protected files inside it, for diff, stage or discard alike."""
+        pathspec would reach protected files inside it, for diff, stage or discard alike. A
+        folder deleted from disk but still tracked is a folder too, so git itself is asked what
+        the pathspec matches — in the index, in HEAD and on disk — and it must be this path alone."""
         path = _path(rel)
-        full = os.path.join(self.roots.root(key), path)
-        if os.path.isdir(full):
+        root = self.roots.root(key)
+        if os.path.isdir(os.path.join(root, path)):
             raise FileError(400, "source control acts on single files; pick a file, not a folder")
+        spec = _spec(path)
+        listed = set()
+        out, _ = await git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", spec,
+                           limit=1024 * 1024)
+        listed |= {p for p in out.decode("utf-8", "replace").split("\x00") if p}
+        out, _ = await git(root, "ls-tree", "-r", "-z", "--name-only", "HEAD", "--", spec, ok=(0, 128),
+                           limit=1024 * 1024)
+        listed |= {p for p in out.decode("utf-8", "replace").split("\x00") if p}
+        if listed - {path}:
+            raise FileError(400, "source control acts on single files; that path is a folder")
         return path
 
     async def status(self, key):
@@ -125,7 +137,7 @@ class SourceControl:
 
     async def diff(self, key, rel, staged=False):
         root = self.roots.root(key)
-        path = self._file(key, rel)
+        path = await self._file(key, rel)
         args = ["diff", "--no-ext-diff", "--no-color", "--find-renames"]
         if staged:
             args.append("--cached")
@@ -146,7 +158,7 @@ class SourceControl:
 
     async def stage(self, key, paths):
         root = self.roots.root(key)
-        clean = [self._file(key, p) for p in paths][:500]
+        clean = [await self._file(key, p) for p in paths[:500]]
         if not clean:
             raise FileError(400, "nothing to stage")
         async with self._lock:
@@ -164,9 +176,14 @@ class SourceControl:
 
     async def unstage(self, key, paths):
         root = self.roots.root(key)
-        clean = [self._file(key, p) for p in paths][:500]
+        clean = [await self._file(key, p) for p in paths[:500]]
         if not clean:
             raise FileError(400, "nothing to unstage")
+        # A staged rename/copy is two index entries: unstage the original path too.
+        st = await self.status(key)
+        for r in st["staged"]:
+            if r["path"] in clean and r.get("orig") and r["orig"] not in clean:
+                clean.append(_path(r["orig"]))
         async with self._lock:
             head_ok = True
             try:
@@ -183,7 +200,7 @@ class SourceControl:
         """Throw away unstaged changes to one path. Tracked: restore from the index.
         Untracked: delete the file (descriptor-safe, via files.Roots.delete). The UI confirms first."""
         root = self.roots.root(key)
-        path = self._file(key, rel)
+        path = await self._file(key, rel)
         async with self._lock:
             out, _ = await git(root, "ls-files", "--error-unmatch", "--", _spec(path), ok=(0, 1))
             if out.strip():

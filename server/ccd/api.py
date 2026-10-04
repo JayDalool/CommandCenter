@@ -561,8 +561,10 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         elif op == "commit":
             out = await sc.commit(key, body.get("message"), body.get("files"))
         elif op == "branch":
-            out = await sc.create_branch(key, body.get("name"), switch=body.get("switch", True) is not False)
             ticket = body.get("ticket")
+            if ticket:
+                daemon.task_get(str(ticket))  # an unknown ticket is refused BEFORE the repository changes
+            out = await sc.create_branch(key, body.get("name"), switch=body.get("switch", True) is not False)
             if ticket:
                 daemon.task_update(str(ticket), {"branch": out["branch"]}, request.state.actor)
         else:
@@ -598,8 +600,14 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         offered = [p.strip() for p in (ws.headers.get("sec-websocket-protocol") or "").split(",")]
         dev = next((p[len(DEV_WS_PREFIX):] for p in offered if p.startswith(DEV_WS_PREFIX)), "")
         name = ws.path_params["name"]
-        if ptys is None or gate is None or not ws.headers.get("origin") or not gate.check(dev):
-            await ws.close(code=4403)
+        if ptys is None or gate is None:
+            await ws.close(code=4403, reason="terminals are not configured")
+            return
+        if not ws.headers.get("origin"):
+            await ws.close(code=4403, reason="origin required")
+            return
+        if not gate.check(dev):
+            await ws.close(code=4403, reason="Developer Unlock required")
             return
         try:
             session_cwd(name, ptys.roots, ptys.home)
@@ -668,19 +676,26 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
             # Developer Mode locked or expired: this view stops at once, output and input alike.
             while True:
                 await asyncio.sleep(3)
-                if dev not in gate.sessions:
+                if not gate.expires_in(dev):  # locked, idle-expired or past its TTL
                     await ws.close(code=4403)
                     return
 
         tasks_ = [asyncio.create_task(pump_out()), asyncio.create_task(pump_in()), asyncio.create_task(watchdog())]
         try:
             await asyncio.wait(tasks_, return_when=asyncio.FIRST_COMPLETED)
-        except (WebSocketDisconnect, RuntimeError, ConnectionError, PtyError):
-            pass
         finally:
             for t in tasks_:
                 t.cancel()
+            for t in tasks_:  # collect every outcome: a closed socket or refused input just ends this view
+                try:
+                    await t
+                except (asyncio.CancelledError, WebSocketDisconnect, RuntimeError, ConnectionError, PtyError):
+                    pass
             ptys.detach(s, client)
+            try:
+                await ws.close(code=1000)
+            except RuntimeError:
+                pass
 
     async def events(ws: WebSocket):
         offered = [p.strip() for p in (ws.headers.get("sec-websocket-protocol") or "").split(",")]

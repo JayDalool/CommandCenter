@@ -212,7 +212,7 @@ async def main(reseed):
     daemon.scm = gitops.SourceControl(daemon.files)
     # Repo shells open in the SANDBOX copies; the server shell is a real shell in $HOME.
     daemon.ptys = pty.PtyManager(audit=lambda kind, text, data: daemon._event("pty", kind, text, data=data),
-                                 roots={registry.prefix_of(k): r for k, r in sandbox.items()})
+                                 roots={registry.prefix_of(k): r for k, r in sandbox.items()}, own_scope=True)
 
     @contextlib.asynccontextmanager
     async def lifespan(app):

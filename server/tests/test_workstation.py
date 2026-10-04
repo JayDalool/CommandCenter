@@ -1,5 +1,6 @@
 """Workstation: real terminals, search, source control, explorer operations, race hardening."""
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -428,3 +429,29 @@ class PtyFdIsolation(unittest.TestCase):
             self.assertFalse(os.get_inheritable(a.fd))
             await m.close_all()
         asyncio.run(run())
+
+
+class DeletedFolderSecrets(_Fixture):
+    def test_a_deleted_tracked_folder_is_still_a_folder(self):
+        os.makedirs(os.path.join(self.root, "conf"))
+        with open(os.path.join(self.root, "conf", "secrets.json"), "w") as f:
+            f.write('{"k": "TOPSECRET"}')
+        with open(os.path.join(self.root, "conf", "a.txt"), "w") as f:
+            f.write("a")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "conf")
+        shutil.rmtree(os.path.join(self.root, "conf"))
+        r = self.get("/api/scm/diff?project=samvision&path=conf")
+        self.assertEqual(r.status_code, 400)
+        self.assertNotIn("TOPSECRET", r.text)
+        git(self.root, "rm", "-r", "-q", "--cached", "conf")
+        r = self.get("/api/scm/diff?project=samvision&path=conf&staged=1")
+        self.assertEqual(r.status_code, 400)
+        self.assertNotIn("TOPSECRET", r.text)
+        h = dict(JSON, **{"x-ccd-developer": self.dev()})
+        for op, body in (("stage", {"paths": ["conf"]}), ("unstage", {"paths": ["conf"]}),
+                         ("discard", {"path": "conf", "confirm": True})):
+            r = self.client.post(f"/api/scm/{op}", content=json.dumps({"project": "samvision", **body}), headers=h)
+            self.assertEqual(r.status_code, 400, op)
+        # a single deleted file is still fine
+        self.assertEqual(self.get("/api/scm/diff?project=samvision&path=README.md").status_code, 200)

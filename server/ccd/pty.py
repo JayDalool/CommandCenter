@@ -23,6 +23,8 @@ import asyncio
 import fcntl
 import os
 import pwd
+import secrets
+import shutil
 import signal
 import struct
 import termios
@@ -83,7 +85,7 @@ class Session:
 
 
 class PtyManager:
-    def __init__(self, audit=None, roots=None, home=None, shell=None, env=None):
+    def __init__(self, audit=None, roots=None, home=None, shell=None, env=None, own_scope=False):
         self.sessions = {}
         self.audit = audit or (lambda kind, text, data: None)
         self.roots = roots
@@ -92,13 +94,19 @@ class PtyManager:
         self.shell = shell or pw.pw_shell or "/bin/bash"
         self.user = pw.pw_name
         self.env = env
+        # own_scope: start each shell in its own transient systemd user scope, OUTSIDE ccd's
+        # cgroup, so a build in a terminal neither shares ccd's MemoryMax nor can get ccd OOM-killed.
+        self.own_scope = own_scope and shutil.which("systemd-run") is not None
         self._lock = asyncio.Lock()
 
     # ---------- lifecycle ----------
 
     def _child_env(self, cwd):
         base = self.env if self.env is not None else os.environ
-        keep = {k: base[k] for k in ("PATH", "LANG", "LC_ALL", "TZ") if k in base}
+        # XDG_RUNTIME_DIR / DBUS_SESSION_BUS_ADDRESS: so `systemctl --user` and `journalctl --user`
+        # work in the shell (and systemd-run can place it in its own scope). They are paths, not secrets.
+        keep = {k: base[k] for k in ("PATH", "LANG", "LC_ALL", "TZ", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS")
+                if k in base}
         home = self.home or pwd.getpwuid(os.getuid()).pw_dir
         keep.update(HOME=home, USER=self.user, LOGNAME=self.user, SHELL=self.shell, PWD=cwd,
                     TERM="xterm-256color", COLORTERM="truecolor")
@@ -111,6 +119,11 @@ class PtyManager:
         env = self._child_env(cwd)
         argv = [os.path.basename(self.shell), "-l"]
         shell = self.shell
+        if self.own_scope:
+            unit = f"cc-pty-{name.replace(':', '-')}-{secrets.token_hex(3)}"
+            argv = ["systemd-run", "--user", "--scope", "--quiet", "--collect", f"--unit={unit}",
+                    "--description=Command Center terminal " + name, "--", self.shell, "-l"]
+            shell = shutil.which("systemd-run")
         try:
             maxfd = os.sysconf("SC_OPEN_MAX")
         except (ValueError, OSError):
@@ -202,8 +215,13 @@ class PtyManager:
         for c in list(s.clients):
             try:
                 c.queue.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
+            except asyncio.QueueFull:  # make room: the end must always reach the viewer
+                c.lost = True
+                try:
+                    c.queue.get_nowait()
+                    c.queue.put_nowait(None)
+                except (asyncio.QueueEmpty, asyncio.QueueFull):
+                    pass
         kind = {"expired": "pty.session.expired"}.get(reason, "pty.session.closed")
         self.audit(kind, f"terminal {s.name} {reason}", {"session": s.name, "clients": len(s.clients)})
 
@@ -236,6 +254,8 @@ class PtyManager:
         s = self.sessions.get(name)
         if not s:
             raise PtyError(404, "no such session")
+        if s.ended or s.closing:  # another close is already signalling this group
+            return {"ok": True, "name": name}
         s.closing = reason
         pgid = s.pid  # forkpty's child called setsid: its pid is its process group
         try:
@@ -262,7 +282,10 @@ class PtyManager:
         now = now or time.time()
         for s in list(self.sessions.values()):
             if not s.clients and now - s.detached_at > IDLE_EXPIRE:
-                await self.close(s.name, "expired")
+                try:
+                    await self.close(s.name, "expired")
+                except PtyError:
+                    continue  # it ended on its own meanwhile
 
     # ---------- clients ----------
 
@@ -270,6 +293,8 @@ class PtyManager:
         c = Client()
         replay = bytes(s.ring)
         s.clients.add(c)
+        if s.ended:  # the shell exited between open and attach: tell this view at once
+            c.queue.put_nowait(None)
         self.audit("pty.attached", f"terminal {s.name} attached", {"session": s.name, "clients": len(s.clients)})
         return c, replay
 
