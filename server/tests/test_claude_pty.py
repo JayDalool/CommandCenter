@@ -52,6 +52,8 @@ def agent(pane, title, root, session):
 @unittest.skipUnless(HAVE_ROOTS, "needs the registered checkouts (jay-server)")
 class ClaudeAttachPty(unittest.TestCase):
     def setUp(self):
+        from ccd import coordid
+        coordid.BINDINGS.unlink(missing_ok=True)     # the test state dir, never the live one
         self.tmp = tempfile.mkdtemp(prefix="claudepty-")
         self.bin = os.path.join(self.tmp, "bin")
         os.makedirs(self.bin)
@@ -69,7 +71,8 @@ class ClaudeAttachPty(unittest.TestCase):
         shutil.rmtree(self.tmp)
 
     def manager(self, agents=None):
-        env = {"PATH": f"{self.bin}:/usr/bin:/bin", "FAKE_AGENTS": json.dumps(self.agents if agents is None else agents)}
+        env = {"PATH": f"{self.bin}:/usr/bin:/bin", "FAKE_AGENTS": json.dumps(self.agents if agents is None else agents),
+               "CCD_STATE_DIR": os.environ["CCD_STATE_DIR"]}
         m = pty_mod.PtyManager(env=env, shell="/bin/sh")
         # FAKE_AGENTS must reach the helper: _child_env keeps only a fixed list, so extend it here.
         orig = m._child_env
@@ -135,8 +138,8 @@ class ClaudeAttachPty(unittest.TestCase):
 
     def test_no_coordinator_or_ambiguous_refuses_and_starts_nothing(self):
         async def run():
-            for agents, needle in (([], b"no running"),
-                                   (self.agents + [agent("wF:p1", "samvision", ROOTS["samvision"], "x")], b"refusing to guess")):
+            for agents, needle in (([], b"no Claude is running"),
+                                   (self.agents + [agent("wF:p1", "samvision", ROOTS["samvision"], "sess-x")], b"choose one")):
                 m = self.manager(agents)
                 s, _ = await m.open("claude:SV")
                 c, _ = m.attach(s)
@@ -147,7 +150,7 @@ class ClaudeAttachPty(unittest.TestCase):
             m = self.manager()
             s, _ = await m.open("claude:MFE")                # MFE has no coordinator
             c, _ = m.attach(s)
-            self.assertIn(b"no running mfe coordinator", await self.read_until(c, b"no running"))
+            self.assertIn(b"no Claude is running in " + ROOTS["mfe"].encode(), await self.read_until(c, b"no Claude"))
             await m.close_all()
         asyncio.run(run())
 
@@ -175,8 +178,8 @@ class ClaudeAttachPty(unittest.TestCase):
             m = self.manager([])
             s, _ = await m.open("claude:SV")
             c, _ = m.attach(s)
-            out = await self.read_until(c, b"no running")
-            self.assertIn(b"no running", out)
+            out = await self.read_until(c, b"no Claude is running")
+            self.assertIn(b"no Claude is running", out)
             deadline = time.monotonic() + 5
             while "claude:SV" in m.sessions and time.monotonic() < deadline:
                 await asyncio.sleep(0.1)

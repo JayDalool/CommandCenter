@@ -12,9 +12,11 @@ server, from the one project registry (server/ccd/registry.py).
 
 `claude` attaches to the coordinator herdr already runs. It never starts,
 resumes or restarts a Claude session: no coordinator means a clear message and
-nothing else. A coordinator is the one live claude pane whose title is the
-project key (samvision, gauzemate) AND whose cwd is the registered root; zero
-or several matches are refused, never guessed.
+nothing else. Which Claude is the coordinator is decided by the one shared
+resolver, server/ccd/coordid.py (also used by ccd for the browser terminal,
+the Workspace and the Agents page): a recorded session binding, else a herdr
+label or title naming the coordinator at the registered root. An unnamed Claude
+at the root must first be adopted in Command Center; several are never guessed.
 
 Anything not matching exactly is refused. No argument becomes a path or a
 command.
@@ -32,10 +34,9 @@ import time
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "server"))
 
-from ccd import registry  # noqa: E402
+from ccd import coordid, registry  # noqa: E402
 
 PREFIX_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
-PANE_RE = re.compile(r"^w[0-9A-Za-z]+:p[0-9]+$")
 # `ssh host cmd` gets a non-login PATH; herdr lives in ~/.local/bin, so find it explicitly.
 # Absolute: the exec happens after chdir, so a relative PATH entry must not be left relative.
 HERDR = os.path.abspath(shutil.which("herdr") or os.path.expanduser("~/.local/bin/herdr"))
@@ -59,19 +60,18 @@ def project_for(prefix):
 
 
 def coordinator_pane(key, root, agents):
-    """The pane id of `key`'s running coordinator, from `herdr agent list` output."""
-    hits = [a for a in agents
-            if a.get("agent") == "claude"
-            and (a.get("terminal_title_stripped") or "").strip() == key
-            and os.path.realpath(a.get("cwd") or "") == root
-            and PANE_RE.match(a.get("pane_id") or "")]
-    if not hits:
-        raise Refused(f"no running {key} coordinator in herdr. Command Center never starts one; "
-                      f"start it in herdr, then open this terminal again.")
-    if len(hits) > 1:
-        raise Refused(f"{len(hits)} panes look like the {key} coordinator ({', '.join(h['pane_id'] for h in hits)}); "
-                      f"refusing to guess. Rename the extra one in herdr.")
-    return hits[0]["pane_id"]
+    """The pane of `key`'s coordinator, via the one shared resolver (ccd/coordid.py)."""
+    r = coordid.resolve_and_record(key, root, agents)
+    if r["state"] == "ready":
+        return r["paneId"]
+    if r["state"] == "found":
+        raise Refused(f"a Claude is running in {root} but is not yet this project's coordinator. "
+                      f"Adopt it in Command Center (Workspace → Claude → Adopt), then open this terminal again.")
+    if r["state"] == "multiple":
+        raise Refused(f"{len(r['candidates'])} Claude sessions are running in {root}; choose one in "
+                      f"Command Center (Workspace → Claude), then open this terminal again.")
+    raise Refused(f"no Claude is running in {root}. Command Center never starts one; "
+                  f"start it in herdr, then open this terminal again.")
 
 
 def herdr_agents(run=subprocess.run):

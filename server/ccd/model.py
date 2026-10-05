@@ -227,7 +227,10 @@ def project_view(p, gh, panes, blocked_min, cfg):
             "all_panes": my_panes, "tests": tests,
             "links": p["links"], "commands": p["commands"], "main_ci": main_ci, "counts": counts,
             "errors": errors, "handoff": handoff,
-            "coordinator": coordinators.pane_for(p, panes)}
+            "coordinator": None, "coordinatorState": None}
+    r = coordinators.resolution(p, panes)
+    view["coordinator"] = coordinators.pane_for(p, panes, r)
+    view["coordinatorState"] = coordinators.public_resolution(r)
     view["summary"] = summary_line(view)
     return view
 

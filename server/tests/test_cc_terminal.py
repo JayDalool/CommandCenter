@@ -13,8 +13,9 @@ cct = importlib.util.module_from_spec(_spec)
 _loader.exec_module(cct)
 
 
-def agent(pane, title, cwd, kind="claude"):
-    return {"agent": kind, "pane_id": pane, "terminal_title_stripped": title, "cwd": cwd}
+def agent(pane, title, cwd, kind="claude", sid=None):
+    sid = sid or f"{abs(hash((pane, title, cwd))):016x}-session"
+    return {"agent": kind, "pane_id": pane, "terminal_title_stripped": title, "cwd": cwd, "agent_session": {"value": sid}}
 
 
 ROOTS = {k: os.path.realpath(p["root"]) for k, p in registry.PROJECTS.items()}
@@ -24,8 +25,29 @@ LIVE = [agent("wE:p2", "samvision", ROOTS["samvision"]), agent("wE:p4", "gauzema
 
 @unittest.skipUnless(all(os.path.isdir(r) for r in ROOTS.values()), "needs the registered checkouts (jay-server)")
 class Plan(unittest.TestCase):
+    def setUp(self):
+        # each test starts with no recorded coordinator bindings
+        from ccd import coordid
+        coordid.BINDINGS.unlink(missing_ok=True)
+
     def plan(self, *argv, agents=LIVE):
         return cct.plan(list(argv), agents_fn=lambda: agents)
+
+    def test_renamed_coordinator_needs_adoption_then_attaches_whatever_its_title(self):
+        from ccd import coordid
+        gyst = agent("w9:p1", "Where did we stop last", ROOTS["gyst"], sid="4de6de1b-3cc5-4846-9382-3f5a361bec11")
+        with self.assertRaisesRegex(cct.Refused, "Adopt it in Command Center"):
+            self.plan("claude", "GYST", agents=LIVE + [gyst])
+        coordid.adopt("gyst", ROOTS["gyst"], LIVE + [gyst], "4de6de1b-3cc5-4846-9382-3f5a361bec11")
+        self.assertEqual(self.plan("claude", "GYST", agents=LIVE + [gyst])[1], ["herdr", "agent", "attach", "w9:p1"])
+        renamed = dict(gyst, terminal_title_stripped="Health v3 night shift", pane_id="wF:p3")
+        self.assertEqual(self.plan("claude", "GYST", agents=LIVE + [renamed])[1], ["herdr", "agent", "attach", "wF:p3"])
+
+    def test_browser_and_native_use_the_same_resolver_as_ccd(self):
+        from ccd import coordid
+        for prefix, key in (("SV", "samvision"), ("GZ", "gauzemate")):
+            r = coordid.resolve(key, ROOTS[key], LIVE)
+            self.assertEqual(self.plan("claude", prefix)[1][-1], r["paneId"])
 
     def test_repo_paths_come_from_the_registry(self):
         for prefix, key in (("SV", "samvision"), ("GZ", "gauzemate"), ("MFE", "mfe"), ("CC", "commandcenter"),
@@ -46,7 +68,7 @@ class Plan(unittest.TestCase):
             self.plan("claude", "MFE")
         with self.assertRaises(cct.Refused):
             self.plan("claude", "SV", agents=[])
-        with self.assertRaises(cct.Refused):  # two candidates: never guess
+        with self.assertRaisesRegex(cct.Refused, "choose one"):  # two candidates: never guess
             self.plan("claude", "SV", agents=LIVE + [agent("wF:p1", "samvision", ROOTS["samvision"])])
         with self.assertRaises(cct.Refused):  # right title, wrong cwd
             self.plan("claude", "SV", agents=[agent("wE:p2", "samvision", "/tmp")])

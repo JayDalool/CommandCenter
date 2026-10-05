@@ -50,6 +50,7 @@ ALLOWED = {
     ("POST", "/api/scm/stage"), ("POST", "/api/scm/unstage"), ("POST", "/api/scm/stage-all"),
     ("POST", "/api/scm/discard"), ("POST", "/api/scm/commit"), ("POST", "/api/scm/branch"),
     ("POST", "/api/action/prompt"), ("POST", "/api/action/key"),
+    ("POST", "/api/coordinators/adopt"),
     ("GET", "/api/pty"), ("POST", "/api/pty/close"), ("WS", "/api/pty/{name}"),
 }
 FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec", "push",
