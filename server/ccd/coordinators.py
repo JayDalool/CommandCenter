@@ -22,7 +22,8 @@ import json
 import re
 import time
 
-from . import sources
+from . import coordid, sources
+from . import registry as project_registry
 from .config import STATE_DIR
 
 REGISTRY = STATE_DIR / "coordinators.json"
@@ -31,7 +32,24 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")  # herdr's rule for agent names
 
 def canonical(project):
     """The one name this project's coordinator answers to."""
-    return project["key"]
+    return coordid.canonical_name(project["key"])
+
+
+def root_of(project):
+    """The registered checkout root: the registry's, else the config's path."""
+    return (project_registry.PROJECTS.get(project["key"]) or {}).get("root") or project.get("path") or ""
+
+
+def resolution(project, panes):
+    """The shared resolver's verdict for this project (see coordid.py)."""
+    return coordid.resolve_and_record(project["key"], root_of(project), sources.agent_panes(panes))
+
+
+def public_resolution(r):
+    """What may leave the daemon: never a terminal title (a title can quote anything)."""
+    out = {k: r[k] for k in ("state", "paneId", "sessionId", "status", "how", "staleBinding")}
+    out["candidates"] = [{k: c[k] for k in ("paneId", "sessionId", "status")} for c in r["candidates"]]
+    return out
 
 
 def valid(name):
@@ -92,18 +110,12 @@ def restart_command(project):
     return f"claude -c -n {name} --rc {name} --model {model}{effort}"
 
 
-def pane_for(project, panes):
-    """The live agent pane that is this project's coordinator, if one is running.
-
-    The coordinator is the live agent whose cwd is the checkout root itself; a
-    lane agent sits in a worktree, so it never wins this.
-    """
-    mine = [p for p in sources.agent_panes(panes) if p.get("project") == project["key"]]
-    if not mine:
+def pane_for(project, panes, r=None):
+    """The live pane of this project's coordinator, only when the resolver is sure."""
+    r = r or resolution(project, panes)
+    if r["state"] != "ready":
         return None
-    exact = [p for p in mine if p.get("cwd") == project.get("path")]
-    named = [p for p in mine if p.get("agent_name") == canonical(project)]
-    return (named or exact or mine)[0]
+    return next((p for p in panes if isinstance(p, dict) and p.get("pane_id") == r["paneId"]), None)
 
 
 def adopt(cfg, panes):

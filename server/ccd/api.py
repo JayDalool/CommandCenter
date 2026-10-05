@@ -47,6 +47,8 @@
     POST  /api/action/prompt         DEVELOPER. send a message to an idle Claude pane (herdr agent.prompt)
     POST  /api/action/key            DEVELOPER. esc or enter into a Claude pane
     GET   /api/pty                   live terminal sessions (names, cwd, clients)
+    POST  /api/coordinators/adopt    DEVELOPER. bind the one EXISTING Claude at a project root as its
+                                     coordinator {project, sessionId}; never starts or renames Claude
     POST  /api/pty/close             DEVELOPER. CLOSE SESSION: ends that one shell's process group
     WS    /api/pty/{name}            DEVELOPER. attach to repo:<PREFIX> or server (created on first attach);
                                      developer session as subprotocol `ccd-dev.<session>`; Origin required
@@ -618,6 +620,10 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     async def pty_list(request):
         return {"sessions": ptys.list() if ptys else [], "enabled": ptys is not None}
 
+    async def coord_adopt(request):
+        body = await _body(request)
+        return await daemon.adopt_coordinator(str(body.get("project") or ""), body.get("sessionId"))
+
     async def pty_close(request):
         if ptys is None:
             raise ActionError(503, "terminals are not configured")
@@ -825,6 +831,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/action/prompt", ws_route(claude_prompt, dev=True), methods=["POST"]),
         Route("/api/action/key", ws_route(claude_key, dev=True), methods=["POST"]),
         Route("/api/pty", ws_route(pty_list), methods=["GET"]),
+        Route("/api/coordinators/adopt", ws_route(coord_adopt, dev=True), methods=["POST"]),
         Route("/api/pty/close", ws_route(pty_close, dev=True), methods=["POST"]),
         WebSocketRoute("/api/pty/{name}", pty_ws),
         Route("/api/desktop/launcher", launcher_info, methods=["GET"]),

@@ -22,7 +22,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import __version__, coordinators, github, model, registry, sources
+from . import __version__, coordid, coordinators, github, model, registry, sources
 from . import herdr as herdr_mod
 from . import importer
 from . import tasks as tasks_mod
@@ -546,11 +546,14 @@ class Daemon:
     def _decorate(self, snap):
         """Public shape: agent roles, canonical coordinators, source freshness."""
         coord = {}
+        views = {v["key"]: v for v in snap.get("projects") or []}
         for p in self.cfg["projects"]:
-            pane = coordinators.pane_for(p, snap["panes"])
-            coord[p["key"]] = {"name": coordinators.canonical(p), "paneId": pane["pane_id"] if pane else None,
-                               "status": pane["status"] if pane else "offline",
-                               "canonical": bool(pane) and pane.get("agent_name") == coordinators.canonical(p)}
+            r = (views.get(p["key"]) or {}).get("coordinatorState") or coordinators.public_resolution(
+                coordinators.resolution(p, snap["panes"]))
+            coord[p["key"]] = {"name": coordinators.canonical(p), "paneId": r["paneId"],
+                               "status": r["status"] if r["state"] == "ready" else "offline",
+                               "canonical": r["state"] == "ready", "state": r["state"], "how": r["how"],
+                               "candidates": r["candidates"]}
         coord_panes = {c["paneId"] for c in coord.values() if c["paneId"]}
         now = _now()
 
@@ -971,11 +974,15 @@ class Daemon:
                 except (OSError, subprocess.TimeoutExpired):
                     branch = None
             coord = (views.get(key) or {}).get("coordinator") or None
+            state = (views.get(key) or {}).get("coordinatorState") or None
             out.append({"key": key, "name": reg["name"], "prefix": reg["prefix"], "root": root,
                         "exists": bool(root and os.path.isdir(root)), "branch": branch,
                         "github": github.identity(reg.get("github") or ""),
                         "coordinator": {"id": coord.get("pane_id"), "name": coord.get("agent_name") or coord.get("label"),
-                                        "status": coord.get("status"), "cwd": coord.get("cwd")} if coord else None})
+                                        "status": coord.get("status"), "cwd": coord.get("cwd")} if coord else None,
+                        # ready | found (adopt) | multiple (pick one) | none — from the one resolver
+                        "coordinatorState": {k: state[k] for k in ("state", "how", "candidates")} if state else
+                                            {"state": "none", "how": None, "candidates": []}})
         return {"projects": out}
 
     def task_context(self, key):
@@ -1196,6 +1203,26 @@ class Daemon:
         if now - self._last_action.get(key, 0) < seconds:
             raise ActionError(429, "too many requests for this target; wait a second")
         self._last_action[key] = now
+
+    async def adopt_coordinator(self, project, session_id):
+        """Bind an EXISTING Claude at the project root as its coordinator (Workspace → Adopt).
+
+        Nothing is started, resumed, renamed or typed into; only the binding file changes."""
+        proj = next((p for p in self.cfg["projects"] if p["key"] == project), None)
+        if not proj:
+            raise ActionError(404, "unknown project")
+        if not self.herdr_state["ok"]:
+            raise ActionError(503, "herdr unreachable")
+        self._throttle(f"adopt:{project}", 2.0)
+        await self.resync("action")
+        try:
+            r = coordid.adopt(project, coordinators.root_of(proj), sources.agent_panes(self.panes), session_id)
+        except ValueError as e:
+            raise ActionError(409, str(e))
+        self._event("action", "action.adopt", f"{coordinators.canonical(proj)} coordinator adopted",
+                    project=project, agent_id=r["paneId"])
+        await self.resync("action")
+        return {"ok": True, "coordinator": coordinators.public_resolution(r)}
 
     async def _fresh_agent(self, ident):
         if not self.herdr_state["ok"]:

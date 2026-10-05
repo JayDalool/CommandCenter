@@ -72,7 +72,9 @@ class Reshape(unittest.TestCase):
 
 class DeriveParity(unittest.TestCase):
     def test_derive_equals_the_legacy_build_on_the_same_inputs(self):
+        from ccd import coordid
         c = cfg()
+        coordid.BINDINGS.unlink(missing_ok=True)
         snap = load_snapshot()
         panes = sources.panes_from(snap)
         gh = {"gyst": sources.reshape(GRAPHQL)}
@@ -96,6 +98,7 @@ class DeriveParity(unittest.TestCase):
         finally:
             (model.sources.github, model.sources.herdr_panes, model.sources.server,
              model.sources.unpushed_branches, model.sources.worktree_paths, model._blocked_since) = orig
+        coordid.BINDINGS.unlink(missing_ok=True)   # both builds start from the same (empty) bindings
         new = model.derive(c, {"gyst": gh["gyst"], "samvision": legacy_empty(), "mfe": legacy_empty(),
                                "gauzemate": legacy_empty()}, panes, srv, unpushed, WORKTREES, {})
         for snap_ in (legacy, new):

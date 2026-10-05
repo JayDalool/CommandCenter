@@ -464,3 +464,48 @@ class DeletedFolderSecrets(_Fixture):
             self.assertEqual(r.status_code, 400, op)
         # a single deleted file is still fine
         self.assertEqual(self.get("/api/scm/diff?project=samvision&path=README.md").status_code, 200)
+
+
+class CoordinatorAdopt(_Fixture):
+    """Workspace → Claude → Adopt: binds an EXISTING Claude; Developer only; touches no pane."""
+    GYST = "/srv/server/repos/gyst-lifeops"
+
+    def setUp(self):
+        from ccd import coordid
+        coordid.BINDINGS.unlink(missing_ok=True)
+        super().setUp()
+
+    def state(self, key):
+        p = next(x for x in self.get("/api/workspace/projects").json()["projects"] if x["key"] == key)
+        return p["coordinatorState"], p["coordinator"]
+
+    def test_renamed_claude_is_found_then_adopted_and_survives_a_rename(self):
+        from ccd import coordid
+        self.fake.add_agent("w9:p1", self.GYST)               # title "x": not canonical
+        self.settle()
+        st, coord = self.state("gyst")
+        self.assertEqual(st["state"], "found")
+        self.assertIsNone(coord)
+        self.assertEqual([c["sessionId"] for c in st["candidates"]], ["s-w9:p1"])
+        self.assertNotIn("title", json.dumps(st))             # titles never leave the daemon
+        writes = lambda: [c for c in self.fake.calls if c[0] in (  # noqa: E731
+            "pane.send_text", "pane.send_keys", "agent.prompt", "agent.rename", "pane.close", "pane.split")]
+        before = len(writes())
+        body = json.dumps({"project": "gyst", "sessionId": "s-w9:p1"})
+        self.assertEqual(self.client.post("/api/coordinators/adopt", content=body, headers=JSON).status_code, 403)
+        dev = dict(JSON, **{"x-ccd-developer": self.dev()})
+        for bad in ({"project": "gyst", "sessionId": "s-wE:p2"}, {"project": "gyst", "sessionId": "nope nope"},
+                    {"project": "nope", "sessionId": "s-w9:p1"}, {"project": "gyst"}):
+            self.assertIn(self.client.post("/api/coordinators/adopt", content=json.dumps(bad), headers=dev).status_code,
+                          (404, 409), bad)
+            time.sleep(2.1)                                    # adopt is throttled per project
+        r = self.client.post("/api/coordinators/adopt", content=body, headers=dev)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((r.json()["coordinator"]["state"], r.json()["coordinator"]["paneId"]), ("ready", "w9:p1"))
+        self.settle()
+        st, coord = self.state("gyst")
+        self.assertEqual((st["state"], st["how"], coord["id"]), ("ready", "binding", "w9:p1"))
+        self.assertEqual(coordid.load()["gyst"]["sessionId"], "s-w9:p1")
+        self.assertEqual(len(writes()), before)                # nothing typed, renamed or started
+        kinds = [e["kind"] for e in self.get("/api/activity?limit=50").json()["events"]]
+        self.assertIn("action.adopt", kinds)

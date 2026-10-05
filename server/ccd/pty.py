@@ -145,8 +145,10 @@ class PtyManager:
         base = self.env if self.env is not None else os.environ
         # XDG_RUNTIME_DIR / DBUS_SESSION_BUS_ADDRESS: so `systemctl --user` and `journalctl --user`
         # work in the shell (and systemd-run can place it in its own scope). They are paths, not secrets.
-        keep = {k: base[k] for k in ("PATH", "LANG", "LC_ALL", "TZ", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS")
-                if k in base}
+        # CCD_STATE_DIR: where cc-terminal finds the coordinator bindings ccd uses (a path, set
+        # only when ccd itself runs with a non-default state dir, e.g. tests and the preview).
+        keep = {k: base[k] for k in ("PATH", "LANG", "LC_ALL", "TZ", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
+                                     "CCD_STATE_DIR") if k in base}
         home = self.home or pwd.getpwuid(os.getuid()).pw_dir
         keep.update(HOME=home, USER=self.user, LOGNAME=self.user, SHELL=self.shell, PWD=cwd,
                     TERM="xterm-256color", COLORTERM="truecolor")
