@@ -22,6 +22,8 @@ one in a sub-directory or worktree. When nothing names the coordinator:
 Adoption binds an EXISTING session; nothing here starts, resumes or renames Claude.
 A label or title match is recorded as a binding too, so a later rename cannot break it.
 """
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -146,22 +148,46 @@ def _save(data, path=None):
         return False
 
 
-def _record(data, key, root, r, now):
-    data[key] = {"canonical": canonical_name(key), "sessionId": r["sessionId"], "paneId": r["paneId"],
-                 "root": _real(root), "verifiedAt": int(now)}
+@contextlib.contextmanager
+def _locked(path):
+    """Serialise every read-modify-write of the bindings file: ccd's derive thread, its
+    event loop (Adopt) and cc-terminal (another process) all write it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)   # closing releases the lock
+
+
+def _row(key, root, session_id, pane_id, now):
+    return {"canonical": canonical_name(key), "sessionId": session_id, "paneId": pane_id,
+            "root": _real(root), "verifiedAt": int(now)}
 
 
 def resolve_and_record(key, root, entries, path=None, now=None):
-    """resolve() with this project's binding, recording a strong identification."""
+    """resolve() with this project's binding, recording a strong identification.
+
+    The write happens under the lock and re-reads the file first: only this project's row
+    changes, and only if nobody (an Adopt, cc-terminal) changed that row since it was read.
+    """
+    path = path or BINDINGS
     now = time.time() if now is None else now
-    data = load(path)
-    r = resolve(key, root, entries, data.get(key))
+    old = load(path).get(key)
+    r = resolve(key, root, entries, old)
     if r["state"] == "ready":
-        old = data.get(key) or {}
-        if (old.get("sessionId") != r["sessionId"] or old.get("paneId") != r["paneId"]
-                or now - (old.get("verifiedAt") or 0) > REVERIFY_S):
-            _record(data, key, root, r, now)
-            _save(data, path)
+        o = old or {}
+        if (o.get("sessionId") != r["sessionId"] or o.get("paneId") != r["paneId"]
+                or now - (o.get("verifiedAt") or 0) > REVERIFY_S):
+            try:
+                with _locked(path):
+                    data = load(path)
+                    if data.get(key) == old:
+                        data[key] = _row(key, root, r["sessionId"], r["paneId"], now)
+                        _save(data, path)
+            except OSError:
+                pass   # recording is an optimisation; the verdict stands
     return r
 
 
@@ -171,14 +197,20 @@ def adopt(key, root, entries, session_id, path=None, now=None):
     Only a live Claude at the exact project root can be adopted. Returns the new
     resolution, or raises ValueError with a short reason.
     """
+    path = path or BINDINGS
     if not isinstance(session_id, str) or not SESSION_RE.match(session_id):
         raise ValueError("not a Claude session id")
     r = resolve(key, root, entries)
-    if not any(c["sessionId"] == session_id for c in r["candidates"]):
+    pick = next((c for c in r["candidates"] if c["sessionId"] == session_id), None)
+    if not pick:
         raise ValueError("that Claude is not running at this project's root")
-    data = load(path)
-    data[key] = {"canonical": canonical_name(key), "sessionId": session_id, "paneId": None,
-                 "root": _real(root), "verifiedAt": int(time.time() if now is None else now)}
-    if not _save(data, path):
+    now = time.time() if now is None else now
+    try:
+        with _locked(path):
+            data = load(path)
+            data[key] = _row(key, root, session_id, pick["paneId"], now)
+            if not _save(data, path):
+                raise OSError
+    except OSError:
         raise ValueError("could not record the binding")
-    return resolve_and_record(key, root, entries, path=path, now=now)
+    return resolve(key, root, entries, data[key])

@@ -150,6 +150,46 @@ class Bindings(unittest.TestCase):
         coordid.resolve_and_record("samvision", SV, LIVE, path=self.path, now=1000 + coordid.REVERIFY_S + 1)
         self.assertEqual(coordid.load(self.path)["samvision"]["verifiedAt"], 1000 + coordid.REVERIFY_S + 1)
 
+    def test_a_write_between_read_and_save_is_never_lost(self):
+        """ccd's derive thread reads, an Adopt for another project lands, then the thread saves."""
+        both = LIVE + [agent("wB:p1", S5, MFE)]
+        real = coordid.resolve
+
+        def racing(*a, **kw):
+            coordid.resolve = real
+            coordid.adopt("gyst", GYST, LIVE, S3, path=self.path, now=1000)   # lands mid-way
+            return real(*a, **kw)
+        coordid.resolve = racing
+        self.addCleanup(setattr, coordid, "resolve", real)
+        coordid.resolve_and_record("samvision", SV, both, path=self.path, now=1000)
+        data = coordid.load(self.path)
+        self.assertEqual((data["gyst"]["sessionId"], data["samvision"]["sessionId"]), (S3, S1))
+
+    def test_a_row_changed_by_someone_else_is_not_overwritten_with_a_stale_verdict(self):
+        both = [agent("wA:p1", S4, MFE, "mfe"), agent("wB:p1", S5, MFE)]
+        real = coordid.resolve
+
+        def racing(*a, **kw):
+            coordid.resolve = real
+            coordid.adopt("mfe", MFE, both, S5, path=self.path, now=1000)    # Jay adopts the other one
+            return real(*a, **kw)
+        coordid.resolve = racing
+        self.addCleanup(setattr, coordid, "resolve", real)
+        coordid.resolve_and_record("mfe", MFE, both, path=self.path, now=1000)   # saw only the titled S4
+        self.assertEqual(coordid.load(self.path)["mfe"]["sessionId"], S5)
+
+    def test_concurrent_writers_keep_every_project(self):
+        import threading
+        keys = [(k, f"/srv/x/p{i}", f"{i:08d}-0000-0000-0000-000000000000") for i, k in enumerate("abcdefgh")]
+        rows = [agent(f"w{i}:p1", sid, root, k) for i, (k, root, sid) in enumerate(keys)]
+        ts = [threading.Thread(target=coordid.resolve_and_record, args=(k, root, rows), kwargs={"path": self.path})
+              for k, root, _ in keys]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual(set(coordid.load(self.path)), {k for k, _, _ in keys})
+
     def test_a_broken_file_is_just_no_bindings(self):
         self.path.write_text("{not json")
         self.assertEqual(coordid.load(self.path), {})
