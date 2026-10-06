@@ -15,6 +15,7 @@ import { app } from "../store/app";
 import { handleChunkError } from "../lib/stale";
 import { installClipboard, makeInputSender } from "./termClipboard";
 import { unlockDialogOpen, useDevActive } from "../components/DevMode";
+import { Overflow, type OverflowItem } from "../components/Overflow";
 
 type Mods = { Terminal: typeof XTerm; FitAddon: typeof FitAddon; SearchAddon: typeof SearchAddon };
 let mods: Promise<Mods> | null = null;
@@ -58,10 +59,14 @@ function termTheme() {
     selectionBackground: "#2d4a3c" };
 }
 
-export function TerminalView({ name, label, active, theme, onMaximize, closeText, toolbar }: {
-  name: string; label: string; active: boolean; theme: "dark" | "light"; onMaximize?: () => void;
+export function TerminalView({ name, label, active, theme, closeText, info, menu = [] }: {
+  name: string; label: string; active: boolean; theme: "dark" | "light";
   /** The CLOSE SESSION confirmation; Claude's says Claude itself keeps running. */
-  closeText?: string; toolbar?: React.ReactNode;
+  closeText?: string;
+  /** The compact context line (e.g. "samvision · opus · idle"); the cwd from ccd when absent. */
+  info?: React.ReactNode;
+  /** Extra ⋯ items (e.g. Open in Windows Terminal), after Find / Detach / Close session. */
+  menu?: OverflowItem[];
 }) {
   const dev = useDevActive();
   const host = useRef<HTMLDivElement>(null);
@@ -72,6 +77,7 @@ export function TerminalView({ name, label, active, theme, onMaximize, closeText
   const [conn, setConn] = useState<Conn>("idle");
   const [cwd, setCwd] = useState<string | null>(null);
   const [find, setFind] = useState("");
+  const [finding, setFinding] = useState(false);
   const enc = useRef(new TextEncoder());
 
   const sendResize = useCallback(() => {
@@ -167,26 +173,34 @@ export function TerminalView({ name, label, active, theme, onMaximize, closeText
   };
 
   // The xterm host is ALWAYS mounted (the terminal lives in it); the lock notice is an overlay.
+  // Primary row: state, context, and only the action that state needs. The rest is under ⋯.
+  const bad = conn === "refused" || conn === "lost" || conn === "elsewhere";
+  const recover = conn === "live" || conn === "connecting" ? null
+    : conn === "ended" ? "New session" : conn === "elsewhere" || conn === "refused" ? "Retry" : conn === "idle" ? null : "Reconnect";
   return <div className="term-wrap">
-    {!dev && <div className="term-lock"><div className="con-notyet">
-      <div className="row" style={{ gap: 8 }}><span className="ro-tag is-off">DEVELOPER MODE LOCKED</span><span className="caps muted">{label}</span></div>
-      <p className="text2">A real shell runs commands as jay on jay-server, so it needs Developer Unlock as well as the ccd token.</p>
-      <button type="button" className="btn is-jay" onClick={unlockDialogOpen}>Unlock</button>
+    {!dev && <div className="term-lock"><div className="term-lock-card">
+      <span className="ro-tag is-off">DEVELOPER LOCKED</span>
+      <button type="button" className="btn is-jay is-sm" onClick={unlockDialogOpen}>Unlock</button>
     </div></div>}
     <div className="term-bar" inert={!dev}>
-      <span className={`ro-tag${conn === "live" ? " is-live" : conn === "refused" || conn === "lost" || conn === "elsewhere" ? " is-off" : ""}`}>{WORD[conn]}</span>
-      <span className="mono-xs">{name}</span>
-      <span className="mono-xs faint trunc" title={cwd ?? ""}>{cwd ?? ""}</span>
-      <span className="sl-fill" />
-      {toolbar}
-      <input className="input is-sm term-find" value={find} placeholder="Find in output" aria-label={`Find in ${label} output`}
-        onChange={(e) => { setFind(e.target.value); if (e.target.value) finder.current?.findNext(e.target.value); }}
-        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); if (e.shiftKey) finder.current?.findPrevious(find); else finder.current?.findNext(find); } }} />
       {conn === "live"
-        ? <button type="button" className="btn is-quiet is-sm" onClick={detach} title="Disconnect this view; the shell keeps running">Detach</button>
-        : <button type="button" className="btn is-sm" onClick={() => void connect()}>{conn === "ended" ? "New session" : conn === "elsewhere" ? "Retry" : "Reconnect"}</button>}
-      <button type="button" className="btn is-quiet is-sm" onClick={() => void closeSession()} disabled={conn === "ended"}>Close session</button>
-      {onMaximize && <button type="button" className="btn is-quiet is-sm" onClick={onMaximize} title="Maximize terminal (Ctrl+Shift+Enter)">Maximize</button>}
+        ? <span className="term-dot is-live" role="status" aria-label="live" title="live" />
+        : <span role="status" className={`ro-tag${bad ? " is-off" : ""}`}>{WORD[conn]}</span>}
+      <span className="mono-xs trunc term-info" title={typeof info === "string" ? info : cwd ?? ""}>{info ?? cwd ?? ""}</span>
+      <span className="sl-fill" />
+      {finding && <input className="input is-sm term-find" value={find} placeholder="Find" aria-label={`Find in ${label} output`} autoFocus
+        onChange={(e) => { setFind(e.target.value); if (e.target.value) finder.current?.findNext(e.target.value); }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") { setFinding(false); term.current?.focus(); }
+          else if (e.key === "Enter") { e.preventDefault(); if (e.shiftKey) finder.current?.findPrevious(find); else finder.current?.findNext(find); }
+        }} />}
+      {recover && <button type="button" className="btn is-sm" onClick={() => void connect()}>{recover}</button>}
+      <Overflow label={`${label} actions`} items={[
+        { label: finding ? "Hide find" : "Find in output", onSelect: () => setFinding(!finding) },
+        { label: "Detach this view", onSelect: detach, hidden: conn !== "live" },
+        ...menu,
+        { label: "Close session…", onSelect: () => void closeSession(), danger: true, hidden: conn === "ended" || conn === "idle" },
+      ]} />
     </div>
     <div className="term-host" ref={host} aria-label={`${label} terminal`} inert={!dev} />
   </div>;

@@ -171,7 +171,11 @@ export interface PublicProject {
   legacy_prefixes?: string[];
 }
 
-export interface Coordinator { name: string; paneId: string | null; status: string; canonical: boolean }
+export interface Coordinator {
+  name: string; paneId: string | null; status: string; canonical: boolean;
+  /** The one resolver's verdict (ccd/coordid.py); absent from an older ccd. */
+  state?: CoordinatorState["state"]; how?: string | null; candidates?: CoordinatorCandidate[];
+}
 
 export interface HealthShort {
   ok: boolean;
@@ -350,7 +354,11 @@ export interface WorkspaceProject {
   key: string; name: string; prefix: string; root: string | null; exists: boolean; branch: string | null;
   github: GithubIdentity | null;
   coordinator: { id: string | null; name: string | null; status: string | null; cwd: string | null } | null;
+  /** From ccd's one resolver: ready, found (one unnamed Claude at the root: Adopt), multiple (pick one), none. */
+  coordinatorState?: CoordinatorState;
 }
+export interface CoordinatorCandidate { paneId: string; sessionId: string; status: string }
+export interface CoordinatorState { state: "ready" | "found" | "multiple" | "none"; how: string | null; candidates: CoordinatorCandidate[] }
 export interface FileEntry {
   name: string; kind: "dir" | "file" | "other" | "outside" | "broken"; size: number | null; mtime: number | null;
   protected: boolean; link: boolean; git?: string | null;

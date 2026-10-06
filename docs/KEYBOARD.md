@@ -12,8 +12,8 @@
 | Ctrl+S | Workspace editor | save (Developer Mode) |
 | Ctrl+B | Workspace | show / hide the sidebar (Explorer, Source control or Search). Clicking the active icon in the activity bar does the same |
 | Ctrl+` | Workspace | show / hide the terminal panel |
-| Ctrl+Shift+` | Workspace | open the repo shell |
-| Ctrl+Shift+Enter | Workspace | maximize / restore the dock (Claude, Repo shell, Server shell) |
+| Ctrl+Shift+` | Workspace | open the Project terminal |
+| Ctrl+Shift+Enter | Workspace | maximize / restore the dock (Claude, Project, Server) |
 | Ctrl+V, Ctrl+Shift+V, Shift+Insert | a browser terminal | paste (the program's bracketed-paste mode is honoured; nothing is sent until you press Enter in a shell) |
 | Ctrl+C | a browser terminal | copy when text is selected; otherwise ^C (interrupt) |
 | Shift+F10 or the Menu key | explorer row | context menu |

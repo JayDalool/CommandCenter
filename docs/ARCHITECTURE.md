@@ -243,7 +243,7 @@ still work and nothing was deleted.
 | Projects | one project's cockpit |
 | Tasks | the ticket system: table, pipeline, Needs Jay, inbox, detail |
 | Development | ticket → branch → commits → PR → CI → review → merge → verify → deploy |
-| Console | Claude mirror, repo shell, server shell |
+| Workspace | files, source control, search, editor; one terminal dock: Claude · Project · Server |
 | Agents · Server · Activity · Alerts · Settings | unchanged |
 
 **Overview** is deliberately four panels and nothing else: NEEDS JAY, ACTIVE
@@ -268,6 +268,12 @@ per repo per `git_seconds` — one subprocess for every branch, not one each.
 guessing.
 
 ## P4B revision: Console
+
+> **Superseded (CC-016…019).** There is no Console screen, mirror or quick-console bar any
+> more. The Workspace dock has three real browser terminals: **Claude** (herdr attach to the
+> EXISTING coordinator, chosen by the one resolver `ccd/coordid.py`; an unnamed Claude at the
+> root is offered for Adopt, never attached on cwd alone), **Project** (`repo:<PREFIX>`) and
+> **Server**. Windows Terminal is an optional ⋯ action. The history below is kept for context.
 
 See [ADR 0004](adr/0004-console-and-real-terminals.md) for the full design and
 the herdr capability findings behind it.

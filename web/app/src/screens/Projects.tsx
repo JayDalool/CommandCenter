@@ -12,6 +12,7 @@ import { NeedsTable } from "./needs";
 import { jayAction } from "./PullRequests";
 import { workspace } from "../workspace/transport";
 import { AttachmentsPanel } from "../components/Attachments";
+import { Overflow } from "../components/Overflow";
 
 export function Projects() {
   const route = useRoute();
@@ -67,22 +68,22 @@ function ActionBar({ k, github, paneId, coordName, coordStatus, asOf }: {
   k: string; github: string | null; paneId: string | null; coordName: string | null; coordStatus: string | null; asOf?: number | null;
 }) {
   const ws = (extra: Record<string, string>) => href("workspace", null, { project: k, ...extra });
-  return <section className="panel" aria-label="Project actions"><div className="panel-body is-pad" style={{ display: "grid", gap: 8 }}>
-    <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-      <a className="btn is-jay is-sm" href={ws({})}>Open Workspace</a>
-      <a className="btn is-sm" href={ws({ tab: "claude" })}>Claude</a>
-      <a className="btn is-sm" href={ws({ tab: "repo" })}>Repo shell</a>
-      <a className="btn is-sm" href={ws({ view: "scm" })}>Source control</a>
-      <a className="btn is-sm" href={href("development", null, { project: k })}>Development</a>
-      {github && <a className="btn is-sm" href={github} target="_blank" rel="noopener noreferrer">GitHub ↗</a>}
-      <button type="button" className="btn is-sm" onClick={() => window.dispatchEvent(new CustomEvent("cc:new-task", { detail: { project: k } }))}>New ticket</button>
-      {paneId && <button type="button" className="btn is-quiet is-sm" onClick={() => void workspace.focusAgent(paneId)}>Focus coordinator in herdr</button>}
-    </div>
-    <div className="row mono-xs muted" style={{ flexWrap: "wrap", gap: 12 }}>
-      <span className="row">coordinator <span className="mono">{coordName ?? "—"}</span><AgentState status={coordStatus ?? "offline"} /></span>
-      {paneId && <span>pane <span className="mono">{paneId}</span></span>}
-      {asOf != null && <span className="row">GitHub as of <Ago at={asOf} /><StaleIndicator at={asOf} limitS={300} /></span>}
-    </div>
+  return <section className="panel" aria-label="Project actions"><div className="panel-body is-pad row" style={{ flexWrap: "wrap", gap: 8 }}>
+    <a className="btn is-jay is-sm" href={ws({})}>Open Workspace</a>
+    <a className="btn is-sm" href={href("tasks", null, { project: k })}>Tasks</a>
+    <a className="btn is-sm" href={href("development", null, { project: k })}>Development</a>
+    {github && <a className="btn is-sm" href={github} target="_blank" rel="noopener noreferrer">GitHub ↗</a>}
+    <Overflow label="More project actions" items={[
+      { label: "Open Claude", href: ws({ tab: "claude" }) },
+      { label: "Open Project terminal", href: ws({ tab: "repo" }) },
+      { label: "New ticket", onSelect: () => window.dispatchEvent(new CustomEvent("cc:new-task", { detail: { project: k } })) },
+      { label: "Focus coordinator in herdr", onSelect: () => { if (paneId) void workspace.focusAgent(paneId); }, hidden: !paneId },
+    ]} />
+    <span className="sl-fill" />
+    <span className="row mono-xs muted" style={{ gap: 8 }}>
+      <span className="mono">{coordName ?? "—"}</span><AgentState status={coordStatus ?? "offline"} />
+      {asOf != null && <StaleIndicator at={asOf} limitS={300} />}
+    </span>
   </div></section>;
 }
 

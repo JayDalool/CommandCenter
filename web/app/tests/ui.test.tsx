@@ -7,7 +7,6 @@ import { DataTable } from "../src/components/DataTable";
 import { CommandPalette, buildItems, rank } from "../src/components/CommandPalette";
 import { Tasks } from "../src/screens/Tasks";
 import { Overview } from "../src/screens/Overview";
-import { Console } from "../src/screens/Console";
 import { Development } from "../src/screens/Development";
 import { Workspaces } from "../src/screens/Workspaces";
 import { NewTicket } from "../src/components/NewTicket";
@@ -19,7 +18,7 @@ function load(over: Partial<typeof initial> = {}) {
     taskProjects: t.projects, meta: t.meta, conn: { status: "live", lastMessageAt: Date.now(), attempt: 0 }, ...over });
 }
 
-beforeEach(() => { location.hash = ""; load(); prefs.patch({ consoleOpen: false }); });
+beforeEach(() => { location.hash = ""; load(); });
 
 describe("DataTable keyboard", () => {
   it("j/k move, Enter opens, roving tabindex", async () => {
@@ -187,63 +186,18 @@ describe("overview", () => {
     expect(titles).toEqual(["Needs Jay", "Active work", "System status", "Recent activity"]);
   });
 
-  it("active work names the ticket an agent is on and links to its console", () => {
+  it("active work names the ticket an agent is on and opens it in the Workspace", () => {
     render(<Overview />);
     const active = screen.getByRole("region", { name: "Active work" });
-    expect(within(active).getAllByRole("link", { name: "Console →" }).length).toBeGreaterThan(0);
+    const links = within(active).getAllByRole("link", { name: "Open →" });
+    expect(links.length).toBeGreaterThan(0);
+    for (const l of links) expect(l.getAttribute("href")).toMatch(/^#\/workspace\?/);
   });
 
   it("system status is words, not meters, and stays quiet when healthy", () => {
     render(<Overview />);
     const status = screen.getByRole("region", { name: "System status" });
     expect(status.textContent).not.toMatch(/%/);          // no meters here; that is the Server page
-  });
-});
-
-describe("console", () => {
-  it("has the three modes and the Claude header Jay asked for", () => {
-    location.hash = "#/console?project=samvision";
-    render(<Console />);
-    const tabs = screen.getByRole("tablist", { name: "Console mode" });
-    expect(within(tabs).getAllByRole("tab").map((t) => t.textContent)).toEqual(["Claude", "Repo shell", "Server shell"]);
-    const head = screen.getByRole("group", { name: "Console context" });
-    expect(within(head).getAllByText(/Project|Claude session|Model|Agent state|Herdr pane|cwd/)
-      .map((e) => e.textContent)).toEqual(["Project", "Claude session", "Model", "Agent state", "Herdr pane", "cwd"]);
-  });
-
-  it("the Claude mirror is labelled read-only and never claims to be a shell", async () => {
-    vi.spyOn(app.api, "tail").mockResolvedValue({ agentId: "wE:p2", name: "samvision", lines: 200,
-      text: "\u2713 tests passed", redactions: 0, truncated: false });
-    location.hash = "#/console?tab=claude&project=samvision";
-    render(<Console />);
-    expect(await screen.findByText("\u2713 tests passed")).toBeInTheDocument();
-    expect(screen.getByText("READ-ONLY MIRROR")).toBeInTheDocument();
-  });
-
-  it("the repo shell says it is not enabled and gives the command that works today", () => {
-    location.hash = "#/console?tab=repo&project=samvision";
-    render(<Console />);
-    expect(screen.getByText("NOT ENABLED")).toBeInTheDocument();
-    expect(screen.getByTitle(/cd \/srv\/server\/apps\/samvisionai/)).toBeInTheDocument();
-    const head = screen.getByRole("group", { name: "Console context" });
-    expect(within(head).getAllByText(/Project|Repository|Branch|Ticket|cwd/).map((e) => e.textContent))
-      .toEqual(["Project", "Repository", "Branch", "Ticket", "cwd"]);
-  });
-
-  it("the server shell is clearly a different scope from the repo shell", () => {
-    location.hash = "#/console?tab=server";
-    render(<Console />);
-    expect(screen.getByText(/whole server, not a repository/)).toBeInTheDocument();
-    expect(screen.getByText("ssh -t jay-server")).toBeInTheDocument();
-  });
-
-  it("carries the ticket Jay was looking at into the repo shell context", () => {
-    location.hash = "#/console?tab=repo&ticket=SV-056";
-    render(<Console />);
-    // once in the tab bar, once in the context header: both point at the ticket
-    expect(screen.getAllByRole("link", { name: "SV-056" })).toHaveLength(2);
-    const head = screen.getByRole("group", { name: "Console context" });
-    expect(within(head).getByRole("link", { name: "SV-056" })).toHaveAttribute("href", "#/tasks/SV-056");
   });
 });
 
@@ -302,27 +256,14 @@ describe("workspaces", () => {
   });
 });
 
-describe("quick console", () => {
-  it("is a launcher and a status line, not a terminal", async () => {
-    const tail = vi.spyOn(app.api, "tail");
-    prefs.patch({ consoleOpen: true, consoleAgent: "wE:p2" });
+describe("one place for terminals", () => {
+  it("there is no quick console bar or console toggle; terminals live in the Workspace dock", async () => {
     render(<AppShell><div /></AppShell>);
-    const bar = screen.getByRole("region", { name: "Quick console" });
-    expect(within(bar).getByRole("button", { name: "Open console" })).toBeInTheDocument();
-    expect(within(bar).getByRole("button", { name: "Focus Claude" })).toBeInTheDocument();
-    expect(within(bar).getByRole("button", { name: "Repo shell" })).toBeInTheDocument();
-    expect(tail).not.toHaveBeenCalled();           // the bar never reads a pane
-    await act(async () => { prefs.patch({ consoleOpen: false }); });
-  });
-
-  it("Open console takes Jay to the full Console with that project", async () => {
-    const user = userEvent.setup();
-    prefs.patch({ consoleOpen: true, consoleAgent: "wE:p2" });
-    render(<AppShell><div /></AppShell>);
-    await user.click(screen.getByRole("button", { name: "Open console" }));
-    expect(location.hash).toMatch(/^#\/console\?/);
-    expect(location.hash).toContain("tab=claude");
-    await act(async () => { prefs.patch({ consoleOpen: false }); });
+    expect(screen.queryByRole("region", { name: "Quick console" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /console/i })).toBeNull();
+    const before = { ...prefs.get() };
+    fireEvent.keyDown(document.body, { key: "`" });
+    expect(prefs.get()).toEqual(before);
   });
 });
 

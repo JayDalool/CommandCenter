@@ -1,11 +1,11 @@
 // WORKSPACE — the daily development surface, laid out like an IDE:
 //
-//   ┌ bar: project · ticket · branch · GitHub · Developer Mode ────────────┐
+//   ┌ bar: project · ticket · branch · Developer Mode ──────────────────────┐
 //   │ ACT │ SIDEBAR            │ MAIN: editor tabs · diff tabs · Development │
 //   │ BAR │ Explorer | Source  │ (no Claude here)                            │
 //   │     │ control | Search   │                                             │
 //   ├─────┴────────────────────┴─────────────────────────────────────────────┤
-//   │ DOCK: Claude | Repo shell (repo:<PREFIX>) | Server shell                │
+//   │ DOCK: Claude | Project (repo:<PREFIX>) | Server                         │
 //   └────────────────────────────────────────────────────────────────────────┘
 //
 // The activity bar picks the sidebar mode; clicking the active mode (or Ctrl+B)
@@ -26,38 +26,19 @@ import { prefs, usePrefs, type Prefs } from "../lib/prefs";
 import { ApiError, uploadBytes } from "../api/client";
 import type { FileEntry, FileRead, WorkspaceProject } from "../api/types";
 import { stamp } from "../lib/time";
-import { EmptyState, Kbd } from "../components/ui";
+import { EmptyState } from "../components/ui";
 import { Dialog } from "../components/Dialog";
 import { DevBadge, unlockDialogOpen, useDevActive } from "../components/DevMode";
+import type { OverflowItem } from "../components/Overflow";
 import { bytes } from "../components/Attachments";
 import { DevTrail } from "../components/DevTrail";
 import { CodeEditor, disposeModel, nextVersion, revealLine, type EditorHandle } from "../workspace/Editor";
-import { ClaudePanel } from "../workspace/ClaudePanel";
+import { ClaudeDock } from "../workspace/ClaudeDock";
 import { TerminalView } from "../workspace/Terminal";
 import { DiffView, ScmSidebar, bumpScm } from "../workspace/SourceControl";
 import { GoToFile, SearchPanel } from "../workspace/Search";
 import { registerUnsaved } from "../lib/stale";
-import { NativeButton, NativePanel } from "../workspace/Native";
-import { workspace } from "../workspace/transport";
-import type { Agent } from "../api/types";
-import { AgentState } from "../components/ui";
-
-/** One compact line of Claude context above the terminal. */
-function ClaudeHeader({ agent, project, ticket, model }: {
-  agent: Agent | null; project: WorkspaceProject; ticket: string | null; model: string | null;
-}) {
-  const cell = (k: string, v: React.ReactNode, title?: string) => <span className="ch-cell" title={title}><span className="caps muted">{k}</span> {v}</span>;
-  return <div className="claude-hdr" role="group" aria-label="Claude context">
-    {cell("Project", <b>{project.name}</b>)}
-    {cell("Coordinator", <span className="mono">{agent?.agent_name || project.key}</span>)}
-    {cell("Status", agent ? <AgentState status={agent.status} /> : <span className="bad-t">not running</span>)}
-    {agent && cell("Pane", <span className="mono-xs">{agent.id}</span>)}
-    {agent?.session_id && cell("Session", <span className="mono-xs">{String(agent.session_id).slice(0, 8)}…</span>, String(agent.session_id))}
-    {model && cell("Model", <span className="mono-xs">{model}</span>)}
-    {ticket && cell("Ticket", <span className="key">{ticket}</span>)}
-    {agent?.cwd && cell("cwd", <span className="mono-xs trunc">{agent.cwd}</span>, agent.cwd)}
-  </div>;
-}
+import { nativeUri } from "../workspace/Native";
 
 interface Tab { path: string; file: FileRead; text: string; version: number; dirty: boolean; conflict: string | null }
 /** Read-only tabs next to the file tabs: one file's diff, or the Development trail. */
@@ -238,16 +219,13 @@ export function Workspace() {
   const setActive = (a: string | null) => tabStore.patch({ active: a });
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [over, setOver] = useState(false);
-  const [git, setGit] = useState(true);
+  const git = true;
   const [menu, setMenu] = useState<Menu | null>(null);
   const [naming, setNaming] = useState<{ title: string; initial: string; done: (v: string) => void } | null>(null);
   const [goto, setGoto] = useState(false);
   const [searchFocus, setSearchFocus] = useState(0);
   const [seenSides, setSeenSides] = useState<Set<Side>>(new Set([side]));
   const [seenTerms, setSeenTerms] = useState<Set<Term>>(new Set([term]));
-  // Native Windows Terminal is the default; a browser shell opens only when Jay asks for one.
-  const [browserShell, setBrowserShell] = useState<Set<Term>>(new Set());
-  const [claudeMirror, setClaudeMirror] = useState(false);
   const [{ vw, vh }, setViewport] = useState({ vw: typeof window !== "undefined" ? window.innerWidth : 1400,
     vh: typeof window !== "undefined" ? window.innerHeight : 900 });
   useEffect(() => {
@@ -462,10 +440,9 @@ export function Workspace() {
     return items;
   };
 
-  const coordinatorAgent = useMemo(() => {
-    const id = proj?.coordinator?.id;
-    return id ? st?.agents.find((a) => a.id === id) ?? null : st?.agents.find((a) => a.project === key && a.role === "coordinator") ?? null;
-  }, [proj, st, key]);
+  // Live (WebSocket) state, so Adopt or a coordinator starting shows up without a reload.
+  const coord = st?.coordinators[key] ?? null;
+  const coordinatorAgent = useMemo(() => (coord?.paneId ? st?.agents.find((a) => a.id === coord.paneId) ?? null : null), [coord, st]);
   const cfg = st?.projectsConfig.find((x) => x.key === key) ?? null;
   const devRow = qt ? development?.rows.find((r) => r.key === qt) ?? null : null;
   const projectRows = development?.rows.filter((r) => r.project === key) ?? [];
@@ -483,7 +460,11 @@ export function Workspace() {
   const exOpen = p.wsExplorerOpen;
   const termOpen = (p.wsTermOpen || p.wsMax === "term") && p.wsMax !== "main";
   const mainOpen = p.wsMax !== "term";
-  const termLabel = (t: Term) => (t === "claude" ? "Claude" : t === "repo" ? `Repo shell · repo:${proj?.prefix ?? "?"}` : "Server shell");
+  const termLabel = (t: Term) => (t === "claude" ? "Claude" : t === "repo" ? "Project" : "Server");
+  const nativeItem = (action: "repo" | "server"): OverflowItem[] => {
+    const uri = nativeUri(action, proj?.prefix);
+    return uri ? [{ label: "Open in Windows Terminal", href: uri }] : [];
+  };
   // Stored sizes are clamped to THIS window, so a size saved on a big monitor never squeezes a laptop to nothing.
   const maxTerm = Math.max(140, vh - 260);
   const termH = Math.min(p.wsTermH, maxTerm);
@@ -504,9 +485,7 @@ export function Workspace() {
         {qt ? <a className="key" href={href("tasks", qt)}>{qt}</a> : <span className="faint">—</span>}</span>
       <span className="row" style={{ gap: 6 }}><span className="caps muted">Branch</span><span className="mono-xs">{ticket?.branch || proj?.branch || "—"}</span></span>
       {devRow?.pr?.number != null && prUrl && <a className="mono-xs link" href={prUrl} target="_blank" rel="noopener noreferrer">PR #{devRow.pr.number} ↗</a>}
-      {proj?.github && <a className="mono-xs link" href={proj.github.url} target="_blank" rel="noopener noreferrer" title="Open the repository on GitHub">{proj.github.slug} ↗</a>}
       <span className="sl-fill" />
-      <button type="button" className="btn is-quiet is-sm" onClick={() => setGoto(true)} title="Go to file">Go to file <Kbd>Ctrl P</Kbd></button>
       <DevBadge />
     </div>
 
@@ -521,7 +500,6 @@ export function Workspace() {
             <span className="caps muted">Explorer</span><span className="sl-fill" />
             <button type="button" className="btn is-quiet is-sm" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); openMenu({ x: r.left, y: r.bottom, path: target, entry: null }); }}
               title="New file, folder or upload" aria-label="New file, folder or upload">+</button>
-            <button type="button" className="btn is-quiet is-sm" aria-pressed={git} onClick={() => { setGit(!git); refresh(); }} title="Show git status">git</button>
             <button type="button" className="btn is-quiet is-sm" onClick={refresh} aria-label="Refresh explorer">↻</button>
           </div>
           <nav className="ws-crumbs mono-xs" aria-label="Current folder">
@@ -535,7 +513,7 @@ export function Workspace() {
                 selected={cur?.file.project === key ? cur.file.path : null} target={target} setTarget={setTarget}
                 listings={listings} load={load} onDropFiles={dropFiles} onMenu={openMenu} />}
           </div>
-          <div className="ws-drop mono-xs">{dev ? <>Drop files to upload into <b>{target || "/"}</b></> : <>Changing files needs <button type="button" className="link" onClick={unlockDialogOpen}>Developer Unlock</button></>}</div>
+          {over && <div className="ws-drop mono-xs">{dev ? <>Drop to upload into <b>{target || "/"}</b></> : <>Locked — <button type="button" className="link" onClick={unlockDialogOpen}>Unlock</button></>}</div>}
           {uploads.length > 0 && <div className="ws-uploads" aria-live="polite">
             {uploads.map((u) => <div key={u.id} className="row mono-xs">
               <span className="trunc" title={join(u.dir, u.name)}>{u.name}</span>
@@ -553,7 +531,7 @@ export function Workspace() {
             selected={curView?.kind === "diff" && curView.project === key ? { path: curView.path, staged: curView.staged } : null} />
         </div>}
         {(seenSides.has("search") || side === "search") && <div className="ws-side-pane" role="region" aria-label="Search" hidden={side !== "search"}>
-          <div className="ws-ex-head"><span className="caps muted">Search</span><span className="sl-fill" /><span className="mono-xs faint">Go to file <Kbd>Ctrl P</Kbd></span></div>
+          <div className="ws-ex-head"><span className="caps muted">Search</span></div>
           <SearchPanel project={key} focusKey={searchFocus} onOpen={(x, line) => void openFile(x, undefined, line)} />
         </div>}
       </aside>
@@ -576,8 +554,9 @@ export function Workspace() {
               </span>;
             })}
           </div>
-          <button type="button" className="btn is-quiet is-sm" aria-pressed={p.wsMax === "main"} onClick={() => maximize("main")}>{p.wsMax === "main" ? "Restore" : "Maximize"}</button>
-          {!termOpen && <button type="button" className="btn is-quiet is-sm" onClick={() => prefs.patch({ wsTermOpen: true, wsMax: "none" })}>Dock <Kbd>Ctrl `</Kbd></button>}
+          {!termOpen && <button type="button" className="btn is-quiet is-sm" onClick={() => prefs.patch({ wsTermOpen: true, wsMax: "none" })} title="Ctrl+`">Terminal</button>}
+          <button type="button" className="btn is-quiet is-sm" aria-pressed={p.wsMax === "main"} aria-label={p.wsMax === "main" ? "Restore editor" : "Maximize editor"}
+            title={p.wsMax === "main" ? "Restore" : "Maximize editor"} onClick={() => maximize("main")}>{p.wsMax === "main" ? "⤡" : "⤢"}</button>
         </div>
         <div className="ws-view" hidden={curView !== null}>
           {cur ? <>
@@ -597,8 +576,7 @@ export function Workspace() {
             </div>}
             {cur.file.kind !== "text" && <div className="ws-editor-wrap is-empty"><EmptyState title={cur.file.kind === "large" ? "Too large for the editor" : "Binary file"}
               hint={`${bytes(cur.file.size)} — download it instead. The editor opens UTF-8 text up to 2 MB.`} /></div>}
-          </> : <div className="ws-editor-wrap is-empty"><EmptyState title="Open a file from the explorer"
-            hint="Ctrl+P go to file · Ctrl+Shift+F search · Ctrl+S save (Developer Mode) · drop files from Windows onto a folder" /></div>}
+          </> : <div className="ws-editor-wrap is-empty"><EmptyState title="No file open" hint="Ctrl+P go to file · Ctrl+Shift+F search" /></div>}
           {/* Mounted while any text tab is open, so switching to a binary or diff tab never drops another tab's edits. */}
           {textTab && <CodeEditor path={textTab.path} text={textTab.text} version={textTab.version} theme={theme} handle={editor}
             hidden={cur?.file.kind !== "text"} onSave={() => void save()}
@@ -625,52 +603,22 @@ export function Workspace() {
       <div className="tabs ws-termtabs" role="tablist" aria-label="Terminal">
         {(["claude", "repo", "server"] as Term[]).map((t) => <button key={t} type="button" role="tab" aria-selected={term === t} className="tab" onClick={() => setTerm(t)}>{termLabel(t)}</button>)}
         <span className="sl-fill" />
-        <button type="button" className="btn is-quiet is-sm" aria-pressed={p.wsMax === "term"} onClick={() => maximize("term")} title="Ctrl+Shift+Enter">{p.wsMax === "term" ? "Restore" : "Maximize"}</button>
-        <button type="button" className="btn is-quiet is-sm" onClick={() => prefs.patch({ wsTermOpen: false, wsMax: "none" })} aria-label="Hide terminal (Ctrl+`)">Hide</button>
+        <button type="button" className="btn is-quiet is-sm" aria-pressed={p.wsMax === "term"} onClick={() => maximize("term")}
+          aria-label={p.wsMax === "term" ? "Restore terminal" : "Maximize terminal"} title="Ctrl+Shift+Enter">{p.wsMax === "term" ? "⤡" : "⤢"}</button>
+        <button type="button" className="btn is-quiet is-sm" onClick={() => prefs.patch({ wsTermOpen: false, wsMax: "none" })} aria-label="Hide terminal" title="Ctrl+`">⌄</button>
       </div>
       <div className="ws-panel-body">
         <div className="ws-term-pane" hidden={term !== "claude"}>
-          {seenTerms.has("claude") && proj && <>
-            <ClaudeHeader agent={coordinatorAgent} project={proj} ticket={qt} model={cfg?.model ?? null} />
-            {claudeMirror
-              ? <ClaudePanel compact prefix={proj.prefix} active={term === "claude" && termOpen} agent={coordinatorAgent}
-                project={{ key: proj.key, name: proj.name }} ticket={qt} model={cfg?.model ?? null} />
-              : <TerminalView key={`claude:${proj.prefix}`} name={`claude:${proj.prefix}`} label={`Claude · ${proj.name}`}
-                active={term === "claude" && termOpen} theme={theme} onMaximize={() => maximize("term")}
-                closeText={`Close the Claude terminal for ${proj.name}? Only this attach closes — Claude keeps running in herdr.`}
-                toolbar={<span className="mono-xs faint" title="herdr direct attach: Ctrl+B then q detaches; Ctrl+B Ctrl+B sends a literal Ctrl+B">Ctrl+B q detaches</span>} />}
-            <div className="native-strip" onClickCapture={(e) => {
-              // herdr allows one writer: hand Claude over to the native terminal / the mirror by
-              // releasing the browser's attach first (Claude itself keeps running).
-              const el = (e.target as HTMLElement).closest("a,button");
-              if (el && (el.getAttribute("href")?.startsWith("commandcenter:") || el.getAttribute("data-release") === "1"))
-                void app.api.ptyClose(`claude:${proj.prefix}`).catch(() => undefined);
-            }}>
-              <NativeButton action="claude" prefix={proj.prefix} primary={false} small>Open native terminal</NativeButton>
-              {coordinatorAgent && <button type="button" className="btn is-quiet is-sm" onClick={() => void workspace.focusAgent(coordinatorAgent.id)}>Open in herdr</button>}
-              <button type="button" className="btn is-quiet is-sm" aria-pressed={claudeMirror} data-release={claudeMirror ? "0" : "1"}
-                onClick={() => setClaudeMirror(!claudeMirror)}
-                title="The old read-only snapshot view (fallback)">{claudeMirror ? "Back to terminal" : "Mirror"}</button>
-              <span className="mono-xs faint">one writer at a time — Open native terminal and Mirror release the browser's attach; leaving Workspace releases it after a minute</span>
-            </div>
-          </>}
+          {seenTerms.has("claude") && proj && <ClaudeDock proj={proj} coord={coord} agent={coordinatorAgent} model={cfg?.model ?? null}
+            active={term === "claude" && termOpen} theme={theme} />}
         </div>
         {/* Terminals stay mounted once opened, so switching tabs never reconnects. */}
         {proj && seenTerms.has("repo") && <div className="ws-term-pane" hidden={term !== "repo"}>
-          {browserShell.has("repo") ? <>
-            <div className="native-strip"><NativeButton action="repo" prefix={proj.prefix} small>Open native repo terminal</NativeButton>
-              <span className="mono-xs faint">recommended · this browser shell is the fallback</span></div>
-            <TerminalView key={`repo:${proj.prefix}`} name={`repo:${proj.prefix}`} label={termLabel("repo")} active={term === "repo" && termOpen} theme={theme} onMaximize={() => maximize("term")} />
-          </> : <NativePanel action="repo" prefix={proj.prefix} label={`repo · ${proj.name}`} detail={`opens in ${proj.root ?? "the registered checkout"}`}
-            onBrowser={() => setBrowserShell((s) => new Set([...s, "repo"]))} />}
+          <TerminalView key={`repo:${proj.prefix}`} name={`repo:${proj.prefix}`} label={`Project · ${proj.name}`} active={term === "repo" && termOpen}
+            theme={theme} info={`${proj.root ?? proj.name} · ${ticket?.branch || proj.branch || "—"}`} menu={nativeItem("repo")} />
         </div>}
         {seenTerms.has("server") && <div className="ws-term-pane" hidden={term !== "server"}>
-          {browserShell.has("server") ? <>
-            <div className="native-strip"><NativeButton action="server" small>Open native server terminal</NativeButton>
-              <span className="mono-xs faint">recommended · this browser shell is the fallback</span></div>
-            <TerminalView name="server" label="Server shell" active={term === "server" && termOpen} theme={theme} onMaximize={() => maximize("term")} />
-          </> : <NativePanel action="server" label="server · jay-server" detail="a normal jay login in /home/jay — no sudo is ever automated"
-            onBrowser={() => setBrowserShell((s) => new Set([...s, "server"]))} />}
+          <TerminalView name="server" label="Server" active={term === "server" && termOpen} theme={theme} menu={nativeItem("server")} />
         </div>}
       </div>
     </section>

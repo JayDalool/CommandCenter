@@ -74,8 +74,8 @@ export function Overview() {
           <span className="trunc t">{ticket?.title ?? agent.agent_name ?? agent.id}</span>
           <span className="mono-xs muted">{agent.role}</span>
           {agent.blockedForMin != null && <span className="mono-xs jay-t">{dur(agent.blockedForMin * 60)}</span>}
-          <a className="goto" href={href("console", null, { project: agent.project ?? undefined,
-            ticket: ticket?.key })}>Console →</a>
+          <a className="goto" href={href("workspace", null, { project: agent.project ?? undefined,
+            ticket: ticket?.key, tab: agent.role === "coordinator" ? "claude" : undefined })}>Open →</a>
         </li>)}
       </ul> : null}
       {/* Tickets in flight with nobody on them: one line, not nine rows that

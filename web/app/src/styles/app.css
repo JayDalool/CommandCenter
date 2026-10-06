@@ -167,8 +167,6 @@ tr:focus-visible, .row-btn:focus-visible { outline-offset: -2px; }
   font: 12.5px/1.5 var(--font-mono); white-space: pre-wrap; word-break: break-word; min-height: 0; }
 .con-term.is-empty { display: grid; place-items: center; }
 .con-term .dim { color: var(--term-dim); }
-.con-notyet { max-width: 60ch; display: grid; gap: 8px; padding: 18px; color: var(--term-text); }
-.con-notyet p { color: var(--term-dim); }
 .con-foot { display: flex; gap: 10px; align-items: center; padding: 6px 12px; border-top: 1px solid var(--line-strong);
   background: var(--bg-2); }
 .con-foot.is-jay { background: var(--jay-soft); }
@@ -179,10 +177,6 @@ tr:focus-visible, .row-btn:focus-visible { outline-offset: -2px; }
 .cmd-inline .cmd { border: 0; background: transparent; padding: 0; }
 .ro-tag.is-off { border-color: var(--line-strong); color: var(--faint); }
 
-/* ================= quick console ================= */
-.quickbar { grid-area: console; display: flex; align-items: center; gap: 10px; padding: 0 12px;
-  height: 34px; border-top: 1px solid var(--line-strong); background: var(--bg-2); min-width: 0; }
-.quickbar[hidden] { display: none; }
 
 .console { grid-area: console; border-top: 1px solid var(--line-strong); background: var(--bg-2); height: var(--console-h);
   display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: 0; }
@@ -705,14 +699,19 @@ tr:focus-visible, .row-btn:focus-visible { outline-offset: -2px; }
   .claude-head { display: none; }
 }
 
-/* native terminals: recommended first */
-.native { flex: 1 1 0; min-height: 0; display: grid; place-items: center; background: var(--term-bg); padding: 16px; overflow: auto; }
-.native-card { display: grid; gap: 10px; justify-items: start; max-width: 560px; }
-.native-card .btn.is-jay { font-size: 14px; height: 34px; padding: 0 18px; }
-.native-note { margin: 0; }
-.native-strip { display: flex; align-items: center; gap: 10px; padding: 3px 8px; border-bottom: 1px solid var(--line); background: var(--bg-2); flex: none; }
 
-/* Claude context: one dense line, never a tall header */
-.claude-hdr { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 16px; padding: 3px 10px; border-bottom: 1px solid var(--line); background: var(--surface); font-size: var(--fs-sm); flex: none; min-width: 0; }
-.ch-cell { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 40ch; }
-.ws-term-pane > .term-wrap, .ws-term-pane > .claude { flex: 1 1 0; min-height: 0; width: 100%; }
+.ws-term-pane > .term-wrap { flex: 1 1 0; min-height: 0; width: 100%; }
+/* Claude tab when the coordinator is not attachable yet: one line of state and the one fix */
+.claude-state { flex: 1 1 0; display: flex; flex-wrap: wrap; align-content: flex-start; align-items: center; gap: 10px; padding: 12px 14px; background: var(--term-bg); color: var(--term-text); }
+.claude-pick { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; width: 100%; }
+.claude-pick li { gap: 10px; }
+
+/* ⋯ overflow menus (terminal dock, project page) */
+.ovf { position: relative; display: inline-flex; }
+.ovf-btn { min-width: 32px; min-height: 28px; font-size: 16px; line-height: 1; }
+.ctx.ovf-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 61; }
+a.ctx-item { text-decoration: none; }
+.term-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+.term-dot.is-live { background: var(--ok); }
+.term-info { min-width: 0; }
+.term-lock-card { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-pop); }
