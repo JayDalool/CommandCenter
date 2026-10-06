@@ -73,6 +73,8 @@ export function DevTrail({ row, repo }: { row: DevRow | null; repo?: string | nu
   }
   const b = row.branch;
   const pr = row.pr;
+  const roles = Object.entries(row.roles ?? {});
+  const pv = row.pipelineReview;
   return <dl className="dev-trail">
     <DetailRow label="Branch">{b
       ? <span className="row" style={{ gap: 8, flexWrap: "wrap" }}>
@@ -94,7 +96,13 @@ export function DevTrail({ row, repo }: { row: DevRow | null; repo?: string | nu
         {row.prs.length > 1 && <span className="mono-xs faint">+{row.prs.length - 1} more linked</span>}</span>
       : <Dash why="no PR linked to this ticket" />}</DetailRow>
     <DetailRow label="CI">{ciStage(row.ci)}</DetailRow>
-    <DetailRow label="Review">{row.review
+    {roles.length > 0 && <DetailRow label="Roles"><span className="mono-xs">
+      {roles.map(([r, v]) => v.model ? `${r} ${v.model}` : r).join(" · ")}</span></DetailRow>}
+    <DetailRow label="Review">{pv
+      ? <span className={pv.verdict === "APPROVE" ? "ok-t" : "warn-t"}>
+        {pv.verdict === "APPROVE" ? "approved" : pv.verdict ? "changes requested" : "reviewed"}
+        {pv.head ? ` at ${pv.head.slice(0, 7)}` : ""}</span>
+      : row.review
       ? <span className={row.review === "APPROVED" ? "ok-t" : row.review === "CHANGES_REQUESTED" ? "warn-t" : "muted"}>
         {REVIEW_WORD[row.review] ?? row.review}</span>
       : <Dash why="no PR to review" />}</DetailRow>

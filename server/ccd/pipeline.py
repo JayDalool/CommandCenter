@@ -145,6 +145,26 @@ class Pipeline:
                 "verification": j(r[10], None), "handoff": j(r[11], None), "blocked": j(r[12], None),
                 "merge": j(r[13], None), "updatedAt": r[14]}
 
+    DEV_ROLES = ("planner", "implementer", "reviewer", "verifier")
+
+    def recorded(self, ids):
+        """{ticket id: {"roles", "review"}} for the tickets that have pipeline work, in ONE query.
+
+        Only what a pipeline step recorded: roles by name (model + time), and the review verdict/head.
+        """
+        ids = list(ids)
+        out = {}
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            for tid, roles, verdict, head in self.db.execute(
+                    "SELECT ticket_id, roles, review_verdict, review_head FROM ticket_work WHERE ticket_id IN (%s)"
+                    % ",".join("?" * len(chunk)), chunk).fetchall():
+                have = json.loads(roles) if roles else {}
+                out[tid] = {"roles": {r: {"model": have[r].get("model"), "at": have[r].get("at")}
+                                      for r in self.DEV_ROLES if isinstance(have.get(r), dict)},
+                            "review": {"verdict": verdict, "head": head} if verdict or head else None}
+        return out
+
     def work(self, key):
         """Everything a coordinator needs to resume this ticket, in one object."""
         t = self.ts.get(key)

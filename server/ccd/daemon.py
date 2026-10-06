@@ -869,6 +869,7 @@ class Daemon:
         links = ts.links_by_key("github", "pr")
         prs_by_project = {}
         rows = []
+        recorded = self.pipeline.recorded(t["id"] for t in tickets) if self.pipeline is not None else {}
         for t in tickets:
             if t["project"] not in prs_by_project:
                 prs_by_project[t["project"]] = self._pr_index(t["project"])
@@ -905,6 +906,8 @@ class Daemon:
                 "ci": pr["ci"] if pr else None,
                 "review": pr["review"] if pr else None,
                 "merge": merge, "verify": verify, "deploy": None,
+                "roles": (recorded.get(t["id"]) or {}).get("roles") or {},
+                "pipelineReview": (recorded.get(t["id"]) or {}).get("review"),
             })
         rows.sort(key=lambda r: (-tasks_mod.STATUSES.index(r["status"]) if r["status"] in tasks_mod.STATUSES else 0,
                                  r["key"]))
