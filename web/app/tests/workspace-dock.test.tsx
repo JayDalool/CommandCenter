@@ -84,6 +84,27 @@ describe("Claude tab follows the one resolver", () => {
     expect(terms()).toEqual(["claude:GYST"]);
   });
 
+  it("a successful Adopt keeps the button disabled, so a double click sends one request", async () => {
+    setCoord("gyst", { state: "found", candidates: [{ paneId: "w9:p1", sessionId: "4de6de1b-3cc5-4846-9382-3f5a361bec11", status: "idle" }] });
+    vi.spyOn(app, "action").mockResolvedValue(true);
+    await open("#/workspace?project=gyst&tab=claude");
+    const btn = screen.getByRole("button", { name: "Adopt" });
+    fireEvent.click(btn);
+    await waitFor(() => expect(btn).toBeDisabled());
+    fireEvent.click(btn);
+    expect(app.action).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed Adopt re-enables the button", async () => {
+    setCoord("gyst", { state: "found", candidates: [{ paneId: "w9:p1", sessionId: "4de6de1b-3cc5-4846-9382-3f5a361bec11", status: "idle" }] });
+    vi.spyOn(app, "action").mockResolvedValue(false);
+    await open("#/workspace?project=gyst&tab=claude");
+    const btn = screen.getByRole("button", { name: "Adopt" });
+    fireEvent.click(btn);
+    await waitFor(() => expect(app.action).toHaveBeenCalled());
+    await waitFor(() => expect(btn).not.toBeDisabled());
+  });
+
   it("found while Developer Mode is locked asks to unlock instead of adopting", async () => {
     developer.set({ active: false } as never);
     setCoord("gyst", { state: "found", candidates: [{ paneId: "w9:p1", sessionId: "4de6de1b-3cc5-4846-9382-3f5a361bec11", status: "idle" }] });

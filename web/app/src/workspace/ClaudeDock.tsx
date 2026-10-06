@@ -25,9 +25,9 @@ export function ClaudeDock({ proj, coord, agent, model, active, theme }: {
   const adopt = async (sessionId: string) => {
     if (!dev) { unlockDialogOpen(); return; }
     setBusy(true);
-    try {
-      await app.action(() => app.api.adoptCoordinator(proj.key, sessionId), `${proj.name}: coordinator adopted`);
-    } finally { setBusy(false); }
+    // On success the button stays disabled: the next snapshot turns this tab into the terminal.
+    const ok = await app.action(() => app.api.adoptCoordinator(proj.key, sessionId), `${proj.name}: coordinator adopted`);
+    if (!ok) setBusy(false);
   };
 
   if (state !== "ready") {

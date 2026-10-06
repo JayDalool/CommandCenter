@@ -41,7 +41,7 @@ export function Overflow({ label, items }: { label: string; items: OverflowItem[
         {it.href
           ? <a role="menuitem" className="ctx-item" href={it.href} onClick={() => { it.onSelect?.(); setOpen(false); }}>{it.label}</a>
           : <button type="button" role="menuitem" className={`ctx-item${it.danger ? " is-danger" : ""}`}
-            onClick={() => { setOpen(false); it.onSelect?.(); }}>{it.label}</button>}
+            onClick={() => { close(); it.onSelect?.(); }}>{it.label}</button>}
       </li>)}
     </ul>}
   </span>;

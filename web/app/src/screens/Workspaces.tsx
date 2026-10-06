@@ -108,7 +108,7 @@ function PaneDetail({ p, w }: { p: WorkspacePaneCell; w: Workspace }) {
       <div className="row" style={{ flexWrap: "wrap" }}>
         {p.live && <button type="button" className="btn is-sm" onClick={() => workspace.focusAgent(p.id)}>Focus agent</button>}
         {p.live && <button type="button" className="btn is-sm" onClick={() => openAgent(p.id)}>
-          {q ? "Answer…" : "Read-only tail"}</button>}
+          {q ? "Open to answer" : "Open"}</button>}
         <button type="button" className="btn is-sm" onClick={() => workspace.focusWorkspace(w.id)}>Open workspace</button>
       </div>
     </div>
