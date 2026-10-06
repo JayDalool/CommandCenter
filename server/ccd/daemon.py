@@ -1011,13 +1011,14 @@ class Daemon:
 
     # What decides a pipeline ticket's gates and stage. On a ticket in the pipeline these move
     # only through pipeline steps — or by Jay with Developer Unlock, as an explicit override.
-    GATE_FIELDS = {"labels", "type", "flags"} | set(tasks_mod.FLAGS)
+    GATE_FIELDS = {"labels", "type", "flags", "archived"} | set(tasks_mod.FLAGS)
 
     def task_update(self, key, body, actor="jay", developer=False):
         if isinstance(body, dict) and self.pipeline is not None and self.tasks.exists(key):
             w = self._wrap(self.pipeline.work, key)
             owner = actor == "jay" and developer
-            if w["planState"] != "none" or w["gate"]:
+            # The same rule as Pipeline.participating(): a plan, a recorded review, or an open gate.
+            if self.pipeline.participating(key) or w["gate"]:
                 if "status" in body and not owner:
                     raise ActionError(409, f"{w['key']} is in the pipeline: its status moves through pipeline steps "
                                            f"(or Jay with Developer Unlock)")
@@ -1497,6 +1498,7 @@ class Daemon:
             rule = DISPATCH_TRANSITIONS.get(verb)
             t = self.tasks.get(task)
             self._task_event("task.updated", t, f"dispatched: {verb} → {name}", {"kind": "dispatch"})
-            if rule:
+            # A pipeline ticket moves only through its own steps (start records branch, worktree, lane).
+            if rule and not self.pipeline.participating(task):
                 self._auto(task, rule[0], rule[1], f"dispatch '{verb}' accepted by idle coordinator {name}")
         return {"ok": True, "coordinator": name, "task": task, "verb": verb, "plan": plan}

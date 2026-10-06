@@ -552,6 +552,32 @@ class PipelineApi(Automation):
         self.assertEqual(len(ev), 1)
         self.assertEqual(ev[0]["severity"], "action")
 
+    def test_a_ticket_in_the_pipeline_by_review_alone_is_guarded_too(self):
+        self.ticket("IN_REVIEW")
+        self.tickets.link("SV-056", "github", "pr", "JayDalool/SamVisionAI#94",
+                          "https://github.com/JayDalool/SamVisionAI/pull/94", "t", "jay")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: x"), headRefOid="a" * 40)]
+        self.poll()
+        self.step("review", {"verdict": "REQUEST_CHANGES", "head": "a" * 40}, "agent:reviewer")
+        for body in ({"status": "READY_TO_MERGE"}, {"status": "DONE"}):
+            self.assertEqual(self.patch(body).status_code, 409, body)
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+
+    def test_archiving_cannot_hide_an_open_gate(self):
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"labels": ["migration"]}, "jay")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        self.assertEqual(self.patch({"archived": True}).status_code, 409)
+
+    def test_dispatch_never_moves_a_pipeline_ticket_past_start(self):
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        r = self.post("/api/action/dispatch", {"project": "samvision", "taskId": "SV-056", "verb": "implement"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.tickets.get("SV-056")["status"], "READY_TO_IMPLEMENT")
+        r = self.step("start", {"branch": "SV-056-x", "worktree": "/srv/w/SV-056"})
+        self.assertEqual(r.json()["status"], "IN_PROGRESS", r.text)
+
     def test_unknown_steps_and_bad_bodies_are_refused(self):
         self.ticket("INBOX")
         self.assertEqual(self.step("merge", {}).status_code, 404)
