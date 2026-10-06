@@ -338,6 +338,9 @@ export interface DevRow {
   merge: "MERGED" | "WAITING FOR JAY" | "BLOCKED" | null;
   verify: "PENDING" | "DONE" | null;
   deploy: null;
+  // Recorded by pipeline steps only; never inferred from the assignee or text.
+  roles?: Record<string, { model: string | null; at: number }>;
+  pipelineReview?: { verdict: string | null; head: string | null } | null;
 }
 export interface Development { rows: DevRow[]; seq: number; gitAsOf: number | null; stages: string[];
   notes: string[] }

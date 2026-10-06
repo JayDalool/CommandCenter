@@ -323,6 +323,26 @@ class DevelopmentView(ApiBase):
         self.tickets.create("samvision", "just an idea")
         self.assertNotIn("SV-001", self.rows())
 
+    def test_roles_and_pipeline_review_appear_only_where_a_pipeline_step_recorded_them(self):
+        self.tickets.create("samvision", "plain", status="IN_PROGRESS", assignee="agent:planner")
+        self.tickets.create("samvision", "piped", status="INBOX")
+        self.daemon.pipeline.plan("SV-002", {"summary": "do it", "tests": ["unit"]}, "agent:planner", model="opus")
+        self.daemon.pipeline.start("SV-002", "SV-002-piped", "/srv/server/worktrees/sv/SV-002", "agent:implementer",
+                                   model="sonnet")
+        rows = self.rows()
+        self.assertEqual(rows["SV-001"]["roles"], {})
+        self.assertIsNone(rows["SV-001"]["pipelineReview"])
+        self.assertEqual(sorted(rows["SV-002"]["roles"]), ["implementer", "planner"])
+        self.assertEqual(rows["SV-002"]["roles"]["planner"]["model"], "opus")
+        self.assertEqual(set(rows["SV-002"]["roles"]["planner"]), {"model", "at"})
+        self.assertIsNone(rows["SV-002"]["pipelineReview"])
+        head = "94" * 20
+        self.tickets.update("SV-002", {"status": "IN_REVIEW"})
+        self.daemon.pipeline.review("SV-002", "APPROVE", head, "agent:reviewer", model="opus")
+        row = self.rows()["SV-002"]
+        self.assertEqual(row["roles"]["reviewer"]["model"], "opus")
+        self.assertEqual(row["pipelineReview"], {"verdict": "APPROVE", "head": head})
+
     def test_an_active_ticket_is_listed_even_before_any_work(self):
         self.tickets.create("samvision", "started", status="IN_PROGRESS")
         row = self.rows()["SV-001"]
