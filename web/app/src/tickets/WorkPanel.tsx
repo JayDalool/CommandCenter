@@ -19,6 +19,7 @@ export function WorkPanel({ t }: { t: TicketDetail }) {
   const dev = useDevActive();
   const agents = useSelector(app.store, (d) => d.state?.agents);
   // Re-read whenever the ticket changes (every pipeline step touches updatedAt).
+  useEffect(() => { setW(null); setErr(null); }, [t.key]);   // never show the previous ticket's work
   useEffect(() => {
     let live = true;
     app.api.taskWork(t.key).then((x) => { if (live) { setW(x); setErr(null); } }, (e) => { if (live) setErr((e as Error).message); });
@@ -35,7 +36,10 @@ export function WorkPanel({ t }: { t: TicketDetail }) {
     const r = await app.action(() => app.api.confirmGate(t.key, gate), `${t.key}: ${gate} confirmed`);
     if (r) setW(r as TicketWork);
   };
-  const prUrl = t.prUrl ?? null;
+  // The reviewed PR first; owner/repo#n → its GitHub URL when the ticket has no prUrl.
+  const ref = w.review.pr ?? w.prs[0] ?? null;
+  const m = ref ? /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(ref) : null;
+  const prUrl = t.prUrl ?? (m ? `https://github.com/${m[1]}/pull/${m[2]}` : null);
   const action = (() => {
     switch (w.gate) {
       case "plan": return <button type="button" className="btn is-jay is-sm" onClick={() => void confirm("plan")}>Approve plan</button>;

@@ -282,12 +282,9 @@ export function describe(e: TimelineEvent): string {
     case "archived": return e.to === "true" ? "archived" : "restored";
     case "attachment_added": return `attached ${v(e.to)}`;
     case "attachment_removed": return `removed attachment ${v(e.from)}`;
-    case "pipeline.plan": case "pipeline.plan_accepted": case "pipeline.started": case "pipeline.review":
-    case "pipeline.review_stale": case "pipeline.ready_to_merge": case "pipeline.merged": case "pipeline.verified":
-    case "pipeline.done": case "pipeline.gate_opened": case "pipeline.gate_confirmed": case "pipeline.blocked":
-    case "pipeline.handoff": case "pipeline.role": case "pipeline.finding":
-      return e.trigger ?? e.kind.replace("pipeline.", "").replace("_", " ");
     default:
+      // Every pipeline step records its own sentence (ccd/pipeline.py), including ones added later.
+      if (e.kind.startsWith("pipeline.")) return e.trigger ?? e.kind.slice(9).replaceAll("_", " ");
       if (e.field === "description") return "edited the description";
       if (e.field === "title") return `renamed to “${v(e.to)}”`;
       return `${e.field} ${v(e.from)} → ${v(e.to)}`;

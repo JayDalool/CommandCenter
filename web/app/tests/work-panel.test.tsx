@@ -80,6 +80,23 @@ it("blocked shows the stage and reason once, with Resume", async () => {
   expect(screen.getByText(/REVIEW: 2 review cycles/)).toBeInTheDocument();
 });
 
+it("every pipeline event reads as its recorded sentence, including safety signals", async () => {
+  const { describe: describeEvent } = await import("../src/screens/TicketDetail");
+  const ev = (kind: string, trigger: string | null) => ({ id: 1, at: 1, actor: "system:automation", kind, field: null, from: null, to: null, trigger, data: {} });
+  expect(describeEvent(ev("pipeline.unreviewed_merge", "JayDalool/SamVisionAI#94 merged without a recorded approval")))
+    .toBe("JayDalool/SamVisionAI#94 merged without a recorded approval");
+  expect(describeEvent(ev("pipeline.not_ready", "back to review: checks are not green"))).toBe("back to review: checks are not green");
+  expect(describeEvent(ev("pipeline.some_future_step", null))).toBe("some future step");
+});
+
+it("merge gate without a ticket prUrl links the reviewed PR", async () => {
+  vi.spyOn(app.api, "taskWork").mockResolvedValue(work({ status: "READY_TO_MERGE", stage: "MERGE", gate: "merge",
+    review: { verdict: "APPROVE", head: "a".repeat(40), cycles: 0, pr: "JayDalool/SamVisionAI#94" } }));
+  render(<WorkPanel t={{ ...T, prUrl: null } as unknown as TicketDetail} />);
+  const link = await screen.findByRole("link", { name: "Open PR ↗" });
+  expect(link).toHaveAttribute("href", "https://github.com/JayDalool/SamVisionAI/pull/94");
+});
+
 it("Needs Jay: a gate is one item with its verb, and replaces a flag item for the same ticket", () => {
   const st = state();
   st.needs = [
