@@ -40,7 +40,7 @@ OWNER_GATES = ("plan", "ui", "deploy", "failure", "merge")
 ROLE_NAMES = ("coordinator", "planner", "implementer", "reviewer", "verifier")
 MAX_LANES = 2
 MAX_REVIEW_CYCLES = 2
-SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")   # the full PR head commit: no prefix can match another head
 SLUG_RE = r"[a-z0-9][a-z0-9-]{0,60}"
 META_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/@+-]{0,79}$")
 CATEGORY_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
@@ -125,13 +125,14 @@ class Pipeline:
 
     def _row(self, tid):
         r = self.db.execute("SELECT plan, plan_state, gate, gate_reason, confirmed, worktree, roles, review_verdict, "
-                            "review_head, review_cycles, verification, handoff, blocked, merge, updated_at "
+                            "review_head, review_cycles, verification, handoff, blocked, merge, updated_at, review_pr "
                             "FROM ticket_work WHERE ticket_id=?", (tid,)).fetchone()
         if not r:
             return None
         j = lambda v, d: json.loads(v) if v else d  # noqa: E731
         return {"plan": j(r[0], {}), "planState": r[1], "gate": r[2], "gateReason": r[3], "confirmed": j(r[4], []),
-                "worktree": r[5], "roles": j(r[6], {}), "review": {"verdict": r[7], "head": r[8], "cycles": r[9]},
+                "worktree": r[5], "roles": j(r[6], {}),
+                "review": {"verdict": r[7], "head": r[8], "cycles": r[9], "pr": r[15]},
                 "verification": j(r[10], None), "handoff": j(r[11], None), "blocked": j(r[12], None),
                 "merge": j(r[13], None), "updatedAt": r[14]}
 
@@ -140,7 +141,7 @@ class Pipeline:
         t = self.ts.get(key)
         tid = self.ts._id_of(key)
         w = self._row(tid) or {"plan": {}, "planState": "none", "gate": None, "gateReason": None, "confirmed": [],
-                               "worktree": None, "roles": {}, "review": {"verdict": None, "head": None, "cycles": 0},
+                               "worktree": None, "roles": {}, "review": {"verdict": None, "head": None, "cycles": 0, "pr": None},
                                "verification": None, "handoff": None, "blocked": None, "merge": None, "updatedAt": None}
         stage = stage_of(t["status"]) or ((w.get("blocked") or {}).get("stage") if t["status"] == "BLOCKED" else None)
         findings = [{"at": a, "source": s, "scope": sc, "category": c, "summary": m, "head": h} for a, s, sc, c, m, h in
@@ -175,6 +176,13 @@ class Pipeline:
         return [{"project": p, "ref": k, "text": f"{what[g]}: {reason or title}"[:300], "kind": "gate", "gate": g,
                  "url": None, "flags": [f"gate:{g}"], "status": st, "since": at}
                 for k, p, title, st, g, reason, at in rows]
+
+    def participating(self, key):
+        """In the pipeline: an accepted plan or a recorded review. Its review state then belongs to the
+        pipeline only — GitHub's reviewDecision never promotes it."""
+        r = self.db.execute("SELECT plan_state, review_head FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id "
+                            "WHERE t.key=?", (str(key).upper(),)).fetchone()
+        return bool(r) and (r[0] in ("proposed", "accepted") or r[1] is not None)
 
     def lanes(self):
         return self.db.execute(
@@ -226,9 +234,11 @@ class Pipeline:
         def fn(tid, t, w, at):
             self._need(t, ("INBOX", "PROPOSED", "RESEARCHING", "READY_TO_IMPLEMENT"), "a plan")
             pol = policy(t)
-            work = {"plan": plan, "roles": self._role(w, "planner", model, session, at)}
+            # A new plan needs a new approval: Jay approved the plan he saw, not this one.
+            confirmed = [g for g in w["confirmed"] if g != "plan"]
+            work = {"plan": plan, "roles": self._role(w, "planner", model, session, at), "confirmed": confirmed}
             events = [("pipeline.plan", "plan recorded", {"owner": pol["plan"] == "owner"})]
-            if pol["plan"] == "owner" and "plan" not in w["confirmed"]:
+            if pol["plan"] == "owner":
                 work.update(plan_state="proposed", gate="plan", gate_reason=", ".join(pol["planReasons"]))
                 events.append(("pipeline.gate_opened", "plan gate: " + ", ".join(pol["planReasons"]), {"gate": "plan"}))
                 return ({"status": "RESEARCHING"} if t["status"] != "RESEARCHING" else {}), work, events
@@ -269,7 +279,8 @@ class Pipeline:
                                 "VALUES (?,?,?,?,?,?,?)", (tid, at, "review", f["scope"], f["category"], f["summary"], head))
             if verdict == "REQUEST_CHANGES":
                 cycles = w["review"]["cycles"] + 1
-                work = {"review_verdict": verdict, "review_head": head, "review_cycles": cycles, "roles": roles}
+                work = {"review_verdict": verdict, "review_head": head, "review_pr": (pr or {}).get("ref"),
+                        "review_cycles": cycles, "roles": roles}
                 events = [("pipeline.review", f"changes requested at {head[:7]} (cycle {cycles})",
                            {"verdict": verdict, "head": head, "cycles": cycles, "findings": len(rows)})]
                 status = {"status": "IN_REVIEW"} if t["status"] != "IN_REVIEW" else {}
@@ -279,9 +290,9 @@ class Pipeline:
                     events.append(("pipeline.blocked", reason, {"stage": "REVIEW"}))
                     status = {"status": "BLOCKED"}
                 return status, work, events
-            work = {"review_verdict": verdict, "review_head": head, "roles": roles}
+            work = {"review_verdict": verdict, "review_head": head, "review_pr": (pr or {}).get("ref"), "roles": roles}
             events = [("pipeline.review", f"approved at {head[:7]}", {"verdict": verdict, "head": head})]
-            status, more, ev = self._ready(t, dict(w, review={"verdict": verdict, "head": head,
+            status, more, ev = self._ready(t, dict(w, review={"verdict": verdict, "head": head, "pr": (pr or {}).get("ref"),
                                                                "cycles": w["review"]["cycles"]}), pr)
             work.update(more)
             return status, work, events + ev
@@ -292,7 +303,9 @@ class Pipeline:
         rv = w["review"]
         if t["status"] != "IN_REVIEW" or rv["verdict"] != "APPROVE" or not pr:
             return {}, {}, []
-        if not (pr.get("head") or "").startswith(rv["head"]) or not pr.get("ciGreen") or pr.get("draft"):
+        if rv.get("pr") and pr.get("ref") != rv["pr"]:
+            return {}, {}, []   # another PR on this ticket says nothing about the reviewed one
+        if pr.get("head") != rv["head"] or not pr.get("ciGreen") or pr.get("draft"):
             return {}, {}, []
         work, events = {}, [("pipeline.ready_to_merge", f"approved head {rv['head'][:7]} with green checks", {})]
         if policy(t)["merge"] == "owner" and "merge" not in w["confirmed"]:
@@ -304,9 +317,14 @@ class Pipeline:
         """ccd's GitHub poll, per linked PR: promote a covered approval, or invalidate a stale one."""
         def fn(tid, t, w, at):
             rv = w["review"]
+            if rv.get("pr") and pr.get("ref") != rv["pr"]:
+                return {}, {}, []
             if t["status"] == "READY_TO_MERGE" and rv["verdict"] == "APPROVE" and pr.get("head") \
-                    and not pr["head"].startswith(rv["head"] or "~"):
-                work = {"review_verdict": None, "gate": None if w["gate"] == "merge" else w["gate"],
+                    and pr["head"] != rv["head"]:
+                # The head stays recorded (the ticket is still in the pipeline); the approval and any
+                # merge authorisation were for the old head, so both go.
+                work = {"review_verdict": None, "confirmed": [g for g in w["confirmed"] if g != "merge"],
+                        "gate": None if w["gate"] == "merge" else w["gate"],
                         "gate_reason": None if w["gate"] == "merge" else w["gateReason"]}
                 return {"status": "IN_REVIEW"}, work, [("pipeline.review_stale",
                                                         f"new PR head {pr['head'][:7]}; approval was for {rv['head'][:7]}",
@@ -376,6 +394,8 @@ class Pipeline:
                 return {"status": "READY_TO_IMPLEMENT"}, work, events
             if gate == "failure":
                 stage = (w["blocked"] or {}).get("stage") or "PLAN"
+                if stage == "BUILD" and self.lanes() >= self.max_lanes:
+                    raise TaskError(409, f"{self.max_lanes} implementation lanes are running; resume this one later")
                 work.update(blocked=None, review_cycles=0 if stage == "REVIEW" else w["review"]["cycles"])
                 return {"status": RESUME_STATUS.get(stage, "RESEARCHING")}, work, events
             if gate in ("ui", "deploy") and t["status"] == "VERIFYING" and (w["verification"] or {}).get("result") == "pass":

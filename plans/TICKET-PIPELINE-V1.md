@@ -71,9 +71,10 @@ No existing column changes; nothing is rewritten. Backed up before applying.
 | `approve-plan` (Jay) | RESEARCHING + gate plan | READY_TO_IMPLEMENT | clears |
 | `start` (coordinator/implementer) | READY_TO_IMPLEMENT | IN_PROGRESS | branch must be `<KEY>-slug`; refuses past `max_lanes` (2) |
 | PR opens (GitHub, existing) | READY_TO_IMPLEMENT / IN_PROGRESS | IN_REVIEW | |
-| `review APPROVE --head SHA` (reviewer) | IN_REVIEW | READY_TO_MERGE when CI green, not draft and SHA == PR head | OWNER_MERGE: gate `merge` (+`ui` first when UI review) |
+| `review APPROVE --head SHA` (reviewer) | IN_REVIEW | READY_TO_MERGE when CI green, not draft and the full SHA == that PR's head | OWNER_MERGE: gate `merge` (the UI gate comes after verify, on the merged result) |
 | `review REQUEST_CHANGES` | IN_REVIEW | IN_REVIEW (cycle+1) | 2 cycles → BLOCKED, gate `failure` |
-| new PR head ≠ review_head (GitHub) | READY_TO_MERGE | IN_REVIEW | approval invalidated |
+| new PR head ≠ review_head (GitHub) | READY_TO_MERGE | IN_REVIEW | approval and any merge authorisation invalidated |
+| a new `plan` | PLAN stages | as `plan` | a plan Jay approved before is not carried over |
 | merged (GitHub, existing) | IN_REVIEW / READY_TO_MERGE | VERIFYING | merge gate clears |
 | `verify pass` (verifier) | VERIFYING | DONE, or gate `ui`/`deploy` if still owed | |
 | `verify fail` | VERIFYING | BLOCKED | gate `failure` |

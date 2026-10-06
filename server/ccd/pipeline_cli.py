@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from . import config
@@ -43,6 +44,8 @@ def call(method, path, body=None, actor=None, port=None, token=None):
             return 1, json.loads(e.read() or b"{}")
         except ValueError:
             return 1, {"error": f"HTTP {e.code}"}
+    except (urllib.error.URLError, OSError) as e:
+        return 1, {"error": f"Command Center is not reachable on 127.0.0.1:{port} ({getattr(e, 'reason', e)})"}
 
 
 def _json_file(path):
@@ -70,6 +73,7 @@ def build(argv):
     p.add_argument("--scope", choices=("in", "out"), default="in")
     p.add_argument("--source", choices=("review", "owner", "verifier"), default="review")
     a = p.parse_args(argv)
+    key = urllib.parse.quote(a.key, safe="")
     if a.op != "work" and not a.role:
         p.error("--role is required: every write is recorded as agent:<role>")
     meta = {k: v for k, v in (("model", a.model), ("session", a.session)) if v}
@@ -86,8 +90,8 @@ def build(argv):
                             "source": a.source},
     }
     if a.op == "work":
-        return "GET", f"/api/tasks/{a.key}/work", None, None
-    return "POST", f"/api/tasks/{a.key}/work/{a.op}", body[a.op](), f"agent:{a.role}"
+        return "GET", f"/api/tasks/{key}/work", None, None
+    return "POST", f"/api/tasks/{key}/work/{a.op}", body[a.op](), f"agent:{a.role}"
 
 
 def main(argv=None):

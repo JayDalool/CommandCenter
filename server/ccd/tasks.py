@@ -227,6 +227,7 @@ CREATE TABLE ticket_work (
   roles          TEXT NOT NULL DEFAULT '{}',
   review_verdict TEXT CHECK (review_verdict IS NULL OR review_verdict IN ('APPROVE', 'REQUEST_CHANGES')),
   review_head    TEXT,
+  review_pr      TEXT,
   review_cycles  INTEGER NOT NULL DEFAULT 0 CHECK (review_cycles >= 0),
   verification   TEXT,
   handoff        TEXT,

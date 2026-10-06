@@ -67,6 +67,15 @@ class Stages(Base):
             self.assertEqual(t["status"], "READY_TO_IMPLEMENT")
         self.assertEqual([n["gate"] for n in self.pl.needs()], [])
 
+    def test_a_new_plan_needs_a_new_approval(self):
+        k = self.ticket(labels=["migration"])
+        self.pl.plan(k, PLAN, "agent:planner")
+        self.pl.confirm(k, "plan", "jay")
+        t, _, _ = self.pl.plan(k, dict(PLAN, summary="v2: drop the table"), "agent:planner")
+        w = self.pl.work(k)
+        self.assertEqual((t["status"], w["gate"], w["planState"]), ("RESEARCHING", "plan", "proposed"))
+        self.assertNotIn("plan", w["confirmed"])
+
     def test_needs_jay_names_the_gate(self):
         k = self.ticket(labels=["architecture"])
         self.pl.plan(k, PLAN, "agent:planner")
@@ -98,21 +107,26 @@ class Review(Base):
     def test_approval_is_tied_to_the_pr_head_and_green_checks(self):
         k = self.ticket()
         self.to_review(k)
-        t, _, _ = self.pl.review(k, "APPROVE", HEAD[:12], "agent:reviewer", pr=self.pr(green=False))
+        t, _, _ = self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", pr=self.pr(green=False))
         self.assertEqual(t["status"], "IN_REVIEW")                           # CI not green yet
         t, _, _ = self.pl.sync_pr(k, self.pr(green=True))
         self.assertEqual(t["status"], "READY_TO_MERGE")
         self.assertEqual(self.pl.work(k)["gate"], "merge")                  # owner merge by default
-        t, _, ev = self.pl.sync_pr(k, self.pr(head="1234567" + "0" * 33))   # a new commit
+        self.pl.confirm(k, "merge", "jay")                                  # Jay authorised the merge…
+        t, _, ev = self.pl.sync_pr(k, self.pr(head="1234567" + "0" * 33))   # …then a new commit lands
         self.assertEqual(t["status"], "IN_REVIEW")
         self.assertEqual([e[0] for e in ev], ["pipeline.review_stale"])
         w = self.pl.work(k)
-        self.assertEqual((w["review"]["verdict"], w["gate"]), (None, None))
+        self.assertEqual((w["review"]["verdict"], w["gate"], w["review"]["head"]), (None, None, HEAD))
+        self.assertNotIn("merge", w["confirmed"])                           # the authorisation was for the old head
+        new = "1234567" + "0" * 33
+        self.pl.review(k, "APPROVE", new, "agent:reviewer", pr=self.pr(head=new))
+        self.assertEqual((self.ts.get(k)["status"], self.pl.work(k)["gate"]), ("READY_TO_MERGE", "merge"))
 
     def test_an_approval_for_another_head_never_promotes(self):
         k = self.ticket()
         self.to_review(k)
-        t, _, _ = self.pl.review(k, "APPROVE", "fedcba9", "agent:reviewer", pr=self.pr())
+        t, _, _ = self.pl.review(k, "APPROVE", "fedcba9" + "0" * 33, "agent:reviewer", pr=self.pr())
         self.assertEqual(t["status"], "IN_REVIEW")
         self.assertEqual(self.pl.sync_pr(k, self.pr())[0]["status"], "IN_REVIEW")
         for draft in (True,):
@@ -126,7 +140,7 @@ class Review(Base):
              {"scope": "out", "category": "perf", "summary": "slow query elsewhere"}]
         t, _, _ = self.pl.review(k, "REQUEST_CHANGES", HEAD, "agent:reviewer", findings=f)
         self.assertEqual(t["status"], "IN_REVIEW")
-        t, _, _ = self.pl.review(k, "REQUEST_CHANGES", "1234567", "agent:reviewer")
+        t, _, _ = self.pl.review(k, "REQUEST_CHANGES", "1234567" + "0" * 33, "agent:reviewer")
         self.assertEqual(t["status"], "BLOCKED")
         w = self.pl.work(k)
         self.assertEqual((w["gate"], w["review"]["cycles"], w["blocked"]["stage"]), ("failure", MAX_REVIEW_CYCLES, "REVIEW"))
@@ -136,10 +150,20 @@ class Review(Base):
         t, _, _ = self.pl.confirm(k, "failure", "jay")                     # Jay unblocks: back to review
         self.assertEqual((t["status"], self.pl.work(k)["review"]["cycles"]), ("IN_REVIEW", 0))
 
+    def test_another_pr_on_the_ticket_says_nothing_about_the_reviewed_one(self):
+        k = self.ticket()
+        self.to_review(k)
+        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", pr=self.pr())
+        self.assertEqual(self.ts.get(k)["status"], "READY_TO_MERGE")
+        other = {"ref": "JayDalool/SamVisionAI#2", "head": "2" * 40, "ciGreen": True, "draft": False}
+        t, ch, ev = self.pl.sync_pr(k, other)
+        self.assertEqual((t["status"], ch, ev), ("READY_TO_MERGE", [], []))
+
     def test_bad_input_is_refused(self):
         k = self.ticket()
         self.to_review(k)
-        for verdict, head in (("LGTM", HEAD), ("APPROVE", "main"), ("APPROVE", "zzzzzzz"), ("APPROVE", None)):
+        for verdict, head in (("LGTM", HEAD), ("APPROVE", "main"), ("APPROVE", "zzzzzzz"), ("APPROVE", None),
+                              ("APPROVE", HEAD[:7]), ("APPROVE", HEAD[:39])):     # a prefix could match another head
             with self.assertRaises(TaskError):
                 self.pl.review(k, verdict, head, "agent:reviewer")
         with self.assertRaises(TaskError):

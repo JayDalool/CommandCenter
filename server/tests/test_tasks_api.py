@@ -420,8 +420,8 @@ class PipelineApi(Automation):
                          "READY_TO_IMPLEMENT")
         r = self.step("start", {"branch": "SV-056-feature", "worktree": "/srv/server/worktrees/sv/SV-056"})
         self.assertEqual(r.json()["status"], "IN_PROGRESS", r.text)
-        head = "0000094abc"
-        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefName="SV-056-feature")]
+        head = "94" * 20
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefName="SV-056-feature", headRefOid=head)]
         self.poll()
         self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
         r = self.step("review", {"verdict": "APPROVE", "head": head}, "agent:reviewer")
@@ -429,6 +429,18 @@ class PipelineApi(Automation):
         for _ in range(2):                       # no GitHub approval: must NOT flap back to IN_REVIEW
             self.poll()
             self.assertEqual(self.tickets.get("SV-056")["status"], "READY_TO_MERGE")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature", review="APPROVED"),
+                                                 headRefName="SV-056-feature", headRefOid="95" * 20)]
+        self.poll()                              # a new head + a stale GitHub approval: never promotes
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+        kinds = [e["data"].get("kind") for e in self.get("/api/activity?limit=200").json()["events"]
+                 if e["kind"] == "task.pipeline"]
+        self.assertIn("pipeline.review_stale", kinds)             # automatic steps reach the event log
+        head = "95" * 20
+        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": head}, "agent:reviewer").json()["status"],
+                         "READY_TO_MERGE")
         needs = [n for n in self.get("/api/state").json()["needs"] if n.get("ref") == "SV-056"]
         self.assertEqual([n["gate"] for n in needs], ["merge"])
         self.gh.data["samvision"]["prs"] = []
@@ -448,9 +460,11 @@ class PipelineApi(Automation):
         self.tickets.link("SV-056", "github", "pr", "JayDalool/SamVisionAI#94", "https://github.com/JayDalool/SamVisionAI/pull/94", "t", "jay")
         self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"))]
         self.poll()
-        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": "0000094abc"}, "agent:reviewer")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefOid="a" * 40)]
+        self.poll()
+        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": "a" * 40}, "agent:reviewer")
                          .json()["status"], "READY_TO_MERGE")
-        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefOid="1111111abc")]
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefOid="b" * 40)]
         self.poll()
         self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
 
@@ -464,6 +478,23 @@ class PipelineApi(Automation):
         self.assertEqual(self.step("confirm", {"gate": "plan"}, "agent:coordinator", dev).status_code, 403)  # not Jay
         r = self.step("confirm", {"gate": "plan"}, "jay", dev)
         self.assertEqual((r.status_code, r.json()["status"]), (200, "READY_TO_IMPLEMENT"))
+
+    def test_review_refuses_a_ticket_with_several_open_prs(self):
+        self.ticket("IN_REVIEW")
+        for n in (94, 95):
+            self.tickets.link("SV-056", "github", "pr", f"JayDalool/SamVisionAI#{n}",
+                              f"https://github.com/JayDalool/SamVisionAI/pull/{n}", "t", "jay")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94)), dict(pr(95))]
+        self.poll()
+        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": "a" * 40}, "agent:reviewer").status_code, 409)
+
+    def test_a_gate_is_one_needs_jay_item_even_with_a_flag(self):
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"needs_jay": True}, "jay")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        st = self.get("/api/state").json()
+        mine = [n for n in st["needs"] if n.get("ref") == "SV-056"]
+        self.assertEqual([n["kind"] for n in mine], ["gate"])
 
     def test_unknown_steps_and_bad_bodies_are_refused(self):
         self.ticket("INBOX")
