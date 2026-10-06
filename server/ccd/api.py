@@ -47,6 +47,9 @@
     POST  /api/action/prompt         DEVELOPER. send a message to an idle Claude pane (herdr agent.prompt)
     POST  /api/action/key            DEVELOPER. esc or enter into a Claude pane
     GET   /api/pty                   live terminal sessions (names, cwd, clients)
+    GET   /api/tasks/{key}/work      the ticket's durable pipeline state (plan, stage, gate, roles, review head, …)
+    POST  /api/tasks/{key}/work/{op} one pipeline step: plan start review verify handoff block role finding;
+                                     `confirm` (close an owner gate) needs Jay AND Developer Unlock
     POST  /api/coordinators/adopt    DEVELOPER. bind the one EXISTING Claude at a project root as its
                                      coordinator {project, sessionId}; never starts or renames Claude
     POST  /api/pty/close             DEVELOPER. CLOSE SESSION: ends that one shell's process group
@@ -329,7 +332,16 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         return daemon.development(project=request.query_params.get("project") or None)
 
     async def patch_task(request, body):
-        return daemon.task_update(request.path_params["key"], body, request.state.actor)
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.task_update(request.path_params["key"], body, request.state.actor, developer=dev)
+
+    async def task_work(request, _):
+        return daemon.task_work(request.path_params["key"])
+
+    async def task_work_op(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.task_work_op(request.path_params["key"], request.path_params["op"], body,
+                                   request.state.actor, developer=dev)
 
     async def task_context(request, _):
         return daemon.task_context(request.path_params["key"])
@@ -802,6 +814,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/tasks/{key}", guarded(get_task), methods=["GET"]),
         Route("/api/tasks/{key}", guarded(patch_task), methods=["PATCH"]),
         Route("/api/tasks/{key}/context", guarded(task_context), methods=["GET"]),
+        Route("/api/tasks/{key}/work", guarded(task_work), methods=["GET"]),
+        Route("/api/tasks/{key}/work/{op}", guarded(task_work_op), methods=["POST"]),
         Route("/api/tasks/{key}/comments", guarded(comment_task), methods=["POST"]),
         Route("/api/tasks/{key}/relations", guarded(relate_task), methods=["POST"]),
         Route("/api/tasks/{key}/links", guarded(link_task), methods=["POST"]),

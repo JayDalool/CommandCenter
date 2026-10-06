@@ -213,6 +213,44 @@ CREATE TRIGGER task_projects_prefix_not_retired BEFORE UPDATE OF prefix ON task_
   WHEN EXISTS (SELECT 1 FROM task_project_aliases WHERE prefix = NEW.prefix AND project != NEW.key)
   BEGIN SELECT RAISE(ABORT, 'that prefix is another project''s retired prefix'); END;
 """),
+    # 3: the ticket pipeline (plans/TICKET-PIPELINE-V1.md). Additive only: one row of durable
+    # work state per ticket that entered the pipeline, and structured review/owner findings.
+    (3, """
+CREATE TABLE ticket_work (
+  ticket_id      INTEGER PRIMARY KEY REFERENCES tickets(id),
+  plan           TEXT NOT NULL DEFAULT '{}',
+  plan_state     TEXT NOT NULL DEFAULT 'none' CHECK (plan_state IN ('none', 'proposed', 'accepted')),
+  gate           TEXT CHECK (gate IS NULL OR gate IN ('plan', 'merge', 'ui', 'deploy', 'failure')),
+  gate_reason    TEXT,
+  confirmed      TEXT NOT NULL DEFAULT '[]',
+  worktree       TEXT,
+  roles          TEXT NOT NULL DEFAULT '{}',
+  review_verdict TEXT CHECK (review_verdict IS NULL OR review_verdict IN ('APPROVE', 'REQUEST_CHANGES')),
+  review_head    TEXT,
+  review_pr      TEXT,
+  review_cycles  INTEGER NOT NULL DEFAULT 0 CHECK (review_cycles >= 0),
+  verification   TEXT,
+  handoff        TEXT,
+  blocked        TEXT,
+  merge          TEXT,
+  updated_at     REAL NOT NULL
+);
+CREATE TABLE ticket_findings (
+  id        INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+  at        REAL NOT NULL,
+  source    TEXT NOT NULL CHECK (source IN ('review', 'owner', 'verifier')),
+  scope     TEXT NOT NULL CHECK (scope IN ('in', 'out')),
+  category  TEXT NOT NULL CHECK (length(category) BETWEEN 1 AND 40),
+  summary   TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 2000),
+  head      TEXT
+);
+CREATE INDEX ticket_findings_ticket ON ticket_findings(ticket_id, id);
+CREATE TRIGGER ticket_findings_append_only_u BEFORE UPDATE ON ticket_findings
+  BEGIN SELECT RAISE(ABORT, 'findings are append-only'); END;
+CREATE TRIGGER ticket_findings_append_only_d BEFORE DELETE ON ticket_findings
+  BEGIN SELECT RAISE(ABORT, 'findings are append-only'); END;
+"""),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

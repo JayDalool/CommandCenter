@@ -50,6 +50,17 @@ PROJECTS = {
                       "root": "/srv/server/repos/gyst-lifeops",     "github": "JayDalool/gyst-lifeops"},
 }
 
+# Ticket pipeline defaults (plans/TICKET-PIPELINE-V1.md), the one place they live.
+# merge: "owner" — Jay merges or explicitly authorises it (every project during the
+# pilot); "auto-eligible" is reserved for a later low-risk CC policy (CC-025).
+# A project overrides with a "pipeline" dict in PROJECTS above.
+PIPELINE_DEFAULTS = {"merge": "owner", "ui_review": False}
+
+
+def pipeline_of(key):
+    return dict(PIPELINE_DEFAULTS, **((PROJECTS.get(key) or {}).get("pipeline") or {}))
+
+
 # IDs that appear only in sources outside ccd (INDEX.md rows, issue titles).
 # They are not ticket prefixes and never mint a key; the importer keeps them as
 # `legacy` ticket_links.

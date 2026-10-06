@@ -398,3 +398,226 @@ class DevelopmentView(ApiBase):
         from ccd import sources
         self.assertEqual(sources.branches_ahead("/srv/server/apps/samvisionai", "--upload-pack=touch /tmp/x"), {})
         self.assertEqual(sources.branches_ahead("/srv/server/apps/samvisionai", ""), {})
+
+
+class PipelineApi(Automation):
+    """The pipeline over HTTP: agent-attributed steps, head-bound approval that survives GitHub polls,
+    owner gates only with Developer Unlock, gates in the one Needs Jay queue."""
+    DEV = "d" * 43
+
+    def equip(self, daemon):
+        from ccd import security
+        daemon.dev_gate = security.DeveloperGate(self.DEV)
+
+    def step(self, op, body, actor="agent:coordinator", headers=None):
+        h = dict(JSON, **{"x-ccd-actor": actor}, **(headers or {}))
+        return self.client.post(f"/api/tasks/SV-056/work/{op}", content=json.dumps(body), headers=h)
+
+    def test_a_ticket_travels_plan_to_done_and_every_step_is_attributed(self):
+        self.ticket("INBOX")
+        plan = {"summary": "the feature", "tests": ["unit"]}
+        self.assertEqual(self.step("plan", {"plan": plan, "model": "opus"}, "agent:planner").json()["status"],
+                         "READY_TO_IMPLEMENT")
+        r = self.step("start", {"branch": "SV-056-feature", "worktree": "/srv/server/worktrees/sv/SV-056"})
+        self.assertEqual(r.json()["status"], "IN_PROGRESS", r.text)
+        head = "94" * 20
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefName="SV-056-feature", headRefOid=head)]
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+        r = self.step("review", {"verdict": "APPROVE", "head": head}, "agent:reviewer")
+        self.assertEqual(r.json()["status"], "READY_TO_MERGE", r.text)
+        for _ in range(2):                       # no GitHub approval: must NOT flap back to IN_REVIEW
+            self.poll()
+            self.assertEqual(self.tickets.get("SV-056")["status"], "READY_TO_MERGE")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature", review="APPROVED"),
+                                                 headRefName="SV-056-feature", headRefOid="95" * 20)]
+        self.poll()                              # a new head + a stale GitHub approval: never promotes
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+        kinds = [e["data"].get("kind") for e in self.get("/api/activity?limit=200").json()["events"]
+                 if e["kind"] == "task.pipeline"]
+        self.assertIn("pipeline.review_stale", kinds)             # automatic steps reach the event log
+        head = "95" * 20
+        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": head}, "agent:reviewer").json()["status"],
+                         "READY_TO_MERGE")
+        needs = [n for n in self.get("/api/state").json()["needs"] if n.get("ref") == "SV-056"]
+        self.assertEqual([n["gate"] for n in needs], ["merge"])
+        self.gh.data["samvision"]["prs"] = []
+        self.gh.data["samvision"]["merged"] = [{"number": 94, "title": "SV-056: the feature", "url": "u",
+                                                "mergedAt": "2026-10-03T00:00:00Z", "mergeCommit": {"oid": "f" * 40}}]
+        self.poll()
+        w = self.get("/api/tasks/SV-056/work").json()
+        self.assertEqual((w["status"], w["gate"], w["merge"]["sha"]), ("VERIFYING", None, "f" * 40))
+        r = self.step("verify", {"result": "pass", "evidence": "health ok"}, "agent:verifier")
+        self.assertEqual(r.json()["status"], "DONE", r.text)
+        actors = {e["actor"] for e in self.tickets.get("SV-056")["timeline"] if (e.get("kind") or "").startswith("pipeline.")}
+        self.assertEqual(actors, {"agent:planner", "agent:coordinator", "agent:reviewer", "agent:verifier",
+                                  "system:automation"})
+
+    def test_a_new_pr_head_invalidates_the_approval(self):
+        self.ticket("IN_REVIEW")
+        self.tickets.link("SV-056", "github", "pr", "JayDalool/SamVisionAI#94", "https://github.com/JayDalool/SamVisionAI/pull/94", "t", "jay")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"))]
+        self.poll()
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefOid="a" * 40)]
+        self.poll()
+        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": "a" * 40}, "agent:reviewer")
+                         .json()["status"], "READY_TO_MERGE")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefOid="b" * 40)]
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+
+    def test_owner_gates_need_jay_with_developer_unlock(self):
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"labels": ["migration"]}, "jay")
+        self.assertEqual(self.step("plan", {"plan": {"summary": "x"}}, "agent:planner").json()["gate"], "plan")
+        self.assertEqual(self.step("confirm", {"gate": "plan"}, "jay").status_code, 403)          # no unlock
+        sid = self.client.post("/api/developer/unlock", content=json.dumps({"token": self.DEV}), headers=JSON).json()["session"]
+        dev = {"x-ccd-developer": sid}
+        self.assertEqual(self.step("confirm", {"gate": "plan"}, "agent:coordinator", dev).status_code, 403)  # not Jay
+        r = self.step("confirm", {"gate": "plan"}, "jay", dev)
+        self.assertEqual((r.status_code, r.json()["status"]), (200, "READY_TO_IMPLEMENT"))
+
+    def test_review_refuses_a_ticket_with_several_open_prs(self):
+        self.ticket("IN_REVIEW")
+        for n in (94, 95):
+            self.tickets.link("SV-056", "github", "pr", f"JayDalool/SamVisionAI#{n}",
+                              f"https://github.com/JayDalool/SamVisionAI/pull/{n}", "t", "jay")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94)), dict(pr(95))]
+        self.poll()
+        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": "a" * 40}, "agent:reviewer").status_code, 409)
+
+    def test_a_gate_is_one_needs_jay_item_even_with_a_flag(self):
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"needs_jay": True}, "jay")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        st = self.get("/api/state").json()
+        mine = [n for n in st["needs"] if n.get("ref") == "SV-056"]
+        self.assertEqual([n["kind"] for n in mine], ["gate"])
+
+    def unlock(self):
+        sid = self.client.post("/api/developer/unlock", content=json.dumps({"token": self.DEV}), headers=JSON).json()["session"]
+        return {"x-ccd-developer": sid}
+
+    def patch(self, body, actor="agent:coordinator", headers=None):
+        h = dict(JSON, **{"x-ccd-actor": actor}, **(headers or {}))
+        return self.client.patch("/api/tasks/SV-056", content=json.dumps(body), headers=h)
+
+    def test_a_pipeline_ticket_never_jumps_a_gate_through_a_plain_edit(self):
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        # (b) no status jump: not by an agent, not by Jay without Developer Unlock
+        for actor in ("agent:coordinator", "jay"):
+            self.assertEqual(self.patch({"status": "READY_TO_MERGE"}, actor).status_code, 409, actor)
+        self.assertEqual(self.tickets.get("SV-056")["status"], "READY_TO_IMPLEMENT")
+        r = self.patch({"status": "BLOCKED"}, "jay", self.unlock())                    # Jay's explicit override
+        self.assertEqual((r.status_code, r.json()["status"]), (200, "BLOCKED"))
+        self.assertEqual(self.patch({"priority": "HIGH"}).status_code, 200)            # ordinary fields still edit
+
+    def test_an_open_gate_cannot_be_dodged_by_editing_what_opened_it(self):
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"labels": ["migration"]}, "jay")
+        self.assertEqual(self.step("plan", {"plan": {"summary": "x"}}, "agent:planner").json()["gate"], "plan")
+        # (c) drop the label, then re-plan: refused, and a re-plan never closes Jay's gate
+        for body in ({"labels": []}, {"type": "DOCS"}, {"needs_jay": False}):
+            self.assertEqual(self.patch(body).status_code, 409, body)
+        self.tickets.update("SV-056", {"labels": []}, "jay")                            # even if it changed anyway…
+        w = self.step("plan", {"plan": {"summary": "v2"}}, "agent:planner").json()
+        self.assertEqual((w["gate"], w["planState"], w["status"]), ("plan", "proposed", "RESEARCHING"))
+
+    def test_a_ui_gate_cannot_be_skipped_by_marking_done(self):
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"needs_ui_review": True}, "jay")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        self.step("start", {"branch": "SV-056-x", "worktree": "/srv/w/SV-056"})
+        self.tickets.update("SV-056", {"status": "VERIFYING"}, "system:automation")
+        self.assertEqual(self.step("verify", {"result": "pass", "evidence": "ok"}, "agent:verifier").json()["gate"], "ui")
+        # (a) an agent cannot mark it DONE around the UI gate
+        self.assertEqual(self.patch({"status": "DONE"}).status_code, 409)
+        needs = [n for n in self.get("/api/state").json()["needs"] if n.get("ref") == "SV-056"]
+        self.assertEqual([n["gate"] for n in needs], ["ui"])
+
+    def test_a_merge_without_a_recorded_approval_is_flagged(self):
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        self.step("start", {"branch": "SV-056-x", "worktree": "/srv/w/SV-056"})
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: x"), headRefName="SV-056-x")]
+        self.poll()
+        self.gh.data["samvision"]["prs"] = []
+        self.gh.data["samvision"]["merged"] = [{"number": 94, "title": "SV-056: x", "url": "u", "mergedAt": "x"}]
+        self.poll()
+        ev = [e for e in self.get("/api/activity?limit=200").json()["events"] if e["kind"] == "task.pipeline"
+              and e["data"].get("kind") == "pipeline.unreviewed_merge"]
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(ev[0]["severity"], "action")
+
+    def test_a_ticket_in_the_pipeline_by_review_alone_is_guarded_too(self):
+        self.ticket("IN_REVIEW")
+        self.tickets.link("SV-056", "github", "pr", "JayDalool/SamVisionAI#94",
+                          "https://github.com/JayDalool/SamVisionAI/pull/94", "t", "jay")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: x"), headRefOid="a" * 40)]
+        self.poll()
+        self.step("review", {"verdict": "REQUEST_CHANGES", "head": "a" * 40}, "agent:reviewer")
+        for body in ({"status": "READY_TO_MERGE"}, {"status": "DONE"}):
+            self.assertEqual(self.patch(body).status_code, 409, body)
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+
+    def test_archiving_cannot_hide_an_open_gate(self):
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"labels": ["migration"]}, "jay")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        self.assertEqual(self.patch({"archived": True}).status_code, 409)
+
+    def test_dispatch_never_moves_a_pipeline_ticket_past_start(self):
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        r = self.post("/api/action/dispatch", {"project": "samvision", "taskId": "SV-056", "verb": "implement"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.tickets.get("SV-056")["status"], "READY_TO_IMPLEMENT")
+        r = self.step("start", {"branch": "SV-056-x", "worktree": "/srv/w/SV-056"})
+        self.assertEqual(r.json()["status"], "IN_PROGRESS", r.text)
+
+    def test_scenario_1_a_flag_cannot_be_dropped_before_its_gate(self):
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"needs_ui_review": True}, "jay")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")              # low risk: auto-accepted
+        self.step("start", {"branch": "SV-056-x", "worktree": "/srv/w/SV-056"})
+        for body in ({"needs_ui_review": False}, {"flags": []}, {"labels": ["x"]}, {"type": "DOCS"}):
+            self.assertEqual(self.patch(body).status_code, 409, body)            # no gate open, still refused
+            self.assertEqual(self.patch(body, "jay").status_code, 409, body)     # Jay without unlock too
+        self.assertIn("needs_ui_review", self.tickets.get("SV-056")["flags"])
+        self.tickets.update("SV-056", {"status": "VERIFYING"}, "system:automation")
+        self.assertEqual(self.step("verify", {"result": "pass", "evidence": "ok"}, "agent:verifier").json()["gate"], "ui")
+        self.assertEqual(self.patch({"needs_ui_review": False}, "jay", self.unlock()).status_code, 200)  # owner override
+
+    def test_scenario_2_an_approved_plan_cannot_be_swapped_for_another(self):
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"labels": ["security"]}, "jay")
+        self.step("plan", {"plan": {"summary": "rate-limit login"}}, "agent:planner")
+        dev = self.unlock()
+        self.assertEqual(self.step("confirm", {"gate": "plan"}, "jay", dev).json()["status"], "READY_TO_IMPLEMENT")
+        self.assertEqual(self.patch({"labels": []}).status_code, 409)               # can't strip the label
+        self.tickets.update("SV-056", {"labels": []}, "jay")                          # …and even if it changed anyway
+        w = self.step("plan", {"plan": {"summary": "rewrite the login flow"}}, "agent:planner").json()
+        self.assertEqual((w["status"], w["gate"], w["planState"]), ("RESEARCHING", "plan", "proposed"))
+        needs = [n for n in self.get("/api/state").json()["needs"] if n.get("ref") == "SV-056"]
+        self.assertEqual([n["gate"] for n in needs], ["plan"])
+
+    def test_a_pr_opened_before_start_waits_for_start(self):
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: x"), headRefName="SV-056-x")]
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "READY_TO_IMPLEMENT")  # not straight to review
+        self.assertEqual(self.step("start", {"branch": "SV-056-x", "worktree": "/srv/w/SV-056"}).json()["status"],
+                         "IN_PROGRESS")
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+
+    def test_unknown_steps_and_bad_bodies_are_refused(self):
+        self.ticket("INBOX")
+        self.assertEqual(self.step("merge", {}).status_code, 404)
+        self.assertEqual(self.step("plan", {"plan": "do it"}).status_code, 400)
+        self.assertEqual(self.client.post("/api/tasks/SV-056/work/plan", content="{}",
+                                          headers=dict(JSON, **{"x-ccd-actor": "root"})).status_code, 400)
