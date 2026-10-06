@@ -2,6 +2,7 @@
 
 Screens Jay must check. Newest first. Delete a line when it's done.
 
+- [ ] CC-026 · Development trail: Roles line and pipeline review verdict · http://127.0.0.1:7777/#/development
 - [ ] CC-021 · Ticket Work: stages, one gate action, Needs Jay item · http://127.0.0.1:7777/#/tasks
 - [ ] CC-018 · Workspace: Claude / Project / Server open without extra clicks · http://127.0.0.1:7777/#/workspace?project=samvision
 - [ ] CC-017 · GYST and MFE Claude tabs attach (no rename needed) · http://127.0.0.1:7777/#/workspace?project=gyst&tab=claude

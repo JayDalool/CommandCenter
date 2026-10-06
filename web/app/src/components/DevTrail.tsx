@@ -74,7 +74,7 @@ export function DevTrail({ row, repo }: { row: DevRow | null; repo?: string | nu
   const b = row.branch;
   const pr = row.pr;
   const roles = Object.entries(row.roles ?? {});
-  const pv = row.pipelineReview;
+  const pv = row.pipelineReview?.verdict ? row.pipelineReview : null;
   return <dl className="dev-trail">
     <DetailRow label="Branch">{b
       ? <span className="row" style={{ gap: 8, flexWrap: "wrap" }}>
@@ -100,7 +100,7 @@ export function DevTrail({ row, repo }: { row: DevRow | null; repo?: string | nu
       {roles.map(([r, v]) => v.model ? `${r} ${v.model}` : r).join(" · ")}</span></DetailRow>}
     <DetailRow label="Review">{pv
       ? <span className={pv.verdict === "APPROVE" ? "ok-t" : "warn-t"}>
-        {pv.verdict === "APPROVE" ? "approved" : pv.verdict ? "changes requested" : "reviewed"}
+        {pv.verdict === "APPROVE" ? "approved" : "changes requested"}
         {pv.head ? ` at ${pv.head.slice(0, 7)}` : ""}</span>
       : row.review
       ? <span className={row.review === "APPROVED" ? "ok-t" : row.review === "CHANGES_REQUESTED" ? "warn-t" : "muted"}>

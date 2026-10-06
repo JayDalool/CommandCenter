@@ -35,3 +35,8 @@ it("prefers the pipeline review verdict, and falls back to GitHub's", () => {
   render(<DevTrail row={row({ pipelineReview: null })} />);
   expect(screen.getByText("APPROVED")).toBeInTheDocument();
 });
+
+it("falls back to GitHub's review when the pipeline recorded a head but no verdict", () => {
+  render(<DevTrail row={row({ pipelineReview: { verdict: null, head: "94abcdef0123456789" } })} />);
+  expect(screen.getByText("APPROVED")).toBeInTheDocument();
+});
