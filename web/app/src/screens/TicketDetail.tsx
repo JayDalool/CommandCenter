@@ -14,6 +14,7 @@ import { DevTrail } from "../components/DevTrail";
 import { NewTicket } from "../components/NewTicket";
 import { stamp } from "../lib/time";
 import { openAgent } from "../lib/openAgent";
+import { WorkPanel } from "../tickets/WorkPanel";
 
 const DISPATCH_VERBS = ["plan", "implement", "review", "verify", "continue"] as const;
 
@@ -122,6 +123,8 @@ function Detail({ t, onClose }: { t: TicketDetail; onClose: () => void }) {
             <span className="muted mono-xs">Ctrl+Enter save</span></div></div>
           : <p className={`desc${t.description ? "" : " is-empty"}`}>{t.description || "No description."}</p>}
       </section>
+
+      <WorkPanel t={t} />
 
       <section aria-label="Development">
         <div className="td-sec-title">Development</div>
@@ -279,6 +282,11 @@ export function describe(e: TimelineEvent): string {
     case "archived": return e.to === "true" ? "archived" : "restored";
     case "attachment_added": return `attached ${v(e.to)}`;
     case "attachment_removed": return `removed attachment ${v(e.from)}`;
+    case "pipeline.plan": case "pipeline.plan_accepted": case "pipeline.started": case "pipeline.review":
+    case "pipeline.review_stale": case "pipeline.ready_to_merge": case "pipeline.merged": case "pipeline.verified":
+    case "pipeline.done": case "pipeline.gate_opened": case "pipeline.gate_confirmed": case "pipeline.blocked":
+    case "pipeline.handoff": case "pipeline.role": case "pipeline.finding":
+      return e.trigger ?? e.kind.replace("pipeline.", "").replace("_", " ");
     default:
       if (e.field === "description") return "edited the description";
       if (e.field === "title") return `renamed to “${v(e.to)}”`;

@@ -283,6 +283,25 @@ export interface Ticket {
 
 export interface TicketRef { key: string; title: string; status: TicketStatus }
 
+export type PipelineStage = "PLAN" | "BUILD" | "REVIEW" | "MERGE" | "VERIFY" | "DONE";
+export type PipelineGate = "plan" | "merge" | "ui" | "deploy" | "failure";
+/** GET /api/tasks/{key}/work — the ticket's durable pipeline state (plans/TICKET-PIPELINE-V1.md). */
+export interface TicketWork {
+  key: string; status: TicketStatus; stage: PipelineStage | null;
+  stages: { stage: PipelineStage; state: "done" | "active" | "blocked" | "todo" }[];
+  plan: { summary?: string; requirements?: string[]; approach?: string; affected?: string[]; risk?: string; tests?: string[]; questions?: string[] };
+  planState: "none" | "proposed" | "accepted";
+  policy: { plan: "auto" | "owner"; planReasons: string[]; merge: string; ui: boolean; deploy: boolean };
+  gate: PipelineGate | null; gateReason: string | null; confirmed: string[];
+  branch: string | null; worktree: string | null; prs: string[];
+  roles: Record<string, { model: string | null; session: string | null; at: number }>;
+  review: { verdict: "APPROVE" | "REQUEST_CHANGES" | null; head: string | null; cycles: number };
+  verification: { result: "pass" | "fail"; evidence: string; at: number; by: string } | null;
+  merge: { pr: string; sha: string | null; at: number } | null;
+  handoff: { done: string; decisions: string; next: string; blockers: string; at: number; by: string } | null;
+  blocked: { stage: PipelineStage; reason: string; at: number } | null;
+  findings: { at: number; source: string; scope: "in" | "out"; category: string; summary: string; head: string | null }[];
+}
 export interface TimelineEvent {
   id: number; at: number; actor: string; kind: string; field: string | null;
   from: string | null; to: string | null; trigger: string | null; data: Record<string, unknown>;

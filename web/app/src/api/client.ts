@@ -1,6 +1,6 @@
 import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
-import type { CoordinatorState,
+import type { CoordinatorState, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
   Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent,
 } from "./types";
@@ -71,6 +71,11 @@ export class Api {
   task(key: string) { return this.req<TicketDetail>("GET", `/api/tasks/${encodeURIComponent(key)}`); }
   createTask(body: { project: string; title: string } & Partial<Record<string, unknown>>) {
     return this.req<TicketDetail>("POST", "/api/tasks", body);
+  }
+  taskWork(key: string) { return this.req<TicketWork>("GET", `/api/tasks/${encodeURIComponent(key)}/work`); }
+  /** Owner step from the UI: close a gate (needs Developer Unlock; ccd also checks it is Jay). */
+  confirmGate(key: string, gate: string) {
+    return this.req<TicketWork>("POST", `/api/tasks/${encodeURIComponent(key)}/work/confirm`, { gate });
   }
   updateTask(key: string, fields: Partial<Record<string, unknown>>) {
     return this.req<TicketDetail>("PATCH", `/api/tasks/${encodeURIComponent(key)}`, fields);
