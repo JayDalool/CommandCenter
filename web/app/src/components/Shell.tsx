@@ -7,7 +7,6 @@ import { freshness, type FreshRow } from "../lib/freshness";
 import { dur, hms, nowS } from "../lib/time";
 import { jayQueue } from "../tickets/model";
 import { Kbd } from "./ui";
-import { QuickConsole } from "./QuickConsole";
 import { CommandPalette } from "./CommandPalette";
 import { NewTicket } from "./NewTicket";
 import { UnlockDialog } from "./DevMode";
@@ -163,7 +162,6 @@ export function FreshnessBar() {
   useTick(1000);
   const st = useSelector(app.store, (d) => d.state);
   const conn = useSelector(app.store, (d) => d.conn, shallowEqual);
-  const consoleOpen = usePrefs((p) => p.consoleOpen);
   const rows = useMemo(() => freshness(st, conn, nowS()), [st, conn, Math.floor(Date.now() / 1000)]);
   return <footer className="statusline" aria-label="Source freshness">
     {rows.map((r: FreshRow) => <span key={r.id} className={`sl-seg is-${r.state}`} title={r.detail}>
@@ -172,8 +170,6 @@ export function FreshnessBar() {
     <span className="sl-fill" />
     <span className="sl-seg">seq <span className="mono-xs">{st?.seq ?? "—"}</span></span>
     <span className="sl-seg">ccd {st?.version ?? "—"}</span>
-    <button type="button" className="sl-btn" aria-pressed={consoleOpen} aria-keyshortcuts="`"
-      onClick={() => prefs.patch({ consoleOpen: !consoleOpen })}>console `</button>
     <button type="button" className="sl-btn" onClick={() => window.dispatchEvent(new Event("cc:palette"))}>Ctrl+K</button>
   </footer>;
 }
@@ -189,7 +185,6 @@ export function AppShell({ children, flush = false }: { children: ReactNode; flu
   const [newTask, setNewTask] = useState(false);
   const [newProject, setNewProject] = useState<string | undefined>(undefined);
   const [unlock, setUnlock] = useState(false);
-  const consoleOpen = usePrefs((p) => p.consoleOpen);
   useEffect(() => {
     const openPal = () => setPalette(true);
     const openNew = (e: Event) => { setNewProject((e as CustomEvent<{ project?: string } | null>).detail?.project); setNewTask(true); };
@@ -205,7 +200,6 @@ export function AppShell({ children, flush = false }: { children: ReactNode; flu
       if (typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
       if (document.querySelector("[role=dialog]")) return;
       if (e.key === "n" || e.key === "N") { e.preventDefault(); setNewProject(undefined); setNewTask(true); }
-      else if (e.key === "`") { e.preventDefault(); prefs.patch({ consoleOpen: !prefs.get().consoleOpen }); }
       else if (e.key === "/") { e.preventDefault(); window.dispatchEvent(new Event("cc:focus-search")); }
       else if (/^[0-9]$/.test(e.key)) {
         const i = e.key === "0" ? 9 : Number(e.key) - 1;
@@ -225,7 +219,6 @@ export function AppShell({ children, flush = false }: { children: ReactNode; flu
       <OfflineBanner />
       <main id="main" className={`screen${flush ? " is-flush" : ""}`} tabIndex={-1}>{children}</main>
     </div>
-    <QuickConsole hidden={!consoleOpen} />
     <FreshnessBar />
     <Toast />
     {palette && <CommandPalette onClose={() => setPalette(false)} onNewTask={() => { setPalette(false); setNewProject(undefined); setNewTask(true); }} />}

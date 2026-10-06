@@ -28,17 +28,21 @@ it("polled project: action bar routes, safe GitHub link, no herdr workspaces lin
   location.hash = `#/projects/${p.key}`;
   const { container } = render(<Projects />);
   expect(screen.getByRole("region", { name: "Project actions" })).toBeTruthy();
+  // Primary: Open Workspace, Tasks, Development, GitHub. Everything else is under ⋯.
   expect(hrefOf("Open Workspace")).toBe(`#/workspace?project=${p.key}`);
-  expect(hrefOf("Claude")).toBe(`#/workspace?project=${p.key}&tab=claude`);
-  expect(hrefOf("Repo shell")).toBe(`#/workspace?project=${p.key}&tab=repo`);
-  expect(hrefOf("Source control")).toBe(`#/workspace?project=${p.key}&view=scm`);
+  expect(hrefOf("Tasks")).toBe(`#/tasks?project=${p.key}`);
   expect(hrefOf("Development")).toBe(`#/development?project=${p.key}`);
+  const bar = screen.getByRole("region", { name: "Project actions" });
+  expect(within(bar).getAllByRole("link").map((a) => a.textContent)).toEqual(["Open Workspace", "Tasks", "Development", "GitHub ↗"]);
+  fireEvent.click(screen.getByRole("button", { name: "More project actions" }));
+  expect(screen.getByRole("menuitem", { name: "Open Claude" }).getAttribute("href")).toBe(`#/workspace?project=${p.key}&tab=claude`);
+  expect(screen.getByRole("menuitem", { name: "Open Project terminal" }).getAttribute("href")).toBe(`#/workspace?project=${p.key}&tab=repo`);
   expect(p.repoUrl).toBeTruthy();
   const gh = screen.getByRole("link", { name: "GitHub ↗" });
   expect(gh.getAttribute("href")).toMatch(/^https:\/\/github\.com\//);
   expect(gh.getAttribute("rel")).toBe("noopener noreferrer");
   expect(gh.getAttribute("target")).toBe("_blank");
-  expect(screen.getByRole("button", { name: "New ticket" })).toBeTruthy();
+  expect(screen.getByRole("menuitem", { name: "New ticket" })).toBeTruthy();
   expect(container.querySelector('a[href^="#/workspaces"]')).toBeNull();
   expect(screen.queryByText("Workspace access")).toBeNull();
 });
@@ -47,9 +51,7 @@ it("commandcenter: same bar from the registry, fetched once", async () => {
   location.hash = "#/projects/commandcenter";
   const { container } = render(<Projects />);
   expect(hrefOf("Open Workspace")).toBe("#/workspace?project=commandcenter");
-  expect(hrefOf("Claude")).toBe("#/workspace?project=commandcenter&tab=claude");
-  expect(hrefOf("Repo shell")).toBe("#/workspace?project=commandcenter&tab=repo");
-  expect(hrefOf("Source control")).toBe("#/workspace?project=commandcenter&view=scm");
+  expect(hrefOf("Tasks")).toBe("#/tasks?project=commandcenter");
   expect(hrefOf("Development")).toBe("#/development?project=commandcenter");
   const gh = await screen.findByRole("link", { name: "GitHub ↗" });
   expect(gh.getAttribute("href")).toBe("https://github.com/JayDalool/CommandCenter");

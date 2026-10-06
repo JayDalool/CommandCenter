@@ -3,6 +3,7 @@ import { href } from "../lib/router";
 import type { JayItem } from "../tickets/model";
 import { Project, EmptyState, Ago, Flags } from "../components/ui";
 import { DataTable, type Column } from "../components/DataTable";
+import { openAgent } from "../lib/openAgent";
 
 export function NeedsTable({ items }: { items: JayItem[] }) {
   const cols: Column<JayItem>[] = [
@@ -16,7 +17,7 @@ export function NeedsTable({ items }: { items: JayItem[] }) {
   ];
   return <div className="tbl-wrap"><DataTable label="Needs Jay" rows={items} columns={cols} rowKey={(j) => j.id}
     onActivate={(_, j) => {
-      if (j.kind === "answer" && j.agentId) window.dispatchEvent(new CustomEvent("cc:console", { detail: j.agentId }));
+      if (j.kind === "answer" && j.agentId) openAgent(j.agentId);
       else if (j.kind === "ticket") location.hash = href("tasks", j.ref);
       else if (j.url) window.open(j.url, "_blank", "noopener");
       else if (j.kind === "merge") location.hash = href("development");

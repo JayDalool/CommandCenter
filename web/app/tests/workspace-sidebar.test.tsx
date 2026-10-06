@@ -123,13 +123,12 @@ describe("search in the sidebar", () => {
 });
 
 describe("claude only in the dock", () => {
-  it("has no Claude tab in the main area; the dock keeps Claude, Repo shell and Server shell", async () => {
+  it("has no Claude tab in the main area; the dock is Claude, Project and Server", async () => {
     await ready();
     expect(within(mainArea()).queryByRole("tab", { name: /claude/i })).toBeNull();
     expect(within(mainArea()).queryByText("Claude")).toBeNull();
     const dock = screen.getByRole("tablist", { name: "Terminal" });
-    expect(within(dock).getAllByRole("tab").map((t) => t.textContent)).toEqual(["Claude", "Repo shell · repo:SV", "Server shell"]);
-    expect(screen.getByRole("group", { name: "Claude context" })).toBeInTheDocument();
+    expect(within(dock).getAllByRole("tab").map((t) => t.textContent)).toEqual(["Claude", "Project", "Server"]);
   });
 });
 
@@ -197,9 +196,9 @@ describe("palette events", () => {
     window.addEventListener("cc:workspace", on);
     const items = buildItems(() => {});
     const by = (l: string) => items.find((i) => i.kind === "ACTION" && i.label === l)!;
-    for (const l of ["Explorer", "Source control", "Search in project", "Go to file", "Claude", "Repo shell", "Server shell", "Development", "Open GitHub", "Open PR"])
+    for (const l of ["Explorer", "Source Control", "Search", "Go to file", "Open Claude", "Open Project terminal", "Open Server terminal", "Development", "Open GitHub", "Open PR"])
       expect(by(l), l).toBeTruthy();
-    for (const l of ["Explorer", "Source control", "Search in project", "Go to file", "Claude", "Repo shell", "Server shell", "Development"]) by(l).run();
+    for (const l of ["Explorer", "Source Control", "Search", "Go to file", "Open Claude", "Open Project terminal", "Open Server terminal", "Development"]) by(l).run();
     vi.advanceTimersByTime(100);
     window.removeEventListener("cc:workspace", on);
     vi.useRealTimers();

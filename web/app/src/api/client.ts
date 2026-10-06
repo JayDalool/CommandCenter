@@ -1,6 +1,6 @@
 import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
-import type {
+import type { CoordinatorState,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
   Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent,
 } from "./types";
@@ -146,6 +146,9 @@ export class Api {
   prompt(agentId: string, text: string) { return this.req<{ ok: true }>("POST", "/api/action/prompt", { agentId, text }); }
   key(agentId: string, key: "esc" | "enter") { return this.req<{ ok: true }>("POST", "/api/action/key", { agentId, key }); }
   ptyList() { return this.req<{ sessions: PtySession[]; enabled: boolean }>("GET", "/api/pty"); }
+  adoptCoordinator(project: string, sessionId: string) {
+    return this.req<{ ok: true; coordinator: CoordinatorState & { paneId: string | null } }>("POST", "/api/coordinators/adopt", { project, sessionId });
+  }
   ptyClose(name: string) { return this.req<{ ok: true }>("POST", "/api/pty/close", { name }); }
 
   private async reqAbortable<T>(path: string, signal?: AbortSignal): Promise<T> {

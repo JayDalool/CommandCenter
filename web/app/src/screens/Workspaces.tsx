@@ -10,6 +10,7 @@ import type { Workspace, WorkspacePaneCell, WorkspaceTab } from "../api/types";
 import { AgentState, Project, EmptyState, Command, Kbd, DetailRow } from "../components/ui";
 import { workspace } from "../workspace/transport";
 import { modelOf } from "./Agents";
+import { openAgent } from "../lib/openAgent";
 
 const HERDR_KEYS: [string, string][] = [["split ↓", "Ctrl+B −"], ["split →", "Ctrl+B v"], ["focus", "Ctrl+B h j k l"],
   ["zoom", "Ctrl+B z"], ["new tab", "Ctrl+B c"], ["workspaces", "Ctrl+B w"], ["detach", "Ctrl+B q"]];
@@ -106,7 +107,7 @@ function PaneDetail({ p, w }: { p: WorkspacePaneCell; w: Workspace }) {
       <div className="caps muted">Safe actions</div>
       <div className="row" style={{ flexWrap: "wrap" }}>
         {p.live && <button type="button" className="btn is-sm" onClick={() => workspace.focusAgent(p.id)}>Focus agent</button>}
-        {p.live && <button type="button" className="btn is-sm" onClick={() => window.dispatchEvent(new CustomEvent("cc:console", { detail: p.id }))}>
+        {p.live && <button type="button" className="btn is-sm" onClick={() => openAgent(p.id)}>
           {q ? "Answer…" : "Read-only tail"}</button>}
         <button type="button" className="btn is-sm" onClick={() => workspace.focusWorkspace(w.id)}>Open workspace</button>
       </div>

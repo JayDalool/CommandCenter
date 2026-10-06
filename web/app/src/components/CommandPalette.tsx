@@ -25,20 +25,19 @@ function currentWorkspace(): { project: string | null; ticket: string | null } {
 export function buildItems(onNewTask: () => void): PalItem[] {
   const d = app.data, st = d.state;
   const items: PalItem[] = [
-    { id: "a:new", kind: "ACTION", label: "New task", hint: "N", keywords: "create ticket capture", run: onNewTask },
-    { id: "a:console", kind: "ACTION", label: "Toggle quick console", hint: "`", run: () => prefs.patch({ consoleOpen: !prefs.get().consoleOpen }) },
+    { id: "a:new", kind: "ACTION", label: "New ticket", hint: "N", keywords: "create task capture", run: onNewTask },
     { id: "a:theme", kind: "ACTION", label: "Toggle light / dark", run: () => prefs.patch({ theme: prefs.get().theme === "dark" ? "light" : "dark" }) },
     { id: "a:density", kind: "ACTION", label: "Toggle compact rows (28 px)", run: () => prefs.patch({ density: prefs.get().density === "compact" ? "comfortable" : "compact" }) },
     { id: "a:needs", kind: "ACTION", label: "Show what needs Jay", keywords: "needs jay queue", run: () => go("tasks", null, { view: "jay" }) },
     { id: "a:import", kind: "ACTION", label: "Task migration preview (read-only)", keywords: "import migrate", run: () => go("settings", null, { tab: "import" }) },
     // Workspace: keyboard-first development
     ...([["Open Workspace", {}, "workspace ide editor"], ["Explorer", { side: "explorer" }, "files tree sidebar"],
-      ["Source control", { side: "scm" }, "git diff stage commit branch sidebar"], ["Search in project", { side: "search", search: true }, "ctrl+shift+f grep find text sidebar"],
-      ["Go to file", { goto: true }, "ctrl+p file open"], ["Claude", { term: "claude" }, "coordinator herdr dock terminal"],
-      ["Repo shell", { term: "repo" }, "terminal pty bash dock"], ["Server shell", { term: "server" }, "terminal pty bash home dock"],
+      ["Source Control", { side: "scm" }, "git diff stage commit branch sidebar"], ["Search", { side: "search", search: true }, "ctrl+shift+f grep find text sidebar"],
+      ["Go to file", { goto: true }, "ctrl+p file open"], ["Open Claude", { term: "claude" }, "coordinator dock terminal"],
+      ["Open Project terminal", { term: "repo" }, "repo shell bash dock"], ["Open Server terminal", { term: "server" }, "shell bash home dock"],
       ["Development", { dev: true }, "ticket trail commits pr ci"],
     ] as [string, Record<string, unknown>, string][]).map(([label, detail, kw], i) => ({ id: `w:${i}`, kind: "ACTION" as const, label,
-      hint: label === "Go to file" ? "Ctrl P" : label === "Search in project" ? "Ctrl ⇧ F" : i > 0 ? "Workspace" : undefined, keywords: `workspace ${kw}`,
+      hint: label === "Go to file" ? "Ctrl P" : label === "Search" ? "Ctrl ⇧ F" : i > 0 ? "Workspace" : undefined, keywords: `workspace ${kw}`,
       run: () => { if (!location.hash.startsWith("#/workspace")) go("workspace"); setTimeout(() => window.dispatchEvent(new CustomEvent("cc:workspace", { detail })), 50); } })),
     // The Workspace's current ticket or project (from the address, then the last project used).
     { id: "w:gh", kind: "ACTION", label: "Open GitHub", hint: "current project", keywords: "workspace github repo", run: () => {
@@ -56,8 +55,8 @@ export function buildItems(onNewTask: () => void): PalItem[] {
       const key = prefs.get().consoleProject ?? st?.projects[0]?.key ?? null;
       const prefix = st?.projectsConfig.find((p) => p.key === key)?.prefix ?? null;
       const name = st?.projects.find((p) => p.key === key)?.name ?? key ?? "";
-      return ([["Open native Claude terminal", nativeUri("claude", prefix), name], ["Open native repo terminal", nativeUri("repo", prefix), name],
-        ["Open native server terminal", nativeUri("server"), "jay-server"]] as [string, string | null, string][])
+      return ([["Claude in Windows Terminal", nativeUri("claude", prefix), name], ["Project in Windows Terminal", nativeUri("repo", prefix), name],
+        ["Server in Windows Terminal", nativeUri("server"), "jay-server"]] as [string, string | null, string][])
         .filter(([, uri]) => uri).map(([label, uri, hint], i) => ({ id: `nt:${i}`, kind: "ACTION" as const, label, hint,
           keywords: "native windows terminal ssh wt", run: () => { location.href = uri!; } }));
     })(),
@@ -65,7 +64,7 @@ export function buildItems(onNewTask: () => void): PalItem[] {
   ];
   for (const p of st?.projects ?? []) {
     items.push({ id: `p:${p.key}`, kind: "PROJECT", label: p.name, hint: p.key, keywords: `${p.key} ${p.repo}`, run: () => go("projects", p.key) });
-    items.push({ id: `pw:${p.key}`, kind: "ACTION", label: `Workspace: ${p.name}`, hint: p.key, keywords: `${p.key} workspace open project`,
+    items.push({ id: `pw:${p.key}`, kind: "ACTION", label: `Open ${p.name}`, hint: "Workspace", keywords: `${p.key} workspace open project`,
       run: () => { prefs.patch({ consoleProject: p.key }); go("workspace", null, { project: p.key }); } });
     if (p.repoUrl) items.push({ id: `gh:${p.key}`, kind: "ACTION", label: `Open ${p.name} on GitHub`, hint: p.repo, keywords: `${p.key} github repo`,
       run: () => window.open(p.repoUrl!, "_blank", "noopener,noreferrer") });

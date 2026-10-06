@@ -13,6 +13,7 @@ import { AttachmentsPanel } from "../components/Attachments";
 import { DevTrail } from "../components/DevTrail";
 import { NewTicket } from "../components/NewTicket";
 import { stamp } from "../lib/time";
+import { openAgent } from "../lib/openAgent";
 
 const DISPATCH_VERBS = ["plan", "implement", "review", "verify", "continue"] as const;
 
@@ -164,7 +165,7 @@ function Detail({ t, onClose }: { t: TicketDetail; onClose: () => void }) {
           <span className="muted trunc">{l.provider}</span><span /></div>)}
         <div className="rel"><span className="caps muted">Agent</span>
           {agent ? <><span className="mono">{agent.agent_name || agent.id}</span><AgentState status={agent.status} />
-            <button type="button" className="btn is-sm" onClick={() => window.dispatchEvent(new CustomEvent("cc:console", { detail: agent.id }))}>Tail</button></>
+            <button type="button" className="btn is-sm" onClick={() => openAgent(agent.id)}>Tail</button></>
             : <><span className="muted">none linked</span><span /><span /></>}</div>
         {dispatchable && <Dispatch t={t} coordinatorStatus={coord!.status} name={coord!.name} />}
       </section>
