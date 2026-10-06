@@ -247,7 +247,8 @@ class Pipeline:
             confirmed = [g for g in w["confirmed"] if g != "plan"]
             work = {"plan": plan, "roles": self._role(w, "planner", model, session, at), "confirmed": confirmed}
             events = [("pipeline.plan", "plan recorded", {"owner": pol["plan"] == "owner"})]
-            if pol["plan"] == "owner":
+            # Only Jay closes an open plan gate: a policy that has since become "auto" never does.
+            if pol["plan"] == "owner" or w["gate"] == "plan":
                 work.update(plan_state="proposed", gate="plan", gate_reason=", ".join(pol["planReasons"]))
                 events.append(("pipeline.gate_opened", "plan gate: " + ", ".join(pol["planReasons"]), {"gate": "plan"}))
                 return ({"status": "RESEARCHING"} if t["status"] != "RESEARCHING" else {}), work, events
@@ -365,7 +366,11 @@ class Pipeline:
             work = {"merge": {"pr": pr_ref, "sha": sha, "at": at}}
             if w["gate"] == "merge":
                 work.update(gate=None, gate_reason=None)
-            return {}, work, [("pipeline.merged", f"{pr_ref} merged", {"pr": pr_ref, "sha": sha})]
+            events = [("pipeline.merged", f"{pr_ref} merged", {"pr": pr_ref, "sha": sha})]
+            rv = w["review"]
+            if rv["verdict"] != "APPROVE":
+                events.append(("pipeline.unreviewed_merge", f"{pr_ref} merged without a recorded approval", {}))
+            return {}, work, events
         t = self.ts.get(key)
         tid = self.ts._id_of(key)
         if t["status"] != "VERIFYING" or ((self._row(tid) or {}).get("merge") or {}).get("pr") == pr_ref:

@@ -496,6 +496,62 @@ class PipelineApi(Automation):
         mine = [n for n in st["needs"] if n.get("ref") == "SV-056"]
         self.assertEqual([n["kind"] for n in mine], ["gate"])
 
+    def unlock(self):
+        sid = self.client.post("/api/developer/unlock", content=json.dumps({"token": self.DEV}), headers=JSON).json()["session"]
+        return {"x-ccd-developer": sid}
+
+    def patch(self, body, actor="agent:coordinator", headers=None):
+        h = dict(JSON, **{"x-ccd-actor": actor}, **(headers or {}))
+        return self.client.patch("/api/tasks/SV-056", content=json.dumps(body), headers=h)
+
+    def test_a_pipeline_ticket_never_jumps_a_gate_through_a_plain_edit(self):
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        # (b) no status jump: not by an agent, not by Jay without Developer Unlock
+        for actor in ("agent:coordinator", "jay"):
+            self.assertEqual(self.patch({"status": "READY_TO_MERGE"}, actor).status_code, 409, actor)
+        self.assertEqual(self.tickets.get("SV-056")["status"], "READY_TO_IMPLEMENT")
+        r = self.patch({"status": "BLOCKED"}, "jay", self.unlock())                    # Jay's explicit override
+        self.assertEqual((r.status_code, r.json()["status"]), (200, "BLOCKED"))
+        self.assertEqual(self.patch({"priority": "HIGH"}).status_code, 200)            # ordinary fields still edit
+
+    def test_an_open_gate_cannot_be_dodged_by_editing_what_opened_it(self):
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"labels": ["migration"]}, "jay")
+        self.assertEqual(self.step("plan", {"plan": {"summary": "x"}}, "agent:planner").json()["gate"], "plan")
+        # (c) drop the label, then re-plan: refused, and a re-plan never closes Jay's gate
+        for body in ({"labels": []}, {"type": "DOCS"}, {"needs_jay": False}):
+            self.assertEqual(self.patch(body).status_code, 409, body)
+        self.tickets.update("SV-056", {"labels": []}, "jay")                            # even if it changed anyway…
+        w = self.step("plan", {"plan": {"summary": "v2"}}, "agent:planner").json()
+        self.assertEqual((w["gate"], w["planState"], w["status"]), ("plan", "proposed", "RESEARCHING"))
+
+    def test_a_ui_gate_cannot_be_skipped_by_marking_done(self):
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"needs_ui_review": True}, "jay")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        self.step("start", {"branch": "SV-056-x", "worktree": "/srv/w/SV-056"})
+        self.tickets.update("SV-056", {"status": "VERIFYING"}, "system:automation")
+        self.assertEqual(self.step("verify", {"result": "pass", "evidence": "ok"}, "agent:verifier").json()["gate"], "ui")
+        # (a) an agent cannot mark it DONE around the UI gate
+        self.assertEqual(self.patch({"status": "DONE"}).status_code, 409)
+        needs = [n for n in self.get("/api/state").json()["needs"] if n.get("ref") == "SV-056"]
+        self.assertEqual([n["gate"] for n in needs], ["ui"])
+
+    def test_a_merge_without_a_recorded_approval_is_flagged(self):
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        self.step("start", {"branch": "SV-056-x", "worktree": "/srv/w/SV-056"})
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: x"), headRefName="SV-056-x")]
+        self.poll()
+        self.gh.data["samvision"]["prs"] = []
+        self.gh.data["samvision"]["merged"] = [{"number": 94, "title": "SV-056: x", "url": "u", "mergedAt": "x"}]
+        self.poll()
+        ev = [e for e in self.get("/api/activity?limit=200").json()["events"] if e["kind"] == "task.pipeline"
+              and e["data"].get("kind") == "pipeline.unreviewed_merge"]
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(ev[0]["severity"], "action")
+
     def test_unknown_steps_and_bad_bodies_are_refused(self):
         self.ticket("INBOX")
         self.assertEqual(self.step("merge", {}).status_code, 404)

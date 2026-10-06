@@ -332,7 +332,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         return daemon.development(project=request.query_params.get("project") or None)
 
     async def patch_task(request, body):
-        return daemon.task_update(request.path_params["key"], body, request.state.actor)
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.task_update(request.path_params["key"], body, request.state.actor, developer=dev)
 
     async def task_work(request, _):
         return daemon.task_work(request.path_params["key"])

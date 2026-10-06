@@ -1009,7 +1009,21 @@ class Daemon:
         self._task_event("task.created", ticket, f"created · {ticket['title']}", {"status": ticket["status"]})
         return ticket
 
-    def task_update(self, key, body, actor="jay"):
+    # What decides a pipeline ticket's gates and stage. On a ticket in the pipeline these move
+    # only through pipeline steps — or by Jay with Developer Unlock, as an explicit override.
+    GATE_FIELDS = {"labels", "type", "flags"} | set(tasks_mod.FLAGS)
+
+    def task_update(self, key, body, actor="jay", developer=False):
+        if isinstance(body, dict) and self.pipeline is not None and self.tasks.exists(key):
+            w = self._wrap(self.pipeline.work, key)
+            owner = actor == "jay" and developer
+            if w["planState"] != "none" or w["gate"]:
+                if "status" in body and not owner:
+                    raise ActionError(409, f"{w['key']} is in the pipeline: its status moves through pipeline steps "
+                                           f"(or Jay with Developer Unlock)")
+                if w["gate"] and set(body) & self.GATE_FIELDS and not owner:
+                    raise ActionError(409, f"{w['key']} has an open {w['gate']} gate: its labels, type and flags "
+                                           f"change only with Jay's Developer Unlock")
         ticket, changes = self._wrap(self._need_tasks().update, key, body, actor)
         self._announce(ticket, changes)
         return ticket
@@ -1084,7 +1098,8 @@ class Daemon:
         for kind, text, _data in events:
             self._event("tasks", "task.pipeline", f"{ticket['key']} {text}"[:300], project=ticket["project"],
                         ref=ticket["key"], data={"kind": kind},
-                        severity="action" if kind in ("pipeline.gate_opened", "pipeline.blocked") else "info")
+                        severity="action" if kind in ("pipeline.gate_opened", "pipeline.blocked",
+                                                      "pipeline.unreviewed_merge") else "info")
 
     def task_comment(self, key, body, actor="jay"):
         ticket = self._wrap(self._need_tasks().comment, key, body, actor)
@@ -1198,7 +1213,8 @@ class Daemon:
                     ref = f"{p['repo']}#{m['number']}"
                     for k in self.tasks.keys_linked("github", "pr", ref):
                         self._auto(k, ("IN_REVIEW", "READY_TO_MERGE"), "VERIFYING", f"PR #{m['number']} merged")
-                        self._pipeline_result(*self.pipeline.merged(k, ref, ((m.get("mergeCommit") or {}).get("oid"))))
+                        if self.pipeline.participating(k):
+                            self._pipeline_result(*self.pipeline.merged(k, ref, ((m.get("mergeCommit") or {}).get("oid"))))
                 except Exception as e:  # noqa: BLE001
                     log.warning(json.dumps({"msg": "ticket automation skipped a merge", "error": repr(e)[:200]}))
 
