@@ -243,14 +243,18 @@ class Pipeline:
         def fn(tid, t, w, at):
             self._need(t, ("INBOX", "PROPOSED", "RESEARCHING", "READY_TO_IMPLEMENT"), "a plan")
             pol = policy(t)
-            # A new plan needs a new approval: Jay approved the plan he saw, not this one.
+            # A new plan needs a new approval: Jay approved the plan he saw, not this one. And a ticket
+            # whose plan ever needed Jay keeps needing him ("owner:plan" is sticky), whatever its labels say now.
+            sticky = "owner:plan" in w["confirmed"] or w["gate"] == "plan"
             confirmed = [g for g in w["confirmed"] if g != "plan"]
             work = {"plan": plan, "roles": self._role(w, "planner", model, session, at), "confirmed": confirmed}
             events = [("pipeline.plan", "plan recorded", {"owner": pol["plan"] == "owner"})]
             # Only Jay closes an open plan gate: a policy that has since become "auto" never does.
-            if pol["plan"] == "owner" or w["gate"] == "plan":
-                work.update(plan_state="proposed", gate="plan", gate_reason=", ".join(pol["planReasons"]))
-                events.append(("pipeline.gate_opened", "plan gate: " + ", ".join(pol["planReasons"]), {"gate": "plan"}))
+            if pol["plan"] == "owner" or sticky:
+                reason = ", ".join(pol["planReasons"]) or "this ticket's plan needed Jay before"
+                work.update(plan_state="proposed", gate="plan", gate_reason=reason,
+                            confirmed=sorted(set(confirmed) | {"owner:plan"}))
+                events.append(("pipeline.gate_opened", "plan gate: " + reason, {"gate": "plan"}))
                 return ({"status": "RESEARCHING"} if t["status"] != "RESEARCHING" else {}), work, events
             work.update(plan_state="accepted", gate=None, gate_reason=None)
             events.append(("pipeline.plan_accepted", "plan accepted (no owner gate)", {}))

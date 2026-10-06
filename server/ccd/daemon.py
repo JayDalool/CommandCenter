@@ -1022,8 +1022,10 @@ class Daemon:
                 if "status" in body and not owner:
                     raise ActionError(409, f"{w['key']} is in the pipeline: its status moves through pipeline steps "
                                            f"(or Jay with Developer Unlock)")
-                if w["gate"] and set(body) & self.GATE_FIELDS and not owner:
-                    raise ActionError(409, f"{w['key']} has an open {w['gate']} gate: its labels, type and flags "
+                # What decides a gate (labels, type, flags, archive) is fixed once a ticket is in the
+                # pipeline — not only while a gate is open — or a flag could be dropped before its gate.
+                if set(body) & self.GATE_FIELDS and not owner:
+                    raise ActionError(409, f"{w['key']} is in the pipeline: its labels, type, flags and archive "
                                            f"change only with Jay's Developer Unlock")
         ticket, changes = self._wrap(self._need_tasks().update, key, body, actor)
         self._announce(ticket, changes)
@@ -1198,7 +1200,10 @@ class Daemon:
                             t, ch = self.tasks.update(k, {"branch": pr["headRefName"]}, "system:automation",
                                                       trigger=f"PR #{n} head branch")
                             self._announce(t, ch)
-                        self._auto(k, ("READY_TO_IMPLEMENT", "IN_PROGRESS"), "IN_REVIEW", f"PR #{n} is open")
+                        # A pipeline ticket reaches review only through `start` (branch, worktree, lane):
+                        # a PR opened before start waits; the next poll after start moves it.
+                        frm = ("IN_PROGRESS",) if self.pipeline.participating(k) else ("READY_TO_IMPLEMENT", "IN_PROGRESS")
+                        self._auto(k, frm, "IN_REVIEW", f"PR #{n} is open")
                         if self.pipeline.participating(k):
                             # A pipeline ticket: only its recorded review, tied to this PR's head, decides.
                             self._pipeline_result(*self.pipeline.sync_pr(k, pr_state))

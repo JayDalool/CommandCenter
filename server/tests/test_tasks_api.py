@@ -578,6 +578,43 @@ class PipelineApi(Automation):
         r = self.step("start", {"branch": "SV-056-x", "worktree": "/srv/w/SV-056"})
         self.assertEqual(r.json()["status"], "IN_PROGRESS", r.text)
 
+    def test_scenario_1_a_flag_cannot_be_dropped_before_its_gate(self):
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"needs_ui_review": True}, "jay")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")              # low risk: auto-accepted
+        self.step("start", {"branch": "SV-056-x", "worktree": "/srv/w/SV-056"})
+        for body in ({"needs_ui_review": False}, {"flags": []}, {"labels": ["x"]}, {"type": "DOCS"}):
+            self.assertEqual(self.patch(body).status_code, 409, body)            # no gate open, still refused
+            self.assertEqual(self.patch(body, "jay").status_code, 409, body)     # Jay without unlock too
+        self.assertIn("needs_ui_review", self.tickets.get("SV-056")["flags"])
+        self.tickets.update("SV-056", {"status": "VERIFYING"}, "system:automation")
+        self.assertEqual(self.step("verify", {"result": "pass", "evidence": "ok"}, "agent:verifier").json()["gate"], "ui")
+        self.assertEqual(self.patch({"needs_ui_review": False}, "jay", self.unlock()).status_code, 200)  # owner override
+
+    def test_scenario_2_an_approved_plan_cannot_be_swapped_for_another(self):
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"labels": ["security"]}, "jay")
+        self.step("plan", {"plan": {"summary": "rate-limit login"}}, "agent:planner")
+        dev = self.unlock()
+        self.assertEqual(self.step("confirm", {"gate": "plan"}, "jay", dev).json()["status"], "READY_TO_IMPLEMENT")
+        self.assertEqual(self.patch({"labels": []}).status_code, 409)               # can't strip the label
+        self.tickets.update("SV-056", {"labels": []}, "jay")                          # …and even if it changed anyway
+        w = self.step("plan", {"plan": {"summary": "rewrite the login flow"}}, "agent:planner").json()
+        self.assertEqual((w["status"], w["gate"], w["planState"]), ("RESEARCHING", "plan", "proposed"))
+        needs = [n for n in self.get("/api/state").json()["needs"] if n.get("ref") == "SV-056"]
+        self.assertEqual([n["gate"] for n in needs], ["plan"])
+
+    def test_a_pr_opened_before_start_waits_for_start(self):
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: x"), headRefName="SV-056-x")]
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "READY_TO_IMPLEMENT")  # not straight to review
+        self.assertEqual(self.step("start", {"branch": "SV-056-x", "worktree": "/srv/w/SV-056"}).json()["status"],
+                         "IN_PROGRESS")
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+
     def test_unknown_steps_and_bad_bodies_are_refused(self):
         self.ticket("INBOX")
         self.assertEqual(self.step("merge", {}).status_code, 404)
