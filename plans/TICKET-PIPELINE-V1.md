@@ -159,3 +159,22 @@ deploy) and switch back to the previous checkout. UI: atomic release switch back
 Desktop notifications from the launcher; auto-merge for low-risk CC; overlap
 classifier; worktree auto-removal after DONE; pattern learning over findings;
 Jira/Slack/email (drafts-first principle documented only).
+
+## RESULT (2026-10-06)
+
+Live since #17 (backend, schema 3) and #18 (WORK view, Needs Jay gates).
+
+- **Dogfood, CC-026** (Development shows recorded roles): plan (auto) → start
+  `CC-026-development-roles` + worktree → PR #19 linked by the GitHub poll →
+  review REQUEST_CHANGES (3 in-scope) → implementer fixed → fresh APPROVE at
+  `a90cf2e` → READY_TO_MERGE + merge gate → merged `0bf6105` (standing CC
+  authorisation) → VERIFYING → fresh verifier pass on the live API/UI → DONE.
+  Every step is an attributed event; roles planner/implementer/reviewer/verifier recorded.
+- **Project pilot, SV-064** (SamVision number fields): plan (auto) → start →
+  PR #114 → REQUEST_CHANGES (stylesheet CI: a comment read by Tailwind; a
+  docs/jay edit SamVision forbids) → fixed → fresh APPROVE at `f430e8e`, CI
+  green → READY_TO_MERGE, merge gate in Needs Jay. Stops there: SamVision
+  merges need Jay.
+- Found on the way: Command Center's own repo was not in ccd's GitHub poll
+  (board config), so CC PRs never linked; added. Backend tests leaked a temp
+  dir per database (CC-027).
