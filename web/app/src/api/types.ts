@@ -295,7 +295,7 @@ export interface TicketWork {
   gate: PipelineGate | null; gateReason: string | null; confirmed: string[];
   branch: string | null; worktree: string | null; prs: string[];
   roles: Record<string, { model: string | null; session: string | null; at: number }>;
-  review: { verdict: "APPROVE" | "REQUEST_CHANGES" | null; head: string | null; cycles: number };
+  review: { verdict: "APPROVE" | "REQUEST_CHANGES" | null; head: string | null; cycles: number; pr?: string | null };
   verification: { result: "pass" | "fail"; evidence: string; at: number; by: string } | null;
   merge: { pr: string; sha: string | null; at: number } | null;
   handoff: { done: string; decisions: string; next: string; blockers: string; at: number; by: string } | null;
