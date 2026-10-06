@@ -4,12 +4,8 @@ export interface Prefs {
   theme: "dark" | "light" | "system";
   density: "comfortable" | "compact";
   sshHost: string;
-  consoleOpen: boolean;
-  consoleAgent: string | null;
   consoleTab: "claude" | "repo" | "server";
   consoleProject: string | null;
-  consoleFull: boolean;
-  consoleFollow: boolean;
   lastProject: string | null;
   // Workspace layout (this browser only)
   wsExplorerW: number; wsExplorerOpen: boolean; wsTermH: number; wsTermOpen: boolean;
@@ -18,8 +14,8 @@ export interface Prefs {
   wsSide: "explorer" | "scm" | "search";
 }
 const KEY = "cc.prefs";
-const DEFAULTS: Prefs = { theme: "dark", density: "comfortable", sshHost: "jay-server", consoleOpen: false,
-  consoleAgent: null, consoleTab: "claude", consoleProject: null, consoleFull: false, consoleFollow: true,
+const DEFAULTS: Prefs = { theme: "dark", density: "comfortable", sshHost: "jay-server",
+  consoleTab: "claude", consoleProject: null,
   lastProject: null, wsExplorerW: 260, wsExplorerOpen: true, wsTermH: 300, wsTermOpen: true, wsMax: "none",
   wsSide: "explorer" };
 
@@ -30,7 +26,8 @@ export function parsePrefs(raw: string | null): Prefs {
   try {
     const o = JSON.parse(raw ?? "{}") as Record<string, unknown>;
     const old = o.wsMain;
-    delete o.wsMain;
+    // Gone with the quick console and the Console screen: dropped from stored prefs.
+    for (const k of ["wsMain", "consoleOpen", "consoleAgent", "consoleFull", "consoleFollow"]) delete o[k];
     const p = { ...DEFAULTS, ...o } as Prefs;
     if (!SIDES.includes(String(o.wsSide))) p.wsSide = old === "scm" || old === "search" ? old : "explorer";
     return p;

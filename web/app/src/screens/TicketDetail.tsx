@@ -165,7 +165,7 @@ function Detail({ t, onClose }: { t: TicketDetail; onClose: () => void }) {
           <span className="muted trunc">{l.provider}</span><span /></div>)}
         <div className="rel"><span className="caps muted">Agent</span>
           {agent ? <><span className="mono">{agent.agent_name || agent.id}</span><AgentState status={agent.status} />
-            <button type="button" className="btn is-sm" onClick={() => openAgent(agent.id)}>Tail</button></>
+            <button type="button" className="btn is-sm" onClick={() => openAgent(agent.id)}>Open</button></>
             : <><span className="muted">none linked</span><span /><span /></>}</div>
         {dispatchable && <Dispatch t={t} coordinatorStatus={coord!.status} name={coord!.name} />}
       </section>

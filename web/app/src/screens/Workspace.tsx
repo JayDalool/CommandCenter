@@ -219,7 +219,6 @@ export function Workspace() {
   const setActive = (a: string | null) => tabStore.patch({ active: a });
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [over, setOver] = useState(false);
-  const git = true;
   const [menu, setMenu] = useState<Menu | null>(null);
   const [naming, setNaming] = useState<{ title: string; initial: string; done: (v: string) => void } | null>(null);
   const [goto, setGoto] = useState(false);
@@ -256,8 +255,8 @@ export function Workspace() {
     inflight.current.add(tag);
     // A response for a project Jay has since left is dropped, never shown in the new tree.
     const put = (v: FileEntry[] | string) => { inflight.current.delete(tag); if (keyRef.current === want) setListings((l) => ({ ...l, [path]: v })); };
-    app.api.listDir(want, path, git).then((r) => put(r.entries)).catch((e) => put((e as Error).message));
-  }, [key, git]);
+    app.api.listDir(want, path, true).then((r) => put(r.entries)).catch((e) => put((e as Error).message));
+  }, [key]);
   const refresh = () => { inflight.current.clear(); setListings({}); };
   const invalidate = (dir: string) => setListings((l) => { const n = { ...l }; delete n[dir]; return n; });
   const toggle = (x: string) => setOpen((s) => { const n = new Set(s); if (n.has(x)) n.delete(x); else n.add(x); return n; });
