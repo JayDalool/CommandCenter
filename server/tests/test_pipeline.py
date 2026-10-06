@@ -150,6 +150,49 @@ class Review(Base):
         t, _, _ = self.pl.confirm(k, "failure", "jay")                     # Jay unblocks: back to review
         self.assertEqual((t["status"], self.pl.work(k)["review"]["cycles"]), ("IN_REVIEW", 0))
 
+    def ready_and_authorised(self, k):
+        self.to_review(k)
+        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", pr=self.pr())
+        self.assertEqual((self.ts.get(k)["status"], self.pl.work(k)["gate"]), ("READY_TO_MERGE", "merge"))
+
+    def test_changes_requested_after_ready_closes_the_merge_gate(self):
+        k = self.ticket()
+        self.ready_and_authorised(k)
+        t, _, _ = self.pl.review(k, "REQUEST_CHANGES", HEAD, "agent:reviewer", pr=self.pr())
+        w = self.pl.work(k)
+        self.assertEqual((t["status"], w["gate"]), ("IN_REVIEW", None))
+        self.assertEqual(self.pl.needs(), [])
+        with self.assertRaises(TaskError):
+            self.pl.confirm(k, "merge", "jay")
+
+    def test_a_merge_authorisation_never_covers_another_head(self):
+        k = self.ticket()
+        self.ready_and_authorised(k)
+        self.pl.confirm(k, "merge", "jay")                                 # Jay authorises head A
+        self.assertEqual(self.pl.work(k)["confirmed"], [f"merge:{HEAD}"])
+        b = "b" * 40
+        t, _, _ = self.pl.review(k, "APPROVE", b, "agent:reviewer", pr=self.pr(head=b))   # before the poll sees B
+        self.assertEqual((t["status"], self.pl.work(k)["gate"]), ("READY_TO_MERGE", "merge"))
+        self.assertTrue(self.pl.needs()[0]["text"].startswith("Ready to merge"))
+
+    def test_resume_after_a_block_needs_a_new_merge_authorisation_for_a_new_head(self):
+        k = self.ticket()
+        self.ready_and_authorised(k)
+        self.pl.confirm(k, "merge", "jay")
+        self.pl.block(k, "CI infra down", "agent:coordinator")
+        self.pl.confirm(k, "failure", "jay")
+        b = "c" * 40
+        self.pl.review(k, "APPROVE", b, "agent:reviewer", pr=self.pr(head=b))
+        self.assertEqual((self.ts.get(k)["status"], self.pl.work(k)["gate"]), ("READY_TO_MERGE", "merge"))
+
+    def test_red_checks_or_draft_at_the_same_head_go_back_to_review_and_return(self):
+        k = self.ticket()
+        self.ready_and_authorised(k)
+        t, _, ev = self.pl.sync_pr(k, self.pr(green=False))
+        self.assertEqual((t["status"], self.pl.work(k)["gate"], ev[0][0]), ("IN_REVIEW", None, "pipeline.not_ready"))
+        self.assertEqual(self.pl.sync_pr(k, self.pr())[0]["status"], "READY_TO_MERGE")      # green again
+        self.assertEqual(self.pl.sync_pr(k, self.pr(draft=True))[0]["status"], "IN_REVIEW")
+
     def test_another_pr_on_the_ticket_says_nothing_about_the_reviewed_one(self):
         k = self.ticket()
         self.to_review(k)

@@ -105,6 +105,15 @@ def clean_plan(raw):
     return plan
 
 
+def _merge_ok(confirmed, head):
+    """Jay's merge authorisation is for one head: it is recorded as merge:<sha>."""
+    return bool(head) and f"merge:{head}" in confirmed
+
+
+def _no_merge(confirmed):
+    return [g for g in confirmed if g != "merge" and not g.startswith("merge:")]
+
+
 def _meta(v, field):
     if v in (None, ""):
         return None
@@ -280,7 +289,9 @@ class Pipeline:
             if verdict == "REQUEST_CHANGES":
                 cycles = w["review"]["cycles"] + 1
                 work = {"review_verdict": verdict, "review_head": head, "review_pr": (pr or {}).get("ref"),
-                        "review_cycles": cycles, "roles": roles}
+                        "review_cycles": cycles, "roles": roles, "confirmed": _no_merge(w["confirmed"])}
+                if w["gate"] == "merge":
+                    work.update(gate=None, gate_reason=None)
                 events = [("pipeline.review", f"changes requested at {head[:7]} (cycle {cycles})",
                            {"verdict": verdict, "head": head, "cycles": cycles, "findings": len(rows)})]
                 status = {"status": "IN_REVIEW"} if t["status"] != "IN_REVIEW" else {}
@@ -292,8 +303,17 @@ class Pipeline:
                 return status, work, events
             work = {"review_verdict": verdict, "review_head": head, "review_pr": (pr or {}).get("ref"), "roles": roles}
             events = [("pipeline.review", f"approved at {head[:7]}", {"verdict": verdict, "head": head})]
-            status, more, ev = self._ready(t, dict(w, review={"verdict": verdict, "head": head, "pr": (pr or {}).get("ref"),
-                                                               "cycles": w["review"]["cycles"]}), pr)
+            status = {}
+            if t["status"] == "READY_TO_MERGE" and head != w["review"]["head"]:
+                # A new head: re-decide from IN_REVIEW; a merge gate for the old head closes.
+                status = {"status": "IN_REVIEW"}
+                if w["gate"] == "merge":
+                    work.update(gate=None, gate_reason=None)
+                t = dict(t, status="IN_REVIEW")
+            st2, more, ev = self._ready(t, dict(w, gate=work.get("gate", w["gate"]),
+                                                review={"verdict": verdict, "head": head, "pr": (pr or {}).get("ref"),
+                                                        "cycles": w["review"]["cycles"]}), pr)
+            status = st2 or status
             work.update(more)
             return status, work, events + ev
         return self._tx(key, actor, fn)
@@ -308,7 +328,7 @@ class Pipeline:
         if pr.get("head") != rv["head"] or not pr.get("ciGreen") or pr.get("draft"):
             return {}, {}, []
         work, events = {}, [("pipeline.ready_to_merge", f"approved head {rv['head'][:7]} with green checks", {})]
-        if policy(t)["merge"] == "owner" and "merge" not in w["confirmed"]:
+        if policy(t)["merge"] == "owner" and not _merge_ok(w["confirmed"], rv["head"]):
             work = {"gate": "merge", "gate_reason": f"PR {pr.get('ref') or ''} approved and green".strip()}
             events.append(("pipeline.gate_opened", "merge gate", {"gate": "merge"}))
         return {"status": "READY_TO_MERGE"}, work, events
@@ -323,12 +343,16 @@ class Pipeline:
                     and pr["head"] != rv["head"]:
                 # The head stays recorded (the ticket is still in the pipeline); the approval and any
                 # merge authorisation were for the old head, so both go.
-                work = {"review_verdict": None, "confirmed": [g for g in w["confirmed"] if g != "merge"],
+                work = {"review_verdict": None, "confirmed": _no_merge(w["confirmed"]),
                         "gate": None if w["gate"] == "merge" else w["gate"],
                         "gate_reason": None if w["gate"] == "merge" else w["gateReason"]}
                 return {"status": "IN_REVIEW"}, work, [("pipeline.review_stale",
                                                         f"new PR head {pr['head'][:7]}; approval was for {rv['head'][:7]}",
                                                         {"head": pr["head"]})]
+            if t["status"] == "READY_TO_MERGE" and rv["verdict"] == "APPROVE" and (not pr.get("ciGreen") or pr.get("draft")):
+                why = "checks are not green" if not pr.get("ciGreen") else "the PR is a draft again"
+                work = {"gate": None, "gate_reason": None} if w["gate"] == "merge" else {}
+                return {"status": "IN_REVIEW"}, work, [("pipeline.not_ready", f"back to review: {why}", {})]
             return self._ready(t, w, pr)
         t = self.ts.get(key)
         if t["status"] not in ("IN_REVIEW", "READY_TO_MERGE"):
@@ -386,7 +410,8 @@ class Pipeline:
         def fn(tid, t, w, at):
             if w["gate"] != gate:
                 raise TaskError(409, f"{t['key']} has no open {gate} gate")
-            confirmed = sorted(set(w["confirmed"]) | ({gate} - {"failure"}))
+            add = {f"merge:{w['review']['head']}"} if gate == "merge" else {gate} - {"failure"}
+            confirmed = sorted(set(w["confirmed"]) | add)
             work = {"confirmed": confirmed, "gate": None, "gate_reason": None}
             events = [("pipeline.gate_confirmed", f"Jay confirmed the {gate} gate", {"gate": gate})]
             if gate == "plan":
