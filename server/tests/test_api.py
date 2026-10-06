@@ -51,6 +51,7 @@ ALLOWED = {
     ("POST", "/api/scm/discard"), ("POST", "/api/scm/commit"), ("POST", "/api/scm/branch"),
     ("POST", "/api/action/prompt"), ("POST", "/api/action/key"),
     ("POST", "/api/coordinators/adopt"),
+    ("GET", "/api/tasks/{key}/work"), ("POST", "/api/tasks/{key}/work/{op}"),
     ("GET", "/api/pty"), ("POST", "/api/pty/close"), ("WS", "/api/pty/{name}"),
 }
 FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec", "push",
@@ -296,7 +297,7 @@ class Actions(ApiBase):
         self.assertEqual(r.status_code, 200, r.text)
         prompt = [p for m, p in self.fake.calls if m == "agent.prompt"]
         self.assertEqual(len(prompt), 1)
-        self.assertEqual(prompt[0]["target"], "samvision")
+        self.assertEqual(prompt[0]["target"], "wE:p2")   # the resolver's pane, not a name
         text = prompt[0]["text"]
         self.assertIn("Not authorized by this message: merge, deploy, production, --apply, secrets, rule changes.",
                       text)
@@ -322,10 +323,27 @@ class Actions(ApiBase):
         self.assertEqual(r.status_code, 409)
         self.assertIn("working", r.json()["error"])
 
-    def test_dispatch_refuses_a_coordinator_without_its_canonical_name(self):
+    def test_dispatch_refuses_a_coordinator_the_resolver_cannot_identify(self):
+        from ccd import coordid
+        coordid.BINDINGS.unlink(missing_ok=True)
         del self.fake.agent("wE:p2")["name"]
+        for pane in self.fake.snapshot["panes"]:
+            if pane["pane_id"] == "wE:p2":
+                pane["label"] = ""
+        self.settle()
         r = self.post("/api/action/dispatch", {"project": "samvision", "taskId": "SV-1", "verb": "plan"})
-        self.assertEqual(r.status_code, 404)  # nothing answers to "samvision" any more
+        self.assertEqual(r.status_code, 409, r.text)   # found, not identified: adopt first
+        self.assertIn("adopt", r.json()["error"])
+        self.assertEqual([p for m, p in self.fake.calls if m == "agent.prompt"], [])
+
+    def test_dispatch_follows_a_bound_coordinator_after_a_rename(self):
+        from ccd import coordid
+        self.assertEqual(coordid.load()["samvision"]["sessionId"], self.fake.agent("wE:p2")["agent_session"]["value"])
+        del self.fake.agent("wE:p2")["name"]               # renamed: the binding still knows it
+        self.settle()
+        r = self.post("/api/action/dispatch", {"project": "samvision", "taskId": "SV-056", "verb": "plan"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual([p["target"] for m, p in self.fake.calls if m == "agent.prompt"], ["wE:p2"])
 
     def test_herdr_down_actions_fail_closed(self):
         self.fake.stop_thread()

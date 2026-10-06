@@ -398,3 +398,76 @@ class DevelopmentView(ApiBase):
         from ccd import sources
         self.assertEqual(sources.branches_ahead("/srv/server/apps/samvisionai", "--upload-pack=touch /tmp/x"), {})
         self.assertEqual(sources.branches_ahead("/srv/server/apps/samvisionai", ""), {})
+
+
+class PipelineApi(Automation):
+    """The pipeline over HTTP: agent-attributed steps, head-bound approval that survives GitHub polls,
+    owner gates only with Developer Unlock, gates in the one Needs Jay queue."""
+    DEV = "d" * 43
+
+    def equip(self, daemon):
+        from ccd import security
+        daemon.dev_gate = security.DeveloperGate(self.DEV)
+
+    def step(self, op, body, actor="agent:coordinator", headers=None):
+        h = dict(JSON, **{"x-ccd-actor": actor}, **(headers or {}))
+        return self.client.post(f"/api/tasks/SV-056/work/{op}", content=json.dumps(body), headers=h)
+
+    def test_a_ticket_travels_plan_to_done_and_every_step_is_attributed(self):
+        self.ticket("INBOX")
+        plan = {"summary": "the feature", "tests": ["unit"]}
+        self.assertEqual(self.step("plan", {"plan": plan, "model": "opus"}, "agent:planner").json()["status"],
+                         "READY_TO_IMPLEMENT")
+        r = self.step("start", {"branch": "SV-056-feature", "worktree": "/srv/server/worktrees/sv/SV-056"})
+        self.assertEqual(r.json()["status"], "IN_PROGRESS", r.text)
+        head = "0000094abc"
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefName="SV-056-feature")]
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+        r = self.step("review", {"verdict": "APPROVE", "head": head}, "agent:reviewer")
+        self.assertEqual(r.json()["status"], "READY_TO_MERGE", r.text)
+        for _ in range(2):                       # no GitHub approval: must NOT flap back to IN_REVIEW
+            self.poll()
+            self.assertEqual(self.tickets.get("SV-056")["status"], "READY_TO_MERGE")
+        needs = [n for n in self.get("/api/state").json()["needs"] if n.get("ref") == "SV-056"]
+        self.assertEqual([n["gate"] for n in needs], ["merge"])
+        self.gh.data["samvision"]["prs"] = []
+        self.gh.data["samvision"]["merged"] = [{"number": 94, "title": "SV-056: the feature", "url": "u",
+                                                "mergedAt": "2026-10-03T00:00:00Z", "mergeCommit": {"oid": "f" * 40}}]
+        self.poll()
+        w = self.get("/api/tasks/SV-056/work").json()
+        self.assertEqual((w["status"], w["gate"], w["merge"]["sha"]), ("VERIFYING", None, "f" * 40))
+        r = self.step("verify", {"result": "pass", "evidence": "health ok"}, "agent:verifier")
+        self.assertEqual(r.json()["status"], "DONE", r.text)
+        actors = {e["actor"] for e in self.tickets.get("SV-056")["timeline"] if (e.get("kind") or "").startswith("pipeline.")}
+        self.assertEqual(actors, {"agent:planner", "agent:coordinator", "agent:reviewer", "agent:verifier",
+                                  "system:automation"})
+
+    def test_a_new_pr_head_invalidates_the_approval(self):
+        self.ticket("IN_REVIEW")
+        self.tickets.link("SV-056", "github", "pr", "JayDalool/SamVisionAI#94", "https://github.com/JayDalool/SamVisionAI/pull/94", "t", "jay")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"))]
+        self.poll()
+        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": "0000094abc"}, "agent:reviewer")
+                         .json()["status"], "READY_TO_MERGE")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefOid="1111111abc")]
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+
+    def test_owner_gates_need_jay_with_developer_unlock(self):
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"labels": ["migration"]}, "jay")
+        self.assertEqual(self.step("plan", {"plan": {"summary": "x"}}, "agent:planner").json()["gate"], "plan")
+        self.assertEqual(self.step("confirm", {"gate": "plan"}, "jay").status_code, 403)          # no unlock
+        sid = self.client.post("/api/developer/unlock", content=json.dumps({"token": self.DEV}), headers=JSON).json()["session"]
+        dev = {"x-ccd-developer": sid}
+        self.assertEqual(self.step("confirm", {"gate": "plan"}, "agent:coordinator", dev).status_code, 403)  # not Jay
+        r = self.step("confirm", {"gate": "plan"}, "jay", dev)
+        self.assertEqual((r.status_code, r.json()["status"]), (200, "READY_TO_IMPLEMENT"))
+
+    def test_unknown_steps_and_bad_bodies_are_refused(self):
+        self.ticket("INBOX")
+        self.assertEqual(self.step("merge", {}).status_code, 404)
+        self.assertEqual(self.step("plan", {"plan": "do it"}).status_code, 400)
+        self.assertEqual(self.client.post("/api/tasks/SV-056/work/plan", content="{}",
+                                          headers=dict(JSON, **{"x-ccd-actor": "root"})).status_code, 400)

@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 from . import __version__, coordid, coordinators, github, model, registry, sources
+from . import pipeline as pipeline_mod
 from . import herdr as herdr_mod
 from . import importer
 from . import tasks as tasks_mod
@@ -150,6 +151,7 @@ class Daemon:
         self.store = store
         self.herdr = herdr
         self.tasks = tasks  # TaskStore, durable product data (tasks.db); None = task system off
+        self.pipeline = pipeline_mod.Pipeline(tasks) if tasks is not None else None
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
@@ -1012,6 +1014,67 @@ class Daemon:
         self._announce(ticket, changes)
         return ticket
 
+    # ---------- the ticket pipeline (plans/TICKET-PIPELINE-V1.md) ----------
+
+    PIPELINE_OPS = ("plan", "start", "review", "verify", "confirm", "handoff", "block", "role", "finding")
+
+    def task_work(self, key):
+        self._need_tasks()
+        return self._wrap(self.pipeline.work, key)
+
+    def _pr_state(self, ticket):
+        """The linked open PR's head, CI and draft state from the last GitHub poll (None if unknown)."""
+        g = (self.gh.get(ticket["project"]) or {}).get("data") or {}
+        refs = {link["ref"] for link in ticket.get("links") or [] if link.get("provider") == "github" and link.get("kind") == "pr"}
+        repo = next((p.get("repo") for p in self.cfg["projects"] if p["key"] == ticket["project"]), None)
+        for pr in g.get("prs") if isinstance(g.get("prs"), list) else []:
+            ref = f"{repo}#{pr.get('number')}"
+            if ref in refs:
+                ci = model.ci_mark(pr.get("statusCheckRollup"))
+                return {"ref": ref, "head": pr.get("headRefOid") or "", "ciGreen": ci in ("✓", "–"), "draft": bool(pr.get("isDraft"))}
+        return None
+
+    def task_work_op(self, key, op, body, actor="jay", developer=False):
+        """One pipeline step. Owner gates (confirm) need Jay with Developer Unlock; the rest any token holder,
+        recorded under the actor it states (X-CCD-Actor: agent:<role>)."""
+        self._need_tasks()
+        if op not in self.PIPELINE_OPS:
+            raise ActionError(404, f"unknown pipeline step {op}")
+        if not isinstance(body, dict):
+            raise ActionError(400, "body must be an object")
+        pl = self.pipeline
+        meta = {"model": body.get("model"), "session": body.get("session")}
+        if op == "plan":
+            r = self._wrap(pl.plan, key, body.get("plan"), actor, **meta)
+        elif op == "start":
+            r = self._wrap(pl.start, key, body.get("branch"), body.get("worktree"), actor, **meta)
+        elif op == "review":
+            t = self._wrap(self.tasks.get, key)
+            r = self._wrap(pl.review, key, body.get("verdict"), body.get("head"), actor, body.get("findings") or [],
+                           pr=self._pr_state(t), **meta)
+        elif op == "verify":
+            r = self._wrap(pl.verify, key, body.get("result"), body.get("evidence"), actor, **meta)
+        elif op == "confirm":
+            if not developer:
+                raise ActionError(403, "Developer Unlock required")
+            r = self._wrap(pl.confirm, key, body.get("gate"), actor)
+        elif op == "handoff":
+            r = self._wrap(pl.handoff, key, body, actor)
+        elif op == "block":
+            r = self._wrap(pl.block, key, body.get("reason"), actor)
+        elif op == "role":
+            r = self._wrap(pl.role, key, body.get("role"), actor, **meta)
+        else:
+            r = self._wrap(pl.finding, key, body.get("finding"), actor, body.get("source") or "review")
+        ticket, changes, events = r
+        self._announce(ticket, changes)
+        for kind, text, _data in events:
+            # An owner gate or a block is owner attention; ordinary transitions are info.
+            self._event("tasks", "task.pipeline", f"{ticket['key']} {text}"[:300], project=ticket["project"],
+                        ref=ticket["key"], data={"kind": kind},
+                        severity="action" if kind in ("pipeline.gate_opened", "pipeline.blocked") else "info")
+        return self._wrap(pl.work, key)
+
     def task_comment(self, key, body, actor="jay"):
         ticket = self._wrap(self._need_tasks().comment, key, body, actor)
         self._task_event("task.commented", ticket, "note added", {"count": len(ticket["comments"])})
@@ -1094,6 +1157,10 @@ class Daemon:
                     keys += [k for k in self.tasks.keys_linked("github", "pr", ref) if k not in keys]
                     ci = model.ci_mark(pr.get("statusCheckRollup"))
                     ready = pr.get("reviewDecision") == "APPROVED" and ci in ("✓", "–") and not pr.get("isDraft")
+                    # What the pipeline needs to tie a recorded review to this PR's current head.
+                    # "–" (no checks configured) counts as green, as for GitHub approvals above.
+                    pr_state = {"ref": ref, "head": pr.get("headRefOid") or "", "ciGreen": ci in ("✓", "–"),
+                                "draft": bool(pr.get("isDraft"))}
                     for k in keys:
                         if not self.tasks.has_link(k, "github", "pr", ref):
                             t, _ = self.tasks.link(k, "github", "pr", ref, github.pr_ref_url(ref), pr.get("title"),
@@ -1105,7 +1172,11 @@ class Daemon:
                                                       trigger=f"PR #{n} head branch")
                             self._announce(t, ch)
                         self._auto(k, ("READY_TO_IMPLEMENT", "IN_PROGRESS"), "IN_REVIEW", f"PR #{n} is open")
-                        if ready:
+                        if self.pipeline.work(k)["review"]["verdict"]:
+                            # A pipeline reviewer recorded a verdict: it, tied to the PR head, decides.
+                            t, ch, _ = self.pipeline.sync_pr(k, pr_state)
+                            self._announce(t, ch)
+                        elif ready:
                             self._auto(k, ("IN_REVIEW",), "READY_TO_MERGE", f"PR #{n} approved, checks green, not draft")
                         else:
                             self._auto(k, ("READY_TO_MERGE",), "IN_REVIEW",
@@ -1117,6 +1188,7 @@ class Daemon:
                     ref = f"{p['repo']}#{m['number']}"
                     for k in self.tasks.keys_linked("github", "pr", ref):
                         self._auto(k, ("IN_REVIEW", "READY_TO_MERGE"), "VERIFYING", f"PR #{m['number']} merged")
+                        self.pipeline.merged(k, ref, ((m.get("mergeCommit") or {}).get("oid")))
                 except Exception as e:  # noqa: BLE001
                     log.warning(json.dumps({"msg": "ticket automation skipped a merge", "error": repr(e)[:200]}))
 
@@ -1132,7 +1204,7 @@ class Daemon:
         if self.tasks is not None:
             # Ticket flags (needs:jay, needs:legal, …) join the one Needs-Jay queue.
             # Read live from tasks.db, so a flag shows the moment it is set.
-            ticket_needs = self.tasks.needs()
+            ticket_needs = self.tasks.needs() + self.pipeline.needs()
             snap["needs"] = list(snap.get("needs") or []) + ticket_needs
             totals = dict(snap.get("totals") or {})
             totals["needs"] = totals.get("needs", 0) + len(ticket_needs)
@@ -1372,9 +1444,14 @@ class Daemon:
             raise ActionError(400, "note must be printable, one line, at most 500 characters")
         self._throttle(f"dispatch:{project}", 5.0)
         name = coordinators.canonical(proj)
-        agent = await self._fresh_agent(name)
-        if agent.get("agent_name") != name:
-            raise ActionError(409, f"{project}'s coordinator is not running under its canonical name")
+        # The one resolver decides which Claude is the coordinator (a session binding, not a name).
+        if not self.herdr_state["ok"]:
+            raise ActionError(503, "herdr unreachable")
+        await self.resync("action")
+        r = coordinators.resolution(proj, self.panes)
+        if r["state"] != "ready":
+            raise ActionError(409, f"{project}'s coordinator is not identified ({r['state']}); adopt it in Workspace")
+        agent = await self._fresh_agent(r["paneId"])
         if agent["status"] not in ("idle", "done"):
             raise ActionError(409, f"{name} is {agent['status']}; dispatch only goes to an idle coordinator")
         plan = self._plan_for(task) or "none – plan it first per your workflow"
@@ -1382,7 +1459,7 @@ class Daemon:
         self._event("action", "action.dispatch", f"{verb} {task} → {name}", project=project, agent_id=agent["pane_id"],
                     ref=task, data={"kind": verb})
         try:
-            await self.herdr.prompt(name, text)
+            await self.herdr.prompt(agent["pane_id"], text)
         except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
             self._event("action", "action.failed", f"dispatch to {name} failed", severity="warn",
                         project=project, data={"kind": "dispatch", "error": str(e)[:160]})

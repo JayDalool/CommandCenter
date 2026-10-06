@@ -60,7 +60,7 @@ query($owner: String!, $name: String!, $ref: String!) {
       }
     }
     merged: pullRequests(states: MERGED, first: 30, orderBy: {field: UPDATED_AT, direction: DESC}) {
-      nodes { number title url mergedAt }
+      nodes { number title url mergedAt mergeCommit { oid } }
     }
     closed: issues(states: CLOSED, first: 30, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes { number title url closedAt stateReason }
