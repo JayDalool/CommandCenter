@@ -142,7 +142,8 @@ export function stepStatus(s: TicketStatus, dir: -1 | 1): TicketStatus {
 
 // ---------- the one Needs-Jay queue ----------
 
-export type NeedKind = "answer" | "merge" | "ticket" | "task" | "actions" | "ci";
+export type NeedKind = "answer" | "merge" | "ticket" | "task" | "actions" | "ci" | "gate";
+const VERB_BY_GATE: Record<string, string> = { plan: "Approve plan", merge: "Merge", ui: "Review UI", deploy: "Deploy", failure: "Unblock" };
 export interface JayItem {
   id: string;
   kind: NeedKind;
@@ -169,11 +170,15 @@ export function jayQueue(st: State | null, agents?: Agent[]): JayItem[] {
     out.push({ id: `answer:${b.pane_id}`, kind: "answer", verb: "Answer", project: b.project, ref: b.name,
       text: b.question, flags: [], since: ms ? ms / 1000 : null, url: null, agentId: b.pane_id });
   }
-  const order: Record<string, number> = { merge: 1, ticket: 2, task: 3, ci: 4, actions: 5 };
-  const rest = [...(st.needs as Need[])].sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9));
+  const order: Record<string, number> = { gate: 0, merge: 1, ticket: 2, task: 3, ci: 4, actions: 5 };
+  // A pipeline gate is the one item for its ticket: a flag on the same ticket would only repeat it.
+  const gated = new Set((st.needs as Need[]).filter((n) => n.kind === "gate").map((n) => n.ref));
+  const rest = [...(st.needs as Need[])].filter((n) => !(n.kind === "ticket" && gated.has(n.ref)))
+    .sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9));
   for (const n of rest) {
-    const kind = (["merge", "ticket", "task", "actions", "ci"].includes(n.kind) ? n.kind : "task") as NeedKind;
-    const verb = kind === "merge" ? "Merge" : kind === "ci" ? "Fix" : kind === "ticket"
+    const kind = (["gate", "merge", "ticket", "task", "actions", "ci"].includes(n.kind) ? n.kind : "task") as NeedKind;
+    const verb = kind === "gate" ? VERB_BY_GATE[(n as Need & { gate?: string }).gate ?? ""] ?? "Decide"
+      : kind === "merge" ? "Merge" : kind === "ci" ? "Fix" : kind === "ticket"
       ? VERB_BY_FLAG[(n.flags ?? [])[0] ?? "needs_jay"] ?? "Decide" : "Do";
     out.push({ id: `${n.kind}:${n.project}:${n.ref}`, kind, verb, project: n.project, ref: n.ref,
       text: n.text.replace(/^merge · /, "").replace(/^you do it · /, ""), flags: n.flags ?? [],

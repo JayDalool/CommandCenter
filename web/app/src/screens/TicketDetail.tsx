@@ -14,6 +14,7 @@ import { DevTrail } from "../components/DevTrail";
 import { NewTicket } from "../components/NewTicket";
 import { stamp } from "../lib/time";
 import { openAgent } from "../lib/openAgent";
+import { WorkPanel } from "../tickets/WorkPanel";
 
 const DISPATCH_VERBS = ["plan", "implement", "review", "verify", "continue"] as const;
 
@@ -122,6 +123,8 @@ function Detail({ t, onClose }: { t: TicketDetail; onClose: () => void }) {
             <span className="muted mono-xs">Ctrl+Enter save</span></div></div>
           : <p className={`desc${t.description ? "" : " is-empty"}`}>{t.description || "No description."}</p>}
       </section>
+
+      <WorkPanel t={t} />
 
       <section aria-label="Development">
         <div className="td-sec-title">Development</div>
@@ -280,6 +283,8 @@ export function describe(e: TimelineEvent): string {
     case "attachment_added": return `attached ${v(e.to)}`;
     case "attachment_removed": return `removed attachment ${v(e.from)}`;
     default:
+      // Every pipeline step records its own sentence (ccd/pipeline.py), including ones added later.
+      if (e.kind.startsWith("pipeline.")) return e.trigger ?? e.kind.slice(9).replaceAll("_", " ");
       if (e.field === "description") return "edited the description";
       if (e.field === "title") return `renamed to “${v(e.to)}”`;
       return `${e.field} ${v(e.from)} → ${v(e.to)}`;
