@@ -234,6 +234,15 @@ describe("questions (spec §9)", () => {
   });
 });
 
+it("the scope tick never carries over to another ticket", () => {
+  const w = (k: string) => work({ key: k, questions: [q(1, "One?"), q(2, "Two?")], openQuestions: 2 });
+  const { rerender } = render(<QuestionsForm ticketKey="SV-071" work={w("SV-071")} onDone={() => {}} />);
+  fireEvent.click(screen.getByRole("checkbox", { name: /change the approved scope/ }));
+  expect(screen.getByRole("checkbox", { name: /change the approved scope/ })).toBeChecked();
+  rerender(<QuestionsForm ticketKey="SV-072" work={w("SV-072")} onDone={() => {}} />);
+  expect(screen.getByRole("checkbox", { name: /change the approved scope/ })).not.toBeChecked();
+});
+
 describe("gates in manager words (spec §11, §22)", () => {
   beforeEach(() => developer.set({ active: true, expiresAt: null, error: null }));
 

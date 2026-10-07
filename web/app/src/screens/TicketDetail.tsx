@@ -28,7 +28,7 @@ function Decisions({ ticketKey }: { ticketKey: string }) {
   if (!open && !work.gate && work.status !== "BLOCKED" && !(work.deploy?.approvedAt && !work.deploy?.result)) return null;
   return <section aria-label="Needs Jay" className="stack" style={{ gap: 10 }}>
     <GateCard ticketKey={ticketKey} work={work} onDone={setWork} />
-    {open > 0 && <QuestionsForm ticketKey={ticketKey} work={work} onDone={setWork} />}
+    {open > 0 && <QuestionsForm key={ticketKey} ticketKey={ticketKey} work={work} onDone={setWork} />}
   </section>;
 }
 

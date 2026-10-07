@@ -389,7 +389,9 @@ class Pipeline:
                 raise TaskError(400, "worktree must be an absolute path")
             if self.lanes() >= self.max_lanes:
                 raise TaskError(409, f"{self.max_lanes} implementation lanes are already running; wait for one to finish")
-            work = {"worktree": worktree, "roles": self._role(w, "implementer", model, session, at)}
+            # The implementation runs in the ticket's task session (spec §8) unless another is named, so the
+            # implementer always has a recorded session a reviewer must differ from.
+            work = {"worktree": worktree, "roles": self._role(w, "implementer", model, session or t["key"].lower(), at)}
             return ({"status": "IN_PROGRESS", "branch": branch}, work,
                     [("pipeline.started", f"implementation started on {branch}", {"branch": branch})])
         return self._tx(key, actor, fn)
@@ -408,8 +410,8 @@ class Pipeline:
                 own = {x for x in (impl.get("session"), t["key"].lower(), t["key"]) if x}
                 if actor == "agent:implementer" or (session and session in own):
                     raise TaskError(409, "the implementer cannot approve its own work; a fresh reviewer must")
-                if impl.get("session") and not session:
-                    raise TaskError(400, "say which reviewer session approves (--session): the implementer's is recorded")
+                if not session:
+                    raise TaskError(400, "say which fresh reviewer session approves (--session)")
             roles = self._role(w, "reviewer", model, session, at)
             for f in rows:
                 self.db.execute("INSERT INTO ticket_findings(ticket_id, at, source, scope, category, summary, head) "
@@ -862,6 +864,8 @@ class Pipeline:
                             (tid, at, actor, "VERIFY", "deploy", f"{env} deployment {result}", evidence))
             work = {"deploy": d}
             if result == "fail":
+                # A failed deployment needs a fresh request and, for live, Jay's fresh approval for the next try.
+                work["deploy"] = dict(d, approvedAt=None)
                 reason = f"{env} deployment failed: {evidence}"[:300]
                 work.update(gate="failure", gate_reason=reason, blocked={"stage": "VERIFY", "reason": reason, "at": at})
                 return {"status": "BLOCKED"}, work, [("pipeline.blocked", reason, {"stage": "VERIFY"})]

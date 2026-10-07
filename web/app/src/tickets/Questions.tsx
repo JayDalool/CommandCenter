@@ -17,7 +17,8 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
   const [scope, setScope] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<AnswersResult | null>(null);
-  useEffect(() => { setResult(null); }, [ticketKey]);
+  // Another ticket: nothing typed or ticked for the previous one carries over (least of all the scope tick).
+  useEffect(() => { setResult(null); setVals({}); setOther({}); setScope(false); }, [ticketKey]);
 
   const set = (id: number, v: string) => setVals((m) => ({ ...m, [id]: v }));
   const value = (q: Question) => (other[q.id] ? `Other: ${vals[q.id] ?? ""}`.trim() : (vals[q.id] ?? "")).trim();

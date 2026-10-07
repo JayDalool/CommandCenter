@@ -3,7 +3,7 @@
     python -m ccd.pipeline_cli work     SV-056
     python -m ccd.pipeline_cli plan     SV-056 --role planner  --plan-file plan.json
     python -m ccd.pipeline_cli start    SV-056 --role coordinator --branch SV-056-x --worktree /srv/…/SV-056
-    python -m ccd.pipeline_cli review   SV-056 --role reviewer --verdict APPROVE --head <sha> [--findings-file f.json]
+    python -m ccd.pipeline_cli review   SV-056 --role reviewer --session <fresh reviewer session> --verdict APPROVE --head <sha> [--findings-file f.json]
     python -m ccd.pipeline_cli verify   SV-056 --role verifier --result pass --evidence "…"
     python -m ccd.pipeline_cli handoff  SV-056 --role coordinator --done … --next … [--decisions …] [--blockers …]
     python -m ccd.pipeline_cli block    SV-056 --role coordinator --reason "…" [--what … --why … --action … --impact … --technical …]

@@ -95,7 +95,7 @@ export function Dossier({ ticketKey, focus, onOpenRoom, onCollapse }: {
         </div>
         {open > 0 && work && <aside className="dossier-side" aria-label="Your questions">
           <h4>Your questions ({open})</h4>
-          <QuestionsForm ticketKey={ticketKey} work={work} onDone={setWork} compact />
+          <QuestionsForm key={ticketKey} ticketKey={ticketKey} work={work} onDone={setWork} compact />
         </aside>}
       </div>}
 
@@ -121,7 +121,7 @@ export function Dossier({ ticketKey, focus, onOpenRoom, onCollapse }: {
       </div>}
 
       {tab === "questions" && <div className="dossier-main">
-        {work ? <QuestionsForm ticketKey={ticketKey} work={work} onDone={setWork} /> : <p className="faint">Loading…</p>}
+        {work ? <QuestionsForm key={ticketKey} ticketKey={ticketKey} work={work} onDone={setWork} /> : <p className="faint">Loading…</p>}
         <AnsweredList questions={questions} />
       </div>}
 

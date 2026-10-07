@@ -107,17 +107,17 @@ class MergeAcceptance(Base):
 
     def test_clean_work_needs_no_merge_gate(self):
         k = self.gz()
-        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", pr=dict(self.pr(), ref="JayDalool/gyst#1"))
+        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=dict(self.pr(), ref="JayDalool/gyst#1"))
         w = self.pl.work(k)
         self.assertEqual((self.ts.get(k)["status"], w["gate"], w["visibleStage"]), ("READY_TO_MERGE", None, "Ready to Merge"))
 
     def test_ui_and_owner_projects_and_replans_need_jay(self):
         k = self.gz(labels=["ui"])
-        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", pr=dict(self.pr(), ref="JayDalool/gyst#1"))
+        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=dict(self.pr(), ref="JayDalool/gyst#1"))
         self.assertEqual(self.pl.work(k)["gate"], "merge")
         sv = self.ticket()                       # SamVision keeps its owner merge rule
         self.to_review(sv)
-        self.pl.review(sv, "APPROVE", HEAD, "agent:reviewer", pr=self.pr())
+        self.pl.review(sv, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr())
         self.assertEqual(self.pl.work(sv)["gate"], "merge")
         t = self.ts.get(self.gz())
         self.assertFalse(needs_acceptance(t, {"confirmed": []}))
@@ -130,7 +130,7 @@ class LiveDeploy(Base):
     def verifying(self):
         k = self.ticket()
         self.to_review(k)
-        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", pr=self.pr())
+        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr())
         self.pl.confirm(k, "merge", "jay")
         self.ts.update(k, {"status": "VERIFYING"}, "system:automation", trigger="PR #1 merged")
         self.pl.merged(k, "JayDalool/SamVisionAI#1", "f" * 40)
@@ -173,7 +173,7 @@ class ReviewFixes(Base):
     def verifying(self, **fields):
         k = self.ticket(**fields)
         self.to_review(k)
-        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", pr=self.pr())
+        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr())
         self.pl.confirm(k, "merge", "jay")
         self.ts.update(k, {"status": "VERIFYING"}, "system:automation", trigger="PR #1 merged")
         return k
@@ -205,6 +205,26 @@ class ReviewFixes(Base):
         self.assertEqual(self.pl.work(k2)["gate"], "ui")
         self.pl.rework(k2, "needs fixes", "jay")                  # "Needs fixes" closes the UI gate
         self.assertIsNone(self.pl.work(k2)["gate"])
+
+    def test_a_failed_live_deploy_needs_a_fresh_approval(self):
+        k = self.verifying()
+        self.pl.deploy_request(k, "live", "v1", "ok", "agent:coordinator")
+        self.pl.confirm(k, "deploy", "jay")
+        self.pl.deployed(k, "live", "fail", "500 on /", "agent:coordinator")
+        self.pl.confirm(k, "failure", "jay")                      # blocker cleared: back to VERIFYING
+        with self.assertRaises(TaskError):
+            self.pl.deployed(k, "live", "pass", "retry", "agent:coordinator")
+        self.pl.deploy_request(k, "live", "v1 again", "ok", "agent:coordinator")
+        self.assertEqual(self.pl.work(k)["gate"], "deploy")
+
+    def test_start_records_the_task_session_and_approvals_must_name_another(self):
+        k = self.ticket()
+        self.to_review(k)
+        self.assertEqual(self.pl.work(k)["roles"]["implementer"]["session"], k.lower())
+        with self.assertRaises(TaskError):
+            self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", pr=self.pr())            # no reviewer session
+        with self.assertRaises(TaskError):
+            self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session=k.lower(), pr=self.pr())
 
     def test_a_pending_live_request_cannot_be_swapped_for_a_preview(self):
         k = self.verifying()

@@ -338,7 +338,7 @@ class DevelopmentView(ApiBase):
         self.assertIsNone(rows["SV-002"]["pipelineReview"])
         head = "94" * 20
         self.tickets.update("SV-002", {"status": "IN_REVIEW"})
-        self.daemon.pipeline.review("SV-002", "APPROVE", head, "agent:reviewer", model="opus")
+        self.daemon.pipeline.review("SV-002", "APPROVE", head, "agent:reviewer", session="review-1", model="opus")
         row = self.rows()["SV-002"]
         self.assertEqual(row["roles"]["reviewer"]["model"], "opus")
         self.assertEqual(row["pipelineReview"], {"verdict": "APPROVE", "head": head})
@@ -444,7 +444,7 @@ class PipelineApi(Automation):
         self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefName="SV-056-feature", headRefOid=head)]
         self.poll()
         self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
-        r = self.step("review", {"verdict": "APPROVE", "head": head}, "agent:reviewer")
+        r = self.step("review", {"verdict": "APPROVE", "head": head, "session": "review-1"}, "agent:reviewer")
         self.assertEqual(r.json()["status"], "READY_TO_MERGE", r.text)
         for _ in range(2):                       # no GitHub approval: must NOT flap back to IN_REVIEW
             self.poll()
@@ -459,7 +459,7 @@ class PipelineApi(Automation):
                  if e["kind"] == "task.pipeline"]
         self.assertIn("pipeline.review_stale", kinds)             # automatic steps reach the event log
         head = "95" * 20
-        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": head}, "agent:reviewer").json()["status"],
+        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": head, "session": "review-1"}, "agent:reviewer").json()["status"],
                          "READY_TO_MERGE")
         needs = [n for n in self.get("/api/state").json()["needs"] if n.get("ref") == "SV-056"]
         self.assertEqual([n["gate"] for n in needs], ["merge"])
@@ -485,7 +485,7 @@ class PipelineApi(Automation):
         self.poll()
         self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefOid="a" * 40)]
         self.poll()
-        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": "a" * 40}, "agent:reviewer")
+        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": "a" * 40, "session": "review-1"}, "agent:reviewer")
                          .json()["status"], "READY_TO_MERGE")
         self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefOid="b" * 40)]
         self.poll()
@@ -509,7 +509,7 @@ class PipelineApi(Automation):
                               f"https://github.com/JayDalool/SamVisionAI/pull/{n}", "t", "jay")
         self.gh.data["samvision"]["prs"] = [dict(pr(94)), dict(pr(95))]
         self.poll()
-        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": "a" * 40}, "agent:reviewer").status_code, 409)
+        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": "a" * 40, "session": "review-1"}, "agent:reviewer").status_code, 409)
 
     def test_a_gate_is_one_needs_jay_item_even_with_a_flag(self):
         self.ticket("INBOX")

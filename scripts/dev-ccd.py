@@ -198,7 +198,7 @@ def seed_control_room(ts):
     pl.plan(k, {"summary": "Manager panels per project"}, "agent:planner", model="opus")
     pl.start(k, f"{k}-dashboard", f"/srv/server/worktrees/cc/{k}", "agent:coordinator", model="sonnet")
     ts.update(k, {"status": "IN_REVIEW"}, "system:automation", trigger="PR #21 is open")
-    pl.review(k, "APPROVE", head, "agent:reviewer", model="opus",
+    pl.review(k, "APPROVE", head, "agent:reviewer", session="review-1", model="opus",
               pr={"ref": "JayDalool/CommandCenter#21", "head": head, "ciGreen": True, "draft": False})
     ts.update(k, {"status": "VERIFYING"}, "system:automation", trigger="PR #21 merged")
     pl.merged(k, "JayDalool/CommandCenter#21", "6" * 40)
@@ -208,7 +208,7 @@ def seed_control_room(ts):
     pl.plan(k, {"summary": "Icon concepts for the galaxy view"}, "agent:planner", model="opus")
     pl.start(k, f"{k}-assets", f"/srv/server/worktrees/gyst/{k}", "agent:coordinator", model="sonnet")
     ts.update(k, {"status": "IN_REVIEW"}, "system:automation", trigger="PR #33 is open")
-    pl.review(k, "APPROVE", head, "agent:reviewer", pr={"ref": "JayDalool/gyst-lifeops#33", "head": head, "ciGreen": True, "draft": False})
+    pl.review(k, "APPROVE", head, "agent:reviewer", session="review-1", pr={"ref": "JayDalool/gyst-lifeops#33", "head": head, "ciGreen": True, "draft": False})
     k = mk("mfe", 18, "Receipt totals by category", type="FEATURE")
     pl.plan(k, {"summary": "Totals per category"}, "agent:planner", model="opus")
 
