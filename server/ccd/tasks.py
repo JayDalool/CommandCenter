@@ -251,6 +251,50 @@ CREATE TRIGGER ticket_findings_append_only_u BEFORE UPDATE ON ticket_findings
 CREATE TRIGGER ticket_findings_append_only_d BEFORE DELETE ON ticket_findings
   BEGIN SELECT RAISE(ABORT, 'findings are append-only'); END;
 """),
+    # 4: the control room (plans/COMMAND-CENTER-CONTROL-ROOM.md). Additive only: structured questions
+    # for Jay, an evidence trail per ticket, and on the work row the worktree's one writer, the last
+    # Codex/Claude checkpoint, the live-deploy request and what was released when the ticket closed.
+    (4, """
+CREATE TABLE ticket_questions (
+  id          INTEGER PRIMARY KEY,
+  ticket_id   INTEGER NOT NULL REFERENCES tickets(id),
+  batch       INTEGER NOT NULL,
+  position    INTEGER NOT NULL,
+  text        TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 1000),
+  kind        TEXT NOT NULL DEFAULT 'text' CHECK (kind IN ('text', 'choice', 'yesno')),
+  options     TEXT NOT NULL DEFAULT '[]',
+  asked_at    REAL NOT NULL,
+  asked_by    TEXT NOT NULL,
+  answer      TEXT CHECK (answer IS NULL OR length(answer) <= 4000),
+  answered_at REAL,
+  answered_by TEXT
+);
+CREATE INDEX ticket_questions_ticket ON ticket_questions(ticket_id, batch, position);
+CREATE TRIGGER ticket_questions_never_deleted BEFORE DELETE ON ticket_questions
+  BEGIN SELECT RAISE(ABORT, 'questions are history; they are never deleted'); END;
+CREATE TRIGGER ticket_questions_answer_once BEFORE UPDATE ON ticket_questions
+  WHEN OLD.answered_at IS NOT NULL OR NEW.text != OLD.text OR NEW.batch != OLD.batch
+  BEGIN SELECT RAISE(ABORT, 'a question is answered once and never rewritten'); END;
+CREATE TABLE ticket_evidence (
+  id        INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+  at        REAL NOT NULL,
+  actor     TEXT NOT NULL,
+  stage     TEXT,
+  kind      TEXT NOT NULL CHECK (kind IN ('screenshot', 'image', 'link', 'file', 'test', 'pr', 'ci', 'deploy', 'note')),
+  ref       TEXT NOT NULL CHECK (length(ref) BETWEEN 1 AND 500),
+  note      TEXT CHECK (note IS NULL OR length(note) <= 2000)
+);
+CREATE INDEX ticket_evidence_ticket ON ticket_evidence(ticket_id, id);
+CREATE TRIGGER ticket_evidence_append_only_u BEFORE UPDATE ON ticket_evidence
+  BEGIN SELECT RAISE(ABORT, 'evidence is append-only'); END;
+CREATE TRIGGER ticket_evidence_append_only_d BEFORE DELETE ON ticket_evidence
+  BEGIN SELECT RAISE(ABORT, 'evidence is append-only'); END;
+ALTER TABLE ticket_work ADD COLUMN writer TEXT;
+ALTER TABLE ticket_work ADD COLUMN checkpoint TEXT;
+ALTER TABLE ticket_work ADD COLUMN deploy TEXT;
+ALTER TABLE ticket_work ADD COLUMN released TEXT;
+"""),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

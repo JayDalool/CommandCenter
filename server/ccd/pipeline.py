@@ -76,6 +76,52 @@ def policy(ticket, project_key=None):
     }
 
 
+CLOSED_STATUSES = ("DONE", "DENIED", "CANCELLED")
+# The ten stages Jay sees (spec §24). The canonical statuses stay as they are underneath.
+VISIBLE_STAGES = ("Planning", "Implementing", "Reviewing", "UI Testing", "Verifying", "Ready to Merge", "Deploying",
+                  "Needs Jay", "Blocked", "Closed")
+
+
+def visible_stage(t, w=None):
+    """One of VISIBLE_STAGES for a ticket and (optionally) its work state."""
+    w = w or {}
+    st = t["status"]
+    gate = w.get("gate")
+    if st in CLOSED_STATUSES:
+        return "Closed"
+    if st == "BLOCKED" or gate == "failure":
+        return "Blocked"
+    if w.get("openQuestions") or gate in ("plan", "merge", "ui", "deploy"):
+        return "Needs Jay"
+    flags = set(t.get("flags") or [])
+    if "needs_jay" in flags and st in ("INBOX", "PROPOSED"):
+        return "Needs Jay"
+    d = w.get("deploy") or {}
+    if d.get("approvedAt") and not d.get("result"):
+        return "Deploying"
+    stage = STAGE_OF.get(st)
+    if stage == "PLAN":
+        return "Planning"
+    if stage == "BUILD":
+        return "Implementing"
+    if stage == "REVIEW":
+        return "Reviewing"
+    if stage == "MERGE":
+        return "Ready to Merge"
+    if stage == "VERIFY":
+        pol = w.get("policy") or policy(t)
+        return "UI Testing" if pol["ui"] and not w.get("verification") else "Verifying"
+    return "Planning"
+
+
+def needs_acceptance(t, w):
+    """Gate 3 — Jay accepts before a merge when the project says so, the change is user-facing or UI,
+    the ticket is flagged needs:jay, or its plan changed after it was approved (a re-plan)."""
+    pol = policy(t)
+    flags = {f.replace(":", "_").replace("-", "_") for f in t.get("flags") or []}
+    return pol["merge"] == "owner" or pol["ui"] or "needs_jay" in flags or "owner:accept" in (w.get("confirmed") or [])
+
+
 def _text(v, limit, field, multiline=True):
     return _printable(str(v if v is not None else "").strip(), limit, field, multiline)
 
@@ -134,8 +180,8 @@ class Pipeline:
 
     def _row(self, tid):
         r = self.db.execute("SELECT plan, plan_state, gate, gate_reason, confirmed, worktree, roles, review_verdict, "
-                            "review_head, review_cycles, verification, handoff, blocked, merge, updated_at, review_pr "
-                            "FROM ticket_work WHERE ticket_id=?", (tid,)).fetchone()
+                            "review_head, review_cycles, verification, handoff, blocked, merge, updated_at, review_pr, "
+                            "writer, checkpoint, deploy, released FROM ticket_work WHERE ticket_id=?", (tid,)).fetchone()
         if not r:
             return None
         j = lambda v, d: json.loads(v) if v else d  # noqa: E731
@@ -143,7 +189,8 @@ class Pipeline:
                 "worktree": r[5], "roles": j(r[6], {}),
                 "review": {"verdict": r[7], "head": r[8], "cycles": r[9], "pr": r[15]},
                 "verification": j(r[10], None), "handoff": j(r[11], None), "blocked": j(r[12], None),
-                "merge": j(r[13], None), "updatedAt": r[14]}
+                "merge": j(r[13], None), "updatedAt": r[14], "writer": r[16], "checkpoint": j(r[17], None),
+                "deploy": j(r[18], None), "released": j(r[19], None)}
 
     DEV_ROLES = ("planner", "implementer", "reviewer", "verifier")
 
@@ -171,14 +218,48 @@ class Pipeline:
         tid = self.ts._id_of(key)
         w = self._row(tid) or {"plan": {}, "planState": "none", "gate": None, "gateReason": None, "confirmed": [],
                                "worktree": None, "roles": {}, "review": {"verdict": None, "head": None, "cycles": 0, "pr": None},
-                               "verification": None, "handoff": None, "blocked": None, "merge": None, "updatedAt": None}
+                               "verification": None, "handoff": None, "blocked": None, "merge": None, "updatedAt": None,
+                               "writer": None, "checkpoint": None, "deploy": None, "released": None}
         stage = stage_of(t["status"]) or ((w.get("blocked") or {}).get("stage") if t["status"] == "BLOCKED" else None)
         findings = [{"at": a, "source": s, "scope": sc, "category": c, "summary": m, "head": h} for a, s, sc, c, m, h in
                     self.db.execute("SELECT at, source, scope, category, summary, head FROM ticket_findings "
                                     "WHERE ticket_id=? ORDER BY id", (tid,)).fetchall()]
         prs = [link["ref"] for link in t.get("links") or [] if link.get("provider") == "github" and link.get("kind") == "pr"]
-        return dict(w, key=t["key"], status=t["status"], stage=stage, branch=t.get("branch"), prs=prs,
-                    policy=policy(t), stages=self._stages(t["status"], stage), findings=findings)
+        questions = self.questions(tid)
+        evidence = [{"id": i, "at": a, "actor": ac, "stage": st, "kind": k, "ref": ref, "note": n}
+                    for i, a, ac, st, k, ref, n in self.db.execute(
+                        "SELECT id, at, actor, stage, kind, ref, note FROM ticket_evidence WHERE ticket_id=? ORDER BY id",
+                        (tid,)).fetchall()]
+        out = dict(w, key=t["key"], status=t["status"], stage=stage, branch=t.get("branch"), prs=prs,
+                   policy=policy(t), stages=self._stages(t["status"], stage), findings=findings,
+                   questions=questions, openQuestions=sum(1 for q in questions if q["answer"] is None),
+                   evidence=evidence)
+        out["visibleStage"] = visible_stage(t, out)
+        return out
+
+    def questions(self, tid):
+        return [{"id": i, "batch": b, "position": pos, "text": tx, "kind": k, "options": json.loads(o or "[]"),
+                 "askedAt": aa, "askedBy": ab, "answer": an, "answeredAt": at, "answeredBy": by}
+                for i, b, pos, tx, k, o, aa, ab, an, at, by in self.db.execute(
+                    "SELECT id, batch, position, text, kind, options, asked_at, asked_by, answer, answered_at, answered_by "
+                    "FROM ticket_questions WHERE ticket_id=? ORDER BY batch, position", (tid,)).fetchall()]
+
+    def compact(self, ids):
+        """{ticket id: {gate, openQuestions, deploy}} for the ticket list, in two queries."""
+        ids = list(ids)
+        out = {}
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            marks = ",".join("?" * len(chunk))
+            for tid, gate, reason, deploy in self.db.execute(
+                    f"SELECT ticket_id, gate, gate_reason, deploy FROM ticket_work WHERE ticket_id IN ({marks})", chunk):
+                d = json.loads(deploy) if deploy else None
+                out[tid] = {"gate": gate, "gateReason": reason, "openQuestions": 0,
+                            "deploy": {k: d.get(k) for k in ("env", "requestedAt", "approvedAt", "result")} if d else None}
+            for tid, n in self.db.execute(f"SELECT ticket_id, COUNT(*) FROM ticket_questions WHERE answered_at IS NULL "
+                                          f"AND ticket_id IN ({marks}) GROUP BY ticket_id", chunk):
+                out.setdefault(tid, {"gate": None, "gateReason": None, "deploy": None})["openQuestions"] = n
+        return out
 
     @staticmethod
     def _stages(status, stage):
@@ -202,9 +283,21 @@ class Pipeline:
             "AND t.status NOT IN ('DONE','DENIED','CANCELLED') ORDER BY w.updated_at").fetchall()
         what = {"plan": "Plan needs approval", "merge": "Ready to merge", "ui": "UI review",
                 "deploy": "Deploy approval", "failure": "Blocked"}
-        return [{"project": p, "ref": k, "text": f"{what[g]}: {reason or title}"[:300], "kind": "gate", "gate": g,
-                 "url": None, "flags": [f"gate:{g}"], "status": st, "since": at}
-                for k, p, title, st, g, reason, at in rows]
+        out = [{"project": p, "ref": k, "text": f"{what[g]}: {reason or title}"[:300], "kind": "gate", "gate": g,
+                "url": None, "flags": [f"gate:{g}"], "status": st, "since": at}
+               for k, p, title, st, g, reason, at in rows]
+        gated = {o["ref"] for o in out}
+        for k, p, title, st, n, at in self.db.execute(
+                "SELECT t.key, t.project, t.title, t.status, COUNT(*), MIN(q.asked_at) FROM ticket_questions q "
+                "JOIN tickets t ON t.id=q.ticket_id WHERE q.answered_at IS NULL AND t.archived=0 "
+                "AND t.status NOT IN ('DONE','DENIED','CANCELLED') GROUP BY t.id ORDER BY MIN(q.asked_at)").fetchall():
+            item = {"project": p, "ref": k, "text": f"Claude needs {n} answer{'s' if n > 1 else ''}: {title}"[:300],
+                    "kind": "questions", "gate": None, "questions": n, "url": None, "flags": ["questions"],
+                    "status": st, "since": at}
+            if k in gated:   # one item per ticket: the questions come first, they are what unblocks it
+                out = [o for o in out if o["ref"] != k]
+            out.append(item)
+        return out
 
     def participating(self, key):
         """In the pipeline: an accepted plan or a recorded review. Its review state then belongs to the
@@ -307,6 +400,10 @@ class Pipeline:
 
         def fn(tid, t, w, at):
             self._need(t, ("IN_REVIEW", "READY_TO_MERGE"), "a review")
+            impl = (w["roles"].get("implementer") or {})
+            if verdict == "APPROVE" and (actor == "agent:implementer"
+                                         or (session and impl.get("session") and session == impl.get("session"))):
+                raise TaskError(409, "the implementer cannot approve its own work; a fresh reviewer must")
             roles = self._role(w, "reviewer", model, session, at)
             for f in rows:
                 self.db.execute("INSERT INTO ticket_findings(ticket_id, at, source, scope, category, summary, head) "
@@ -353,7 +450,7 @@ class Pipeline:
         if pr.get("head") != rv["head"] or not pr.get("ciGreen") or pr.get("draft"):
             return {}, {}, []
         work, events = {}, [("pipeline.ready_to_merge", f"approved head {rv['head'][:7]} with green checks", {})]
-        if policy(t)["merge"] == "owner" and not _merge_ok(w["confirmed"], rv["head"]):
+        if needs_acceptance(t, w) and not _merge_ok(w["confirmed"], rv["head"]):
             work = {"gate": "merge", "gate_reason": f"PR {pr.get('ref') or ''} approved and green".strip()}
             events.append(("pipeline.gate_opened", "merge gate", {"gate": "merge"}))
         return {"status": "READY_TO_MERGE"}, work, events
@@ -427,6 +524,11 @@ class Pipeline:
             if on and g not in w["confirmed"]:
                 return {}, {"gate": g, "gate_reason": "verified; owner check left"}, \
                     [("pipeline.gate_opened", f"{g} gate", {"gate": g})]
+        d = w.get("deploy") or {}
+        if d.get("requestedAt") and d.get("result") != "pass":
+            # A live deployment was asked for: the ticket closes only once it is deployed and verified live.
+            # Its deploy gate (if Jay has not approved yet) stays open.
+            return {}, {}, []
         return {"status": "DONE"}, {"gate": None, "gate_reason": None}, [("pipeline.done", "done", {})]
 
     def confirm(self, key, gate, actor):
@@ -452,6 +554,12 @@ class Pipeline:
                     raise TaskError(409, f"{self.max_lanes} implementation lanes are running; resume this one later")
                 work.update(blocked=None, review_cycles=0 if stage == "REVIEW" else w["review"]["cycles"])
                 return {"status": RESUME_STATUS.get(stage, "RESEARCHING")}, work, events
+            if gate == "deploy" and (w["deploy"] or {}).get("requestedAt") and not (w["deploy"] or {}).get("result"):
+                # Jay approved a live deployment that has not happened yet: the agent deploys next and
+                # records it with `deployed`; the ticket closes only after that, verified live.
+                work["deploy"] = dict(w["deploy"], approvedAt=at, approvedBy=actor)
+                events.append(("pipeline.deploy_approved", "Jay approved the live deployment", {}))
+                return {}, work, events
             if gate in ("ui", "deploy") and t["status"] == "VERIFYING" and (w["verification"] or {}).get("result") == "pass":
                 status, more, ev = self._after_verify(t, dict(w, confirmed=confirmed))
                 work.update(more)
@@ -468,17 +576,25 @@ class Pipeline:
         return self._tx(key, actor, lambda tid, t, w, at: ({}, {"handoff": dict(h, at=at, by=actor)},
                                                           [("pipeline.handoff", "handoff updated", {})]))
 
-    def block(self, key, reason, actor):
+    EXPLAIN = ("what", "why", "action", "impact", "technical")
+
+    def block(self, key, reason, actor, explain=None):
+        """Blocked, explained for a manager first (what happened, why it matters, recommended action,
+        estimated impact) with the technical details kept underneath."""
         reason = _text(reason, 300, "reason", multiline=False)
         if not reason:
             raise TaskError(400, "say why it is blocked")
+        if explain is not None and not isinstance(explain, dict):
+            raise TaskError(400, "explain must be an object")
+        more = {k: _text((explain or {}).get(k), 4000 if k == "technical" else 2000, k) for k in self.EXPLAIN}
+        more = {k: v for k, v in more.items() if v}
 
         def fn(tid, t, w, at):
             stage = stage_of(t["status"])
             if not stage or stage == "DONE":
                 raise TaskError(409, f"{t['key']} is {t['status']}; nothing to block")
             return {"status": "BLOCKED"}, {"gate": "failure", "gate_reason": reason,
-                                           "blocked": {"stage": stage, "reason": reason, "at": at}}, \
+                                           "blocked": dict(more, stage=stage, reason=reason, at=at)}, \
                 [("pipeline.blocked", reason, {"stage": stage})]
         return self._tx(key, actor, fn)
 
@@ -510,4 +626,236 @@ class Pipeline:
             self.db.execute("INSERT INTO ticket_findings(ticket_id, at, source, scope, category, summary) "
                             "VALUES (?,?,?,?,?,?)", (tid, at, source, row["scope"], row["category"], row["summary"]))
             return {}, {}, [("pipeline.finding", f"{source} finding ({row['scope']} scope)", {"category": row["category"]})]
+        return self._tx(key, actor, fn)
+
+    # ---------- the control room (plans/COMMAND-CENTER-CONTROL-ROOM.md) ----------
+
+    QUESTION_KINDS = ("text", "choice", "yesno")
+    EVIDENCE_KINDS = ("screenshot", "image", "link", "file", "test", "pr", "ci", "deploy", "note")
+    WRITERS = ("claude", "codex", "jay", "none")
+    DEPLOY_ENVS = ("live", "preview", "dev")
+    MAX_QUESTIONS = 10
+
+    def _open(self, t, op):
+        if t["status"] in CLOSED_STATUSES:
+            raise TaskError(409, f"{t['key']} is {t['status']}; {op} needs an open ticket")
+
+    def ask(self, key, questions, actor):
+        """Claude needs answers: one batch of structured questions. Waiting never ends the task session."""
+        if isinstance(questions, (str, dict)):
+            questions = [questions]
+        if not isinstance(questions, list) or not 1 <= len(questions) <= self.MAX_QUESTIONS:
+            raise TaskError(400, f"questions must be a list of 1–{self.MAX_QUESTIONS}")
+        rows = []
+        for q in questions:
+            q = {"text": q} if isinstance(q, str) else q
+            if not isinstance(q, dict):
+                raise TaskError(400, "each question is text or {text, kind, options}")
+            text = _text(q.get("text"), 1000, "question")
+            kind = q.get("kind") or ("choice" if q.get("options") else "text")
+            if not text or kind not in self.QUESTION_KINDS:
+                raise TaskError(400, "a question needs text; kind is text, choice or yesno")
+            options = _list(q.get("options"), "options", 8, 200) if kind == "choice" else []
+            if kind == "choice" and len(options) < 2:
+                raise TaskError(400, "a choice question needs at least two options")
+            rows.append((text, kind, options))
+
+        def fn(tid, t, w, at):
+            self._open(t, "a question")
+            batch = (self.db.execute("SELECT MAX(batch) FROM ticket_questions WHERE ticket_id=?", (tid,)).fetchone()[0]
+                     or 0) + 1
+            for i, (text, kind, options) in enumerate(rows):
+                self.db.execute("INSERT INTO ticket_questions(ticket_id, batch, position, text, kind, options, asked_at, "
+                                "asked_by) VALUES (?,?,?,?,?,?,?,?)", (tid, batch, i, text, kind, json.dumps(options), at, actor))
+            n = len(rows)
+            return {}, {}, [("pipeline.questions", f"Claude needs {n} answer{'s' if n > 1 else ''}",
+                             {"batch": batch, "count": n})]
+        return self._tx(key, actor, fn)
+
+    def answer(self, key, answers, actor):
+        """Jay's answers. Only Jay; each question once. Returns (ticket, changes, events)."""
+        if actor != "jay":
+            raise TaskError(403, "only Jay answers questions")
+        if not isinstance(answers, list) or len(answers) > 50:
+            raise TaskError(400, "answers must be a list of {id, answer}")
+        clean = []
+        for a in answers:
+            if not isinstance(a, dict) or not isinstance(a.get("id"), int):
+                raise TaskError(400, "each answer is {id, answer}")
+            text = _text(a.get("answer"), 4000, "answer")
+            if not text:
+                raise TaskError(400, "an answer cannot be empty")
+            clean.append((a["id"], text))
+
+        def fn(tid, t, w, at):
+            self._open(t, "an answer")
+            for qid, text in clean:
+                row = self.db.execute("SELECT kind, options, answered_at FROM ticket_questions WHERE id=? AND ticket_id=?",
+                                      (qid, tid)).fetchone()
+                if not row:
+                    raise TaskError(404, f"no question {qid} on {t['key']}")
+                if row[2] is not None:
+                    raise TaskError(409, f"question {qid} is already answered")
+                if row[0] == "yesno" and text.lower() not in ("yes", "no") and not text.lower().startswith("other:"):
+                    raise TaskError(400, f"question {qid} is yes / no (or Other: …)")
+                self.db.execute("UPDATE ticket_questions SET answer=?, answered_at=?, answered_by=? WHERE id=?",
+                                (text, at, actor, qid))
+            left = self.db.execute("SELECT COUNT(*) FROM ticket_questions WHERE ticket_id=? AND answered_at IS NULL",
+                                   (tid,)).fetchone()[0]
+            ev = [("pipeline.answered", f"Jay answered {len(clean)} question{'s' if len(clean) != 1 else ''}"
+                   + ("" if left else " — all answered"), {"count": len(clean), "left": left})] if clean else []
+            return {}, {}, ev
+        return self._tx(key, actor, fn)
+
+    def replan(self, key, reason, actor):
+        """Back to Planning: invalid assumptions, architecture, security or a major scope change.
+        The approval, any merge authorisation and the accepted plan go; Jay accepts before the merge."""
+        reason = _text(reason, 300, "reason", multiline=False)
+        if not reason:
+            raise TaskError(400, "say why it goes back to planning")
+
+        def fn(tid, t, w, at):
+            self._open(t, "a re-plan")
+            confirmed = sorted(set(_no_merge(w["confirmed"])) - {"plan"} | {"owner:accept"})
+            work = {"plan_state": "proposed", "review_verdict": None, "confirmed": confirmed, "blocked": None,
+                    "gate": None, "gate_reason": None}
+            status = {"status": "RESEARCHING"} if t["status"] != "RESEARCHING" else {}
+            return status, work, [("pipeline.replan", f"back to planning: {reason}", {"from": t["status"]})]
+        return self._tx(key, actor, fn)
+
+    def rework(self, key, reason, actor):
+        """Back to Implementation: an ordinary defect found in review, UI testing or verification."""
+        reason = _text(reason, 300, "reason", multiline=False)
+        if not reason:
+            raise TaskError(400, "say what needs fixing")
+
+        def fn(tid, t, w, at):
+            self._need(t, ("IN_REVIEW", "READY_TO_MERGE", "VERIFYING", "BLOCKED"), "rework")
+            if w["planState"] != "accepted":
+                raise TaskError(409, f"{t['key']} has no accepted plan; re-plan instead")
+            if self.lanes() >= self.max_lanes:
+                raise TaskError(409, f"{self.max_lanes} implementation lanes are already running; wait for one to finish")
+            work = {"review_verdict": None, "confirmed": _no_merge(w["confirmed"]), "blocked": None}
+            if w["gate"] in ("merge", "failure"):
+                work.update(gate=None, gate_reason=None)
+            return {"status": "IN_PROGRESS"}, work, [("pipeline.rework", f"back to implementation: {reason}",
+                                                      {"from": t["status"]})]
+        return self._tx(key, actor, fn)
+
+    def evidence(self, key, kind, ref, note, actor, stage=None):
+        if kind not in self.EVIDENCE_KINDS:
+            raise TaskError(400, f"kind must be one of {', '.join(self.EVIDENCE_KINDS)}")
+        ref = _text(ref, 500, "ref", multiline=False)
+        note = _text(note, 2000, "note") or None
+        if not ref:
+            raise TaskError(400, "evidence needs a ref (a link, a file name, a test name …)")
+        if stage is not None and stage not in STAGES:
+            raise TaskError(400, f"stage must be one of {', '.join(STAGES)}")
+
+        def fn(tid, t, w, at):
+            st = stage or stage_of(t["status"]) or (w.get("blocked") or {}).get("stage")
+            self.db.execute("INSERT INTO ticket_evidence(ticket_id, at, actor, stage, kind, ref, note) VALUES (?,?,?,?,?,?,?)",
+                            (tid, at, actor, st, kind, ref, note))
+            return {}, {}, [("pipeline.evidence", f"{kind} evidence: {ref}"[:200], {"kind": kind, "stage": st})]
+        return self._tx(key, actor, fn)
+
+    CHECKPOINT_TEXT = ("reason", "branch", "worktree", "dirty", "tests", "decisions", "blocker", "remaining")
+
+    def _checkpoint(self, raw):
+        if raw is None:
+            return None
+        if not isinstance(raw, dict):
+            raise TaskError(400, "checkpoint must be an object")
+        cp = {k: _text(raw.get(k), 2000, k) for k in self.CHECKPOINT_TEXT}
+        commit = raw.get("commit")
+        if commit not in (None, "") and (not isinstance(commit, str) or not re.match(r"^[0-9a-f]{7,40}$", commit)):
+            raise TaskError(400, "checkpoint commit must be a SHA")
+        cp["commit"] = commit or ""
+        cp["changed"] = _list(raw.get("changed"), "changed", 200, 300)
+        if not (cp["remaining"] or cp["reason"]):
+            raise TaskError(400, "a checkpoint says why it was taken and what remains")
+        return cp
+
+    def writer(self, key, owner, actor, checkpoint=None):
+        """Only ONE writer owns a worktree. Handing it over from another writer needs a checkpoint, so the
+        next one (Claude after a Codex limit) resumes from the current state instead of starting again."""
+        if owner not in self.WRITERS:
+            raise TaskError(400, f"writer must be one of {', '.join(self.WRITERS)}")
+        cp = self._checkpoint(checkpoint)
+
+        def fn(tid, t, w, at):
+            self._open(t, "a writer change")
+            cur = w.get("writer")
+            if cur and cur != owner and owner != "none" and cp is None:
+                raise TaskError(409, f"{cur} owns the worktree; hand it over with a checkpoint")
+            work = {"writer": None if owner == "none" else owner}
+            text = f"{owner} owns the worktree" if owner != "none" else "worktree released"
+            if cp is not None:
+                work["checkpoint"] = dict(cp, at=at, by=actor, frm=cur, to=owner)
+                text += f" (checkpoint from {cur or 'no writer'})"
+            return {}, work, [("pipeline.writer", text, {"from": cur, "to": owner, "checkpoint": cp is not None})]
+        return self._tx(key, actor, fn)
+
+    def deploy_request(self, key, env, what, verification, actor):
+        """Ask before deploying. A LIVE deployment opens the deploy gate: Jay is told and approves first."""
+        if env not in self.DEPLOY_ENVS:
+            raise TaskError(400, f"env must be one of {', '.join(self.DEPLOY_ENVS)}")
+        what = _text(what, 2000, "what")
+        verification = _text(verification, 2000, "verification")
+        if not what:
+            raise TaskError(400, "say what will go live")
+
+        def fn(tid, t, w, at):
+            self._need(t, ("VERIFYING",), "a deployment (after the merge)")
+            if w["gate"] not in (None, "deploy"):
+                raise TaskError(409, f"{t['key']} has an open {w['gate']} gate")
+            d = {"env": env, "what": what, "verification": verification, "requestedAt": at, "requestedBy": actor,
+                 "approvedAt": None, "result": None}
+            if env != "live":   # preview / dev follow the configured automation
+                d.update(approvedAt=at, approvedBy="policy")
+                return {}, {"deploy": d}, [("pipeline.deploy_requested", f"{env} deployment requested", {"env": env})]
+            work = {"deploy": d, "gate": "deploy", "gate_reason": "Ready for live deployment",
+                    "confirmed": [g for g in w["confirmed"] if g != "deploy"]}
+            return {}, work, [("pipeline.deploy_requested", "live deployment waiting for Jay", {"env": env}),
+                              ("pipeline.gate_opened", "deploy gate", {"gate": "deploy"})]
+        return self._tx(key, actor, fn)
+
+    def deployed(self, key, env, result, evidence, actor):
+        """The deployment happened. A live one only after Jay approved it; then verify live, then close."""
+        if result not in ("pass", "fail"):
+            raise TaskError(400, "result must be pass or fail")
+        evidence = _text(evidence, 2000, "evidence")
+        if not evidence:
+            raise TaskError(400, "say how the deployment was verified")
+
+        def fn(tid, t, w, at):
+            self._need(t, ("VERIFYING",), "a deployment record")
+            d = w.get("deploy") or {}
+            if not d.get("requestedAt") or d.get("env") != env:
+                raise TaskError(409, f"no {env} deployment was requested for {t['key']}")
+            if not d.get("approvedAt"):
+                raise TaskError(409, "Jay has not approved this live deployment")
+            d = dict(d, result=result, evidence=evidence, deployedAt=at, deployedBy=actor)
+            self.db.execute("INSERT INTO ticket_evidence(ticket_id, at, actor, stage, kind, ref, note) VALUES (?,?,?,?,?,?,?)",
+                            (tid, at, actor, "VERIFY", "deploy", f"{env} deployment {result}", evidence))
+            work = {"deploy": d}
+            if result == "fail":
+                reason = f"{env} deployment failed: {evidence}"[:300]
+                work.update(gate="failure", gate_reason=reason, blocked={"stage": "VERIFY", "reason": reason, "at": at})
+                return {"status": "BLOCKED"}, work, [("pipeline.blocked", reason, {"stage": "VERIFY"})]
+            events = [("pipeline.deployed", f"{env} deployment done and verified", {"env": env})]
+            if (w["verification"] or {}).get("result") == "pass":
+                status, more, ev = self._after_verify(t, dict(w, deploy=d))
+                work.update(more)
+                return status, work, events + ev
+            return {}, work, events
+        return self._tx(key, actor, fn)
+
+    def release(self, key, summary, actor="system:automation"):
+        """The ticket closed: record what was released (sessions, writer). The worktree is never deleted here."""
+        def fn(tid, t, w, at):
+            if w.get("released"):
+                return {}, {}, []
+            return {}, {"writer": None, "released": dict(summary, at=at)}, [
+                ("pipeline.released", "task sessions released", {k: summary.get(k) for k in ("ptys", "claude")})]
         return self._tx(key, actor, fn)

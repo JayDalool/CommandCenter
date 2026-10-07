@@ -48,12 +48,17 @@
     POST  /api/action/key            DEVELOPER. esc or enter into a Claude pane
     GET   /api/pty                   live terminal sessions (names, cwd, clients)
     GET   /api/tasks/{key}/work      the ticket's durable pipeline state (plan, stage, gate, roles, review head, …)
-    POST  /api/tasks/{key}/work/{op} one pipeline step: plan start review verify handoff block role finding;
+    POST  /api/tasks/{key}/work/{op} one pipeline step: plan start review verify handoff block role finding
+                                     ask replan rework evidence writer deploy-request deployed;
                                      `confirm` (close an owner gate) needs Jay AND Developer Unlock
+    POST  /api/tasks/{key}/answers   Jay AND Developer Unlock. answer Claude's questions; the last answer
+                                     resumes the SAME task Claude session (never starts one)
+    GET   /api/tasks/{key}/record    the ticket's task.md / workflow.md (Command Center storage, never a repo)
     POST  /api/coordinators/adopt    DEVELOPER. bind the one EXISTING Claude at a project root as its
                                      coordinator {project, sessionId}; never starts or renames Claude
     POST  /api/pty/close             DEVELOPER. CLOSE SESSION: ends that one shell's process group
-    WS    /api/pty/{name}            DEVELOPER. attach to repo:<PREFIX> or server (created on first attach);
+    WS    /api/pty/{name}            DEVELOPER. attach to repo|claude|codex:<PREFIX>, repo|claude|codex:<KEY>
+                                     or server (created on first attach);
                                      developer session as subprotocol `ccd-dev.<session>`; Origin required
     GET   /api/desktop/launcher      the Windows launcher's version, SHA-256 and build commit
     GET   /api/desktop/launcher/download  CommandCenter.exe, as an attachment
@@ -89,7 +94,7 @@ from .attachments import content_disposition
 from .daemon import ActionError
 from .files import FileError
 from .gitops import ticket_branch_name
-from .pty import PtyError, session_cwd
+from .pty import PtyError
 
 NO_STORE = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
 WS_PROTOCOL = "ccd.v1"
@@ -340,8 +345,15 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
 
     async def task_work_op(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
-        return daemon.task_work_op(request.path_params["key"], request.path_params["op"], body,
-                                   request.state.actor, developer=dev)
+        return await daemon.task_work_op_async(request.path_params["key"], request.path_params["op"], body,
+                                               request.state.actor, developer=dev)
+
+    async def task_answers(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return await daemon.task_answers(request.path_params["key"], body, request.state.actor, developer=dev)
+
+    async def task_record(request, _):
+        return daemon.task_record(request.path_params["key"])
 
     async def task_context(request, _):
         return daemon.task_context(request.path_params["key"])
@@ -662,7 +674,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
             await ws.close(code=4403, reason="Developer Unlock required")
             return
         try:
-            session_cwd(name, ptys.roots, ptys.home)
+            ptys.cwd_for(name)
             cols = int(ws.query_params.get("cols", "80"))
             rows = int(ws.query_params.get("rows", "24"))
         except PtyError as e:
@@ -816,6 +828,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/tasks/{key}/context", guarded(task_context), methods=["GET"]),
         Route("/api/tasks/{key}/work", guarded(task_work), methods=["GET"]),
         Route("/api/tasks/{key}/work/{op}", guarded(task_work_op), methods=["POST"]),
+        Route("/api/tasks/{key}/answers", guarded(task_answers), methods=["POST"]),
+        Route("/api/tasks/{key}/record", guarded(task_record), methods=["GET"]),
         Route("/api/tasks/{key}/comments", guarded(comment_task), methods=["POST"]),
         Route("/api/tasks/{key}/relations", guarded(relate_task), methods=["POST"]),
         Route("/api/tasks/{key}/links", guarded(link_task), methods=["POST"]),

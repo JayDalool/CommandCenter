@@ -214,3 +214,27 @@ def adopt(key, root, entries, session_id, path=None, now=None):
     except OSError:
         raise ValueError("could not record the binding")
     return resolve(key, root, entries, data[key])
+
+
+# ---------- task sessions (plans/COMMAND-CENTER-CONTROL-ROOM.md §8) ----------
+#
+# Every actively worked ticket has its own Claude task session, named after the key in lower case
+# (sv-071). The name is herdr's agent name or pane label, or `claude -n sv-071`'s title — set when
+# the session is started, so a later conversation rename never loses it. Nothing here starts one.
+
+def task_names(key):
+    k = str(key or "").strip()
+    return {k.lower(), k.upper()} if k else set()
+
+
+def task_session(key, entries):
+    """{state: ready|multiple|none, paneId, sessionId, status} for ticket `key`'s task Claude session."""
+    names = task_names(key)
+    claude = [c for c in map(normalize, entries or [])
+              if c["live"] and c["agent"] == "claude" and PANE_RE.match(c["paneId"])]
+    hits = [c for c in claude if c["name"] in names or c["label"] in names or c["title"] in names]
+    if len(hits) == 1:
+        c = hits[0]
+        return {"state": "ready", "paneId": c["paneId"], "sessionId": c["sessionId"], "status": c["status"]}
+    return {"state": "multiple" if hits else "none", "paneId": None, "sessionId": None, "status": "offline",
+            "candidates": [_public(c) for c in hits]}

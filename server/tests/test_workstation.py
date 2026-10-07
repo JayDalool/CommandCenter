@@ -200,7 +200,8 @@ class PtyApi(_Fixture):
     def test_arbitrary_cwd_and_unregistered_projects_refused(self):
         sid = self.dev()
         p = ["ccd.v1", f"ccd-token.{TOKEN}", f"ccd-dev.{sid}"]
-        for name, code in (("repo:XX", 4404), ("bash", 4400), ("repo:..", 4404), ("%2Fetc", None)):
+        for name, code in (("repo:XX", 4404), ("bash", 4400), ("repo:..", 4400), ("repo:SV-999", 4404),
+                           ("codex:..", 4400), ("codex:../x", None), ("%2Fetc", None)):
             got = self.refused(name, p)
             if code is None:
                 self.assertIn(got, (1000, 4400, 4404), name)  # no such route: never a shell

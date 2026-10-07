@@ -26,6 +26,7 @@ from . import __version__, coordid, coordinators, github, model, registry, sourc
 from . import pipeline as pipeline_mod
 from . import herdr as herdr_mod
 from . import importer
+from . import records as records_mod
 from . import tasks as tasks_mod
 from .config import STATE_DIR, public_project
 
@@ -161,6 +162,10 @@ class Daemon:
         self.subscribers = set()
         self._loops = []
         self._stopping = False
+        self.ptys = None          # pty.PtyManager, set by __main__
+        self.records_dir = None   # where task records are written; None = off (tests, previews)
+        self._record_timers = {}
+        self._closing = set()
         self._dirty = asyncio.Event()
         self._git_now = asyncio.Event()
         self._last_action = {}
@@ -766,7 +771,11 @@ class Daemon:
 
     def _announce(self, ticket, changes):
         """One ops event per change, so live clients refresh the ticket. The audit trail is in tasks.db."""
+        if changes:
+            self._record_soon(ticket["key"])
         for c in changes:
+            if c["field"] == "status" and c["to"] in tasks_mod.CLOSED and c["from"] not in tasks_mod.CLOSED:
+                self._closed_soon(ticket["key"])
             f = c["field"]
             if f in ("description", "title"):
                 self._task_event("task.updated", ticket, f"{f} edited", {"kind": f})
@@ -791,13 +800,24 @@ class Daemon:
         except (ValueError, TypeError) as e:
             raise ActionError(400, f"bad value: {str(e)[:120]}")
 
+    def _with_work(self, tickets):
+        """Each ticket with the work facts the control room shows in lists: open gate, open questions,
+        deploy state and the visible stage (pipeline.visible_stage)."""
+        marks = self.pipeline.compact(t["id"] for t in tickets) if self.pipeline is not None else {}
+        for t in tickets:
+            m = marks.get(t["id"]) or {"gate": None, "gateReason": None, "openQuestions": 0, "deploy": None}
+            t.update(gate=m["gate"], gateReason=m["gateReason"], openQuestions=m["openQuestions"], deploy=m["deploy"])
+            t["visibleStage"] = pipeline_mod.visible_stage(t, m)
+        return tickets
+
     def task_list(self, project=None, include_archived=False):
         ts = self._need_tasks()
-        return {"tickets": ts.list(project=project, include_archived=include_archived), "projects": ts.projects(),
-                "meta": ts.meta(), "seq": self.seq}
+        return {"tickets": self._with_work(ts.list(project=project, include_archived=include_archived)),
+                "projects": ts.projects(), "meta": dict(ts.meta(), visibleStages=list(pipeline_mod.VISIBLE_STAGES)),
+                "seq": self.seq}
 
     def task_get(self, key):
-        return self._wrap(self._need_tasks().get, key)
+        return self._with_work([self._wrap(self._need_tasks().get, key)])[0]
 
     # ---------- development traceability ----------
 
@@ -995,6 +1015,20 @@ class Daemon:
         t = ctx["ticket"]
         coord = (self.snap or {}).get("coordinators", {}).get(t["project"]) if self.snap else None
         ctx["coordinator"] = coord
+        if self.pipeline is not None:
+            w = self.pipeline.work(t["key"])
+            extra = []
+            for q in w["questions"]:
+                extra.append(f"question: {q['text']} → {q['answer']}" if q["answer"] else f"open question: {q['text']}")
+            cp = w.get("checkpoint")
+            if cp:
+                extra.append(f"checkpoint ({cp.get('frm') or '—'} → {cp.get('to')}): commit {cp.get('commit') or '—'}; "
+                             f"remaining: {cp.get('remaining') or '—'}")
+            if w.get("writer"):
+                extra.append(f"worktree writer: {w['writer']}")
+            if extra:
+                ctx["brief"] += "\n\n" + "\n".join(extra)
+            ctx["session"] = self.task_session(t["key"])
         ctx["dispatchable"] = bool(coord) and t["project"] in set(
             self.cfg.get("dispatch_projects") or ("samvision", "gauzemate"))
         return ctx
@@ -1010,7 +1044,7 @@ class Daemon:
         fields = {k: v for k, v in body.items() if k in CREATE_FIELDS}
         ticket, changes = self._wrap(ts.create, str(body.get("project") or ""), body.get("title"), actor, **fields)
         self._task_event("task.created", ticket, f"created · {ticket['title']}", {"status": ticket["status"]})
-        return ticket
+        return self._with_work([ticket])[0]
 
     # What decides a pipeline ticket's gates and stage. On a ticket in the pipeline these move
     # only through pipeline steps — or by Jay with Developer Unlock, as an explicit override.
@@ -1032,15 +1066,19 @@ class Daemon:
                                            f"change only with Jay's Developer Unlock")
         ticket, changes = self._wrap(self._need_tasks().update, key, body, actor)
         self._announce(ticket, changes)
-        return ticket
+        return self._with_work([ticket])[0]
 
     # ---------- the ticket pipeline (plans/TICKET-PIPELINE-V1.md) ----------
 
-    PIPELINE_OPS = ("plan", "start", "review", "verify", "confirm", "handoff", "block", "role", "finding")
+    PIPELINE_OPS = ("plan", "start", "review", "verify", "confirm", "handoff", "block", "role", "finding",
+                    "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed")
 
     def task_work(self, key):
         self._need_tasks()
-        return self._wrap(self.pipeline.work, key)
+        w = self._wrap(self.pipeline.work, key)
+        w["session"] = self.task_session(w["key"])
+        w["project"] = self.tasks.get(w["key"])["project"]
+        return w
 
     def _open_prs(self, ticket):
         """The ticket's linked PRs that the last GitHub poll saw open, as pipeline PR states."""
@@ -1089,13 +1127,227 @@ class Daemon:
         elif op == "handoff":
             r = self._wrap(pl.handoff, key, body, actor)
         elif op == "block":
-            r = self._wrap(pl.block, key, body.get("reason"), actor)
+            explain = body.get("explain") if isinstance(body.get("explain"), dict) else \
+                {k: body.get(k) for k in pl.EXPLAIN if body.get(k)}
+            r = self._wrap(pl.block, key, body.get("reason"), actor, explain or None)
         elif op == "role":
             r = self._wrap(pl.role, key, body.get("role"), actor, **meta)
-        else:
+        elif op == "finding":
             r = self._wrap(pl.finding, key, body.get("finding"), actor, body.get("source") or "review")
+        elif op == "ask":
+            r = self._wrap(pl.ask, key, body.get("questions"), actor)
+        elif op == "replan":
+            r = self._wrap(pl.replan, key, body.get("reason"), actor)
+        elif op == "rework":
+            r = self._wrap(pl.rework, key, body.get("reason"), actor)
+        elif op == "evidence":
+            r = self._wrap(pl.evidence, key, body.get("kind"), body.get("ref"), body.get("note"), actor, body.get("stage"))
+        elif op == "writer":
+            r = self._wrap(pl.writer, key, body.get("owner"), actor, body.get("checkpoint"))
+        elif op == "deploy-request":
+            r = self._wrap(pl.deploy_request, key, body.get("env"), body.get("what"), body.get("verification"), actor)
+        else:
+            r = self._wrap(pl.deployed, key, body.get("env"), body.get("result"), body.get("evidence"), actor)
         self._pipeline_result(*r)
-        return self._wrap(pl.work, key)
+        return self.task_work(key)
+
+    # What the task Claude session is told after a step that changes its course. Best effort: an
+    # idle session gets it at once; otherwise the step stands and the UI offers to resend.
+    def _nudge_text(self, key, op, body, work):
+        if op == "rework":
+            return (f"Jay sent {key} back to implementation: {body.get('reason')}. Fix it in this session (same "
+                    f"worktree), then run review and verification again.")
+        if op == "replan":
+            return (f"Jay moved {key} back to planning: {body.get('reason')}. Re-plan with Opus, record the revised plan "
+                    f"and acceptance criteria (python -m ccd.pipeline_cli plan {key} …), and continue only after it is accepted.")
+        if op == "confirm" and body.get("gate") == "deploy" and (work.get("deploy") or {}).get("approvedAt"):
+            return (f"Jay approved the live deployment of {key}. Deploy it now, verify it live, then record it: "
+                    f"python -m ccd.pipeline_cli deployed {key} --role coordinator --env live --result pass|fail --evidence \"…\"")
+        if op == "confirm" and body.get("gate") == "failure":
+            return f"Jay cleared the blocker on {key}. Continue from {work.get('stage') or 'the blocked stage'}."
+        if op == "confirm" and body.get("gate") == "plan":
+            return f"Jay approved the plan for {key}. Start implementation."
+        if op == "writer" and body.get("owner") == "claude" and work.get("checkpoint"):
+            cp = work["checkpoint"]
+            lines = [f"You now own the {key} worktree (handed over from {cp.get('frm') or 'no writer'}). Resume from the "
+                     f"current state; do not restart the implementation.",
+                     f"Reason: {cp.get('reason') or '—'}", f"Branch: {cp.get('branch') or work.get('branch') or '—'}",
+                     f"Worktree: {cp.get('worktree') or work.get('worktree') or '—'}", f"Latest commit: {cp.get('commit') or '—'}",
+                     f"Uncommitted changes: {cp.get('dirty') or '—'}",
+                     f"Changed files: {', '.join(cp.get('changed') or []) or '—'}", f"Tests: {cp.get('tests') or '—'}",
+                     f"Decisions: {cp.get('decisions') or '—'}", f"Blocker: {cp.get('blocker') or '—'}",
+                     f"Remaining: {cp.get('remaining') or '—'}"]
+            return "\n".join(lines)[:7900]
+        return None
+
+    async def task_work_op_async(self, key, op, body, actor="jay", developer=False):
+        work = self.task_work_op(key, op, body, actor, developer)
+        text = self._nudge_text(work["key"], op, body or {}, work) if (actor == "jay" or op == "writer") else None
+        if text:
+            delivered, reason = await self._nudge_task(work["key"], text)
+            work = dict(work, nudge={"delivered": delivered, "reason": reason})
+        return work
+
+    def task_session(self, key):
+        """The ticket's task Claude session, from the one resolver (coordid.task_session)."""
+        return coordid.task_session(key, self.panes)
+
+    async def _nudge_task(self, key, text):
+        """Tell the EXISTING task Claude session something. Never starts, resumes or duplicates one."""
+        r = self.task_session(key)
+        if r["state"] != "ready":
+            return False, ("no task Claude session is running for " + key if r["state"] == "none"
+                           else f"several Claude sessions are named {key.lower()}")
+        try:
+            await self.act_prompt(r["paneId"], text)
+        except ActionError as e:
+            return False, e.message
+        return True, None
+
+    async def task_answers(self, key, body, actor="jay", developer=False):
+        """Jay answers Claude's questions. When the last open one is answered, the SAME task Claude session
+        is resumed with the answers (and the scope guard); a scope change sends the ticket back to planning."""
+        if actor != "jay" or not developer:
+            raise ActionError(403, "Developer Unlock required: answering sends your answers to Claude")
+        if not isinstance(body, dict):
+            raise ActionError(400, "body must be an object")
+        answers = body.get("answers") or []
+        scope = bool(body.get("scopeChange"))
+        pl = self.pipeline
+        if answers:
+            self._pipeline_result(*self._wrap(pl.answer, key, answers, actor))
+        work = self.task_work(key)
+        if work["openQuestions"]:
+            return {"work": work, "complete": False, "delivered": False,
+                    "reason": f"{work['openQuestions']} question(s) still open"}
+        answered = [q for q in work["questions"] if q["answer"] is not None]
+        if not answered:
+            raise ActionError(409, f"{work['key']} has no questions to answer")
+        replanned = False
+        if scope and answers:
+            self._pipeline_result(*self._wrap(pl.replan, key, "Jay's answers change the approved scope", actor))
+            replanned = True
+        latest = max(q["batch"] for q in answered)
+        lines = [f"Jay answered your questions on {work['key']}:", ""]
+        for i, q in enumerate([q for q in answered if q["batch"] == latest], 1):
+            lines += [f"{i}. {q['text']}", f"   → {q['answer']}", ""]
+        if replanned:
+            lines.append(f"Jay marked these answers as changing the approved scope. {work['key']} is back in Planning: "
+                         f"re-plan with Opus, record the revised plan and acceptance criteria "
+                         f"(python -m ccd.pipeline_cli plan {work['key']} …), and continue implementation only after "
+                         f"the revised plan is accepted.")
+        else:
+            lines.append(f"Before continuing: if any answer materially changes the approved scope, architecture, security, "
+                         f"data model, permissions/auth or major UX direction, move the ticket back to planning "
+                         f"(python -m ccd.pipeline_cli replan {work['key']} --role coordinator --reason \"…\"), re-plan with "
+                         f"Opus and update the plan and acceptance criteria. Otherwise continue in this session.")
+        text = "\n".join(lines)
+        if len(text) > 7900:
+            text = text[:7880] + "\n[…truncated]"
+        delivered, reason = await self._nudge_task(work["key"], text)
+        if delivered:
+            self._event("tasks", "task.pipeline", f"{work['key']} answers delivered to its Claude session",
+                        project=work.get("project") or self.tasks.get(key)["project"], ref=work["key"],
+                        data={"kind": "pipeline.answers_delivered"})
+        return {"work": self.task_work(key), "complete": True, "delivered": delivered, "reason": reason,
+                "replanned": replanned}
+
+    def task_record(self, key):
+        """task.md and workflow.md as rendered now (and written, when records are on)."""
+        t = self._wrap(self._need_tasks().get, key)
+        w = self.task_work(key)
+        out = {"key": t["key"], "taskMd": records_mod.render_task(t, w), "workflowMd": records_mod.render_workflow(t, w),
+               "dir": None}
+        if self.records_dir:
+            try:
+                out["dir"] = str(records_mod.write(t, w, self.records_dir))
+            except (OSError, ValueError) as e:
+                log.warning(json.dumps({"msg": "task record not written", "key": t["key"], "error": repr(e)[:200]}))
+        return out
+
+    def _record_soon(self, key, delay=2.0):
+        """Rewrite a ticket's Markdown record shortly after it changed (coalesced per ticket)."""
+        if not self.records_dir or key in self._record_timers:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        def run():
+            self._record_timers.pop(key, None)
+            try:
+                self.task_record(key)
+            except Exception as e:  # noqa: BLE001 — a record must never break a ticket write
+                log.warning(json.dumps({"msg": "task record failed", "key": key, "error": repr(e)[:200]}))
+        self._record_timers[key] = loop.call_later(delay, run)
+
+    def _closed_soon(self, key):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if key in self._closing:
+            return
+        self._closing.add(key)
+        task = loop.create_task(self.on_task_closed(key))
+        task.add_done_callback(lambda _t: self._closing.discard(key))
+
+    async def on_task_closed(self, key):
+        """A ticket became DONE / DENIED / CANCELLED: end its temporary sessions, keep every record.
+
+          1. its Task Room terminals (claude:/repo:/codex:<KEY>) close — the claude: one is only the attach client
+          2. its task Claude session (named after the key) is asked to /exit when idle; a working or
+             blocked one is left running and reported (never killed)
+          3. the worktree's writer is released; the worktree itself is never deleted here
+          4. the final task.md / workflow.md are written
+        The project coordinator is never touched."""
+        try:
+            names = await self.ptys.close_task(key) if self.ptys is not None else []
+        except Exception as e:  # noqa: BLE001
+            names = []
+            log.warning(json.dumps({"msg": "closing task terminals failed", "key": key, "error": repr(e)[:200]}))
+        r = self.task_session(key)
+        claude = None
+        if r["state"] == "ready":
+            if r["status"] in ("idle", "done"):
+                ok, why = await self._nudge_task(key, "/exit")
+                claude = f"{key.lower()} ended (/exit)" if ok else f"{key.lower()} still running: {why}"
+            else:
+                claude = f"{key.lower()} is {r['status']}; left running"
+        if claude and ("still running" in claude or "left running" in claude):
+            t = self.tasks.get(key)
+            self._event("tasks", "task.pipeline", f"{key} closed, but its Claude session is still running", severity="warn",
+                        project=t["project"], ref=key, data={"kind": "pipeline.session_left"})
+        try:
+            self._pipeline_result(*self.pipeline.release(key, {"ptys": names, "claude": claude}))
+        except tasks_mod.TaskError:
+            pass
+        if self.records_dir:
+            try:
+                self.task_record(key)
+            except Exception as e:  # noqa: BLE001
+                log.warning(json.dumps({"msg": "final task record failed", "key": key, "error": repr(e)[:200]}))
+
+    def task_cwd(self, key):
+        """(project root, worktree|None) for a Task Room terminal. The worktree counts only when it is a
+        known git worktree of that project (from ccd's git poll) or inside the project root."""
+        from .pty import PtyError
+        if self.tasks is None or not self.tasks.exists(key):
+            raise PtyError(404, f"no ticket {key}")
+        t = self.tasks.get(key)
+        root = registry.root_of(t["project"])
+        if not root:
+            raise PtyError(404, f"{t['project']} has no registered checkout")
+        w = self.pipeline.work(key)
+        wt = w.get("worktree")
+        if wt and os.path.isdir(wt):
+            real = os.path.realpath(wt)
+            known = {os.path.realpath(x) for x in (self.git.get("worktrees") or {}).get(t["project"]) or []}
+            rroot = os.path.realpath(root)
+            if real in known or real == rroot or real.startswith(rroot.rstrip("/") + "/"):
+                return root, real
+        return root, None
 
     def _pipeline_result(self, ticket, changes, events):
         """Announce one pipeline step (an agent's or the GitHub poll's): status changes, then its events.
@@ -1105,12 +1357,15 @@ class Daemon:
             self._event("tasks", "task.pipeline", f"{ticket['key']} {text}"[:300], project=ticket["project"],
                         ref=ticket["key"], data={"kind": kind},
                         severity="action" if kind in ("pipeline.gate_opened", "pipeline.blocked",
-                                                      "pipeline.unreviewed_merge") else "info")
+                                                      "pipeline.unreviewed_merge", "pipeline.questions",
+                                                      "pipeline.deploy_requested", "pipeline.replan") else "info")
+        if events:
+            self._record_soon(ticket["key"])
 
     def task_comment(self, key, body, actor="jay"):
         ticket = self._wrap(self._need_tasks().comment, key, body, actor)
         self._task_event("task.commented", ticket, "note added", {"count": len(ticket["comments"])})
-        return ticket
+        return self._with_work([ticket])[0]
 
     def task_relate(self, key, kind, target, remove=False, actor="jay"):
         ticket, changed = self._wrap(self._need_tasks().relate, key, kind, target, actor, remove)
@@ -1118,7 +1373,7 @@ class Daemon:
             other = self._wrap(self._need_tasks().get, target)
             for t in (ticket, other):
                 self._task_event("task.updated", t, "relations changed", {"kind": "relations"})
-        return ticket
+        return self._with_work([ticket])[0]
 
     def task_link(self, key, body, actor="jay"):
         ticket, changed = self._wrap(self._need_tasks().link, key, str(body.get("provider") or "github"),
@@ -1127,7 +1382,7 @@ class Daemon:
         if changed:
             self._task_event("task.updated", ticket, f"{'unlinked' if body.get('remove') else 'linked'} "
                              f"{body.get('kind') or 'pr'} {body.get('ref')}", {"kind": "links"})
-        return ticket
+        return self._with_work([ticket])[0]
 
     def task_import_preview(self):
         """Runs in a worker thread, on its own read-only connection to tasks.db."""

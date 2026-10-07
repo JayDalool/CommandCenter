@@ -15,7 +15,7 @@ import sys
 
 import uvicorn
 
-from . import __version__, attachments, config, files, gitops, pty, search, security
+from . import __version__, attachments, config, files, gitops, pty, records, search, security
 from .api import create_app
 from .daemon import Daemon
 from .herdr import Herdr
@@ -95,7 +95,8 @@ def build(cfg=None):
     daemon.search = search.Search(daemon.files)
     daemon.scm = gitops.SourceControl(daemon.files)
     daemon.ptys = pty.PtyManager(audit=lambda kind, text, data: daemon._event("pty", kind, text, data=data),
-                                 own_scope=True)
+                                 own_scope=True, task=daemon.task_cwd)
+    daemon.records_dir = records.RECORDS_DIR
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
