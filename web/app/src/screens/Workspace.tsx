@@ -121,7 +121,9 @@ function FullDialog({ wall, spec, onClose }: { wall: string; spec: Spec; onClose
     <p className="text2">Opening {spec.key ?? `${spec.project} console`} needs a free slot. Its room and every other one keep their sessions.</p>
     <div className="caps muted" style={{ marginTop: 10 }}>Pop out an existing room</div>
     <div className="row" style={{ flexWrap: "wrap", marginTop: 6 }}>
-      {ids.map((id) => <button key={id} type="button" className="btn" onClick={() => { popOutRoom(id); openRoom(wall, spec); onClose(); }}>
+      {ids.map((id) => <button key={id} type="button" className="btn" onClick={() => {
+        if (!popOutRoom(id)) { app.toast("The browser blocked the pop-out window — allow pop-ups for Command Center", "bad"); return; }
+        openRoom(wall, spec); onClose(); }}>
         Pop Out {label(id)} ↗</button>)}
     </div>
     <div className="row" style={{ marginTop: 14 }}>
@@ -151,7 +153,8 @@ function Wall({ wall, onPicker }: { wall: string; onPicker: () => void }) {
         aria-current={w === wall ? "page" : undefined}>Workspace {w}</a>)}
       <button type="button" className="btn is-quiet is-xs" title="New Workspace window (another monitor)" aria-label="New Workspace window"
         onClick={() => { const w = newWall(); openWorkspaceWindow(w); }}>+</button>
-      {popped.length > 0 && <span className="mono-xs muted" title="Rooms in their own windows">↗ {popped.map((r) => r.key ?? r.project).join(", ")}</span>}
+      {popped.map((r) => <button key={r.id} type="button" className="chip-btn" title="In its own window — click to bring it back here (that window closes)"
+        onClick={() => { if (!returnRoom(r.id, wall)) app.toast("This Workspace is full — pop a room out first", "bad"); }}>↗ {r.key ?? `${r.project} console`}</button>)}
       {detached.map((r) => <button key={r.id} type="button" className="chip-btn" title="Its window was closed; sessions kept running. Bring it back."
         onClick={() => { if (!returnRoom(r.id, wall)) app.toast("This Workspace is full — pop a room out first", "bad"); }}>↺ {r.key ?? `${r.project} console`}</button>)}
       <span className="sl-fill" />

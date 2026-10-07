@@ -21,8 +21,9 @@ own; when ccd is down, it builds locally exactly as before.
   agent, and never touches a coordinator's lifecycle. Stopping or restarting ccd
   affects no agent. Two deliberate exceptions (control room, spec §8–§9), both
   through herdr's existing `agent.prompt` on an idle pane: Jay's answers resume
-  the ticket's EXISTING task session (`sv-071`), and when a ticket closes its
-  idle task session is asked to `/exit` (a working one is left running).
+  the ticket's EXISTING task session (`sv-071`), and when a ticket closes (a
+  pipeline step, or Jay with Developer Unlock) its task session is asked to
+  `/exit` once idle. A coordinator is never a task session.
 - **Loopback only.** ccd binds `127.0.0.1:7777`, fixed in code. No public port,
   no Cloudflare, no Tailscale Serve, and the herdr socket is never bridged to TCP.
   The Windows client will reach it with `ssh -L 7777:127.0.0.1:7777 jay-server`.

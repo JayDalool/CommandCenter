@@ -769,13 +769,15 @@ class Daemon:
                     severity="action" if kind == "task.updated" and (data or {}).get("kind") in tasks_mod.FLAGS
                     and (data or {}).get("to") is True else "info", data=data or {})
 
-    def _announce(self, ticket, changes):
-        """One ops event per change, so live clients refresh the ticket. The audit trail is in tasks.db."""
+    def _announce(self, ticket, changes, teardown=True):
+        """One ops event per change, so live clients refresh the ticket. The audit trail is in tasks.db.
+        `teardown`: a close ends the task's sessions (pipeline steps, Jay with Developer Unlock); a plain edit
+        with the ordinary token only records that they were left running."""
         if changes:
             self._record_soon(ticket["key"])
         for c in changes:
             if c["field"] == "status" and c["to"] in tasks_mod.CLOSED and c["from"] not in tasks_mod.CLOSED:
-                self._closed_soon(ticket["key"])
+                self._closed_soon(ticket["key"], teardown)
             f = c["field"]
             if f in ("description", "title"):
                 self._task_event("task.updated", ticket, f"{f} edited", {"kind": f})
@@ -1065,7 +1067,7 @@ class Daemon:
                     raise ActionError(409, f"{w['key']} is in the pipeline: its labels, type, flags and archive "
                                            f"change only with Jay's Developer Unlock")
         ticket, changes = self._wrap(self._need_tasks().update, key, body, actor)
-        self._announce(ticket, changes)
+        self._announce(ticket, changes, teardown=actor == "jay" and developer)
         return self._with_work([ticket])[0]
 
     # ---------- the ticket pipeline (plans/TICKET-PIPELINE-V1.md) ----------
@@ -1167,23 +1169,18 @@ class Daemon:
             return f"Jay cleared the blocker on {key}. Continue from {work.get('stage') or 'the blocked stage'}."
         if op == "confirm" and body.get("gate") == "plan":
             return f"Jay approved the plan for {key}. Start implementation."
-        if op == "writer" and body.get("owner") == "claude" and work.get("checkpoint"):
-            cp = work["checkpoint"]
-            lines = [f"You now own the {key} worktree (handed over from {cp.get('frm') or 'no writer'}). Resume from the "
-                     f"current state; do not restart the implementation.",
-                     f"Reason: {cp.get('reason') or '—'}", f"Branch: {cp.get('branch') or work.get('branch') or '—'}",
-                     f"Worktree: {cp.get('worktree') or work.get('worktree') or '—'}", f"Latest commit: {cp.get('commit') or '—'}",
-                     f"Uncommitted changes: {cp.get('dirty') or '—'}",
-                     f"Changed files: {', '.join(cp.get('changed') or []) or '—'}", f"Tests: {cp.get('tests') or '—'}",
-                     f"Decisions: {cp.get('decisions') or '—'}", f"Blocker: {cp.get('blocker') or '—'}",
-                     f"Remaining: {cp.get('remaining') or '—'}"]
-            return "\n".join(lines)[:7900]
+        if op == "writer" and body.get("owner") == "claude" and isinstance(body.get("checkpoint"), dict):
+            # A FIXED line: the checkpoint's free text is never typed into Claude; Claude reads it as data.
+            return (f"You now own the {key} worktree. Read the handover checkpoint with "
+                    f"`python -m ccd.pipeline_cli work {key}` and resume from the current state; do not restart the "
+                    f"implementation.")
         return None
 
     async def task_work_op_async(self, key, op, body, actor="jay", developer=False):
         work = self.task_work_op(key, op, body, actor, developer)
         # Jay's steps reach Claude only with Developer Unlock (typing into Claude is a developer action). The one
-        # agent-initiated delivery is a writer handover WITH a checkpoint: a fixed template, to the task session only.
+        # agent-initiated delivery is a writer handover WITH a checkpoint: one fixed sentence (no free text), to
+        # the task session only.
         text = self._nudge_text(work["key"], op, body or {}, work) \
             if (actor == "jay" and developer) or op == "writer" else None
         if text:
@@ -1192,8 +1189,12 @@ class Daemon:
         return work
 
     def task_session(self, key):
-        """The ticket's task Claude session, from the one resolver (coordid.task_session)."""
-        return coordid.task_session(key, self.panes)
+        """The ticket's task Claude session, from the one resolver (coordid.task_session). A pane that is any
+        project's coordinator is never one, whatever it is named."""
+        snap = self.snap or {}
+        coords = {c.get("paneId") for c in (snap.get("coordinators") or {}).values() if c.get("paneId")}
+        coords |= {a.get("pane_id") or a.get("id") for a in snap.get("agents") or [] if a.get("role") == "coordinator"}
+        return coordid.task_session(key, self.panes, exclude=coords)
 
     async def _nudge_task(self, key, text):
         """Tell the EXISTING task Claude session something. Never starts, resumes or duplicates one."""
@@ -1227,7 +1228,7 @@ class Daemon:
         if not answered:
             raise ActionError(409, f"{work['key']} has no questions to answer")
         replanned = False
-        if scope and answers:
+        if scope and work["status"] != "RESEARCHING":
             self._pipeline_result(*self._wrap(pl.replan, key, "Jay's answers change the approved scope", actor))
             replanned = True
         latest = max(q["batch"] for q in answered)
@@ -1285,7 +1286,7 @@ class Daemon:
                 log.warning(json.dumps({"msg": "task record failed", "key": key, "error": repr(e)[:200]}))
         self._record_timers[key] = loop.call_later(delay, run)
 
-    def _closed_soon(self, key):
+    def _closed_soon(self, key, teardown=True):
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -1293,10 +1294,30 @@ class Daemon:
         if key in self._closing:
             return
         self._closing.add(key)
-        task = loop.create_task(self.on_task_closed(key))
+        task = loop.create_task(self.on_task_closed(key, teardown))
         task.add_done_callback(lambda _t: self._closing.discard(key))
 
-    async def on_task_closed(self, key):
+    # A ticket usually closes because its own session just ran `pipeline_cli verify`/`deployed`, so it is still
+    # "working" at that moment: wait for it to go idle (bounded) before asking it to /exit.
+    EXIT_WAIT_S = 30.0
+    EXIT_TRIES = 20
+
+    async def _exit_when_idle(self, key):
+        for i in range(self.EXIT_TRIES + 1):
+            t = self.tasks.get(key)
+            if t["status"] not in tasks_mod.CLOSED:
+                return f"{key.lower()} left running (the ticket reopened)"
+            r = self.task_session(key)
+            if r["state"] != "ready":
+                return None if i == 0 else f"{key.lower()} ended"
+            if r["status"] in ("idle", "done"):
+                ok, why = await self._nudge_task(key, "/exit")
+                return f"{key.lower()} ended (/exit)" if ok else f"{key.lower()} still running: {why}"
+            if i < self.EXIT_TRIES:
+                await asyncio.sleep(self.EXIT_WAIT_S)
+        return f"{key.lower()} is {r['status']}; left running"
+
+    async def on_task_closed(self, key, teardown=True):
         """A ticket became DONE / DENIED / CANCELLED: end its temporary sessions, keep every record.
 
           1. its Task Room terminals (claude:/repo:/codex:<KEY>) close — the claude: one is only the attach client
@@ -1305,19 +1326,15 @@ class Daemon:
           3. the worktree's writer is released; the worktree itself is never deleted here
           4. the final task.md / workflow.md are written
         The project coordinator is never touched."""
-        try:
-            names = await self.ptys.close_task(key) if self.ptys is not None else []
-        except Exception as e:  # noqa: BLE001
-            names = []
-            log.warning(json.dumps({"msg": "closing task terminals failed", "key": key, "error": repr(e)[:200]}))
-        r = self.task_session(key)
-        claude = None
-        if r["state"] == "ready":
-            if r["status"] in ("idle", "done"):
-                ok, why = await self._nudge_task(key, "/exit")
-                claude = f"{key.lower()} ended (/exit)" if ok else f"{key.lower()} still running: {why}"
-            else:
-                claude = f"{key.lower()} is {r['status']}; left running"
+        names, claude = [], None
+        if not teardown:
+            claude = "left running: closed without Developer Unlock"
+        else:
+            try:
+                names = await self.ptys.close_task(key) if self.ptys is not None else []
+            except Exception as e:  # noqa: BLE001
+                log.warning(json.dumps({"msg": "closing task terminals failed", "key": key, "error": repr(e)[:200]}))
+            claude = await self._exit_when_idle(key)
         if claude and ("still running" in claude or "left running" in claude):
             t = self.tasks.get(key)
             self._event("tasks", "task.pipeline", f"{key} closed, but its Claude session is still running", severity="warn",

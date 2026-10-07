@@ -168,7 +168,7 @@ export function RoomView({ room, popped = false, onClose, extra }: {
       {stage && <StagePill stage={stage} />}
       <span className="sl-fill" />
       {extra}
-      {!popped && <button type="button" className="btn is-quiet is-xs" onClick={() => popOutRoom(room.id)} aria-label={`Pop out ${title}`}
+      {!popped && <button type="button" className="btn is-quiet is-xs" onClick={() => { if (!popOutRoom(room.id)) app.toast("The browser blocked the pop-out window — allow pop-ups for Command Center", "bad"); }} aria-label={`Pop out ${title}`}
         title="Pop out this room to its own window (same sessions)">↗</button>}
       {onClose && <button type="button" className="btn is-quiet is-xs" onClick={onClose} aria-label={`Close ${title}`}
         title="Close this room (its sessions keep running)">×</button>}
@@ -195,7 +195,7 @@ export function RoomView({ room, popped = false, onClose, extra }: {
             <div className="pane-head">
               <span className="pane-name">{TOOL_LABEL[tool].toUpperCase()}</span>
               <span className="sl-fill" />
-              <button type="button" className="btn is-quiet is-xs" onClick={() => popOutPane(room.id, tool)}
+              <button type="button" className="btn is-quiet is-xs" onClick={() => { if (!popOutPane(room.id, tool)) app.toast("The browser blocked the pop-out window — allow pop-ups for Command Center", "bad"); }}
                 aria-label={`Pop out ${TOOL_LABEL[tool]}`} title="Pop out to its own window (same session); this slot becomes free">↗</button>
               <button type="button" className="btn is-quiet is-xs" onClick={() => toggleTool(room.id, tool)}
                 aria-label={`Hide ${TOOL_LABEL[tool]}`} title="Hide this pane (the session keeps running)">×</button>

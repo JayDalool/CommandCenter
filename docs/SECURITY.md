@@ -157,11 +157,16 @@ session (named after the key, e.g. `sv-071`, via herdr `agent.prompt` on an
 idle pane); nothing is started when none runs. A pipeline step Jay takes
 (rework, re-plan, approve a plan or a live deploy) tells that session what he
 decided only when Developer Unlock is active. The one agent-initiated delivery
-is a worktree handover WITH a checkpoint (`writer` step, spec §20): a fixed
-template of the recorded checkpoint fields, to the task session only, never a
-coordinator. When a ticket closes, an idle task session is asked to `/exit`; a
-working or blocked one is left running and reported. Coordinators are never
-touched.
+is a worktree handover WITH a checkpoint (`writer` step, spec §20): one fixed
+sentence telling the task session to read the checkpoint with
+`pipeline_cli work <KEY>` — the checkpoint's free text is never typed into
+Claude. A task session is only ever a live Claude whose herdr name or label is
+the key (never a terminal title), and never a pane that resolves as a
+coordinator. When a ticket closes through a pipeline step, or by Jay with
+Developer Unlock, its task terminals close and its task session is asked to
+`/exit` once it is idle (checked for up to 10 minutes; a still-busy one is left
+running and reported). A close by a plain edit with the ccd token alone stops
+nothing: it records that the sessions were left running.
 
 **Roots.** The explorer, editor and uploads reach only a registered project's
 `root` in `ccd/registry.py`. The browser sends a project key and a relative

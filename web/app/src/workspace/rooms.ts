@@ -50,8 +50,18 @@ export function parseLayout(raw: string | null): Layout {
   } catch { return structuredClone(EMPTY); }
 }
 
+/** On a window's start, a room or pane still marked "popped" may belong to a window that is gone (a crash,
+ *  a blocked pop-up): it becomes "detached" — listed to bring back. A live pop-out window re-asserts itself. */
+export function settle(l: Layout): Layout {
+  const rooms = Object.fromEntries(Object.entries(l.rooms).map(([id, r]) => [id, {
+    ...r, where: r.where === "popped" ? "detached" as const : r.where,
+    out: Object.fromEntries(Object.entries(r.out).map(([t, w]) => [t, w === "popped" ? "detached" : w])) as Room["out"],
+  }]));
+  return { ...l, rooms };
+}
+
 function load(): Layout {
-  try { return parseLayout(localStorage.getItem(KEY)); } catch { return structuredClone(EMPTY); }
+  try { return settle(parseLayout(localStorage.getItem(KEY))); } catch { return structuredClone(EMPTY); }
 }
 
 export const layout = new Store<Layout>(load());
@@ -224,14 +234,28 @@ export function openWindow(hash: string, name: string, features = FEATURES): Win
   return window.open(`${location.pathname}${location.search}${hash}`, name, features);
 }
 
-export function popOutRoom(id: string) {
+/** Pop the room out. If the browser blocks the window, the room stays where it was. Returns success. */
+export function popOutRoom(id: string): boolean {
+  const wall = wallOf(layout.get(), id);
   popRoomState(id);
-  openWindow(`#/room/${encodeURIComponent(id)}`, `cc-room-${id}`);
+  if (openWindow(`#/room/${encodeURIComponent(id)}`, `cc-room-${id}`)) return true;
+  if (wall) returnRoom(id, wall); else detachRoom(id);
+  return false;
 }
 
-export function popOutPane(id: string, tool: Tool) {
+export function popOutPane(id: string, tool: Tool): boolean {
   popPaneState(id, tool);
-  openWindow(`#/pane/${encodeURIComponent(id)}/${tool}`, `cc-pane-${id}-${tool}`, "popup=yes,width=900,height=600");
+  if (openWindow(`#/pane/${encodeURIComponent(id)}/${tool}`, `cc-pane-${id}-${tool}`, "popup=yes,width=900,height=600")) return true;
+  reattachPane(id, tool);
+  return false;
+}
+
+/** A pop-out window says it is alive (after `settle` in another window marked it detached). */
+export function assertPoppedRoom(id: string) {
+  patchRoom(id, (r) => (r.where === "detached" ? { ...r, where: "popped" } : r));
+}
+export function assertPoppedPane(id: string, tool: Tool) {
+  patchRoom(id, (r) => (r.out[tool] === "detached" ? { ...r, out: { ...r.out, [tool]: "popped" } } : r));
 }
 
 export function openWorkspaceWindow(wall: string) {

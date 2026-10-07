@@ -14,7 +14,8 @@ import { EmptyState } from "../components/ui";
 import { DevDot } from "../components/DevMode";
 import { PaneBody, RoomView, useRoom, useWsProjects } from "../workspace/Room";
 import { StagePill } from "../workspace/Dossier";
-import { TOOL_LABEL, TOOLS, detachPane, detachRoom, layout, reattachPane, returnRoom, sessionName, type Tool } from "../workspace/rooms";
+import { TOOL_LABEL, TOOLS, assertPoppedPane, assertPoppedRoom, detachPane, detachRoom, layout, reattachPane, returnRoom, sessionName,
+  type Tool } from "../workspace/rooms";
 
 function homeWall(): string {
   const l = layout.get();
@@ -26,6 +27,7 @@ export function RoomWindow() {
   const id = route.id ?? "";
   const room = useRoom(id);
   const [closing, setClosing] = useState(false);
+  useEffect(() => { assertPoppedRoom(id); }, [id]);   // this window is alive: undo a start-up "detached"
   useEffect(() => {
     const off = () => detachRoom(id);   // the OS close button: detach, never stop
     window.addEventListener("pagehide", off);
@@ -57,6 +59,7 @@ export function PaneWindow() {
   const pname = useSelector(app.store, (d) => d.state?.projects.find((p) => p.key === room?.project)?.name ?? room?.project ?? "");
   const [ended, setEnded] = useState(false);
   const state = room?.out[tool];
+  useEffect(() => { assertPoppedPane(rid, tool); }, [rid, tool]);
   useEffect(() => {
     const off = () => detachPane(rid, tool);
     window.addEventListener("pagehide", off);

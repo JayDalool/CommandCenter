@@ -3,7 +3,7 @@ import json
 import os
 import tempfile
 
-from .helpers import pr
+from .helpers import wait_sync, pr
 from .test_api import AUTH, HOST, JSON, PORT, TOKEN, ApiBase
 
 
@@ -471,7 +471,10 @@ class PipelineApi(Automation):
         self.assertEqual((w["status"], w["gate"], w["merge"]["sha"]), ("VERIFYING", None, "f" * 40))
         r = self.step("verify", {"result": "pass", "evidence": "health ok"}, "agent:verifier")
         self.assertEqual(r.json()["status"], "DONE", r.text)
-        actors = {e["actor"] for e in self.tickets.get("SV-056")["timeline"] if (e.get("kind") or "").startswith("pipeline.")}
+        # Closing releases the task's sessions in the background on ccd's loop; read through the API (the loop's
+        # thread), never the shared SQLite connection from this test thread, once that has finished.
+        wait_sync(lambda: self.get("/api/tasks/SV-056/work").json().get("released") is not None, what="released")
+        actors = {e["actor"] for e in self.get("/api/tasks/SV-056").json()["timeline"] if (e.get("kind") or "").startswith("pipeline.")}
         self.assertEqual(actors, {"agent:planner", "agent:coordinator", "agent:reviewer", "agent:verifier",
                                   "system:automation"})
 

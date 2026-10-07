@@ -13,7 +13,7 @@ import { QuestionsForm } from "../src/tickets/Questions";
 import { GateCard } from "../src/tickets/GateCard";
 import { works } from "../src/tickets/useWork";
 import {
-  MAX_ROOMS, addPane, closeRoom, detachPane, detachRoom, layout, openRoom, paneAreas, parseLayout, popPaneState, popRoomState,
+  MAX_ROOMS, addPane, popOutRoom, popOutPane, settle, closeRoom, detachPane, detachRoom, layout, openRoom, paneAreas, parseLayout, popPaneState, popRoomState,
   reattachPane, resetLayout, returnRoom, sessionName, toggleTool, wallShape,
 } from "../src/workspace/rooms";
 import { ev, state, tasks } from "./helpers";
@@ -111,6 +111,20 @@ describe("the wall layout (spec §12, §17)", () => {
     expect(returnRoom("t:SV-2", "1")).toBe(false);          // full again
     expect(returnRoom("t:SV-2", "2")).toBe(true);           // a second Workspace window
     expect(layout.get().walls["2"]).toEqual(["t:SV-2"]);
+  });
+
+  it("a blocked pop-up keeps the room and pane where they were; a stale 'popped' becomes 'detached' on start", () => {
+    openRoom("1", { kind: "task", project: "samvision", key: "SV-1", tools: ["claude", "project"] });
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    expect(popOutRoom("t:SV-1")).toBe(false);
+    expect(layout.get().walls["1"]).toEqual(["t:SV-1"]);
+    expect(popOutPane("t:SV-1", "claude")).toBe(false);
+    expect(layout.get().rooms["t:SV-1"].slots).toContain("claude");
+    open.mockReturnValue({} as Window);
+    expect(popOutRoom("t:SV-1")).toBe(true);
+    const s2 = settle(layout.get());
+    expect(s2.rooms["t:SV-1"].where).toBe("detached");      // a crashed window never strands the room
+    expect(returnRoom("t:SV-1", "1")).toBe(true);
   });
 
   it("parses stored layouts defensively", () => {

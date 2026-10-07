@@ -29,7 +29,8 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
     setBusy(true);
     try {
       const r = await app.api.answers(ticketKey, filled.map((q) => ({ id: q.id, answer: value(q) })), scope);
-      setResult(r); setVals({}); setOther({}); setScope(false);
+      // The scope tick belongs to the batch: it stays until the last answer goes in with it.
+      setResult(r); setVals({}); setOther({}); if (r.complete) setScope(false);
       onDone(r.work);
       app.toast(r.complete ? (r.delivered ? `Answers sent — ${ticketKey.toLowerCase()} continues${r.replanned ? " (back to planning)" : ""}`
         : "Answers saved — Claude was not reached") : `${filled.length} answer${filled.length === 1 ? "" : "s"} saved`, r.complete && !r.delivered ? "bad" : "ok");

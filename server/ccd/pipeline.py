@@ -251,14 +251,17 @@ class Pipeline:
         for i in range(0, len(ids), 500):
             chunk = ids[i:i + 500]
             marks = ",".join("?" * len(chunk))
-            for tid, gate, reason, deploy in self.db.execute(
-                    f"SELECT ticket_id, gate, gate_reason, deploy FROM ticket_work WHERE ticket_id IN ({marks})", chunk):
+            for tid, gate, reason, deploy, verification in self.db.execute(
+                    f"SELECT ticket_id, gate, gate_reason, deploy, verification FROM ticket_work WHERE ticket_id IN ({marks})",
+                    chunk):
                 d = json.loads(deploy) if deploy else None
+                v = json.loads(verification) if verification else None
                 out[tid] = {"gate": gate, "gateReason": reason, "openQuestions": 0,
-                            "deploy": {k: d.get(k) for k in ("env", "requestedAt", "approvedAt", "result")} if d else None}
+                            "deploy": {k: d.get(k) for k in ("env", "requestedAt", "approvedAt", "result")} if d else None,
+                            "verification": {"result": v.get("result")} if v else None}
             for tid, n in self.db.execute(f"SELECT ticket_id, COUNT(*) FROM ticket_questions WHERE answered_at IS NULL "
                                           f"AND ticket_id IN ({marks}) GROUP BY ticket_id", chunk):
-                out.setdefault(tid, {"gate": None, "gateReason": None, "deploy": None})["openQuestions"] = n
+                out.setdefault(tid, {"gate": None, "gateReason": None, "deploy": None, "verification": None})["openQuestions"] = n
         return out
 
     @staticmethod
@@ -401,9 +404,12 @@ class Pipeline:
         def fn(tid, t, w, at):
             self._need(t, ("IN_REVIEW", "READY_TO_MERGE"), "a review")
             impl = (w["roles"].get("implementer") or {})
-            if verdict == "APPROVE" and (actor == "agent:implementer"
-                                         or (session and impl.get("session") and session == impl.get("session"))):
-                raise TaskError(409, "the implementer cannot approve its own work; a fresh reviewer must")
+            if verdict == "APPROVE":
+                own = {x for x in (impl.get("session"), t["key"].lower(), t["key"]) if x}
+                if actor == "agent:implementer" or (session and session in own):
+                    raise TaskError(409, "the implementer cannot approve its own work; a fresh reviewer must")
+                if impl.get("session") and not session:
+                    raise TaskError(400, "say which reviewer session approves (--session): the implementer's is recorded")
             roles = self._role(w, "reviewer", model, session, at)
             for f in rows:
                 self.db.execute("INSERT INTO ticket_findings(ticket_id, at, source, scope, category, summary, head) "
@@ -554,6 +560,15 @@ class Pipeline:
                     raise TaskError(409, f"{self.max_lanes} implementation lanes are running; resume this one later")
                 work.update(blocked=None, review_cycles=0 if stage == "REVIEW" else w["review"]["cycles"])
                 return {"status": RESUME_STATUS.get(stage, "RESEARCHING")}, work, events
+            if gate == "deploy" and not (w["deploy"] or {}).get("requestedAt"):
+                # The deploy gate came from the ticket's needs:deploy flag, with no request yet: Jay's
+                # approval IS the request. Nothing is deployed by clicking — the agent deploys next, records
+                # it with `deployed --env live`, and only then does the ticket close.
+                work["deploy"] = {"env": "live", "what": t["title"], "verification": (w["verification"] or {}).get("evidence") or "",
+                                  "requestedAt": at, "requestedBy": "policy:needs_deploy", "approvedAt": at,
+                                  "approvedBy": actor, "result": None}
+                events.append(("pipeline.deploy_approved", "Jay approved the live deployment", {}))
+                return {}, work, events
             if gate == "deploy" and (w["deploy"] or {}).get("requestedAt") and not (w["deploy"] or {}).get("result"):
                 # Jay approved a live deployment that has not happened yet: the agent deploys next and
                 # records it with `deployed`; the ticket closes only after that, verified live.
@@ -716,9 +731,9 @@ class Pipeline:
 
         def fn(tid, t, w, at):
             self._open(t, "a re-plan")
-            confirmed = sorted(set(_no_merge(w["confirmed"])) - {"plan"} | {"owner:accept"})
+            confirmed = sorted(set(_no_merge(w["confirmed"])) - {"plan", "ui", "deploy"} | {"owner:accept"})
             work = {"plan_state": "proposed", "review_verdict": None, "confirmed": confirmed, "blocked": None,
-                    "gate": None, "gate_reason": None}
+                    "gate": None, "gate_reason": None, "verification": None, "deploy": None}
             status = {"status": "RESEARCHING"} if t["status"] != "RESEARCHING" else {}
             return status, work, [("pipeline.replan", f"back to planning: {reason}", {"from": t["status"]})]
         return self._tx(key, actor, fn)
@@ -735,8 +750,11 @@ class Pipeline:
                 raise TaskError(409, f"{t['key']} has no accepted plan; re-plan instead")
             if self.lanes() >= self.max_lanes:
                 raise TaskError(409, f"{self.max_lanes} implementation lanes are already running; wait for one to finish")
-            work = {"review_verdict": None, "confirmed": _no_merge(w["confirmed"]), "blocked": None}
-            if w["gate"] in ("merge", "failure"):
+            # The change is being rewritten: an approval, a verification, a UI acceptance or a live-deploy
+            # approval was for the old one, and an open UI / deploy / merge / failure gate no longer applies.
+            work = {"review_verdict": None, "confirmed": [g for g in _no_merge(w["confirmed"]) if g not in ("ui", "deploy")],
+                    "blocked": None, "verification": None, "deploy": None}
+            if w["gate"] in ("merge", "failure", "ui", "deploy"):
                 work.update(gate=None, gate_reason=None)
             return {"status": "IN_PROGRESS"}, work, [("pipeline.rework", f"back to implementation: {reason}",
                                                       {"from": t["status"]})]
@@ -809,6 +827,10 @@ class Pipeline:
             self._need(t, ("VERIFYING",), "a deployment (after the merge)")
             if w["gate"] not in (None, "deploy"):
                 raise TaskError(409, f"{t['key']} has an open {w['gate']} gate")
+            cur = w.get("deploy") or {}
+            if cur.get("env") == "live" and cur.get("requestedAt") and not cur.get("result") and env != "live":
+                raise TaskError(409, "a live deployment is waiting for Jay; it cannot be replaced by a "
+                                     f"{env} request")
             d = {"env": env, "what": what, "verification": verification, "requestedAt": at, "requestedBy": actor,
                  "approvedAt": None, "result": None}
             if env != "live":   # preview / dev follow the configured automation

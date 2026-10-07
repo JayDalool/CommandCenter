@@ -86,7 +86,8 @@ def herdr_agents(run=subprocess.run):
 
 
 def task_pane(key, agents):
-    r = coordid.task_session(key, agents)
+    roots = {k: p.get("root") for k, p in registry.PROJECTS.items()}
+    r = coordid.task_session(key, agents, exclude=coordid.coordinator_panes(agents, roots))
     if r["state"] == "ready":
         return r["paneId"]
     if r["state"] == "multiple":
