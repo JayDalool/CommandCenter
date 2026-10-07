@@ -219,7 +219,7 @@ async def main(reseed):
             Path(str(DEV / "data" / "tasks.db") + suffix).unlink(missing_ok=True)
     fake = FakeHerdr()
     fake.add_agent("wE:pA", "/srv/server/worktrees/samvisionai/SV-056", name="sv-056-impl", status="working")
-    fake.add_agent("wE:pB", "/srv/server/apps/samvisionai", name="sv-071", status="idle")   # SV-071's task session
+    fake.add_agent("wE:p9", "/srv/server/apps/samvisionai", name="sv-071", status="idle")   # SV-071's task session
     fake.set_status("wE:p4", "blocked")
     fake.tails["wE:p4"] = ("Reading docs/LAWYER_QUESTIONS.md\n● The profile export would include the patient's initials.\n"
                            "Should I keep initials out of the export file? (y/n)")
@@ -227,7 +227,7 @@ async def main(reseed):
     # the extra lane pane needs a place in the layout
     lay = next(l for l in fake.snapshot["layouts"] if l["tab_id"] == "wE:t1")
     lay["panes"].append({"focused": False, "pane_id": "wE:pA", "rect": {"height": 20, "width": 17, "x": 70, "y": 20}})
-    lay["panes"].append({"focused": False, "pane_id": "wE:pB", "rect": {"height": 10, "width": 17, "x": 70, "y": 40}})
+    lay["panes"].append({"focused": False, "pane_id": "wE:p9", "rect": {"height": 10, "width": 17, "x": 70, "y": 40}})
     lay["panes"] = [p for p in lay["panes"] if p["pane_id"] != "wE:pC"]
     lay["zoomed"] = False
     await fake.start()

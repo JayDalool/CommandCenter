@@ -45,7 +45,9 @@ function useTaskSession(key: string | null) {
   return useSelector(app.store, (d) => {
     if (!key) return null;
     const names = [key.toLowerCase(), key.toUpperCase()];
-    const hits = (d.state?.agents ?? []).filter((a) => names.includes(a.agent_name) || names.includes(a.label));
+    // The same rule as ccd's coordid.task_session: a live Claude named (or labelled) after the key.
+    const hits = (d.state?.agents ?? []).filter((a) => (!a.agent || a.agent === "claude") && a.live !== false
+      && (names.includes(a.agent_name) || names.includes(a.label)));
     return hits.length === 1 ? { paneId: hits[0].id, status: hits[0].status } : hits.length > 1 ? { paneId: null, status: "multiple" } : null;
   }, (a, b) => JSON.stringify(a) === JSON.stringify(b));
 }
