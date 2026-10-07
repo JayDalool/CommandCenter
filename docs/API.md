@@ -115,3 +115,30 @@ DEV = also needs `X-CCD-Developer: <session>` from `/api/developer/unlock`.
 Every GitHub URL ccd returns (repo, PR, issue, commit, branch) is rebuilt from
 the project's registry identity on `https://github.com`; a stored URL string is
 never trusted.
+
+## Control room (plans/COMMAND-CENTER-CONTROL-ROOM.md, tasks.db schema 4)
+
+| | |
+|---|---|
+| `GET /api/tasks` · `GET /api/tasks/{key}` | every ticket row also carries `gate`, `gateReason`, `openQuestions`, `deploy{env,requestedAt,approvedAt,result}` and `visibleStage` — one of `Planning · Implementing · Reviewing · UI Testing · Verifying · Ready to Merge · Deploying · Needs Jay · Blocked · Closed` (`pipeline.visible_stage`). `meta.visibleStages` lists them |
+| `GET /api/tasks/{key}/work` | adds `questions[]` (`{id,batch,position,text,kind: text\|choice\|yesno,options,answer,answeredAt}`), `openQuestions`, `evidence[]`, `writer`, `checkpoint`, `deploy`, `released`, `visibleStage`, `session{state: ready\|multiple\|none, paneId, status}` (the task Claude session, `coordid.task_session`), `project`; a step Jay takes returns `nudge{delivered, reason}` when it told the task session |
+| `POST /api/tasks/{key}/answers` | Jay **and** Developer Unlock. `{answers: [{id, answer}], scopeChange?}` → `{work, complete, delivered, reason, replanned}`. Answers are stored once each; when the last open one is answered, the answers go to the SAME task Claude session (herdr `agent.prompt`, idle pane only) with the scope guard. `scopeChange: true` first sends the ticket back to Planning. `answers: []` re-sends the latest answers. Never starts a session |
+| `GET /api/tasks/{key}/record` | `{key, taskMd, workflowMd, dir}` — the readable record, also written to `~/command-center/task-records/<project>/<KEY>/{task.md, workflow.md, files/}` (never a product repo) |
+
+New pipeline steps on `POST /api/tasks/{key}/work/{op}` (agents: `python -m ccd.pipeline_cli <op>`):
+
+| op | body | effect |
+|---|---|---|
+| `ask` | `{questions: [text \| {text, kind?, options?}]}` (1–10) | one batch of questions for Jay; the ticket reads **Needs Jay**; the task session keeps waiting |
+| `replan` | `{reason}` | back to Planning (RESEARCHING, plan `proposed`); approval and merge authorisation dropped; Jay accepts before the merge (`owner:accept`) |
+| `rework` | `{reason}` | back to Implementation (IN_PROGRESS) from review, ready-to-merge, verifying or blocked; respects the lane limit |
+| `evidence` | `{kind: screenshot\|image\|link\|file\|test\|pr\|ci\|deploy\|note, ref, note?, stage?}` | append-only evidence |
+| `writer` | `{owner: claude\|codex\|jay\|none, checkpoint?}` | one writer per worktree; taking it from another writer needs a checkpoint `{reason, branch, worktree, commit, dirty, changed[], tests, decisions, blocker, remaining}`; a handover to Claude is sent to the task session |
+| `deploy-request` | `{env: live\|preview\|dev, what, verification}` | after the merge (VERIFYING). `live` opens the deploy gate — **Ready for live deployment** — and waits for Jay; preview/dev follow automation |
+| `deployed` | `{env, result: pass\|fail, evidence}` | records the deployment; `live` is refused (409) until Jay approved it; pass + verified → DONE; fail → BLOCKED |
+| `block` | `{reason, what?, why?, action?, impact?, technical?}` | as before, plus the manager explanation the UI shows first |
+
+Review: an `APPROVE` from `agent:implementer`, or with the implementer's session, is refused (409) — the implementer never approves its own work.
+Merge policy: `registry.PIPELINE_DEFAULTS.merge = "auto"` — a merge gate opens only when Jay must accept (project `merge: owner`, UI/user-facing, `needs:jay`, or re-planned after approval). SamVision keeps `owner`.
+
+Terminal names (`WS /api/pty/{name}`, DEVELOPER): `repo|claude|codex:<PREFIX>` (Project Console), `repo|claude|codex:<KEY>` (Task Room: the shells and Codex in the ticket's known worktree, Claude = the task session `sv-071`), `server`. Every Command Center window attaches to the same session by name; closing a window only detaches. When a ticket closes, its `*:<KEY>` terminals close and an idle task session gets `/exit`.

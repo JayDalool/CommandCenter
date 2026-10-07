@@ -138,10 +138,30 @@ Two credentials, two powers:
 | developer token | `~/.config/command-center/developer.token` (0600, created on first start, must differ from the ccd token) | **also** saving and uploading repository files, adding and removing attachments |
 
 The browser sends the developer token once to `POST /api/developer/unlock` and
-gets a random session id that lives only in ccd's memory and the tab's memory
-(never localStorage, sessionStorage, a URL or the page). Sessions end on LOCK,
-2 h idle, 8 h total, or a ccd restart. Five wrong tokens in five minutes lock
-unlocking for five minutes. Write routes answer 403 to the ccd token alone.
+gets a random session id that lives in ccd's memory. The token itself is never
+stored. **Once per app session (control room, spec §27):** the session id is kept
+in the tab's `sessionStorage` (so a reload does not ask again) and handed to
+Command Center's own other windows — pop-out terminals and rooms, a second
+Workspace window — over a same-origin `BroadcastChannel`; never localStorage, a
+URL or the page. Sessions end on LOCK (in any window: every window locks), when
+the browser session ends, 2 h idle, 8 h total, or a ccd restart. Five wrong
+tokens in five minutes lock unlocking for five minutes. Write routes answer 403
+to the ccd token alone. The ccd token reaches a pop-out window the same way when
+the browser does not copy `sessionStorage` into it.
+
+**What reaches a Claude pane.** Typing into Claude stays a Developer action:
+`POST /api/action/prompt` (DEVELOPER), the terminals (DEVELOPER), and Jay's
+answers to Claude's questions — `POST /api/tasks/{key}/answers` needs `jay`
+**and** Developer Unlock, and only ever goes to the ticket's EXISTING task
+session (named after the key, e.g. `sv-071`, via herdr `agent.prompt` on an
+idle pane); nothing is started when none runs. A pipeline step Jay takes
+(rework, re-plan, approve a plan or a live deploy) tells that session what he
+decided only when Developer Unlock is active. The one agent-initiated delivery
+is a worktree handover WITH a checkpoint (`writer` step, spec §20): a fixed
+template of the recorded checkpoint fields, to the task session only, never a
+coordinator. When a ticket closes, an idle task session is asked to `/exit`; a
+working or blocked one is left running and reported. Coordinators are never
+touched.
 
 **Roots.** The explorer, editor and uploads reach only a registered project's
 `root` in `ccd/registry.py`. The browser sends a project key and a relative
@@ -181,8 +201,13 @@ name and size only, never contents.
 **Terminals (ADR 0004 phase 3).** `WS /api/pty/{name}` needs the ccd token
 (subprotocol `ccd-token.<t>`), a Developer Unlock session (subprotocol
 `ccd-dev.<id>`), a Host of `127.0.0.1:7777`/`localhost:7777` and an Origin that
-is present and the same. Names are `repo:<PREFIX>` (cwd = the registry root) or
-`server` (cwd = `$HOME`); nothing from the browser becomes a path. Each is one
+is present and the same. Names are `repo:<PREFIX>` (cwd = the registry root),
+`codex:<PREFIX>` (Codex if installed, else a shell saying so; same cwd),
+`repo:<KEY>` / `codex:<KEY>` (a Task Room: cwd = that ticket's recorded worktree
+only when it is a known git worktree of the project or inside its root, else the
+root), `claude:<PREFIX>` / `claude:<KEY>` (the herdr attach client for the
+existing coordinator / task session) or `server` (cwd = `$HOME`). Names are
+matched against fixed patterns; nothing from the browser becomes a path. Each is one
 login shell as jay in its own process group, started with a reduced
 environment (PATH, LANG, LC_ALL, TZ, HOME, USER, SHELL, TERM) and with every
 inherited descriptor above 2 closed, so no ccd socket, database or other

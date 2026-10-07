@@ -313,3 +313,35 @@ carries the interactive byte stream in either mode.
 `scripts/dev-ccd.py` runs a second ccd on `127.0.0.1:7788` against a fake herdr
 (real wire protocol), canned GitHub data and a seeded tasks.db, with state,
 data and token in `~/command-center/dev/`. It never touches the live service.
+
+
+## Control room (2026-10-07)
+
+See [plans/COMMAND-CENTER-CONTROL-ROOM.md](../plans/COMMAND-CENTER-CONTROL-ROOM.md) (the approved spec, with the
+implementation mapping at its end) and the references in `docs/design/`.
+
+```text
+Dashboard ─▶ Workspace ─▶ Task Room
+ one panel     tree · dossier ·   Claude (task session sv-071) · Codex · Project (worktree) · Server
+ per project   wall of ≤4 rooms   1–4 panes · pop out a pane or the room · same named session everywhere
+```
+
+| layer | where |
+|---|---|
+| visible stages, Needs Jay (gates + questions), merge acceptance, live-deploy gate, writer/checkpoint | `ccd/pipeline.py` |
+| questions, evidence, writer, checkpoint, deploy, released | tasks.db schema 4 (`ticket_questions`, `ticket_evidence`, `ticket_work` columns) |
+| answers → the SAME task session; nudges; closing releases sessions; records | `ccd/daemon.py` (`task_answers`, `task_work_op_async`, `on_task_closed`, `task_record`) |
+| task session resolver (`sv-071`) | `ccd/coordid.py task_session`, used by ccd and `scripts/cc-terminal task <KEY>` |
+| task terminals `repo\|claude\|codex:<KEY>` | `ccd/pty.py` (`session_cwd`, task resolver from the daemon) |
+| readable records | `ccd/records.py` → `~/command-center/task-records/<project>/<KEY>/` |
+| wall / rooms / panes / pop-out layout | `web/app/src/workspace/rooms.ts` (localStorage, shared by every window) |
+| screens | `screens/Dashboard.tsx`, `screens/Workspace.tsx`, `screens/Popout.tsx`, `workspace/Room.tsx`, `workspace/Dossier.tsx`, `tickets/{Questions,GateCard}.tsx`, `components/Notifications.tsx`; the old IDE is `screens/Files.tsx` |
+
+Navigation is six items: Dashboard, Workspace, Task Manager, Activity / Logs, Files, Settings. Projects,
+Development, Agents, Server, Alerts and Pull requests keep their routes and are under Settings → Diagnostics,
+Activity / Logs and Ctrl+K.
+
+Layout is per browser (every window of it); the work is not: rooms and panes are views of named ccd PTY
+sessions and herdr panes, so moving a room between windows, popping out a pane or closing a window never
+starts or stops a process. Concurrency limits are unchanged: 4 visible rooms per window is not 4 heavy
+implementation lanes (`pipeline.MAX_LANES` still bounds IN_PROGRESS work).

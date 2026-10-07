@@ -1420,3 +1420,57 @@ Keep Jay's manual acceptance checklist short.
 Then stop.
 
 Do not begin another redesign phase.
+
+---
+
+# APPENDIX — IMPLEMENTATION MAPPING (2026-10-07)
+
+How each part of the spec landed in Command Center. Working backend (ticket DB, pipeline V1, Needs Jay,
+GitHub linking, coordinator bindings, herdr, browser PTYs, files/uploads, attachments, Source Control,
+Search, Developer Unlock, loopback, launcher, atomic releases, audit, exact-head review) is reused as is.
+
+| § | Where |
+|---|---|
+| 3 navigation | `components/Shell.tsx` NAV: Dashboard · Workspace · Task Manager · Activity / Logs · Files · Settings. Old screens keep routes (Settings → Diagnostics, Activity / Logs, Ctrl+K) |
+| 4 dashboard | `screens/Dashboard.tsx` — one panel per registered project; latest update (night/morning shift), Needs Jay, counts, ready to merge, went live / blockers only when present |
+| 5 tree | `screens/Workspace.tsx` Tree — collapsible projects, Project Console, active tasks only (closed leave at once; Task History link) |
+| 6 dossier | `workspace/Dossier.tsx` — Why / Problem / Cause / Status / Plan / Acceptance (from `## Why` … sections, else the plan), Questions, History (path with backward moves, findings, verification, merge, deploy, evidence, technical details, workflow.md), Files |
+| 7 roles | recorded by pipeline steps (`roles.planner/implementer/reviewer/verifier`); normal defects → `rework`, scope/architecture → `replan` |
+| 8 task session | the herdr Claude pane named after the key (`sv-071`), resolved by `coordid.task_session`; attached by `claude:<KEY>` / `cc-terminal task <KEY>`; on close: terminals closed, idle session asked to `/exit`, writer released (`pipeline.release`), records kept |
+| 9 questions | `ask` step, `POST /api/tasks/{key}/answers`, `tickets/Questions.tsx`; last answer resumes the SAME session with the scope guard; the scope tick re-plans first; never a duplicate session |
+| 10 notifications | `components/Notifications.tsx` over the one Needs Jay queue; tone + toast for new items; deep links `#/workspace?task=KEY&focus=…&open=1` |
+| 11 blockers | `block {what, why, action, impact, technical}`; `tickets/GateCard.tsx` [Fix and continue] [Re-plan] [Show technical details] |
+| 12 wall | `screens/Workspace.tsx` Wall + `workspace/rooms.ts` — ≤4 rooms per window, 1 / 2 / 2×2, draggable dividers, no page scroll |
+| 13–14 rooms | `workspace/Room.tsx` — Claude / Codex / Project / Server toggled, 1–4 panes (1 · 2 · 1 over 2 · 2×2), dark xterm only |
+| 15 pane pop-out | `popOutPane` + `screens/Popout.tsx PaneWindow` — same named session, slot shows + Add Pane, Reattach / Close Window / Detach / End Session |
+| 16 room pop-out | `popOutRoom` + `RoomWindow` — same sessions and layout; Return to Workspace / Close Window / Detach |
+| 17 new window | "Workspace is full (4/4)" dialog: Pop Out Existing Room / Open New Workspace Window (`#/workspace?w=2`) |
+| 18 project console | room kind `project`: coordinator via the existing resolver (Adopt flow kept), `codex:<PREFIX>`, `repo:<PREFIX>`, `server` |
+| 19–20 Codex | `codex:` terminals (Codex if installed); `writer` step: one writer, handover with checkpoint, sent to the task session |
+| 21 review | exact-head binding as before; implementer may not approve (actor or session) |
+| 22 merge / deploy | merge default `auto` with Gate 3 (UI, needs:jay, re-plan, owner projects → merge gate); SamVision stays `owner`; live deploy: `deploy-request` opens the gate, `deployed --env live` refused until Jay's Deploy Live; preview/dev automatic |
+| 23 evidence | `ticket_evidence`, `ccd/records.py` → `~/command-center/task-records/<project>/<KEY>/{task.md, workflow.md, files/}` |
+| 24 stages | `pipeline.visible_stage` (server) / `lib/control.ts stageOf` (fallback), colours in `styles/tokens.css --vs-*` |
+| 25 closed | tree, wall picker and Activity (default) hide closed tickets; Task Manager history keeps them |
+| 26 files | the former IDE, now `screens/Files.tsx` (explorer, upload, download, view, Source Control, Search) |
+| 27 developer mode | `api/developer.ts` — once per browser session, shared with Command Center windows; `Developer ●` |
+| 28 concurrency | unchanged: `pipeline.MAX_LANES` bounds implementation lanes independently of visible rooms |
+
+## Old Command Center UI tickets (§30)
+
+The live ticket database is on jay-server; this is the reconciliation to apply there (each line keeps its
+genuine requirement).
+
+| ticket / check | verdict | where the requirement lives now |
+|---|---|---|
+| CC-026 Development roles | satisfied (verified, DONE) | Development (Diagnostics), dossier Plan tab "Who works on it" |
+| CC-021 Ticket WORK view | superseded | gate cards + questions in the Workspace dossier and Task Manager detail; WorkPanel kept |
+| CC-018 Claude / Project / Server open without extra clicks | superseded | Task Room / Project Console tool toggles |
+| CC-017 GYST and MFE Claude attach | carried (still a real check) | Project Console Claude uses the same resolver |
+| CC-015 Project page action bar | superseded | Dashboard panel → Workspace; Projects under Diagnostics |
+| CC-014 / CC-013 / CC-004 / CC-003 Explorer, editor, Source Control, search | carried | Files |
+| CC-011 / CC-012 native Windows Terminal | carried | Files dock and Project Console Claude ⋯ menu |
+| CC-002 repo / server shells | carried | Task Room / Project Console panes |
+| CC-008 Tasks shows all projects | carried | Task Manager |
+| CC-010 terminal background jobs end with the session | reliability — stays separate | — |
+| CC-027 backend tests leak a temp dir per database | reliability — stays separate | — |
