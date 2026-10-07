@@ -9,24 +9,32 @@ import { jayQueue } from "../tickets/model";
 import { Kbd } from "./ui";
 import { CommandPalette } from "./CommandPalette";
 import { NewTicket } from "./NewTicket";
-import { UnlockDialog } from "./DevMode";
+import { DevDot, UnlockDialog } from "./DevMode";
+import { NotificationBell } from "./Notifications";
 import { hasUnsavedWork, staleBuild } from "../lib/stale";
 
-// One list, in Jay's order (go-live revision). Pull requests live inside
-// Development; the old Console route opens Workspace, which absorbed it. Old
-// links keep working.
+// The six primary destinations of the control room (spec §3), in Jay's order. Everything that used to
+// be primary (Projects, Development, Agents, Server, Alerts, Pull requests) keeps its route and is one
+// click away under Settings → Diagnostics or Activity / Logs; old links keep working.
+const ICONS: Record<string, React.ReactNode> = {
+  dashboard: <><rect x="3.5" y="3.5" width="7" height="7" rx="1" /><rect x="13.5" y="3.5" width="7" height="7" rx="1" /><rect x="3.5" y="13.5" width="7" height="7" rx="1" /><rect x="13.5" y="13.5" width="7" height="7" rx="1" /></>,
+  workspace: <><rect x="3.5" y="4.5" width="17" height="15" rx="1.5" /><path d="M12 4.5v15M3.5 12h17" /></>,
+  tasks: <><rect x="3.5" y="4.5" width="17" height="15" rx="1.5" /><path d="M7 9h2M11 9h6M7 13h2M11 13h6M7 17h2M11 17h4" /></>,
+  activity: <><path d="M6 3.5h9l3.5 3.5v13.5h-12.5z" /><path d="M9 11h6M9 14.5h6M9 18h4" /></>,
+  files: <><path d="M3.5 6.5A1.5 1.5 0 0 1 5 5h4.5l2 2H19a1.5 1.5 0 0 1 1.5 1.5v9A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z" /></>,
+  settings: <><circle cx="12" cy="12" r="3" /><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7" /></>,
+};
 export const NAV: { id: (typeof SCREENS)[number]; label: string; title: string }[] = [
-  { id: "overview", label: "Overview", title: "Overview" },
-  { id: "projects", label: "Projects", title: "Projects" },
-  { id: "tasks", label: "Tasks", title: "Tasks" },
-  { id: "development", label: "Development", title: "Development" },
+  { id: "dashboard", label: "Dashboard", title: "Dashboard" },
   { id: "workspace", label: "Workspace", title: "Workspace" },
-  { id: "agents", label: "Agents", title: "Agents" },
-  { id: "server", label: "Server", title: "Server" },
-  { id: "activity", label: "Activity", title: "Activity" },
-  { id: "alerts", label: "Alerts", title: "Alerts" },
+  { id: "tasks", label: "Task Manager", title: "Task Manager" },
+  { id: "activity", label: "Activity / Logs", title: "Activity / Logs" },
+  { id: "files", label: "Files", title: "Files" },
   { id: "settings", label: "Settings", title: "Settings" },
 ];
+/** Screens reached from Settings / Activity (diagnostics) and the routes old links use. */
+const TITLES: Record<string, string> = { overview: "Dashboard", projects: "Projects", development: "Development",
+  agents: "Agents", server: "Server", alerts: "Alerts", prs: "Pull requests", workspaces: "herdr layout", console: "Files" };
 
 /** Keys typed into a field belong to the field. */
 export function typing(e: KeyboardEvent | React.KeyboardEvent): boolean {
@@ -43,58 +51,28 @@ export function useTick(ms = 1000) {
 
 function Rail() {
   const route = useRoute();
-  const counts = useSelector(app.store, (d) => {
-    const st = d.state;
-    return {
-      jay: jayQueue(st).length,
-      agents: st?.agents.length ?? 0,
-      blocked: st?.blocked.length ?? 0,
-      prs: st?.projects.reduce((n, p) => n + p.prs.length, 0) ?? 0,
-      alerts: st?.alerts.filter((a) => !a.ack).length ?? 0,
-      tasks: d.tickets.filter((t) => !t.archived && !["DONE", "DENIED", "CANCELLED"].includes(t.status)).length,
-    };
-  }, shallowEqual);
-  const projects = useSelector(app.store, (d) => d.state?.projects ?? null);
-  const needsBy = useSelector(app.store, (d) => {
-    const m: Record<string, number> = {};
-    jayQueue(d.state).forEach((j) => { m[j.project] = (m[j.project] ?? 0) + 1; });
-    return JSON.stringify(m);
-  });
-  const nb = JSON.parse(needsBy) as Record<string, number>;
+  const counts = useSelector(app.store, (d) => ({
+    jay: jayQueue(d.state).length,
+    tasks: d.tickets.filter((t) => !t.archived && !["DONE", "DENIED", "CANCELLED"].includes(t.status)).length,
+    alerts: d.state?.alerts.filter((a) => !a.ack).length ?? 0,
+  }), shallowEqual);
+  const current = route.screen === "overview" ? "dashboard" : route.screen === "console" ? "files" : route.screen;
   const n: Partial<Record<string, ReactNode>> = {
-    overview: counts.jay ? <span className="nav-n is-jay" title="waiting on Jay">{counts.jay}</span> : null,
-    agents: <span className={`nav-n${counts.blocked ? " is-warn" : ""}`}>{counts.blocked ? `${counts.blocked}!` : counts.agents}</span>,
+    dashboard: counts.jay ? <span className="nav-n is-jay" title="needs Jay">{counts.jay}</span> : null,
     tasks: <span className="nav-n">{counts.tasks || ""}</span>,
-    development: <span className="nav-n">{counts.prs || ""}</span>,
-    alerts: counts.alerts ? <span className="nav-n is-warn">{counts.alerts}</span> : null,
+    activity: counts.alerts ? <span className="nav-n is-warn" title="unacknowledged alerts">{counts.alerts}</span> : null,
   };
   return <aside className="rail" aria-label="Navigation">
     <div className="brand"><span className="brand-mark" aria-hidden><i /><i /><i /><i /></span>
-      <span style={{ display: "grid", lineHeight: 1.2 }}><span className="brand-name">Command Center</span>
-        <span className="brand-host">jay-server</span></span></div>
+      <span className="brand-name">Command Center</span></div>
     <nav className="nav" aria-label="Screens">
-      {NAV.map((s, i) => <a key={s.id} href={href(s.id)} aria-current={route.screen === s.id ? "page" : undefined}
-        aria-keyshortcuts={i < 9 ? String(i + 1) : "0"}>
-        <span className="nav-key" aria-hidden>{i < 9 ? i + 1 : 0}</span><span>{s.label}</span>{n[s.id] ?? <span />}</a>)}
+      {NAV.map((s, i) => <a key={s.id} href={href(s.id)} aria-current={current === s.id ? "page" : undefined}
+        aria-keyshortcuts={String(i + 1)} title={`${s.label} (${i + 1})`}>
+        <svg className="nav-ico" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.6"
+          strokeLinecap="round" strokeLinejoin="round" aria-hidden>{ICONS[s.id]}</svg>
+        <span>{s.label}</span>{n[s.id] ?? <span />}</a>)}
     </nav>
-    <div className="rail-sec rail-projects">
-      <div className="rail-head caps muted">Projects</div>
-      {projects?.map((p) => {
-        const live = p.panes.length;
-        const blocked = p.panes.filter((a) => a.status === "blocked").length;
-        const working = p.panes.filter((a) => a.status === "working").length;
-        return <a key={p.key} className="rp" href={href("projects", p.key)}
-          aria-current={route.screen === "projects" && route.id === p.key ? "page" : undefined}>
-          <span className="pj" style={{ ["--pj" as string]: `var(--pj-${p.key})` }}><i className="pj-mark" aria-hidden /></span>
-          <span className="trunc">{p.name}</span>
-          <span className="row" style={{ gap: 6 }}>
-            <span className={`rp-state${blocked ? " is-attn" : ""}`}>{blocked ? `${blocked} blocked` : working ? `${working} working`
-              : live ? `${live} idle` : "quiet"}</span>
-            {nb[p.key] ? <span className="badge-jay" title={`${nb[p.key]} waiting on Jay`}>{nb[p.key]}</span> : null}
-          </span>
-        </a>;
-      })}
-    </div>
+    <div className="sl-fill" />
     <div className="rail-foot"><button type="button" className="btn is-quiet is-sm" onClick={() => window.dispatchEvent(new Event("cc:palette"))}>
       <Kbd>Ctrl</Kbd><Kbd>K</Kbd><span>Commands</span></button></div>
   </aside>;
@@ -102,28 +80,19 @@ function Rail() {
 
 function TopBar() {
   const route = useRoute();
-  const c = useSelector(app.store, (d) => ({
-    jay: jayQueue(d.state).length,
-    blocked: d.state?.blocked.length ?? 0,
-    working: d.state?.agents.filter((a) => a.status === "working").length ?? 0,
-    prs: d.state?.projects.reduce((n, p) => n + p.prs.length, 0) ?? 0,
-  }), shallowEqual);
   const theme = usePrefs((p) => p.theme);
-  const title = NAV.find((s) => s.id === route.screen)?.title ?? "Overview";
+  const title = NAV.find((s) => s.id === route.screen)?.title ?? TITLES[route.screen] ?? "Dashboard";
   const projName = useSelector(app.store, (d) => d.state?.projects.find((p) => p.key === route.id)?.name ?? null);
   return <header className="top">
-    <div className="top-title"><span className="crumb">Command Center{route.id ? ` / ${title}` : ""}</span>
+    <div className="top-title">
       <h1 className="page-title">{route.screen === "projects" && projName ? projName : route.id && route.screen === "tasks" ? route.id : title}</h1></div>
     <div className="top-right">
-      <a className="chip is-jay" href={href("overview")}><b>{c.jay}</b> needs Jay</a>
-      {c.blocked > 0 && <a className="chip is-blocked" href={href("agents")}><b>{c.blocked}</b> blocked</a>}
-      <a className="chip" href={href("agents")}><b>{c.working}</b> working</a>
-      <a className="chip" href={href("development")}><b>{c.prs}</b> open PRs</a>
-      <span className="vsep" aria-hidden />
       <button type="button" className="btn is-quiet is-sm" onClick={() => window.dispatchEvent(new Event("cc:new-task"))}
         aria-keyshortcuts="n"><Kbd>N</Kbd> New task</button>
       <button type="button" className="btn is-quiet is-sm" onClick={() => prefs.patch({ theme: theme === "dark" ? "light" : "dark" })}
         aria-label="Toggle light and dark">{theme === "dark" ? "Light" : "Dark"}</button>
+      <DevDot />
+      <NotificationBell />
     </div>
   </header>;
 }
@@ -158,11 +127,13 @@ export function OfflineBanner() {
   </div>;
 }
 
-export function FreshnessBar() {
+export function FreshnessBar({ always = false }: { always?: boolean }) {
   useTick(1000);
   const st = useSelector(app.store, (d) => d.state);
   const conn = useSelector(app.store, (d) => d.conn, shallowEqual);
   const rows = useMemo(() => freshness(st, conn, nowS()), [st, conn, Math.floor(Date.now() / 1000)]);
+  // Diagnostics stay out of the way until they matter: the line shows only while a source is stale or down.
+  if (!always && rows.every((r) => r.state === "live" || r.state === "off")) return null;
   return <footer className="statusline" aria-label="Source freshness">
     {rows.map((r: FreshRow) => <span key={r.id} className={`sl-seg is-${r.state}`} title={r.detail}>
       <b>{r.label}</b><span className="sl-state">{r.state}</span>
@@ -180,7 +151,9 @@ function Toast() {
   return <div className={`toast is-${t.tone}`} role={t.tone === "bad" ? "alert" : "status"}>{t.text}</div>;
 }
 
-export function AppShell({ children, flush = false }: { children: ReactNode; flush?: boolean }) {
+export function AppShell({ children, flush = false, bare = false, chrome = "full" }: {
+  children: ReactNode; flush?: boolean; bare?: boolean; chrome?: "full" | "dash";
+}) {
   const [palette, setPalette] = useState(false);
   const [newTask, setNewTask] = useState(false);
   const [newProject, setNewProject] = useState<string | undefined>(undefined);
@@ -201,8 +174,8 @@ export function AppShell({ children, flush = false }: { children: ReactNode; flu
       if (document.querySelector("[role=dialog]")) return;
       if (e.key === "n" || e.key === "N") { e.preventDefault(); setNewProject(undefined); setNewTask(true); }
       else if (e.key === "/") { e.preventDefault(); window.dispatchEvent(new Event("cc:focus-search")); }
-      else if (/^[0-9]$/.test(e.key)) {
-        const i = e.key === "0" ? 9 : Number(e.key) - 1;
+      else if (/^[1-9]$/.test(e.key)) {
+        const i = Number(e.key) - 1;
         if (NAV[i]) { e.preventDefault(); go(NAV[i].id); }
       }
     };
@@ -210,16 +183,16 @@ export function AppShell({ children, flush = false }: { children: ReactNode; flu
     return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("cc:palette", openPal);
       window.removeEventListener("cc:new-task", openNew); window.removeEventListener("cc:dev-unlock", openUnlock); };
   }, []);
-  return <div className="shell">
+  return <div className={`shell${bare ? " is-bare" : ""}${chrome === "dash" ? " is-dash" : ""}`}>
     <a className="sr" href="#main">Skip to content</a>
-    <Rail />
+    {!bare && <Rail />}
     <div className="main">
-      <TopBar />
+      {!bare && chrome !== "dash" && <TopBar />}
       <UpdatedBanner />
       <OfflineBanner />
       <main id="main" className={`screen${flush ? " is-flush" : ""}`} tabIndex={-1}>{children}</main>
     </div>
-    <FreshnessBar />
+    {!bare && <FreshnessBar />}
     <Toast />
     {palette && <CommandPalette onClose={() => setPalette(false)} onNewTask={() => { setPalette(false); setNewProject(undefined); setNewTask(true); }} />}
     {newTask && <NewTicket onClose={() => setNewTask(false)} defaults={newProject ? { project: newProject } : undefined} />}

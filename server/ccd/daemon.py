@@ -1182,7 +1182,10 @@ class Daemon:
 
     async def task_work_op_async(self, key, op, body, actor="jay", developer=False):
         work = self.task_work_op(key, op, body, actor, developer)
-        text = self._nudge_text(work["key"], op, body or {}, work) if (actor == "jay" or op == "writer") else None
+        # Jay's steps reach Claude only with Developer Unlock (typing into Claude is a developer action). The one
+        # agent-initiated delivery is a writer handover WITH a checkpoint: a fixed template, to the task session only.
+        text = self._nudge_text(work["key"], op, body or {}, work) \
+            if (actor == "jay" and developer) or op == "writer" else None
         if text:
             delivered, reason = await self._nudge_task(work["key"], text)
             work = dict(work, nudge={"delivered": delivered, "reason": reason})

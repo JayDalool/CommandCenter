@@ -157,6 +157,60 @@ def seed(ts):
     ts.comment("SV-056", "Keep the cluster colours from the legend; no new palette.", "jay")
     ts.comment("SV-056", "Plan accepted. Implementing in worktree sv-056.", "agent:samvision")
     ts.update("SV-056", {"status": "IN_PROGRESS"}, "system:automation", trigger="dispatch 'implement' accepted by idle coordinator samvision")
+    seed_control_room(ts)
+
+
+def seed_control_room(ts):
+    """The control room's own shapes: questions waiting, a blocker explained, a live deploy waiting, review rounds."""
+    from ccd.pipeline import Pipeline
+    pl = Pipeline(ts, max_lanes=9)
+    head = "5" * 40
+
+    def mk(project, number, title, description="", **f):
+        t, _ = ts.create(project, title, "jay", number=number, description=description, **f)
+        return t["key"]
+    k = mk("samvision", 71, "Valuation Layout Improvements", "## Why\nImprove the valuation layout for a better user "
+           "experience and clarity.\n\n## Acceptance criteria\n- [ ] Layout works on all screen sizes\n- [ ] No breaking changes\n"
+           "- [ ] Passes UI/UX review\n- [ ] Tests pass (frontend + integration)", priority="HIGH", type="FEATURE")
+    pl.plan(k, {"summary": "Rework the valuation layout", "requirements": ["Analyze current layout issues",
+            "Design improved layout options", "Implement selected approach", "Test across device sizes",
+            "Get user feedback and iterate"], "approach": "Two layout options, Jay picks one."}, "agent:planner", model="opus")
+    pl.start(k, f"{k}-valuation-layout", f"/srv/server/worktrees/samvisionai/{k}", "agent:coordinator", model="sonnet", session="sv-071")
+    pl.ask(k, [{"text": "Which layout option do you prefer?", "options": ["Option A — side-by-side comps", "Option B — stacked cards"]},
+               {"text": "Should we keep the current color scheme?", "kind": "yesno"},
+               "Any specific user groups to prioritize?"], "agent:coordinator")
+    k = mk("samvision", 74, "Comparable photos carousel", type="FEATURE")
+    pl.plan(k, {"summary": "Carousel for comp photos"}, "agent:planner", model="opus")
+    pl.start(k, f"{k}-carousel", f"/srv/server/worktrees/samvisionai/{k}", "agent:coordinator", model="sonnet")
+    ts.update(k, {"status": "IN_REVIEW"}, "system:automation", trigger="PR #118 is open")
+    pl.review(k, "REQUEST_CHANGES", head, "agent:reviewer", findings=[{"summary": "Swipe does not work on iOS Safari"}], model="opus")
+    pl.rework(k, "swipe on iOS Safari", "agent:coordinator")
+    ts.update(k, {"status": "IN_REVIEW"}, "system:automation", trigger="PR #118 updated")
+    k = mk("samvision", 79, "Mortgage calculator rounding", type="BUG")
+    pl.plan(k, {"summary": "Round at the end, not per step"}, "agent:planner", model="opus")
+    pl.start(k, f"{k}-rounding", f"/srv/server/worktrees/samvisionai/{k}", "agent:coordinator", model="sonnet")
+    pl.block(k, "mobile UI test failed", "agent:verifier", {
+        "what": "The feature passed code review, but the final mobile UI test found that the action buttons overlap on narrow screens.",
+        "why": "Merging now would solve desktop but create a visible mobile regression.",
+        "action": "Fix the mobile layout and rerun UI verification.", "impact": "Small. The current implementation can remain.",
+        "technical": "playwright tests/ui/calculator.spec.ts:42 — expected #actions not to overlap #summary at 375px"})
+    k = mk("commandcenter", 31, "Control room dashboard", type="FEATURE")
+    pl.plan(k, {"summary": "Manager panels per project"}, "agent:planner", model="opus")
+    pl.start(k, f"{k}-dashboard", f"/srv/server/worktrees/cc/{k}", "agent:coordinator", model="sonnet")
+    ts.update(k, {"status": "IN_REVIEW"}, "system:automation", trigger="PR #21 is open")
+    pl.review(k, "APPROVE", head, "agent:reviewer", model="opus",
+              pr={"ref": "JayDalool/CommandCenter#21", "head": head, "ciGreen": True, "draft": False})
+    ts.update(k, {"status": "VERIFYING"}, "system:automation", trigger="PR #21 merged")
+    pl.merged(k, "JayDalool/CommandCenter#21", "6" * 40)
+    pl.deploy_request(k, "live", "The new Dashboard and Workspace for Command Center", "Fresh review approved 5555555; "
+                      "UI tests 14/14; verifier pass on the preview", "agent:coordinator")
+    k = mk("gyst", 24, "Galaxy UI assets", type="DESIGN", labels=["ui"])
+    pl.plan(k, {"summary": "Icon concepts for the galaxy view"}, "agent:planner", model="opus")
+    pl.start(k, f"{k}-assets", f"/srv/server/worktrees/gyst/{k}", "agent:coordinator", model="sonnet")
+    ts.update(k, {"status": "IN_REVIEW"}, "system:automation", trigger="PR #33 is open")
+    pl.review(k, "APPROVE", head, "agent:reviewer", pr={"ref": "JayDalool/gyst-lifeops#33", "head": head, "ciGreen": True, "draft": False})
+    k = mk("mfe", 18, "Receipt totals by category", type="FEATURE")
+    pl.plan(k, {"summary": "Totals per category"}, "agent:planner", model="opus")
 
 
 async def main(reseed):
@@ -165,6 +219,7 @@ async def main(reseed):
             Path(str(DEV / "data" / "tasks.db") + suffix).unlink(missing_ok=True)
     fake = FakeHerdr()
     fake.add_agent("wE:pA", "/srv/server/worktrees/samvisionai/SV-056", name="sv-056-impl", status="working")
+    fake.add_agent("wE:pB", "/srv/server/apps/samvisionai", name="sv-071", status="idle")   # SV-071's task session
     fake.set_status("wE:p4", "blocked")
     fake.tails["wE:p4"] = ("Reading docs/LAWYER_QUESTIONS.md\n● The profile export would include the patient's initials.\n"
                            "Should I keep initials out of the export file? (y/n)")
@@ -172,6 +227,7 @@ async def main(reseed):
     # the extra lane pane needs a place in the layout
     lay = next(l for l in fake.snapshot["layouts"] if l["tab_id"] == "wE:t1")
     lay["panes"].append({"focused": False, "pane_id": "wE:pA", "rect": {"height": 20, "width": 17, "x": 70, "y": 20}})
+    lay["panes"].append({"focused": False, "pane_id": "wE:pB", "rect": {"height": 10, "width": 17, "x": 70, "y": 40}})
     lay["panes"] = [p for p in lay["panes"] if p["pane_id"] != "wE:pC"]
     lay["zoomed"] = False
     await fake.start()
@@ -214,7 +270,10 @@ async def main(reseed):
     daemon.scm = gitops.SourceControl(daemon.files)
     # Repo shells open in the SANDBOX copies; the server shell is a real shell in $HOME.
     daemon.ptys = pty.PtyManager(audit=lambda kind, text, data: daemon._event("pty", kind, text, data=data),
-                                 roots={registry.prefix_of(k): r for k, r in sandbox.items()}, own_scope=True)
+                                 roots={registry.prefix_of(k): r for k, r in sandbox.items()},
+                                 own_scope=not os.environ.get("CCD_DEV_NO_SCOPE"),
+                                 task=lambda key: (sandbox[tasks.get(key)["project"]], None))
+    daemon.records_dir = DEV / "task-records"
 
     @contextlib.asynccontextmanager
     async def lifespan(app):

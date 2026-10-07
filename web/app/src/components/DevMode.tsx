@@ -33,9 +33,10 @@ export function UnlockDialog({ onClose }: { onClose: () => void }) {
   };
   return <Dialog title="Developer Unlock" onClose={onClose}>
     <form onSubmit={submit} className="stack" style={{ gap: 10 }} autoComplete="off">
-      <p className="text2">Saving files, uploading, and removing attachments need the developer token. It is
-        different from the ccd token. Command Center keeps only a session in this tab's memory. A reload, a ccd
-        restart, or LOCK ends it.</p>
+      <p className="text2">Terminals, Claude, answers, uploads and file changes need the developer token — once per
+        app session. It is different from the ccd token and is never stored; Command Center keeps only a session id
+        for this browser session and shares it with its own windows. Closing the browser, a ccd restart, 2 hours
+        idle or Lock ends it.</p>
       <p className="mono-xs muted">ssh jay-server cat ~/.config/command-center/developer.token</p>
       <input className="input mono" type="password" value={value} onChange={(e) => setValue(e.target.value)}
         aria-label="Developer token" placeholder="developer token" data-autofocus autoComplete="off" spellCheck={false} />
@@ -44,6 +45,19 @@ export function UnlockDialog({ onClose }: { onClose: () => void }) {
         <button type="button" className="btn is-quiet" onClick={onClose}>Cancel</button></div>
     </form>
   </Dialog>;
+}
+
+/** The one small indicator (spec §27): "Developer ●" when active, a click locks; "Developer ○" unlocks. */
+export function DevDot() {
+  const active = useDevActive();
+  return <button type="button" className={`dev-dot${active ? " is-on" : ""}`}
+    title={active ? "Developer Mode active for this app session — click to lock" : "Developer Mode locked — click to unlock"}
+    aria-label={active ? "Developer Mode active. Lock" : "Developer Mode locked. Unlock"}
+    onClick={async () => {
+      if (!active) { unlockDialogOpen(); return; }
+      try { await app.api.lock(); } catch { /* the session ends locally regardless */ }
+      setDevSession(null); app.toast("Developer Mode locked");
+    }}>Developer <i aria-hidden>{active ? "●" : "○"}</i></button>;
 }
 
 export function DevBadge() {

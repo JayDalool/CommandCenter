@@ -1,6 +1,6 @@
 import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
-import type { CoordinatorState, TicketWork,
+import type { AnswersResult, CoordinatorState, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
   Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent,
 } from "./types";
@@ -77,6 +77,15 @@ export class Api {
   confirmGate(key: string, gate: string) {
     return this.req<TicketWork>("POST", `/api/tasks/${encodeURIComponent(key)}/work/confirm`, { gate });
   }
+  /** One pipeline step from the UI (rework, replan, confirm …), recorded as Jay. */
+  workOp(key: string, op: string, body: Record<string, unknown>) {
+    return this.req<TicketWork>("POST", `/api/tasks/${encodeURIComponent(key)}/work/${encodeURIComponent(op)}`, body);
+  }
+  /** Jay answers Claude's questions (Developer Unlock). The last answer resumes the same task session. */
+  answers(key: string, answers: { id: number; answer: string }[], scopeChange = false) {
+    return this.req<AnswersResult>("POST", `/api/tasks/${encodeURIComponent(key)}/answers`, { answers, scopeChange });
+  }
+  record(key: string) { return this.req<TaskRecord>("GET", `/api/tasks/${encodeURIComponent(key)}/record`); }
   updateTask(key: string, fields: Partial<Record<string, unknown>>) {
     return this.req<TicketDetail>("PATCH", `/api/tasks/${encodeURIComponent(key)}`, fields);
   }

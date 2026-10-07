@@ -19,7 +19,7 @@ vi.mock("../src/workspace/Terminal", () => ({
 
 import { app, initial } from "../src/store/app";
 import { prefs } from "../src/lib/prefs";
-import { Workspace, workspaceTabs } from "../src/screens/Workspace";
+import { Files as Workspace, workspaceTabs } from "../src/screens/Files";
 import { developer } from "../src/api/developer";
 import { state, tasks } from "./helpers";
 import type { Coordinator } from "../src/api/types";
@@ -55,7 +55,7 @@ const terms = () => screen.queryAllByTestId("term").map((t) => t.getAttribute("d
 describe("Claude tab follows the one resolver", () => {
   it("ready: attaches the existing coordinator, compact header, Windows Terminal only under ⋯", async () => {
     setCoord("samvision", { state: "ready", paneId: "wE:p2", status: "idle", name: "samvision", candidates: [] });
-    await open("#/workspace?project=samvision&tab=claude");
+    await open("#/files?project=samvision&tab=claude");
     expect(terms()).toEqual(["claude:SV"]);
     expect(screen.getByTestId("info").textContent).toMatch(/^samvision · \S+ · idle$/);
     const menu = screen.getAllByTestId("menu");
@@ -67,14 +67,14 @@ describe("Claude tab follows the one resolver", () => {
 
   it("blocked shows a small BLOCKED tag", async () => {
     setCoord("samvision", { state: "ready", paneId: "wE:p2", status: "blocked", candidates: [] });
-    await open("#/workspace?project=samvision&tab=claude");
+    await open("#/files?project=samvision&tab=claude");
     expect(within(screen.getByTestId("info")).getByText("BLOCKED")).toBeInTheDocument();
   });
 
   it("found: says COORDINATOR FOUND (never 'no coordinator'), Adopt binds it, then the terminal attaches", async () => {
     setCoord("gyst", { state: "found", candidates: [{ paneId: "w9:p1", sessionId: "4de6de1b-3cc5-4846-9382-3f5a361bec11", status: "idle" }] });
     const adopt = vi.spyOn(app.api, "adoptCoordinator").mockResolvedValue({ ok: true } as never);
-    await open("#/workspace?project=gyst&tab=claude");
+    await open("#/files?project=gyst&tab=claude");
     expect(screen.getByText("COORDINATOR FOUND")).toBeInTheDocument();
     expect(screen.queryByText(/NO COORDINATOR/)).toBeNull();
     expect(terms()).toEqual([]);                                  // nothing attaches on cwd alone
@@ -87,7 +87,7 @@ describe("Claude tab follows the one resolver", () => {
   it("a successful Adopt keeps the button disabled, so a double click sends one request", async () => {
     setCoord("gyst", { state: "found", candidates: [{ paneId: "w9:p1", sessionId: "4de6de1b-3cc5-4846-9382-3f5a361bec11", status: "idle" }] });
     vi.spyOn(app, "action").mockResolvedValue(true);
-    await open("#/workspace?project=gyst&tab=claude");
+    await open("#/files?project=gyst&tab=claude");
     const btn = screen.getByRole("button", { name: "Adopt" });
     fireEvent.click(btn);
     await waitFor(() => expect(btn).toBeDisabled());
@@ -98,7 +98,7 @@ describe("Claude tab follows the one resolver", () => {
   it("a failed Adopt re-enables the button", async () => {
     setCoord("gyst", { state: "found", candidates: [{ paneId: "w9:p1", sessionId: "4de6de1b-3cc5-4846-9382-3f5a361bec11", status: "idle" }] });
     vi.spyOn(app, "action").mockResolvedValue(false);
-    await open("#/workspace?project=gyst&tab=claude");
+    await open("#/files?project=gyst&tab=claude");
     const btn = screen.getByRole("button", { name: "Adopt" });
     fireEvent.click(btn);
     await waitFor(() => expect(app.action).toHaveBeenCalled());
@@ -111,7 +111,7 @@ describe("Claude tab follows the one resolver", () => {
     const adopt = vi.spyOn(app.api, "adoptCoordinator");
     const unlock = vi.fn();
     window.addEventListener("cc:dev-unlock", unlock);
-    await open("#/workspace?project=gyst&tab=claude");
+    await open("#/files?project=gyst&tab=claude");
     fireEvent.click(screen.getByRole("button", { name: "Adopt" }));
     window.removeEventListener("cc:dev-unlock", unlock);
     expect(unlock).toHaveBeenCalled();
@@ -123,7 +123,7 @@ describe("Claude tab follows the one resolver", () => {
       { paneId: "w9:p1", sessionId: "aaaaaaaa-0000-0000-0000-000000000001", status: "idle" },
       { paneId: "wB:p1", sessionId: "bbbbbbbb-0000-0000-0000-000000000002", status: "working" }] });
     const adopt = vi.spyOn(app.api, "adoptCoordinator").mockResolvedValue({ ok: true } as never);
-    await open("#/workspace?project=gyst&tab=claude");
+    await open("#/files?project=gyst&tab=claude");
     expect(screen.getByText("MULTIPLE CLAUDE SESSIONS")).toBeInTheDocument();
     const pick = screen.getByRole("list", { name: "Choose the coordinator" });
     expect(within(pick).getAllByRole("listitem")).toHaveLength(2);
@@ -135,7 +135,7 @@ describe("Claude tab follows the one resolver", () => {
   it("none: NO COORDINATOR, nothing attaches, nothing is started", async () => {
     setCoord("gyst", { state: "none", candidates: [] });
     const adopt = vi.spyOn(app.api, "adoptCoordinator");
-    await open("#/workspace?project=gyst&tab=claude");
+    await open("#/files?project=gyst&tab=claude");
     expect(screen.getByText("NO COORDINATOR")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Adopt" })).toBeNull();
     expect(terms()).toEqual([]);
@@ -145,7 +145,7 @@ describe("Claude tab follows the one resolver", () => {
 
 describe("Project and Server open straight into a browser terminal", () => {
   it("Project: repo:<PREFIX> rooted in the project, native only under ⋯", async () => {
-    await open("#/workspace?project=samvision&tab=repo");
+    await open("#/files?project=samvision&tab=repo");
     expect(terms()).toContain("repo:SV");
     expect(screen.getByTestId("info").textContent).toBe("/srv/server/apps/samvisionai · main");
     expect(screen.getAllByTestId("menu").map((m) => [m.textContent, m.getAttribute("href")]))
@@ -155,7 +155,7 @@ describe("Project and Server open straight into a browser terminal", () => {
   });
 
   it("Server: the server terminal, native only under ⋯", async () => {
-    await open("#/workspace?project=samvision&tab=server");
+    await open("#/files?project=samvision&tab=server");
     expect(terms()).toContain("server");
     expect(screen.getAllByTestId("menu").map((m) => m.getAttribute("href"))).toEqual(["commandcenter://terminal/server"]);
   });
@@ -163,7 +163,7 @@ describe("Project and Server open straight into a browser terminal", () => {
   it("switching project switches the Project terminal and the Claude context; nothing from the old project shows", async () => {
     setCoord("samvision", { state: "ready", paneId: "wE:p2", status: "idle", candidates: [] });
     setCoord("gyst", { state: "none", candidates: [] });
-    await open("#/workspace?project=samvision&tab=repo");
+    await open("#/files?project=samvision&tab=repo");
     expect(terms()).toContain("repo:SV");
     fireEvent.change(screen.getByRole("combobox", { name: "Workspace project" }), { target: { value: "gyst" } });
     await waitFor(() => expect(terms()).toContain("repo:GYST"));
@@ -173,7 +173,7 @@ describe("Project and Server open straight into a browser terminal", () => {
 
 describe("the top bar is project · ticket · branch", () => {
   it("no GitHub slug, no Go-to-file button in the bar (Ctrl+P and the palette still open it)", async () => {
-    await open("#/workspace?project=samvision");
+    await open("#/files?project=samvision");
     const bar = document.querySelector(".ws-bar")!;
     expect(bar.textContent).toMatch(/Project.*Ticket.*Branch/);
     expect(within(bar as HTMLElement).queryByRole("button", { name: /Go to file/ })).toBeNull();

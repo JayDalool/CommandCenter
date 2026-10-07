@@ -35,3 +35,29 @@ export function isRemembered(): boolean {
 }
 
 export const TOKEN_SHAPE = /^[A-Za-z0-9_-]{32,128}$/;
+
+// A pop-out terminal, room or second Workspace window opened from Command Center normally inherits
+// this tab's sessionStorage; when it does not (a browser that does not copy it), it asks the open
+// Command Center windows for the token over a same-origin BroadcastChannel. Nothing leaves the origin.
+type TokMsg = { t: "tok?" } | { t: "tok"; token: string };
+const tokChannel: BroadcastChannel | null = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("cc-token") : null;
+tokChannel?.addEventListener("message", (e: MessageEvent<TokMsg>) => {
+  if (e.data?.t === "tok?" && getToken()) tokChannel.postMessage({ t: "tok", token: getToken()! } satisfies TokMsg);
+});
+
+export function restoreToken(): Promise<void> {
+  if (getToken() || !tokChannel) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = setTimeout(resolve, 250);
+    const once = (e: MessageEvent<TokMsg>) => {
+      if (e.data?.t === "tok" && TOKEN_SHAPE.test(e.data.token)) {
+        clearTimeout(done); tokChannel.removeEventListener("message", once);
+        memory = e.data.token;
+        try { sessionStorage.setItem(KEY, memory); } catch { /* memory only */ }
+        resolve();
+      }
+    };
+    tokChannel.addEventListener("message", once);
+    try { tokChannel.postMessage({ t: "tok?" } satisfies TokMsg); } catch { resolve(); }
+  });
+}
