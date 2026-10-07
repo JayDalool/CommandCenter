@@ -13,7 +13,7 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 src="$repo/launcher"
 out="${CCD_LAUNCHER_DIR:-$HOME/.local/share/command-center/launcher}"
-version="${CCD_LAUNCHER_VERSION:-0.3.0}"
+version="${CCD_LAUNCHER_VERSION:-0.4.0}"
 
 if ! command -v go >/dev/null 2>&1; then
   export PATH="$HOME/.local/go/bin:$PATH"

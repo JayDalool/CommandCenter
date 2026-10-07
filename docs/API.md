@@ -109,6 +109,8 @@ DEV = also needs `X-CCD-Developer: <session>` from `/api/developer/unlock`.
 | `GET /api/attachments/{id}/download` | always `application/octet-stream`, attachment, sandboxed |
 | `DELETE /api/attachments/{id}` DEV | remove (audited) |
 | `GET /api/developer` · `POST /api/developer/unlock {token}` · `POST /api/developer/lock` | Developer Unlock |
+| `POST /api/developer/handoff {token}` | SSH sign-in, used by `scripts/cc-session` (as jay): ccd token + developer token → `{code, expiresIn: 120}`; the code is single-use and the session lasts 12 h |
+| `POST /api/developer/redeem {code}` | **No ccd token** (Host/Origin checked, JSON only): the code, once → `{token, session, expiresIn}`. Wrong/reused codes count toward the unlock lockout |
 | `GET /api/development/{key}/commits` | `{branch, base, branchUrl, commits[{sha,short,message,author,at,url}]}` |
 | `GET /api/desktop/launcher` · `GET /api/desktop/launcher/download` | Windows launcher metadata (`version, sha256, commit, built_at, size`) and the exe |
 

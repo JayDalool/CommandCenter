@@ -149,6 +149,19 @@ tokens in five minutes lock unlocking for five minutes. Write routes answer 403
 to the ccd token alone. The ccd token reaches a pop-out window the same way when
 the browser does not copy `sessionStorage` into it.
 
+**SSH sign-in (control room).** Typing two tokens was the friction; an SSH key login is the stronger
+proof and CommandCenter.exe already makes one for its tunnel. Over it the launcher runs the fixed helper
+`scripts/cc-session`, which — as jay, the only user who can read `developer.token` — calls
+`POST /api/developer/handoff` (ccd token + developer token). ccd mints a Developer session that lasts the
+working day (12 h, no shorter idle limit) and a **one-time code, valid 120 s**. The launcher opens
+`#/?signin=<code>` (a URL fragment: never sent to any server); the page strips it at once and trades it at
+`POST /api/developer/redeem` — the one `/api` route that takes no ccd token, still behind the Host and
+Origin checks, JSON-only — for the ccd token and the session. Wrong or reused codes count toward the same
+five-in-five-minutes lockout as wrong developer tokens; ccd logs that a code was issued, never the code.
+A page cannot mint a code: minting needs both tokens, which only a process running as jay can read.
+`commandcenter://unlock` (any web page can open it) can only make the launcher open Command Center's own
+address with a fresh code, which only Command Center's own origin can read.
+
 **What reaches a Claude pane.** Typing into Claude stays a Developer action:
 `POST /api/action/prompt` (DEVELOPER), the terminals (DEVELOPER), and Jay's
 answers to Claude's questions — `POST /api/tasks/{key}/answers` needs `jay`

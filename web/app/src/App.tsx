@@ -14,6 +14,7 @@ import { Files } from "./screens/Files";
 import { PaneWindow, RoomWindow } from "./screens/Popout";
 import { restoreToken } from "./api/auth";
 import { restoreDevSession } from "./api/developer";
+import { redeemSignin } from "./api/signin";
 import { PullRequests } from "./screens/PullRequests";
 import { Workspaces } from "./screens/Workspaces";
 import { Server } from "./screens/Server";
@@ -31,6 +32,8 @@ const BARE: Record<string, () => React.JSX.Element> = { room: RoomWindow, pane: 
 
 /** A pop-out or second window gets the token and the Developer session from the open windows. */
 export async function start() {
+  const signinError = await redeemSignin();   // CommandCenter.exe's SSH sign-in, when the address carries one
+  if (signinError) app.toast(`SSH sign-in: ${signinError}`, "bad");
   await restoreToken();
   await restoreDevSession();
   await app.boot();
@@ -41,6 +44,18 @@ export function App() {
   const hasState = useSelector(app.store, (d) => d.state !== null);
   const route = useRoute();
   useEffect(() => { void start(); return () => app.live.stop(); }, []);
+  // A sign-in link opened in a tab that is already open (only the address changes): redeem it too.
+  useEffect(() => {
+    const on = () => {
+      if (!/[?&]signin=/.test(location.hash)) return;
+      void redeemSignin().then((err) => {
+        if (err) app.toast(`SSH sign-in: ${err}`, "bad");
+        else { app.toast("Signed in over SSH — Developer Mode on"); void app.boot(); }
+      });
+    };
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
   useEffect(() => { document.getElementById("main")?.focus({ preventScroll: true }); }, [route.screen]);
   if (auth === "needed" || (auth === "checking" && !hasState)) return auth === "needed" ? <Connect /> : <div className="connect"><EmptyState title="Connecting to ccd…" /></div>;
   const Bare = BARE[route.screen];

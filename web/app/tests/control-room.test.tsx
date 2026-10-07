@@ -288,3 +288,43 @@ describe("Developer Mode once per app session (spec §27)", () => {
     expect(JSON.stringify({ ...localStorage })).not.toContain("s".repeat(43));
   });
 });
+
+describe("SSH sign-in (no pasting, no unlock prompt)", () => {
+  it("trades #/?signin=<code> for the token and a Developer session, and strips the code from the address", async () => {
+    const { redeemSignin } = await import("../src/api/signin");
+    const { getToken, clearToken } = await import("../src/api/auth");
+    clearToken();
+    const code = "c".repeat(43);
+    location.hash = `#/?signin=${code}`;
+    const calls: unknown[] = [];
+    const err = await redeemSignin((async (_u: unknown, init?: RequestInit) => {
+      calls.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ ok: true, token: "t".repeat(43), session: "s".repeat(43), expiresIn: 43200 }), { status: 200 });
+    }) as typeof fetch);
+    expect(err).toBeNull();
+    expect(calls).toEqual([{ code }]);
+    expect(location.hash).not.toContain(code);
+    expect(getToken()).toBe("t".repeat(43));
+    expect(devSession()).toBe("s".repeat(43));
+    location.hash = "#/workspace";
+    expect(await redeemSignin((async () => { throw new Error("must not be called"); }) as typeof fetch)).toBeNull();
+  });
+});
+
+describe("focus (terminals only)", () => {
+  it("Focus hides the navigation and top bar on the Workspace; the tree can be hidden too", async () => {
+    vi.spyOn(app.api, "workspaceProjects").mockResolvedValue({ projects: [] });
+    const { AppShell } = await import("../src/components/Shell");
+    location.hash = "#/workspace";
+    render(<AppShell flush><Workspace /></AppShell>);
+    expect(screen.getByRole("complementary", { name: "Navigation" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Focus/ }));
+    expect(screen.queryByRole("complementary", { name: "Navigation" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Exit focus" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Tree/ }));
+    expect(screen.queryByRole("navigation", { name: "Projects and tasks" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Exit focus" }));
+    expect(screen.getByRole("complementary", { name: "Navigation" })).toBeInTheDocument();
+    prefs.patch({ wsFocus: false, wsTreeOpen: true });
+  });
+});

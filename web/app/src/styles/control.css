@@ -280,3 +280,18 @@
 .btn.is-primary:disabled { opacity: .5; }
 .pane { overflow: hidden; }
 .pane > .pane-add { grid-row: 1 / -1; }
+
+/* collapsed navigation rail: icons only */
+.shell.is-rail-mini { --rail-w: 60px; }
+.shell.is-rail-mini .rail .brand-name, .shell.is-rail-mini .nav a > span, .shell.is-rail-mini .nav-n { display: none; }
+.shell.is-rail-mini .nav a { grid-template-columns: 1fr; justify-items: center; padding: 0; }
+.shell.is-rail-mini .brand { justify-content: center; padding: 0; }
+.shell.is-rail-mini .rail-foot { justify-content: center; padding: 8px 0; }
+.rail-foot { justify-content: space-between; }
+
+/* workspace view toggles: the tree can go, and focus leaves only the terminals */
+.ws3.no-tree { grid-template-columns: minmax(0, 1fr); }
+.ws3.no-tree.has-detail { grid-template-columns: minmax(380px, 520px) minmax(0, 1fr); }
+.ws3.no-tree:not(.has-detail):has(.detail-rail) { grid-template-columns: 28px minmax(0, 1fr); }
+.ws3.is-focus { grid-template-columns: 250px minmax(0, 1fr); }
+.ws3.is-focus.no-tree { grid-template-columns: minmax(0, 1fr); }

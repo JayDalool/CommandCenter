@@ -17,12 +17,19 @@ export interface Prefs {
   wsCollapsed: string[];
   /** The task detail column beside the tree. */
   wsDetailOpen: boolean;
+  /** The project/task tree column. */
+  wsTreeOpen: boolean;
+  /** Focus: the Workspace alone — no navigation rail, no top bar, no task detail. */
+  wsFocus: boolean;
+  /** The navigation rail shows icons only. */
+  railCollapsed: boolean;
 }
 const KEY = "cc.prefs";
 const DEFAULTS: Prefs = { theme: "dark", density: "comfortable", sshHost: "jay-server",
   consoleTab: "claude", consoleProject: null,
   lastProject: null, wsExplorerW: 260, wsExplorerOpen: true, wsTermH: 300, wsTermOpen: true, wsMax: "none",
-  wsSide: "explorer", wsCollapsed: [], wsDetailOpen: true };
+  wsSide: "explorer", wsCollapsed: [], wsDetailOpen: true,
+  wsTreeOpen: true, wsFocus: false, railCollapsed: false };
 
 const SIDES = ["explorer", "scm", "search"];
 

@@ -51,6 +51,7 @@ export function useTick(ms = 1000) {
 
 function Rail() {
   const route = useRoute();
+  const collapsed = usePrefs((p) => p.railCollapsed);
   const counts = useSelector(app.store, (d) => ({
     jay: jayQueue(d.state).length,
     tasks: d.tickets.filter((t) => !t.archived && !["DONE", "DENIED", "CANCELLED"].includes(t.status)).length,
@@ -73,8 +74,13 @@ function Rail() {
         <span>{s.label}</span>{n[s.id] ?? <span />}</a>)}
     </nav>
     <div className="sl-fill" />
-    <div className="rail-foot"><button type="button" className="btn is-quiet is-sm" onClick={() => window.dispatchEvent(new Event("cc:palette"))}>
-      <Kbd>Ctrl</Kbd><Kbd>K</Kbd><span>Commands</span></button></div>
+    <div className="rail-foot">
+      {!collapsed && <button type="button" className="btn is-quiet is-sm" onClick={() => window.dispatchEvent(new Event("cc:palette"))}>
+        <Kbd>Ctrl</Kbd><Kbd>K</Kbd><span>Commands</span></button>}
+      <button type="button" className="btn is-quiet is-sm rail-toggle" onClick={() => prefs.patch({ railCollapsed: !collapsed })}
+        aria-label={collapsed ? "Expand navigation" : "Collapse navigation"} title={`${collapsed ? "Expand" : "Collapse"} navigation (Ctrl+\\)`}>
+        {collapsed ? "»" : "«"}</button>
+    </div>
   </aside>;
 }
 
@@ -166,6 +172,11 @@ export function AppShell({ children, flush = false, bare = false, chrome = "full
     const openUnlock = () => setUnlock(true);
     window.addEventListener("cc:dev-unlock", openUnlock);
     const onKey = (e: KeyboardEvent) => {
+      // Ctrl+. focus (Workspace alone) · Ctrl+\ collapse the navigation rail. Neither is a shell key.
+      if ((e.ctrlKey || e.metaKey) && e.key === ".") { e.preventDefault(); prefs.patch({ wsFocus: !prefs.get().wsFocus }); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key === "\\" && !(e.target as HTMLElement | null)?.closest?.(".xterm")) {
+        e.preventDefault(); prefs.patch({ railCollapsed: !prefs.get().railCollapsed }); return;
+      }
       // Inside a real terminal, Ctrl+K is the shell's (kill to end of line); the palette opens from anywhere else.
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && !(e.target as HTMLElement | null)?.closest?.(".xterm")) {
         e.preventDefault(); setPalette((v) => !v); return;
@@ -183,11 +194,17 @@ export function AppShell({ children, flush = false, bare = false, chrome = "full
     return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("cc:palette", openPal);
       window.removeEventListener("cc:new-task", openNew); window.removeEventListener("cc:dev-unlock", openUnlock); };
   }, []);
-  return <div className={`shell${bare ? " is-bare" : ""}${chrome === "dash" ? " is-dash" : ""}`}>
+  const route = useRoute();
+  const railCollapsed = usePrefs((p) => p.railCollapsed);
+  const wsFocus = usePrefs((p) => p.wsFocus);
+  // Focus (the Workspace only): no rail, no top bar — the tree and the terminals get the whole window.
+  const focus = wsFocus && route.screen === "workspace";
+  const noChrome = bare || focus;
+  return <div className={`shell${noChrome ? " is-bare" : ""}${chrome === "dash" ? " is-dash" : ""}${railCollapsed ? " is-rail-mini" : ""}`}>
     <a className="sr" href="#main">Skip to content</a>
-    {!bare && <Rail />}
+    {!noChrome && <Rail />}
     <div className="main">
-      {!bare && chrome !== "dash" && <TopBar />}
+      {!noChrome && chrome !== "dash" && <TopBar />}
       <UpdatedBanner />
       <OfflineBanner />
       <main id="main" className={`screen${flush ? " is-flush" : ""}`} tabIndex={-1}>{children}</main>

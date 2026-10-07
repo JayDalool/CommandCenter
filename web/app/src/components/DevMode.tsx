@@ -32,6 +32,11 @@ export function UnlockDialog({ onClose }: { onClose: () => void }) {
     }
   };
   return <Dialog title="Developer Unlock" onClose={onClose}>
+    <div className="stack" style={{ gap: 8, marginBottom: 14 }}>
+      <a className="btn is-primary" href="commandcenter://unlock" onClick={() => setTimeout(onClose, 300)}>Sign in with SSH (CommandCenter.exe)</a>
+      <p className="mono-xs muted">Uses your SSH key login: a signed-in window opens and every Command Center window unlocks for the
+        day. No launcher here? On the server run <span className="mono">scripts/cc-session --url</span> and open the link it prints.</p>
+    </div>
     <form onSubmit={submit} className="stack" style={{ gap: 10 }} autoComplete="off">
       <p className="text2">Terminals, Claude, answers, uploads and file changes need the developer token — once per
         app session. It is different from the ccd token and is never stored; Command Center keeps only a session id

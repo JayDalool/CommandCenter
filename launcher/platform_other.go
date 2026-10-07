@@ -44,6 +44,10 @@ func registerProtocol([]regValue) error { return errors.New("only supported on W
 
 func (p *osPlatform) OpenDefault(string) error { return errors.New("only supported on Windows") }
 
+func (p *osPlatform) Output(path string, args []string) ([]byte, error) {
+	return exec.Command(path, args...).Output()
+}
+
 func (p *osPlatform) FirstInstance(string) bool { return true }
 
 func (p *osPlatform) Tray(TrayMenu, <-chan struct{}) error {

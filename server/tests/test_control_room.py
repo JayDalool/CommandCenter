@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
 from ccd import coordid, pty, records, registry
 from ccd.pipeline import Pipeline, needs_acceptance, visible_stage  # noqa: F401
@@ -485,3 +486,63 @@ class ControlRoomApi(PipelineApi):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SshSignin(unittest.TestCase):
+    """CommandCenter.exe's SSH login → cc-session → a one-time code → the page: token + day-long session."""
+    def test_a_code_is_good_once_and_briefly_and_the_session_lasts_the_day(self):
+        from ccd.security import DeveloperGate
+        now = [1000.0]
+        g = DeveloperGate("d" * 43, clock=lambda: now[0])
+        self.assertEqual(g.handoff("wrong")[0], None)
+        code, _ = g.handoff("d" * 43)
+        sid, _ = g.redeem(code)
+        self.assertTrue(g.check(sid))
+        self.assertIsNone(g.redeem(code)[0])                       # once
+        late, _ = g.handoff("d" * 43)
+        now[0] += g.CODE_TTL + 1
+        self.assertIsNone(g.redeem(late)[0])                       # briefly
+        now[0] += 6 * 3600                                         # six idle hours: a typed unlock would be gone
+        self.assertTrue(g.check(sid))
+        now[0] += 13 * 3600
+        self.assertFalse(g.check(sid))                             # but not beyond the day
+        typed, _ = g.unlock("d" * 43)
+        now[0] += 3 * 3600
+        self.assertFalse(g.check(typed))                           # the typed unlock keeps its 2 h idle limit
+
+
+class SshSigninApi(PipelineApi):
+    def test_handoff_needs_both_tokens_and_redeem_needs_none(self):
+        from .test_api import HOST, TOKEN
+        r = self.client.post("/api/developer/handoff", content=json.dumps({"token": self.DEV}),
+                             headers={**HOST, "content-type": "application/json"})
+        self.assertEqual(r.status_code, 401)                       # the ccd token is required to mint
+        r = self.client.post("/api/developer/handoff", content=json.dumps({"token": "x" * 43}), headers=JSON)
+        self.assertEqual(r.status_code, 403)                       # and the developer token
+        code = self.client.post("/api/developer/handoff", content=json.dumps({"token": self.DEV}), headers=JSON).json()["code"]
+        bare = {**HOST, "content-type": "application/json"}
+        out = self.client.post("/api/developer/redeem", content=json.dumps({"code": code}), headers=bare).json()
+        self.assertEqual(out["token"], TOKEN)
+        self.assertTrue(self.daemon.dev_gate.check(out["session"]))
+        again = self.client.post("/api/developer/redeem", content=json.dumps({"code": code}), headers=bare)
+        self.assertEqual(again.status_code, 403)
+        self.assertEqual(self.client.post("/api/developer/redeem", content="code=x",
+                                          headers={**HOST, "content-type": "text/plain"}).status_code, 415)
+        self.assertEqual(self.client.post("/api/developer/redeem", content=json.dumps({"code": code}),
+                                          headers={**bare, "origin": "http://evil.example"}).status_code, 403)
+        self.assertEqual(self.client.get("/api/developer/redeem", headers=HOST).status_code, 405)
+        kinds = [e["kind"] for e in self.get("/api/activity?limit=50").json()["events"]]
+        self.assertIn("developer.handoff", kinds)
+        self.assertNotIn(code, json.dumps(self.get("/api/activity?limit=50").json()))   # the code is never logged
+
+    def test_cc_session_prints_a_code_or_a_link(self):
+        from unittest import mock
+        from ccd import signin
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "ccd.token").write_text("t" * 43)
+            Path(d, "developer.token").write_text("d" * 43)
+            with mock.patch.object(signin, "mint", return_value="c" * 43) as m, \
+                    mock.patch("builtins.print") as out:
+                signin.main(["--port", "7789", "--dev-dir", d, "--url"])
+            m.assert_called_once_with(7789, "t" * 43, "d" * 43)
+            out.assert_called_once_with("http://127.0.0.1:7789/#/?signin=" + "c" * 43)

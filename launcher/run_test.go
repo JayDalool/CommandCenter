@@ -114,6 +114,10 @@ func (f *fakePlatform) StartTerminal(path string, args []string, newConsole bool
 	return nil
 }
 
+func (f *fakePlatform) Output(string, []string) ([]byte, error) {
+	return nil, errors.New("no ssh sign-in in tests")
+}
+
 func (f *fakePlatform) OpenDefault(url string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

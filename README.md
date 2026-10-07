@@ -27,6 +27,7 @@ own; when ccd is down, it builds locally exactly as before.
 - **Loopback only.** ccd binds `127.0.0.1:7777`, fixed in code. No public port,
   no Cloudflare, no Tailscale Serve, and the herdr socket is never bridged to TCP.
   The Windows client will reach it with `ssh -L 7777:127.0.0.1:7777 jay-server`.
+  CommandCenter.exe also signs in over that SSH login (`scripts/cc-session`), so nothing is pasted.
 - **No dangerous endpoints.** There is no API for merge, deploy, production,
   secrets, Docker, destructive git, or config/rule changes. Merges and deploys
   are done by agents under the pipeline's gates; ccd only records them, and a

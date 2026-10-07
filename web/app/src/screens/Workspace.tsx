@@ -135,6 +135,19 @@ function FullDialog({ wall, spec, onClose }: { wall: string; spec: Spec; onClose
   </Dialog>;
 }
 
+/** Show / hide the tree, and Focus: the terminals alone (no navigation, no top bar, no task detail). */
+function ViewToggles() {
+  const tree = usePrefs((p) => p.wsTreeOpen);
+  const focus = usePrefs((p) => p.wsFocus);
+  return <span className="row" style={{ gap: 4 }}>
+    <button type="button" className="btn is-quiet is-sm" aria-pressed={tree} onClick={() => prefs.patch({ wsTreeOpen: !tree })}
+      title={tree ? "Hide the project tree" : "Show the project tree"}>{tree ? "⇤ Tree" : "⇥ Tree"}</button>
+    <button type="button" className={`btn is-sm${focus ? " is-primary" : " is-quiet"}`} aria-pressed={focus}
+      onClick={() => prefs.patch({ wsFocus: !focus })} title={focus ? "Exit focus (Ctrl+.)" : "Focus: terminals only (Ctrl+.)"}>
+      {focus ? "Exit focus" : "⛶ Focus"}</button>
+  </span>;
+}
+
 function Wall({ wall, onPicker }: { wall: string; onPicker: () => void }) {
   const ids = useSelector(layout, (l) => l.walls[wall] ?? [], shallowEqual);
   const rooms = useSelector(layout, (l) => l.rooms);
@@ -160,6 +173,7 @@ function Wall({ wall, onPicker }: { wall: string; onPicker: () => void }) {
       <span className="sl-fill" />
       <span className="mono-xs muted">Active Rooms: {ids.length}/{MAX_ROOMS}</span>
       <button type="button" className="btn is-sm is-outline" onClick={onPicker}>Open Room</button>
+      <ViewToggles />
     </div>
     {ids.length === 0 ? <div className="wall-empty">
       <button type="button" className="slot-empty" onClick={onPicker}><span className="slot-plus">+</span>Open Task or Project Console</button>
@@ -183,6 +197,8 @@ export function Workspace() {
   const tickets = useSelector(app.store, (d) => d.tickets);
   const loaded = useSelector(app.store, (d) => d.ticketsLoaded);
   const detailOpen = usePrefs((p) => p.wsDetailOpen);
+  const treeOpen = usePrefs((p) => p.wsTreeOpen);
+  const focusMode = usePrefs((p) => p.wsFocus);
   const wall = route.params.get("w") || "1";
   const taskParam = route.params.get("task") || route.params.get("ticket");
   const focus = (route.params.get("focus") as Focus) || null;
@@ -212,14 +228,14 @@ export function Workspace() {
   }, [wantOpen, loaded, selected, consoleParam]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!loaded) return <EmptyState title="Loading tasks…" />;
-  const showDetail = detailOpen && !!selected;
-  return <div className={`ws3${showDetail ? " has-detail" : ""}`}>
-    <Tree selected={selected} onPick={(t) => { select(t.key); if (!prefs.get().wsDetailOpen) prefs.patch({ wsDetailOpen: true }); }}
-      onOpen={openTask} onConsole={(p) => request({ kind: "project", project: p, key: null })} />
+  const showDetail = detailOpen && !!selected && !focusMode;
+  return <div className={`ws3${showDetail ? " has-detail" : ""}${treeOpen ? "" : " no-tree"}${focusMode ? " is-focus" : ""}`}>
+    {treeOpen && <Tree selected={selected} onPick={(t) => { select(t.key); if (!prefs.get().wsDetailOpen) prefs.patch({ wsDetailOpen: true }); }}
+      onOpen={openTask} onConsole={(p) => request({ kind: "project", project: p, key: null })} />}
     {showDetail && <Dossier ticketKey={selected!} focus={focus}
       onOpenRoom={() => { const t = tickets.find((x) => x.key === selected); if (t) request({ kind: "task", project: t.project, key: t.key }); }}
       onCollapse={() => prefs.patch({ wsDetailOpen: false })} />}
-    {!showDetail && selected && <button type="button" className="detail-rail" onClick={() => prefs.patch({ wsDetailOpen: true })}
+    {!showDetail && selected && !focusMode && <button type="button" className="detail-rail" onClick={() => prefs.patch({ wsDetailOpen: true })}
       aria-label="Show task details" title="Show task details">▸ {selected}</button>}
     <Wall wall={wall} onPicker={() => setPicker(true)} />
     {picker && <Picker onClose={() => setPicker(false)} onPick={(s) => { setPicker(false); if (s.key) select(s.key); request(s); }} />}

@@ -22,6 +22,8 @@ type Platform interface {
 	// in the job). newConsole asks for a new console window (PowerShell).
 	StartTerminal(path string, args []string, newConsole bool) error
 	OpenDefault(url string) error
+	// Output runs a hidden, non-interactive command (the ssh sign-in) and returns its stdout.
+	Output(path string, args []string) ([]byte, error)
 	// FirstInstance takes a per-user named mutex for the life of the process.
 	// false means another launcher already holds it.
 	FirstInstance(name string) bool
@@ -57,6 +59,8 @@ type app struct {
 	secondWait time.Duration
 	poll       time.Duration
 	newTunnel  func(start func(*tailBuffer) (Proc, error), probe func() bool, log *logger) *tunnel
+	// signin mints a one-time SSH sign-in code (signin.go); nil = never sign in.
+	signin func(Config) (string, error)
 }
 
 func newApp(p Platform, log *logger) *app {
@@ -68,6 +72,7 @@ func newApp(p Platform, log *logger) *app {
 		secondWait: 25 * time.Second,
 		poll:       500 * time.Millisecond,
 		newTunnel:  newTunnel,
+		signin:     sshSignin(p),
 	}
 }
 
@@ -139,7 +144,7 @@ func (a *app) run() int {
 	switch a.classify(cfg.LocalPort) {
 	case PortCCD:
 		a.log.Printf("reuse: Command Center already answers on %d", cfg.LocalPort)
-		if err := a.openDetached(url, profile); err != nil {
+		if err := a.openDetached(a.signedURL(cfg, url), profile); err != nil {
 			p.Alert("Command Center is reachable at "+url+" but no browser could be opened.", true)
 			return 1
 		}
@@ -187,7 +192,7 @@ func (a *app) run() int {
 		}
 	}
 
-	b, err := openBrowser(p, url, profile, a.log)
+	b, err := openBrowser(p, a.signedURL(cfg, url), profile, a.log)
 	if err != nil {
 		shutdown()
 		p.Alert("The tunnel is up, but no browser could be opened. Visit "+url+" yourself.", true)
@@ -238,7 +243,7 @@ func (a *app) waitForUser(cfg Config, url, profile string, t *tunnel, stop <-cha
 	err := a.p.Tray(TrayMenu{
 		Tip: "Command Center (tunnel to " + cfg.Host + ")",
 		Open: func() {
-			if err := a.openDetached(url, profile); err != nil {
+			if err := a.openDetached(a.signedURL(cfg, url), profile); err != nil {
 				a.log.Printf("tray open: %v", err)
 			}
 		},
@@ -274,7 +279,7 @@ func (a *app) secondLaunch(cfg Config, url, profile string) int {
 		}
 		time.Sleep(a.poll)
 	}
-	if err := a.openDetached(url, profile); err != nil {
+	if err := a.openDetached(a.signedURL(cfg, url), profile); err != nil {
 		a.p.Alert("Command Center is reachable at "+url+" but no browser could be opened.", true)
 		return 1
 	}
