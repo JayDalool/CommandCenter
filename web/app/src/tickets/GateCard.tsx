@@ -49,7 +49,7 @@ export function GateCard({ ticketKey, work, onDone }: { ticketKey: string; work:
         {b?.impact && <><dt>Estimated impact</dt><dd>{b.impact}</dd></>}
       </dl>
       <div className="gate-actions">
-        <button type="button" className="btn is-jay" disabled={busy} onClick={() => rework(b?.action || b?.reason || "")}>Fix and continue</button>
+        <button type="button" className="btn is-primary" disabled={busy} onClick={() => rework(b?.action || b?.reason || "")}>Fix and continue</button>
         <button type="button" className="btn" disabled={busy} onClick={() => replan(b?.reason || "")}>Re-plan</button>
         <button type="button" className="btn is-quiet" aria-expanded={tech} onClick={() => setTech(!tech)}>{tech ? "Hide" : "Show"} technical details</button>
       </div>
@@ -78,7 +78,7 @@ export function GateCard({ ticketKey, work, onDone }: { ticketKey: string; work:
         <dt>Verification completed</dt><dd>{d?.verification || work.verification?.evidence || "—"}</dd>
       </dl>
       <div className="gate-actions">
-        <button type="button" className="btn is-jay" disabled={busy} onClick={() => confirm("deploy", "Live deployment approved")}>Deploy Live</button>
+        <button type="button" className="btn is-primary" disabled={busy} onClick={() => confirm("deploy", "Live deployment approved")}>Deploy Live</button>
         <button type="button" className="btn" disabled={busy} onClick={() => rework("not ready to go live: ")}>Not yet — fix first</button>
       </div>
     </section>;
@@ -89,7 +89,7 @@ export function GateCard({ ticketKey, work, onDone }: { ticketKey: string; work:
       <p>{work.plan?.summary || work.gateReason}</p>
       {work.policy?.planReasons?.length ? <p className="muted mono-xs">why you: {work.policy.planReasons.join(", ")}</p> : null}
       <div className="gate-actions">
-        <button type="button" className="btn is-jay" disabled={busy} onClick={() => confirm("plan", "Plan approved")}>Approve plan</button>
+        <button type="button" className="btn is-primary" disabled={busy} onClick={() => confirm("plan", "Plan approved")}>Approve plan</button>
         <button type="button" className="btn" disabled={busy} onClick={() => replan("")}>Re-plan</button>
       </div>
     </section>;
@@ -100,7 +100,7 @@ export function GateCard({ ticketKey, work, onDone }: { ticketKey: string; work:
       <p className="muted">A fresh reviewer approved the exact head {work.review?.head ? <span className="mono">{work.review.head.slice(0, 7)}</span> : null}
         {work.review?.pr ? <> on {work.review.pr}</> : null}. Accepting lets Claude merge this head (a new commit needs a new review).</p>
       <div className="gate-actions">
-        <button type="button" className="btn is-jay" disabled={busy} onClick={() => confirm("merge", "Merge accepted for this head")}>Accept — allow merge</button>
+        <button type="button" className="btn is-primary" disabled={busy} onClick={() => confirm("merge", "Merge accepted for this head")}>Accept — allow merge</button>
         <button type="button" className="btn" disabled={busy} onClick={() => rework("")}>Request changes</button>
       </div>
     </section>;
@@ -112,7 +112,7 @@ export function GateCard({ ticketKey, work, onDone }: { ticketKey: string; work:
       <p className="muted">Verified{work.verification?.evidence ? `: ${work.verification.evidence}` : "."} Check the screens, then decide.</p>
       {shots.length > 0 && <ul className="gate-ev">{shots.map((e) => <li key={e.id} className="mono-xs">{e.ref}{e.note ? ` — ${e.note}` : ""}</li>)}</ul>}
       <div className="gate-actions">
-        <button type="button" className="btn is-jay" disabled={busy} onClick={() => confirm("ui", "UI accepted")}>UI accepted</button>
+        <button type="button" className="btn is-primary" disabled={busy} onClick={() => confirm("ui", "UI accepted")}>UI accepted</button>
         <button type="button" className="btn" disabled={busy} onClick={() => rework("")}>Needs fixes</button>
       </div>
     </section>;

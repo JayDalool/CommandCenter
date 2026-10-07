@@ -125,7 +125,7 @@ function FullDialog({ wall, spec, onClose }: { wall: string; spec: Spec; onClose
         Pop Out {label(id)} ↗</button>)}
     </div>
     <div className="row" style={{ marginTop: 14 }}>
-      <button type="button" className="btn is-jay" data-autofocus onClick={() => {
+      <button type="button" className="btn is-primary" data-autofocus onClick={() => {
         const w = newWall(); openRoom(w, spec); openWorkspaceWindow(w); onClose();
       }}>Open New Workspace Window</button>
       <button type="button" className="btn is-quiet" onClick={onClose}>Cancel</button>

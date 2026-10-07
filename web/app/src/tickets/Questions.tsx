@@ -73,7 +73,7 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
     </div>)}
     <label className="qs-scope"><input type="checkbox" checked={scope} onChange={(e) => setScope(e.target.checked)} />
       These answers change the approved scope, architecture, security, data model, auth or major UX direction</label>
-    <button type="submit" className="btn is-jay qs-submit" disabled={busy || !filled.length}>
+    <button type="submit" className="btn is-primary qs-submit" disabled={busy || !filled.length}>
       {filled.length && filled.length < open.length ? `Save ${filled.length} answer${filled.length === 1 ? "" : "s"}` : "Submit Answers"}</button>
     {!dev && <div className="mono-xs muted">Sending answers to Claude needs Developer Mode (once per session).</div>}
   </form>;

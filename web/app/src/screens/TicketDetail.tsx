@@ -15,6 +15,22 @@ import { NewTicket } from "../components/NewTicket";
 import { stamp } from "../lib/time";
 import { openAgent } from "../lib/openAgent";
 import { WorkPanel } from "../tickets/WorkPanel";
+import { GateCard } from "../tickets/GateCard";
+import { QuestionsForm } from "../tickets/Questions";
+import { useWork } from "../tickets/useWork";
+import { taskHref } from "../lib/control";
+
+/** The decision this ticket waits on and Claude's open questions — the same cards as the Workspace. */
+function Decisions({ ticketKey }: { ticketKey: string }) {
+  const [work, setWork] = useWork(ticketKey);
+  if (!work) return null;
+  const open = work.openQuestions ?? 0;
+  if (!open && !work.gate && work.status !== "BLOCKED" && !(work.deploy?.approvedAt && !work.deploy?.result)) return null;
+  return <section aria-label="Needs Jay" className="stack" style={{ gap: 10 }}>
+    <GateCard ticketKey={ticketKey} work={work} onDone={setWork} />
+    {open > 0 && <QuestionsForm ticketKey={ticketKey} work={work} onDone={setWork} />}
+  </section>;
+}
 
 const DISPATCH_VERBS = ["plan", "implement", "review", "verify", "continue"] as const;
 
@@ -124,6 +140,7 @@ function Detail({ t, onClose }: { t: TicketDetail; onClose: () => void }) {
           : <p className={`desc${t.description ? "" : " is-empty"}`}>{t.description || "No description."}</p>}
       </section>
 
+      <Decisions ticketKey={t.key} />
       <WorkPanel t={t} />
 
       <section aria-label="Development">
@@ -131,7 +148,7 @@ function Detail({ t, onClose }: { t: TicketDetail; onClose: () => void }) {
         <DevTrail row={devRow} repo={proj?.repo ?? null} />
         <div className="row" style={{ gap: 8 }}>
           <a className="btn is-sm" href={href("development")}>All development</a>
-          <a className="btn is-sm" href={href("workspace", null, { project: t.project, ticket: t.key })}>Workspace</a>
+          <a className="btn is-sm" href={taskHref(t.key)}>Open Task Room</a>
         </div>
       </section>
 

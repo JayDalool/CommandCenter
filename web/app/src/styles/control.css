@@ -272,3 +272,11 @@
   .ws3, .ws3.has-detail { grid-template-columns: minmax(0, 1fr); }
   .ws3 .tree { display: none; }
 }
+
+/* the one primary action in a decision: control-room blue, never the alarm red */
+.btn.is-primary { border-color: color-mix(in srgb, var(--accent) 70%, transparent); color: var(--text);
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface)); font-weight: 600; }
+.btn.is-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 32%, var(--surface)); }
+.btn.is-primary:disabled { opacity: .5; }
+.pane { overflow: hidden; }
+.pane > .pane-add { grid-row: 1 / -1; }

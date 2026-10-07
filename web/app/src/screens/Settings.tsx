@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { app } from "../store/app";
 import { useSelector } from "../lib/store";
-import { go, useRoute } from "../lib/router";
+import { go, href, useRoute } from "../lib/router";
 import { prefs, usePrefs, commands } from "../lib/prefs";
 import { isRemembered } from "../api/auth";
 import type { ImportPreview, LauncherInfo } from "../api/types";
@@ -15,13 +15,26 @@ export function Settings() {
   return <div className="stack">
     <Seg label="Settings section" value={tab} onChange={(v) => go("settings", null, { tab: v === "general" ? undefined : v })}
       options={[{ v: "general", label: "General" }, { v: "desktop", label: "Desktop app" }, { v: "developer", label: "Developer mode" },
-        { v: "connection", label: "Connection" }, { v: "import", label: "Task migration preview" }]} />
+        { v: "connection", label: "Connection" }, { v: "import", label: "Task migration preview" }, { v: "diagnostics", label: "Diagnostics" }]} />
     {tab === "general" && <General />}
     {tab === "desktop" && <DesktopApp />}
     {tab === "developer" && <DeveloperMode />}
     {tab === "connection" && <Connection />}
     {tab === "import" && <ImportPreviewView />}
+    {tab === "diagnostics" && <Diagnostics />}
   </div>;
+}
+
+/** Server and agent diagnostics: out of the primary navigation (spec §3), never gone. */
+function Diagnostics() {
+  return <Panel title="Diagnostics" pad>
+    <p className="text2">Ops views for when something needs looking into. Every old link still works.</p>
+    <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+      {([["projects", "Projects"], ["development", "Development"], ["agents", "Agents"], ["server", "Server"], ["alerts", "Alerts"],
+        ["prs", "Pull requests"], ["workspaces", "herdr layout"]] as [string, string][]).map(([id, label]) =>
+        <a key={id} className="btn is-sm" href={href(id)}>{label}</a>)}
+    </div>
+  </Panel>;
 }
 
 function DesktopApp() {
@@ -65,10 +78,11 @@ function DeveloperMode() {
   return <Panel title="Developer mode" pad>
     <div className="stack" style={{ gap: 10 }}>
       <DevBadge />
-      <p className="text2">The ccd token lets this browser read and steer metadata. Saving or uploading repository files and
-        adding or removing attachments also need Developer Unlock, a separate token kept in
-        <span className="mono"> ~/.config/command-center/developer.token</span> on jay-server. The unlock lasts until you lock it,
-        reload the tab, two idle hours pass, or ccd restarts. It is never stored in the browser.</p>
+      <p className="text2">The ccd token lets this browser read and steer metadata. Terminals, Claude, answers to Claude's
+        questions, saving or uploading repository files and attachments also need Developer Unlock, a separate token kept in
+        <span className="mono"> ~/.config/command-center/developer.token</span> on jay-server. Unlock once per app session:
+        reloads and Command Center's own pop-out windows keep it. It ends when you lock it, close the browser, two idle hours
+        pass, eight hours pass, or ccd restarts. The token itself is never stored; only the session id, in this browser session.</p>
     </div>
   </Panel>;
 }
