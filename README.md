@@ -78,6 +78,16 @@ http://127.0.0.1:7777, paste the token (`ssh jay-server cat
 .config/command-center/ccd.token | clip`). Tickets live in
 `~/command-center/data/tasks.db` — back it up as data.
 
+## Go live with a branch (one step)
+
+```
+scripts/go-live.sh                 # backs up tasks.db, switches the live checkout, builds the UI, restarts ccd
+scripts/reconcile-cc-ui.py         # dry run: what the control room does to the old CC UI tickets
+scripts/reconcile-cc-ui.py --apply
+```
+
+`go-live.sh` prints the exact rollback (previous branch + the tasks.db backup) when it finishes.
+
 ## Roll back
 
 `scripts/install-user-unit.sh --remove`. The legacy board falls back to local

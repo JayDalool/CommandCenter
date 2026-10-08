@@ -1031,6 +1031,11 @@ class Daemon:
             if extra:
                 ctx["brief"] += "\n\n" + "\n".join(extra)
             ctx["session"] = self.task_session(t["key"])
+            # So the Task Room's Claude pane can attach (coordid.task_session matches the herdr name only).
+            ctx["brief"] += (f"\n\nTask session: work {t['key']} in its own Claude session whose herdr pane is named "
+                             f"{t['key'].lower()} (e.g. herdr pane rename to {t['key'].lower()}); Command Center's Task "
+                             f"Room attaches to that name. Ask Jay questions with python -m ccd.pipeline_cli ask "
+                             f"{t['key']} --role coordinator --question \"…\" — his answers come back into that session.")
         ctx["dispatchable"] = bool(coord) and t["project"] in set(
             self.cfg.get("dispatch_projects") or ("samvision", "gauzemate"))
         return ctx

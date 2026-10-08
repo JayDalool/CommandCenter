@@ -121,7 +121,7 @@ export class Api {
     return this.req<{ attachments: Attachment[] }>("GET", `/api/attachments?${new URLSearchParams({ owner, key })}`);
   }
   removeAttachment(id: string) { return this.req<{ ok: true }>("DELETE", `/api/attachments/${encodeURIComponent(id)}`, {}); }
-  developerStatus() { return this.req<{ active: boolean; expiresIn: number | null }>("GET", "/api/developer"); }
+  developerStatus() { return this.req<{ active: boolean; expiresIn: number | null; tokenFile?: string | null }>("GET", "/api/developer"); }
   unlock(token: string) {
     return this.req<{ ok: true; session: string; expiresIn: number }>("POST", "/api/developer/unlock", { token });
   }

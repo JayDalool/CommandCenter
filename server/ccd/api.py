@@ -514,8 +514,11 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     async def dev_status(request):
         sid = request.headers.get(DEV_HEADER) or ""
         active = bool(gate and gate.check(sid))
+        # Which developer.token belongs to THIS ccd (a path, never its contents), so a preview does not
+        # send Jay to the live token file.
+        hint = getattr(daemon, "dev_token_hint", None)
         return _json({"active": active, "expiresIn": gate.expires_in(sid) if active else None,
-                      "configured": gate is not None})
+                      "configured": gate is not None, "tokenFile": hint})
 
     async def dev_unlock(request):
         try:

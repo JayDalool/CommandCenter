@@ -1,7 +1,7 @@
 // DEVELOPER MODE: LOCKED / ACTIVE. Writing files, uploading and removing
 // attachments need it; browsing never does. The developer token is typed into
 // a password field, sent once, and dropped from memory as soon as ccd answers.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { app } from "../store/app";
 import { useSelector } from "../lib/store";
 import { developer, setDevSession } from "../api/developer";
@@ -15,6 +15,9 @@ export function UnlockDialog({ onClose }: { onClose: () => void }) {
   const [value, setValue] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // This ccd's own developer.token (a preview has its own; the live one would be refused here).
+  const [file, setFile] = useState("~/.config/command-center/developer.token");
+  useEffect(() => { app.api.developerStatus().then((r) => { if (r.tokenFile) setFile(r.tokenFile); }).catch(() => undefined); }, []);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!value.trim()) return;
@@ -42,7 +45,7 @@ export function UnlockDialog({ onClose }: { onClose: () => void }) {
         app session. It is different from the ccd token and is never stored; Command Center keeps only a session id
         for this browser session and shares it with its own windows. Closing the browser, a ccd restart, 2 hours
         idle or Lock ends it.</p>
-      <p className="mono-xs muted">ssh jay-server cat ~/.config/command-center/developer.token</p>
+      <p className="mono-xs muted">ssh jay-server cat {file.replace(/^~\//, "")}</p>
       <input className="input mono" type="password" value={value} onChange={(e) => setValue(e.target.value)}
         aria-label="Developer token" placeholder="developer token" data-autofocus autoComplete="off" spellCheck={false} />
       {err && <div className="bad-t" role="alert">{err}</div>}

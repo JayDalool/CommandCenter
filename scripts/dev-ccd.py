@@ -259,6 +259,7 @@ async def main(reseed):
     daemon.attachments = attachments.Attachments(config.DATA_DIR / "attachments.db", config.ATTACH_DIR,
                                                  50 * 1024 * 1024)
     daemon.dev_gate = security.DeveloperGate(security.load_or_create_token(config.DEV_TOKEN_PATH))
+    daemon.dev_token_hint = str(config.DEV_TOKEN_PATH).replace(str(Path.home()), "~", 1)
     daemon.launcher_dir = Path.home() / ".local" / "share" / "command-center" / "launcher"
     for key, root in sandbox.items():  # a git repo per sandbox, so Source Control has something to show
         if not (Path(root) / ".git").exists():

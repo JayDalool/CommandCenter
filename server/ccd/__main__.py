@@ -90,6 +90,7 @@ def build(cfg=None):
     if hmac.compare_digest(dev_secret, token):
         sys.exit("developer.token must differ from ccd.token")
     daemon.dev_gate = security.DeveloperGate(dev_secret)
+    daemon.dev_token_hint = str(config.DEV_TOKEN_PATH).replace(str(os.path.expanduser("~")), "~", 1)
     daemon.secret_values = (token, dev_secret)
     daemon.launcher_dir = config.LAUNCHER_DIR
     daemon.search = search.Search(daemon.files)
