@@ -118,20 +118,27 @@ Every GitHub URL ccd returns (repo, PR, issue, commit, branch) is rebuilt from
 the project's registry identity on `https://github.com`; a stored URL string is
 never trusted.
 
-## Control room (plans/COMMAND-CENTER-CONTROL-ROOM.md, tasks.db schema 4)
+## Control room (plans/COMMAND-CENTER-CONTROL-ROOM.md, tasks.db schema 5)
 
 | | |
 |---|---|
 | `GET /api/tasks` · `GET /api/tasks/{key}` | every ticket row also carries `gate`, `gateReason`, `openQuestions`, `deploy{env,requestedAt,approvedAt,result}` and `visibleStage` — one of `Planning · Implementing · Reviewing · UI Testing · Verifying · Ready to Merge · Deploying · Needs Jay · Blocked · Closed` (`pipeline.visible_stage`). `meta.visibleStages` lists them |
 | `GET /api/tasks/{key}/work` | adds `questions[]` (`{id,batch,position,text,kind: text\|choice\|yesno,options,answer,answeredAt}`), `openQuestions`, `evidence[]`, `writer`, `checkpoint`, `deploy`, `released`, `visibleStage`, `session{state: ready\|multiple\|none, paneId, status}` (the task Claude session, `coordid.task_session`), `project`; a step Jay takes returns `nudge{delivered, reason}` when it told the task session |
 | `POST /api/tasks/{key}/answers` | Jay **and** Developer Unlock. `{answers: [{id, answer}], scopeChange?}` → `{work, complete, delivered, reason, replanned}`. Answers are stored once each; when the last open one is answered, the answers go to the SAME task Claude session (herdr `agent.prompt`, idle pane only) with the scope guard. `scopeChange: true` first sends the ticket back to Planning. `answers: []` re-sends the latest answers. Never starts a session |
+| `POST /api/tasks/check` | Jay **and** Developer Unlock. `{project, copy?}` → `{ok, project, coordinator, openTasks, text?}`. **The task check**: one fixed message (`daemon.TASK_CHECK_TEMPLATE`, with the project's open tickets) to the project's idle coordinator Claude, asking it to compare them with the repo and every .md file that held tasks, propose stale ones (`stale`), add missing ones (`pipeline_cli add`, Inbox, label `task-check`) and ask about unclear ones. It changes no code and never cancels. 409 when the coordinator is not identified or busy. `copy: true` sends nothing and returns the message to paste into any Claude in that repo |
 | `GET /api/tasks/{key}/record` | `{key, taskMd, workflowMd, dir}` — the readable record, also written to `~/command-center/task-records/<project>/<KEY>/{task.md, workflow.md, files/}` (never a product repo) |
+
+**Jay first** (`registry` pipeline `jay_first`, default on): `start` is refused (409) while the ticket's project has,
+on another ticket, an open question for Jay, a plan waiting on his approval or a blocker only he can clear
+(`Pipeline.held_by`). A ticket flagged needs:legal (or type LEGAL) waits on a lawyer and never holds; sign-offs on
+finished work (merge acceptance, UI review, live deploy) do not hold either.
 
 New pipeline steps on `POST /api/tasks/{key}/work/{op}` (agents: `python -m ccd.pipeline_cli <op>`):
 
 | op | body | effect |
 |---|---|---|
 | `ask` | `{questions: [text \| {text, kind?, options?}]}` (1–10) | one batch of questions for Jay; the ticket reads **Needs Jay**; the task session keeps waiting |
+| `stale` | `{reason}` | the task check: one question for Jay, `purpose: "stale"`, options **Cancel it / Keep it** (one open per ticket). Jay's "Cancel it" on `/answers` cancels the ticket (with a note, ending its sessions); "Keep it" keeps it. Nothing is typed into any Claude |
 | `replan` | `{reason}` | back to Planning (RESEARCHING, plan `proposed`); approval and merge authorisation dropped; Jay accepts before the merge (`owner:accept`) |
 | `rework` | `{reason}` | back to Implementation (IN_PROGRESS) from review, ready-to-merge, verifying or blocked; respects the lane limit |
 | `evidence` | `{kind: screenshot\|image\|link\|file\|test\|pr\|ci\|deploy\|note, ref, note?, stage?}` | append-only evidence |

@@ -295,3 +295,32 @@
 .ws3.no-tree:not(.has-detail):has(.detail-rail) { grid-template-columns: 28px minmax(0, 1fr); }
 .ws3.is-focus { grid-template-columns: 250px minmax(0, 1fr); }
 .ws3.is-focus.no-tree { grid-template-columns: minmax(0, 1fr); }
+
+/* the Workspace's left column as the Task Manager: the wall of rooms stays beside it */
+.ws-left-tabs { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); }
+.ws-left-tab { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600;
+  padding: 3px 9px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.ws-left-tab:hover { color: var(--text); }
+.ws-left-tab.is-on { background: color-mix(in srgb, var(--accent) 22%, var(--surface)); color: var(--text); }
+.ws3.is-tasks, .ws3.is-tasks.is-focus { grid-template-columns: var(--ws-tasks-w, 640px) minmax(0, 1fr); }
+.ws-tasks { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; min-width: 0;
+  border-right: 1px solid var(--line); background: var(--bg); }
+.ws-tasks > .tasks { min-height: 0; }
+.ws-tasks-grip { position: absolute; top: 0; right: -4px; width: 8px; height: 100%; cursor: col-resize; z-index: 5; }
+.ws-tasks-grip:hover, .ws-tasks-grip:focus-visible { background: color-mix(in srgb, var(--accent) 35%, transparent); outline: 0; }
+.tasks.is-embedded .tasks-bar, .tasks.is-embedded .filters { padding-left: 12px; padding-right: 12px; gap: 6px; }
+.tasks.is-embedded .tasks-body.has-detail { grid-template-columns: minmax(0, 1fr); }
+.tasks.is-embedded .tasks-body.has-detail .tasks-list { display: none; }
+@media (max-width: 760px) { .ws3.is-tasks { grid-template-columns: minmax(0, 1fr); } .ws3.is-tasks .wall { display: none; } }
+
+/* the task check */
+.qs-stale { display: grid; gap: 8px; padding: 10px 12px; margin-bottom: 10px; border: 1px solid color-mix(in srgb, var(--jay) 45%, var(--line));
+  border-radius: 8px; background: color-mix(in srgb, var(--jay) 7%, var(--surface)); }
+.qs-stales { display: grid; }
+.dash-hold { margin-top: 4px; font-size: 12px; color: var(--jay); font-weight: 600; }
+.tc-list { display: grid; gap: 6px; margin-top: 12px; }
+.tc-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 10px;
+  border: 1px solid var(--line); border-left: 3px solid var(--pj); border-radius: 6px; background: var(--surface); }
+.tc-name { display: grid; gap: 2px; min-width: 0; }
+.tc-ok { color: var(--ok); }
+.tc-bad { color: var(--bad); }

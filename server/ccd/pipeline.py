@@ -77,6 +77,8 @@ def policy(ticket, project_key=None):
 
 
 CLOSED_STATUSES = ("DONE", "DENIED", "CANCELLED")
+HOLDING_GATES = ("plan", "failure")       # jay_first: Jay's decisions that hold new work (questions too)
+STALE_OPTIONS = ("Cancel it", "Keep it")   # the task check's question; "Cancel it" cancels the ticket
 # The ten stages Jay sees (spec §24). The canonical statuses stay as they are underneath.
 VISIBLE_STAGES = ("Planning", "Implementing", "Reviewing", "UI Testing", "Verifying", "Ready to Merge", "Deploying",
                   "Needs Jay", "Blocked", "Closed")
@@ -239,10 +241,10 @@ class Pipeline:
 
     def questions(self, tid):
         return [{"id": i, "batch": b, "position": pos, "text": tx, "kind": k, "options": json.loads(o or "[]"),
-                 "askedAt": aa, "askedBy": ab, "answer": an, "answeredAt": at, "answeredBy": by}
-                for i, b, pos, tx, k, o, aa, ab, an, at, by in self.db.execute(
-                    "SELECT id, batch, position, text, kind, options, asked_at, asked_by, answer, answered_at, answered_by "
-                    "FROM ticket_questions WHERE ticket_id=? ORDER BY batch, position", (tid,)).fetchall()]
+                 "askedAt": aa, "askedBy": ab, "answer": an, "answeredAt": at, "answeredBy": by, "purpose": pu}
+                for i, b, pos, tx, k, o, aa, ab, an, at, by, pu in self.db.execute(
+                    "SELECT id, batch, position, text, kind, options, asked_at, asked_by, answer, answered_at, answered_by, "
+                    "purpose FROM ticket_questions WHERE ticket_id=? ORDER BY batch, position", (tid,)).fetchall()]
 
     def compact(self, ids):
         """{ticket id: {gate, openQuestions, deploy}} for the ticket list, in two queries."""
@@ -290,17 +292,31 @@ class Pipeline:
                 "url": None, "flags": [f"gate:{g}"], "status": st, "since": at}
                for k, p, title, st, g, reason, at in rows]
         gated = {o["ref"] for o in out}
-        for k, p, title, st, n, at in self.db.execute(
-                "SELECT t.key, t.project, t.title, t.status, COUNT(*), MIN(q.asked_at) FROM ticket_questions q "
-                "JOIN tickets t ON t.id=q.ticket_id WHERE q.answered_at IS NULL AND t.archived=0 "
+        for k, p, title, st, n, stale, at in self.db.execute(
+                "SELECT t.key, t.project, t.title, t.status, COUNT(*), SUM(q.purpose IS 'stale'), MIN(q.asked_at) "
+                "FROM ticket_questions q JOIN tickets t ON t.id=q.ticket_id WHERE q.answered_at IS NULL AND t.archived=0 "
                 "AND t.status NOT IN ('DONE','DENIED','CANCELLED') GROUP BY t.id ORDER BY MIN(q.asked_at)").fetchall():
-            item = {"project": p, "ref": k, "text": f"Claude needs {n} answer{'s' if n > 1 else ''}: {title}"[:300],
-                    "kind": "questions", "gate": None, "questions": n, "url": None, "flags": ["questions"],
+            text = (f"Task check — still needed? {title}" if stale == n
+                    else f"Claude needs {n} answer{'s' if n > 1 else ''}: {title}")
+            item = {"project": p, "ref": k, "text": text[:300], "kind": "questions", "gate": None, "questions": n,
+                    "stale": bool(stale), "url": None, "flags": ["questions"] + (["stale"] if stale else []),
                     "status": st, "since": at}
             if k in gated:   # one item per ticket: the questions come first, they are what unblocks it
                 out = [o for o in out if o["ref"] != k]
             out.append(item)
         return out
+
+    def held_by(self, project, key=None):
+        """What holds new work in `project` under the jay_first rule: on tickets other than `key`, every open
+        question for Jay and every decision only Jay can make before work goes on (a plan to approve, a blocker
+        to clear). Sign-offs on finished work (merge acceptance, UI review, live deploy) do not hold it. A
+        ticket that needs a lawyer (needs:legal, type LEGAL) waits on the lawyer, not on Jay: it never holds."""
+        if not registry.pipeline_of(project).get("jay_first", True):
+            return []
+        legal = {k for (k,) in self.db.execute(
+            "SELECT key FROM tickets WHERE project=? AND (needs_legal=1 OR type='LEGAL')", (project,))}
+        return [n for n in self.needs() if n["project"] == project and n["ref"] != key and n["ref"] not in legal
+                and (n["kind"] == "questions" or n.get("gate") in HOLDING_GATES)]
 
     def participating(self, key):
         """In the pipeline: an accepted plan or a recorded review. Its review state then belongs to the
@@ -389,6 +405,12 @@ class Pipeline:
                 raise TaskError(400, "worktree must be an absolute path")
             if self.lanes() >= self.max_lanes:
                 raise TaskError(409, f"{self.max_lanes} implementation lanes are already running; wait for one to finish")
+            held = self.held_by(t["project"], t["key"])
+            if held:
+                refs = ", ".join(sorted({h["ref"] for h in held}))
+                raise TaskError(409, f"Jay first: {t['project']} has {len(held)} open question(s) or decision(s) for Jay "
+                                     f"({refs[:200]}). New work starts after he answers them; tasks that need a lawyer "
+                                     f"do not count.")
             # The implementation runs in the ticket's task session (spec §8) unless another is named, so the
             # implementer always has a recorded session a reviewer must differ from.
             work = {"worktree": worktree, "roles": self._role(w, "implementer", model, session or t["key"].lower(), at)}
@@ -687,6 +709,27 @@ class Pipeline:
             n = len(rows)
             return {}, {}, [("pipeline.questions", f"Claude needs {n} answer{'s' if n > 1 else ''}",
                              {"batch": batch, "count": n})]
+        return self._tx(key, actor, fn)
+
+    def stale(self, key, reason, actor):
+        """The task check: Claude thinks this task is no longer needed. Jay gets one question — Cancel it or
+        Keep it — and only his answer changes anything (daemon.task_answers cancels on "Cancel it")."""
+        reason = _text(reason, 300, "reason", multiline=False)
+        if not reason:
+            raise TaskError(400, "reason required: why this task is stale (what replaced it, or that it is done)")
+
+        def fn(tid, t, w, at):
+            self._open(t, "a stale proposal")
+            if self.db.execute("SELECT 1 FROM ticket_questions WHERE ticket_id=? AND purpose='stale' "
+                               "AND answered_at IS NULL", (tid,)).fetchone():
+                raise TaskError(409, f"{t['key']} already has an open stale proposal for Jay")
+            batch = (self.db.execute("SELECT MAX(batch) FROM ticket_questions WHERE ticket_id=?", (tid,)).fetchone()[0]
+                     or 0) + 1
+            self.db.execute("INSERT INTO ticket_questions(ticket_id, batch, position, text, kind, options, asked_at, "
+                            "asked_by, purpose) VALUES (?,?,0,?,'choice',?,?,?,'stale')",
+                            (tid, batch, f"Task check: Claude thinks this task is no longer needed — {reason}",
+                             json.dumps(list(STALE_OPTIONS)), at, actor))
+            return {}, {}, [("pipeline.stale", f"proposed as stale: {reason}", {"batch": batch})]
         return self._tx(key, actor, fn)
 
     def answer(self, key, answers, actor):

@@ -1,6 +1,6 @@
 import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
-import type { AnswersResult, CoordinatorState, TaskRecord, TicketWork,
+import type { AnswersResult, CoordinatorState, TaskCheckResult, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
   Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent,
 } from "./types";
@@ -80,6 +80,10 @@ export class Api {
   /** One pipeline step from the UI (rework, replan, confirm …), recorded as Jay. */
   workOp(key: string, op: string, body: Record<string, unknown>) {
     return this.req<TicketWork>("POST", `/api/tasks/${encodeURIComponent(key)}/work/${encodeURIComponent(op)}`, body);
+  }
+  /** The task check (Developer Unlock): the project's idle coordinator Claude proposes stale tasks and adds missing ones. */
+  taskCheck(project: string, copy = false) {
+    return this.req<TaskCheckResult>("POST", "/api/tasks/check", copy ? { project, copy: true } : { project });
   }
   /** Jay answers Claude's questions (Developer Unlock). The last answer resumes the same task session. */
   answers(key: string, answers: { id: number; answer: string }[], scopeChange = false) {

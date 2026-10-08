@@ -1474,3 +1474,25 @@ genuine requirement).
 | CC-008 Tasks shows all projects | carried | Task Manager |
 | CC-010 terminal background jobs end with the session | reliability — stays separate | — |
 | CC-027 backend tests leak a temp dir per database | reliability — stays separate | — |
+
+## After go-live: Jay's additions (2026-10-08)
+
+Asked by Jay after two hours of use; additions, not changes to the frozen spec.
+
+- **Task Manager beside the rooms.** Workspace → `☰ Tasks` (or the Projects / Task Manager tabs at the top of
+  the left column) puts the full Task Manager in the tree's place: filters, Table / Pipeline / Needs Jay / Inbox
+  and a ticket's whole detail, Status dropdown included. The wall of rooms stays open beside it; the column's
+  right edge resizes it. `Open Task Room ▸` in a ticket opens its room on the wall. (`Workspace.tsx`
+  `TasksColumn`, `Tasks embedded`, prefs `wsLeft` / `wsTasksW`.)
+- **The task check.** Dashboard or Task Manager → `Check tasks`. With Developer Mode, one fixed message
+  (`daemon.TASK_CHECK_TEMPLATE`) goes to each project's idle coordinator Claude: compare the open tasks with the
+  repo and every .md file that held tasks; propose stale ones (`pipeline_cli stale`, which asks Jay **Cancel it /
+  Keep it**), add missing ones to the Inbox (`pipeline_cli add`, label `task-check`), ask about unclear ones. It
+  changes no code and Claude never cancels anything; Jay's "Cancel it" does. A project without an identified
+  coordinator gets `Copy prompt` to paste into any Claude in that repo. Questions carry `purpose` (tasks.db
+  schema 5).
+- **Jay first.** `start` is refused while the project has, on another ticket, an open question for Jay, a plan
+  waiting on his approval or a blocker only he can clear (`Pipeline.held_by`, registry `jay_first`, default on).
+  Tasks flagged needs:legal / type LEGAL wait on a lawyer and never hold; merge acceptance, UI review and live
+  deploy sign-offs do not hold either. The Dashboard panel says "New work on hold — answer these first", and
+  the agent brief (`work <KEY>`) says it too.

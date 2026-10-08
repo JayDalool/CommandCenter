@@ -20,6 +20,7 @@ import { byProjectOrder, initials, isActive, pjVar, stageOf, STAGE, type Focus }
 import { Dialog } from "../components/Dialog";
 import { EmptyState } from "../components/ui";
 import { Dossier } from "../workspace/Dossier";
+import { Tasks } from "./Tasks";
 import { Divider, RoomView } from "../workspace/Room";
 import { MAX_ROOMS, closeRoom, layout, newWall, openRoom, openWorkspaceWindow, popOutRoom, returnRoom, setSplit,
   wallShape, type Room } from "../workspace/rooms";
@@ -58,7 +59,7 @@ function Tree({ selected, onPick, onOpen, onConsole }: {
   const toggle = (k: string) => prefs.patch({ wsCollapsed: collapsed.includes(k) ? collapsed.filter((x) => x !== k) : [...collapsed, k] });
   const needle = q.trim().toLowerCase();
   return <nav className="tree" aria-label="Projects and tasks">
-    <div className="tree-head"><b>Projects</b><span className="sl-fill" />
+    <div className="tree-head"><LeftTabs /><span className="sl-fill" />
       <button type="button" className="btn is-quiet is-xs" aria-label="New task" title="New task (N)"
         onClick={() => window.dispatchEvent(new Event("cc:new-task"))}>+</button></div>
     <input className="input is-sm tree-find" placeholder="Filter tasks…" aria-label="Filter tasks" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -89,6 +90,44 @@ function Tree({ selected, onPick, onOpen, onConsole }: {
     </div>
     <a className="tr-history" href={href("tasks", null, { history: "1" })}>Task History →</a>
   </nav>;
+}
+
+/** The left column shows the project tree or the Task Manager; the wall stays open either way. */
+function LeftTabs() {
+  const left = usePrefs((p) => p.wsLeft);
+  return <span className="ws-left-tabs" role="tablist" aria-label="Left column">
+    {(["projects", "tasks"] as const).map((v) => <button key={v} type="button" role="tab" aria-selected={left === v}
+      className={`ws-left-tab${left === v ? " is-on" : ""}`} onClick={() => prefs.patch({ wsLeft: v })}>
+      {v === "projects" ? "Projects" : "Task Manager"}</button>)}
+  </span>;
+}
+
+/** The Task Manager in the Workspace's left column (the tree's place): filters, table, pipeline, Needs Jay and a
+ * ticket's full detail (status included) — with the wall of rooms still beside it. Its right edge resizes. */
+function TasksColumn({ onOpenRoom }: { onOpenRoom: (t: Ticket) => void }) {
+  const w = usePrefs((p) => p.wsTasksW);
+  const drag = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const x0 = e.clientX, w0 = w;
+    const move = (ev: PointerEvent) => prefs.patch({ wsTasksW: clampTasksW(w0 + ev.clientX - x0) });
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  return <section className="ws-tasks" aria-label="Task Manager">
+    <div className="tree-head"><LeftTabs /><span className="sl-fill" />
+      <button type="button" className="btn is-quiet is-xs" aria-label="New task" title="New task (N)"
+        onClick={() => window.dispatchEvent(new Event("cc:new-task"))}>+</button></div>
+    <Tasks embedded={{ onOpenRoom }} />
+    <div className="ws-tasks-grip" role="separator" aria-orientation="vertical" aria-label="Resize the Task Manager"
+      tabIndex={0} onPointerDown={drag} onDoubleClick={() => prefs.patch({ wsTasksW: 640 })}
+      onKeyDown={(e) => { if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault(); prefs.patch({ wsTasksW: clampTasksW(w + (e.key === "ArrowRight" ? 40 : -40)) }); } }} />
+  </section>;
+}
+export function clampTasksW(px: number): number {
+  const max = Math.max(420, (typeof window === "undefined" ? 1600 : window.innerWidth) - 520);
+  return Math.round(Math.min(max, Math.max(420, px)));
 }
 
 /** The "Open Room" picker: any active task or a project console. */
@@ -138,10 +177,15 @@ function FullDialog({ wall, spec, onClose }: { wall: string; spec: Spec; onClose
 /** Show / hide the tree, and Focus: the terminals alone (no navigation, no top bar, no task detail). */
 function ViewToggles() {
   const tree = usePrefs((p) => p.wsTreeOpen);
+  const left = usePrefs((p) => p.wsLeft);
   const focus = usePrefs((p) => p.wsFocus);
+  const tasksOn = tree && left === "tasks";
   return <span className="row" style={{ gap: 4 }}>
+    <button type="button" className={`btn is-sm${tasksOn ? " is-primary" : " is-quiet"}`} aria-pressed={tasksOn}
+      onClick={() => prefs.patch(tasksOn ? { wsLeft: "projects" } : { wsLeft: "tasks", wsTreeOpen: true })}
+      title={tasksOn ? "Back to the project tree" : "Task Manager beside the rooms"}>☰ Tasks</button>
     <button type="button" className="btn is-quiet is-sm" aria-pressed={tree} onClick={() => prefs.patch({ wsTreeOpen: !tree })}
-      title={tree ? "Hide the project tree" : "Show the project tree"}>{tree ? "⇤ Tree" : "⇥ Tree"}</button>
+      title={tree ? "Hide the left column" : "Show the left column"}>{tree ? "⇤ Tree" : "⇥ Tree"}</button>
     <button type="button" className={`btn is-sm${focus ? " is-primary" : " is-quiet"}`} aria-pressed={focus}
       onClick={() => prefs.patch({ wsFocus: !focus })} title={focus ? "Exit focus (Ctrl+.)" : "Focus: terminals only (Ctrl+.)"}>
       {focus ? "Exit focus" : "⛶ Focus"}</button>
@@ -198,6 +242,8 @@ export function Workspace() {
   const loaded = useSelector(app.store, (d) => d.ticketsLoaded);
   const detailOpen = usePrefs((p) => p.wsDetailOpen);
   const treeOpen = usePrefs((p) => p.wsTreeOpen);
+  const left = usePrefs((p) => p.wsLeft);
+  const tasksW = usePrefs((p) => p.wsTasksW);
   const focusMode = usePrefs((p) => p.wsFocus);
   const wall = route.params.get("w") || "1";
   const taskParam = route.params.get("task") || route.params.get("ticket");
@@ -228,14 +274,17 @@ export function Workspace() {
   }, [wantOpen, loaded, selected, consoleParam]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!loaded) return <EmptyState title="Loading tasks…" />;
-  const showDetail = detailOpen && !!selected && !focusMode;
-  return <div className={`ws3${showDetail ? " has-detail" : ""}${treeOpen ? "" : " no-tree"}${focusMode ? " is-focus" : ""}`}>
-    {treeOpen && <Tree selected={selected} onPick={(t) => { select(t.key); if (!prefs.get().wsDetailOpen) prefs.patch({ wsDetailOpen: true }); }}
+  const tasksMode = treeOpen && left === "tasks";
+  const showDetail = detailOpen && !!selected && !focusMode && !tasksMode;
+  return <div className={`ws3${showDetail ? " has-detail" : ""}${treeOpen ? "" : " no-tree"}${focusMode ? " is-focus" : ""}${tasksMode ? " is-tasks" : ""}`}
+    style={tasksMode ? { "--ws-tasks-w": `${clampTasksW(tasksW)}px` } as React.CSSProperties : undefined}>
+    {tasksMode && <TasksColumn onOpenRoom={(t) => request({ kind: "task", project: t.project, key: t.key })} />}
+    {treeOpen && !tasksMode && <Tree selected={selected} onPick={(t) => { select(t.key); if (!prefs.get().wsDetailOpen) prefs.patch({ wsDetailOpen: true }); }}
       onOpen={openTask} onConsole={(p) => request({ kind: "project", project: p, key: null })} />}
     {showDetail && <Dossier ticketKey={selected!} focus={focus}
       onOpenRoom={() => { const t = tickets.find((x) => x.key === selected); if (t) request({ kind: "task", project: t.project, key: t.key }); }}
       onCollapse={() => prefs.patch({ wsDetailOpen: false })} />}
-    {!showDetail && selected && !focusMode && <button type="button" className="detail-rail" onClick={() => prefs.patch({ wsDetailOpen: true })}
+    {!showDetail && selected && !focusMode && !tasksMode && <button type="button" className="detail-rail" onClick={() => prefs.patch({ wsDetailOpen: true })}
       aria-label="Show task details" title="Show task details">▸ {selected}</button>}
     <Wall wall={wall} onPicker={() => setPicker(true)} />
     {picker && <Picker onClose={() => setPicker(false)} onPick={(s) => { setPicker(false); if (s.key) select(s.key); request(s); }} />}

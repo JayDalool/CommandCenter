@@ -12,19 +12,25 @@ import { DataTable, type Column } from "../components/DataTable";
 import { StateText, PriorityMark, Assignee, Project, Flags, Ago, EmptyState, Seg, Kbd } from "../components/ui";
 import { TicketDetailPane } from "./TicketDetail";
 import { NeedsTable } from "./needs";
+import { TaskCheckButton } from "../components/TaskCheck";
 
 type View = "list" | "board" | "jay" | "inbox";
+/** Embedded in the Workspace's left column: its own view and open ticket (the URL stays the Workspace's), the
+ * detail replaces the list, and a ticket can open its Task Room on the wall beside it. */
+export interface EmbeddedTasks { onOpenRoom: (t: Ticket) => void }
+const EMBEDDED_COLS = new Set(["id", "title", "status", "prio", "flags"]);   // the key already names the project
 
-export function Tasks() {
+export function Tasks({ embedded }: { embedded?: EmbeddedTasks } = {}) {
   const route = useRoute();
-  const view = (route.params.get("view") as View) || "list";
-  const openKey = route.id;
+  const [local, setLocal] = useState<{ view: View; key: string | null }>({ view: "list", key: null });
+  const view = embedded ? local.view : (route.params.get("view") as View) || "list";
+  const openKey = embedded ? local.key : route.id;
   const tickets = useSelector(app.store, (d) => d.tickets);
   const loaded = useSelector(app.store, (d) => d.ticketsLoaded);
   const projects = useSelector(app.store, (d) => d.taskProjects);
   const types = useSelector(app.store, (d) => d.meta?.types ?? NO_TYPES);
   const st = useSelector(app.store, (d) => d.state);
-  const [f, setF] = useState<TicketFilter>(() => ({
+  const [f, setF] = useState<TicketFilter>(() => embedded ? {} : ({
     project: route.params.get("project") ? [route.params.get("project")!] : [],
     status: route.params.get("status") ? [route.params.get("status") as TicketStatus] : [],
   }));
@@ -41,6 +47,10 @@ export function Tasks() {
   useEffect(() => { if (openKey) setSel(openKey); }, [openKey]);
 
   const nav = (patch: { view?: View; key?: string | null }) => {
+    if (embedded) {
+      setLocal((l) => ({ view: patch.view ?? l.view, key: patch.key === undefined ? l.key : patch.key }));
+      return;
+    }
     const p: Record<string, string | undefined> = { view: (patch.view ?? view) === "list" ? undefined : patch.view ?? view };
     go("tasks", patch.key === undefined ? openKey : patch.key, p);
   };
@@ -98,12 +108,14 @@ export function Tasks() {
     { id: "flags", header: "Flags", cell: (t) => <span className="row">{t.blockedBy.length > 0 && <span className="flag" style={{ color: "var(--st-blocked)" }}>blocked</span>}<Flags flags={t.flags} /></span> },
   ];
 
+  const shownCols = embedded ? cols.filter((c) => EMBEDDED_COLS.has(c.id)) : cols;
+  const roomOf = (key: string) => { const t = tickets.find((x) => x.key === key); if (t) embedded?.onOpenRoom(t); };
   const toggle = <K extends keyof TicketFilter>(k: K, v: TicketFilter[K]) => setF((x) => ({ ...x, [k]: x[k] === v ? undefined : v }));
   const pick = (k: "project" | "status" | "priority" | "type" | "assignee" | "label", v: string) =>
     setF((x) => ({ ...x, [k]: v ? [v] : [] }));
   const active = Object.entries(f).filter(([, v]) => (Array.isArray(v) ? v.length : v)).length;
 
-  return <div className="tasks">
+  return <div className={`tasks${embedded ? " is-embedded" : ""}`}>
     <div className="tasks-bar">
       <Seg<View> label="View" value={view} onChange={(v) => nav({ view: v })} options={[
         { v: "list", label: "Table", n: counts.list }, { v: "board", label: "Pipeline" },
@@ -113,8 +125,9 @@ export function Tasks() {
           onChange={(e) => setF((x) => ({ ...x, q: e.target.value }))}
           onKeyDown={(e) => { if (e.key === "Escape") { (e.target as HTMLInputElement).blur(); } }} /></label>
       <span className="muted mono-xs">{rows.length} shown</span>
-      <span style={{ marginLeft: "auto" }} className="row muted mono-xs"><Kbd>/</Kbd> search <Kbd>j</Kbd><Kbd>k</Kbd> move
-        <Kbd>Enter</Kbd> open <Kbd>⇧←→</Kbd> status <Kbd>N</Kbd> new</span>
+      {!embedded && <TaskCheckButton className="btn is-sm is-outline" />}
+      {!embedded && <span style={{ marginLeft: "auto" }} className="row muted mono-xs"><Kbd>/</Kbd> search <Kbd>j</Kbd><Kbd>k</Kbd> move
+        <Kbd>Enter</Kbd> open <Kbd>⇧←→</Kbd> status <Kbd>N</Kbd> new</span>}
     </div>
     {view !== "jay" && <div className="filters" role="group" aria-label="Filters">
       <span className="row" role="group" aria-label="Project" style={{ gap: 4 }}>
@@ -146,12 +159,13 @@ export function Tasks() {
         {!loaded ? <EmptyState title="Loading tickets…" />
           : view === "jay" ? <div style={{ padding: 16 }}><NeedsTable items={jayQueue(st)} /></div>
           : view === "board" ? <Board rows={base} selected={sel} onOpen={(k) => nav({ key: k })} onMove={move} />
-          : <DataTable label="Tasks" rows={rows} columns={cols} rowKey={(t) => t.key} selected={sel} onSelect={(k) => setSel(k)}
+          : <DataTable label="Tasks" rows={rows} columns={shownCols} rowKey={(t) => t.key} selected={sel} onSelect={(k) => setSel(k)}
               onActivate={(k) => nav({ key: k })} onKeyExtra={onKeyExtra} initialSort={{ id: "status", dir: 1 }}
               empty={<EmptyState title={tickets.length ? "No ticket matches these filters." : "No tickets yet."}
                 hint={tickets.length ? "Clear filters, or press N to capture one." : "Press N to capture the first one."} />} />}
       </div>
-      {openKey && <TicketDetailPane ticketKey={openKey} onClose={() => nav({ key: null })} />}
+      {openKey && <TicketDetailPane ticketKey={openKey} onClose={() => nav({ key: null })}
+        onOpenRoom={embedded ? () => roomOf(openKey) : undefined} />}
     </div>
   </div>;
 }

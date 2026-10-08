@@ -56,6 +56,31 @@ DISPATCH_TEMPLATE = (
     "Need a visible lane? Message command-center: \"lane <task> <plan or prompt file>\".\n"
     "Report each stage change to command-center in one line: <task> <stage> <PR/issue> <Jay action>."
 )
+# The task check (Jay: "make sure the tasks in Command Center are the actual tasks left"). A fixed message to
+# the project's coordinator; only the project key, the counts and the ticket list are filled in.
+TASK_CHECK_TEMPLATE = (
+    "Task check from Jay via command-center: {project}.\n"
+    "We have been through a lot of design changes. Jay wants {project}'s task list in Command Center to be exactly "
+    "the work that is left — no stale tasks, nothing missing. Check every open task below against the repo as it is "
+    "now: the code, plans/, docs/ and every .md file that holds or used to hold tasks (INDEX.md, TODO, backlog, plan "
+    "files). See them all with: python -m ccd.pipeline_cli tasks {project}\n"
+    "1. A task that is done already, superseded by a later design, a duplicate or no longer wanted: propose it as "
+    "stale (Jay decides Cancel or Keep; never cancel, close or edit a task yourself):\n"
+    "   python -m ccd.pipeline_cli stale <KEY> --role coordinator --reason \"<why, naming the file or task that replaces it>\"\n"
+    "2. Work still needed that is listed in a .md file but has no task here: add it (it lands in the Inbox):\n"
+    "   python -m ccd.pipeline_cli add {project} --role coordinator --title \"…\" --note \"<source file:line>\"\n"
+    "3. A task you cannot judge: ask Jay one clear question on it:\n"
+    "   python -m ccd.pipeline_cli ask <KEY> --role coordinator --question \"…\"\n"
+    "Copy no licensed data, records, addresses or secrets into a task, reason or question.\n"
+    "This check changes no code: do not plan, start or implement anything, and do not edit, move or delete files.\n"
+    "Not authorized by this message: merge, deploy, production, --apply, secrets, rule changes.\n"
+    "Jay first: no new task starts in {project} while Jay has an open question, a plan to approve or a blocker to "
+    "clear there (tasks that need a lawyer excepted).\n"
+    "When done, report in one line: {project} task check: <n> stale proposed, <n> added, <n> questions.\n"
+    "Open tasks now ({n}):\n{tasks}"
+)
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+TASK_CHECK_LIST_MAX = 5000   # characters of the ticket list in the message; the rest: `pipeline_cli tasks`
 # Agent fields that may leave ccd. Terminal titles are deliberately absent:
 # Claude titles its terminal after the conversation, which can quote anything.
 AGENT_FIELDS = ("pane_id", "status", "live", "agent", "agent_name", "label", "cwd", "workspace_id",
@@ -1036,6 +1061,12 @@ class Daemon:
                              f"{t['key'].lower()} (e.g. herdr pane rename to {t['key'].lower()}); Command Center's Task "
                              f"Room attaches to that name. Ask Jay questions with python -m ccd.pipeline_cli ask "
                              f"{t['key']} --role coordinator --question \"…\" — his answers come back into that session.")
+            held = self.pipeline.held_by(t["project"], t["key"])
+            if held:
+                ctx["brief"] += (f"\n\nJay first: {t['project']} has {len(held)} open question(s), plan(s) or blocker(s) "
+                                 f"waiting on Jay ({', '.join(sorted({h['ref'] for h in held}))[:200]}). Do not start new "
+                                 f"implementation until he has answered them; planning and finishing work already "
+                                 f"started may go on.")
         ctx["dispatchable"] = bool(coord) and t["project"] in set(
             self.cfg.get("dispatch_projects") or ("samvision", "gauzemate"))
         return ctx
@@ -1078,7 +1109,7 @@ class Daemon:
     # ---------- the ticket pipeline (plans/TICKET-PIPELINE-V1.md) ----------
 
     PIPELINE_OPS = ("plan", "start", "review", "verify", "confirm", "handoff", "block", "role", "finding",
-                    "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed")
+                    "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale")
 
     def task_work(self, key):
         self._need_tasks()
@@ -1151,6 +1182,8 @@ class Daemon:
             r = self._wrap(pl.evidence, key, body.get("kind"), body.get("ref"), body.get("note"), actor, body.get("stage"))
         elif op == "writer":
             r = self._wrap(pl.writer, key, body.get("owner"), actor, body.get("checkpoint"))
+        elif op == "stale":
+            r = self._wrap(pl.stale, key, body.get("reason"), actor)
         elif op == "deploy-request":
             r = self._wrap(pl.deploy_request, key, body.get("env"), body.get("what"), body.get("verification"), actor)
         else:
@@ -1223,13 +1256,29 @@ class Daemon:
         answers = body.get("answers") or []
         scope = bool(body.get("scopeChange"))
         pl = self.pipeline
+        before = {q["id"]: q for q in self.task_work(key)["questions"]}
         if answers:
             self._pipeline_result(*self._wrap(pl.answer, key, answers, actor))
+        # The task check: Jay's answer to a stale proposal. "Cancel it" cancels the ticket (and ends its
+        # sessions); "Keep it" keeps it. Neither is typed into any Claude session.
+        stale = [a for a in answers if isinstance(a, dict) and (before.get(a.get("id")) or {}).get("purpose") == "stale"]
+        if stale:
+            q = before[stale[0]["id"]]
+            reason = q["text"].split(" — ", 1)[-1]
+            if str(stale[0].get("answer") or "").strip() == pipeline_mod.STALE_OPTIONS[0]:
+                self.task_comment(key, f"Cancelled in the task check. Claude's reason: {reason}", actor)
+                self.task_update(key, {"status": "CANCELLED"}, actor, developer=True)
+                return {"work": self.task_work(key), "complete": True, "delivered": False, "cancelled": True,
+                        "reason": "cancelled in the task check"}
+            self.task_comment(key, f"Kept in the task check (Claude had proposed it as stale: {reason})", actor)
+            if len(stale) == len(answers):
+                return {"work": self.task_work(key), "complete": True, "delivered": False, "cancelled": False,
+                        "reason": "kept in the task check"}
         work = self.task_work(key)
         if work["openQuestions"]:
             return {"work": work, "complete": False, "delivered": False,
                     "reason": f"{work['openQuestions']} question(s) still open"}
-        answered = [q for q in work["questions"] if q["answer"] is not None]
+        answered = [q for q in work["questions"] if q["answer"] is not None and q.get("purpose") != "stale"]
         if not answered:
             raise ActionError(409, f"{work['key']} has no questions to answer")
         replanned = False
@@ -1735,6 +1784,58 @@ class Daemon:
             if f.is_file():
                 return str(f.resolve())
         return None
+
+    def task_check_text(self, project):
+        """The task-check message for `project`, with its open tickets (and how many there are)."""
+        ts = self._need_tasks()
+        open_ = sorted((t for t in ts.list(project=project) if t["status"] not in tasks_mod.CLOSED),
+                       key=lambda t: t["number"])
+        lines, used = [], 0
+        for t in open_:
+            title = CONTROL_RE.sub(" ", str(t["title"])).strip()[:100]
+            line = f"- {t['key']} [{t['status']}] {title}"
+            if used + len(line) > TASK_CHECK_LIST_MAX:
+                lines.append(f"- … {len(open_) - len(lines)} more: python -m ccd.pipeline_cli tasks {project}")
+                break
+            lines.append(line)
+            used += len(line) + 1
+        return TASK_CHECK_TEMPLATE.format(project=project, n=len(open_), tasks="\n".join(lines) or "- (none)"), len(open_)
+
+    async def act_task_check(self, project, actor="jay", developer=False, copy=False):
+        """Ask the project's coordinator Claude to check its open tasks against the repo (TASK_CHECK_TEMPLATE).
+        Jay with Developer Unlock (it types into Claude). Never into a busy or blocked coordinator. With copy,
+        nothing is sent: the message comes back for Jay to paste into any Claude in that repo."""
+        if actor != "jay" or not developer:
+            raise ActionError(403, "Developer Unlock required: the task check sends a message to Claude")
+        self._need_tasks()
+        proj = next((p for p in self.cfg["projects"] if p["key"] == project), None)
+        if proj is None:
+            raise ActionError(404, "unknown project")
+        if copy:
+            text, n = self.task_check_text(project)
+            return {"ok": True, "project": project, "coordinator": None, "openTasks": n, "text": text}
+        self._throttle(f"taskcheck:{project}", 5.0)
+        if not self.herdr_state["ok"]:
+            raise ActionError(503, "herdr unreachable")
+        await self.resync("action")
+        name = coordinators.canonical(proj)
+        r = coordinators.resolution(proj, self.panes)
+        if r["state"] != "ready":
+            raise ActionError(409, f"{project}'s coordinator Claude is not identified ({r['state']}); open its Project "
+                                   f"Console and adopt it, then run the check again")
+        agent = await self._fresh_agent(r["paneId"])
+        if agent["status"] not in ("idle", "done"):
+            raise ActionError(409, f"{name} is {agent['status']}; the task check goes only to an idle coordinator")
+        text, n = self.task_check_text(project)
+        self._event("action", "action.task_check", f"task check → {name} ({n} open tasks)", project=project,
+                    agent_id=agent["pane_id"], data={"kind": "task_check", "count": n})
+        try:
+            await self.herdr.prompt(agent["pane_id"], text)
+        except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
+            self._event("action", "action.failed", f"task check to {name} failed", severity="warn",
+                        project=project, data={"kind": "task_check", "error": str(e)[:160]})
+            raise ActionError(502, f"herdr refused: {e}")
+        return {"ok": True, "project": project, "coordinator": name, "openTasks": n}
 
     async def act_dispatch(self, project, task, verb, note=""):
         """Send one task to a coordinator, under the dispatch skill's rules.

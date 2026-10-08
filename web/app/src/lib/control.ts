@@ -87,6 +87,7 @@ export function jayHref(j: JayItem): string {
 
 /** In words, what Jay is asked to do (the dashboard's "Needs Jay" bullets). */
 export function jayWords(j: JayItem): string {
+  if (j.kind === "questions" && j.flags.includes("stale") && j.questions === 1) return `Still needed? ${j.ref} (task check)`;
   if (j.kind === "questions") return `Answer ${j.questions ?? ""} question${j.questions === 1 ? "" : "s"} on ${j.ref}`.replace("  ", " ");
   if (j.kind === "gate") {
     const w = j.gate === "plan" ? "Approve plan" : j.gate === "merge" ? "Accept merge" : j.gate === "ui" ? "Review UI"
@@ -96,4 +97,13 @@ export function jayWords(j: JayItem): string {
   if (j.kind === "answer") return `Answer ${j.ref}: ${j.text}`;
   if (j.kind === "merge") return `Merge ${j.ref}`;
   return j.text;
+}
+
+/** Jay first (ccd pipeline.held_by): what holds new work in a project — open questions for Jay, a plan to
+ *  approve, a blocker to clear. Sign-offs on finished work do not; a task that needs a lawyer never does. */
+export function holdItems(queue: JayItem[], tickets: Ticket[], project: string): JayItem[] {
+  const legal = new Set(tickets.filter((t) => t.project === project
+    && (t.flags.includes("needs_legal") || t.type === "LEGAL")).map((t) => t.key));
+  return queue.filter((j) => j.project === project && !legal.has(j.ref)
+    && (j.kind === "questions" || (j.kind === "gate" && (j.gate === "plan" || j.gate === "failure"))));
 }

@@ -5,7 +5,8 @@ import { vi } from "vitest";
 import { app, initial } from "../src/store/app";
 import { developer, devSession, restoreDevSession, setDevSession } from "../src/api/developer";
 import { prefs } from "../src/lib/prefs";
-import { stageOf, jayHref, taskHref } from "../src/lib/control";
+import { holdItems, stageOf, jayHref, taskHref } from "../src/lib/control";
+import { TaskCheckDialog } from "../src/components/TaskCheck";
 import { jayQueue } from "../src/tickets/model";
 import { Dashboard, newsText, projectPanels } from "../src/screens/Dashboard";
 import { Workspace } from "../src/screens/Workspace";
@@ -41,7 +42,7 @@ beforeEach(() => {
   works.set({});
   location.hash = "";
   setDevSession(null);
-  prefs.patch({ wsCollapsed: [], wsDetailOpen: true });
+  prefs.patch({ wsCollapsed: [], wsDetailOpen: true, wsLeft: "projects", wsTreeOpen: true });
 });
 
 describe("the wall layout (spec §12, §17)", () => {
@@ -326,5 +327,73 @@ describe("focus (terminals only)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Exit focus" }));
     expect(screen.getByRole("complementary", { name: "Navigation" })).toBeInTheDocument();
     prefs.patch({ wsFocus: false, wsTreeOpen: true });
+  });
+});
+
+describe("the Task Manager beside the rooms", () => {
+  it("replaces the tree, keeps the wall, shows a task's status and opens its room on the wall", async () => {
+    vi.spyOn(app.api, "workspaceProjects").mockResolvedValue({ projects: [] });
+    const t0 = app.data.tickets.find((t) => !t.archived && !["DONE", "DENIED", "CANCELLED"].includes(t.status))!;
+    vi.spyOn(app.api, "task").mockImplementation(async (k) => ({ ...tasks().tickets.find((t) => t.key === k)!, description: "", relations:
+      { blocks: [], blocked_by: [], related: [], duplicates: [], duplicated_by: [] }, subtaskList: [], comments: [], timeline: [] }));
+    vi.spyOn(app.api, "taskWork").mockResolvedValue(work({ key: t0.key }));
+    openRoom("1", { kind: "project", project: "samvision", key: null });
+    location.hash = "#/workspace";
+    render(<Workspace />);
+    fireEvent.click(screen.getByRole("button", { name: "☰ Tasks" }));
+    expect(screen.queryByRole("navigation", { name: "Projects and tasks" })).toBeNull();
+    const col = screen.getByRole("region", { name: "Task Manager" });
+    expect(screen.getByRole("region", { name: "Workspace 1" })).toBeInTheDocument();      // the wall stays
+    expect(screen.getByText("Active Rooms: 1/4")).toBeInTheDocument();
+    const row = within(col).getByText(t0.key).closest("tr")!;
+    fireEvent.doubleClick(row);
+    fireEvent.keyDown(row, { key: "Enter" });
+    const detail = await within(col).findByRole("complementary", { name: `Ticket ${t0.key}` });
+    expect(within(detail).getByLabelText("Status")).toBeInTheDocument();                   // the status dropdown
+    expect(location.hash).toBe("#/workspace");                                             // the URL stays the Workspace's
+    fireEvent.click(within(detail).getByRole("button", { name: "Open Task Room ▸" }));
+    expect(layout.get().walls["1"]).toContain(`t:${t0.key}`);
+    fireEvent.click(within(col).getByRole("tab", { name: "Projects" }));
+    expect(screen.getByRole("navigation", { name: "Projects and tasks" })).toBeInTheDocument();
+  });
+});
+
+describe("the task check", () => {
+  it("a stale proposal is two buttons: Cancel it / Keep it, sent as that one answer", async () => {
+    const stale = { ...q(7, "Task check: Claude thinks this task is no longer needed — done in SV-071", "choice", ["Cancel it", "Keep it"]),
+      purpose: "stale" as const };
+    const answers = vi.spyOn(app.api, "answers").mockResolvedValue({ work: work(), complete: true, delivered: false, reason: null, cancelled: true });
+    act(() => developer.set({ active: true, expiresAt: null, error: null }));
+    render(<QuestionsForm ticketKey="SV-012" work={work({ key: "SV-012", questions: [stale], openQuestions: 1 })} onDone={() => {}} />);
+    expect(screen.getByText("Task check — is SV-012 still needed?")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Submit Answers" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel it" }));
+    await waitFor(() => expect(answers).toHaveBeenCalledWith("SV-012", [{ id: 7, answer: "Cancel it" }]));
+  });
+
+  it("Check all asks every project's coordinator, and says which could not be reached", async () => {
+    act(() => developer.set({ active: true, expiresAt: null, error: null }));
+    const check = vi.spyOn(app.api, "taskCheck").mockImplementation(async (p) => {
+      if (p === "gyst") throw new Error("gyst's coordinator Claude is not identified (none)");
+      return { ok: true, project: p, coordinator: p, openTasks: 3 };
+    });
+    render(<TaskCheckDialog onClose={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Check all projects" }));
+    await waitFor(() => expect(check).toHaveBeenCalled());
+    await screen.findAllByText(/Sent to/);
+    const asked = check.mock.calls.map((c) => c[0]);
+    expect(asked.length).toBeGreaterThan(1);
+    if (asked.includes("gyst")) expect(await screen.findByText(/not identified/)).toBeInTheDocument();
+  });
+
+  it("Jay first: questions, plans and blockers hold new work; lawyer tasks and merges do not", () => {
+    const tk = (key: string, over: Partial<Ticket> = {}) => ticket({ key, project: "samvision", flags: [], type: null, ...over });
+    const item = (ref: string, kind: string, gate?: string) => ({ id: `${kind}:${ref}`, kind, verb: "x", project: "samvision", ref,
+      text: "", flags: [], since: null, url: null, gate }) as never;
+    const queue = [item("SV-1", "questions"), item("SV-2", "gate", "plan"), item("SV-3", "gate", "merge"),
+      item("SV-4", "gate", "failure"), item("SV-5", "questions")];
+    const tickets = [tk("SV-1"), tk("SV-2"), tk("SV-3"), tk("SV-4"), tk("SV-5", { flags: ["needs_legal"] })];
+    expect(holdItems(queue, tickets, "samvision").map((j) => j.ref)).toEqual(["SV-1", "SV-2", "SV-4"]);
+    expect(holdItems(queue, tickets, "gauzemate")).toEqual([]);
   });
 });

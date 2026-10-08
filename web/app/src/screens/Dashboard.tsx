@@ -12,13 +12,14 @@ import { app } from "../store/app";
 import { useSelector } from "../lib/store";
 import { href } from "../lib/router";
 import { jayQueue, type JayItem } from "../tickets/model";
-import { byProjectOrder, greeting, initials, isActive, jayHref, jayWords, pjVar, stageOf, taskHref } from "../lib/control";
+import { byProjectOrder, greeting, holdItems, initials, isActive, jayHref, jayWords, pjVar, stageOf, taskHref } from "../lib/control";
 import type { CcdEvent, Ticket } from "../api/types";
 import { ago, nowS } from "../lib/time";
 import { useTick } from "../components/Shell";
 import { NotificationBell } from "../components/Notifications";
 import { DevDot } from "../components/DevMode";
 import { EmptyState } from "../components/ui";
+import { TaskCheckButton } from "../components/TaskCheck";
 
 /** Events worth a manager's eye: work moving, PRs, CI, deployments, questions. Not agent chatter. */
 export function newsworthy(e: CcdEvent): boolean {
@@ -52,6 +53,8 @@ function Mark({ e }: { e: CcdEvent }) {
 
 interface PanelData {
   key: string; name: string; prefix: string; active: Ticket[]; news: CcdEvent[]; needs: JayItem[];
+  /** Jay first: what holds new work here (questions, a plan to approve, a blocker). */
+  hold: number;
   counts: { needs: number; progress: number; review: number; merge: number };
   live: CcdEvent[]; blocked: Ticket[];
 }
@@ -67,6 +70,7 @@ export function projectPanels(projects: { key: string; name: string; prefix: str
       key: p.key, name: p.name, prefix: p.prefix, active,
       news: mine.filter(newsworthy).slice(0, 2),
       needs: queue.filter((j) => j.project === p.key),
+      hold: holdItems(queue, tickets, p.key).length,
       counts: { needs: queue.filter((j) => j.project === p.key).length,
         progress: n("Planning", "Implementing", "UI Testing", "Verifying", "Deploying"), review: n("Reviewing"),
         merge: n("Ready to Merge") },
@@ -99,6 +103,8 @@ function ProjectPanel({ d }: { d: PanelData }) {
       {d.needs.length ? <ul>{d.needs.slice(0, 3).map((j) => <li key={j.id}><a href={jayHref(j)} title={j.text}>{jayWords(j)}</a></li>)}
         {d.needs.length > 3 && <li className="muted"><a href={href("workspace", null, { project: d.key })}>+{d.needs.length - 3} more</a></li>}</ul>
         : <div className="muted dash-sub">Nothing — all clear.</div>}
+      {d.hold > 0 && <div className="dash-hold" title="Jay first: Claude starts no new task here until these are answered (tasks that need a lawyer don't count)">
+        New work on hold — answer {d.hold === 1 ? "this" : `these ${d.hold}`} first</div>}
     </div>
 
     {(d.live.length > 0 || d.blocked.length > 0) && <div className="dash-extra">
@@ -143,6 +149,7 @@ export function Dashboard() {
       <span className="sl-fill" />
       <DevDot />
       <NotificationBell />
+      <TaskCheckButton className="btn is-outline" />
       <a className="btn is-outline" href={href("workspace")}>Open Workspace →</a>
     </header>
     <div className="dash-grid" style={{ ["--n" as string]: String(Math.max(1, panels.length)) }}>

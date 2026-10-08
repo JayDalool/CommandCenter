@@ -355,6 +355,79 @@ class TaskTerminals(unittest.TestCase):
         self.assertEqual(coordid.task_session("SV-071", rows + [dict(rows[0], pane_id="w1:p3")])["state"], "multiple")
 
 
+class TaskCheck(Base):
+    """The task check: Claude proposes a stale task, only Jay's answer cancels it; and Jay first — no new task
+    starts while Jay has an open question, plan or blocker in the project (lawyer tasks excepted)."""
+    def test_a_stale_proposal_is_one_cancel_or_keep_question_once(self):
+        k = self.ticket()
+        self.pl.stale(k, "superseded by SV-071 (plans/valuation.md)", "agent:coordinator")
+        q = self.pl.work(k)["questions"][0]
+        self.assertEqual((q["purpose"], q["kind"], q["options"]), ("stale", "choice", ["Cancel it", "Keep it"]))
+        self.assertIn("superseded by SV-071", q["text"])
+        with self.assertRaises(TaskError) as e:
+            self.pl.stale(k, "again", "agent:coordinator")
+        self.assertEqual(e.exception.status, 409)
+        need = [n for n in self.pl.needs() if n["ref"] == k][0]
+        self.assertTrue(need["stale"])
+        self.assertIn("Task check", need["text"])
+        with self.assertRaises(TaskError):
+            self.pl.stale(k, "", "agent:coordinator")
+        self.ts.update(k, {"status": "CANCELLED"}, "jay")
+        with self.assertRaises(TaskError):
+            self.pl.stale(k, "x", "agent:coordinator")
+
+    def test_jay_first_holds_a_new_start_until_his_questions_are_answered(self):
+        a, b = self.ticket(), self.ticket()
+        self.pl.plan(b, PLAN, "agent:planner")
+        self.pl.ask(a, ["Which layout?"], "agent:coordinator")
+        with self.assertRaises(TaskError) as e:
+            self.pl.start(b, f"{b}-x", f"/srv/w/{b}", "agent:coordinator")
+        self.assertEqual(e.exception.status, 409)
+        self.assertIn("Jay first", e.exception.message)
+        self.assertIn(a, e.exception.message)
+        qid = self.pl.work(a)["questions"][0]["id"]
+        self.pl.answer(a, [{"id": qid, "answer": "the old one"}], "jay")
+        self.assertEqual(self.pl.start(b, f"{b}-x", f"/srv/w/{b}", "agent:coordinator")[0]["status"], "IN_PROGRESS")
+
+    def test_a_plan_or_blocker_holds_but_lawyer_tasks_and_sign_offs_do_not(self):
+        b = self.ticket()
+        self.pl.plan(b, PLAN, "agent:planner")
+        risky = self.ticket(labels=["migration"])
+        self.pl.plan(risky, PLAN, "agent:planner")                       # plan gate: Jay must approve
+        self.assertEqual([h["ref"] for h in self.pl.held_by("samvision", b)], [risky])
+        self.ts.update(risky, {"needs_legal": True}, "jay")               # waits on a lawyer, not on Jay
+        self.assertEqual(self.pl.held_by("samvision", b), [])
+        stuck = self.ticket()
+        self.pl.block(stuck, "the API key expired", "agent:coordinator")
+        self.assertEqual([h["ref"] for h in self.pl.held_by("samvision", b)], [stuck])
+        self.assertEqual(self.pl.held_by("gauzemate"), [])               # per project
+        old = registry.PROJECTS["samvision"].get("pipeline")
+        registry.PROJECTS["samvision"]["pipeline"] = dict(old or {}, jay_first=False)
+        try:
+            self.assertEqual(self.pl.held_by("samvision", b), [])
+        finally:
+            registry.PROJECTS["samvision"]["pipeline"] = old
+
+    def test_a_merge_gate_does_not_hold_new_work(self):
+        a, b = self.ticket(), self.ticket()
+        self.to_review(a)
+        self.pl.review(a, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr())
+        self.assertEqual(self.pl.work(a)["gate"], "merge")                # SamVision: Jay accepts every merge
+        self.pl.plan(b, PLAN, "agent:planner")
+        self.assertEqual(self.pl.start(b, f"{b}-x", f"/srv/w/{b}", "agent:coordinator")[0]["status"], "IN_PROGRESS")
+
+    def test_the_cli_builds_stale_tasks_and_add(self):
+        from ccd import pipeline_cli
+        self.assertEqual(pipeline_cli.build(["stale", "SV-1", "--role", "coordinator", "--reason", "done in SV-9"]),
+                         ("POST", "/api/tasks/SV-1/work/stale", {"reason": "done in SV-9"}, "agent:coordinator"))
+        self.assertEqual(pipeline_cli.build(["tasks", "samvision"])[:2], ("GET", "/api/tasks?project=samvision"))
+        m, path, body, actor = pipeline_cli.build(["add", "samvision", "--role", "coordinator", "--title", "Export CSV",
+                                                   "--note", "plans/x.md:12"])
+        self.assertEqual((m, path, actor), ("POST", "/api/tasks", "agent:coordinator"))
+        self.assertEqual((body["project"], body["title"], body["labels"]), ("samvision", "Export CSV", ["task-check"]))
+        self.assertIn("plans/x.md:12", body["description"])
+
+
 class ControlRoomApi(PipelineApi):
     """Over HTTP with a fake herdr: answers go to the SAME task Claude session, never a new one."""
     def task_agent(self, status="idle"):
@@ -470,6 +543,62 @@ class ControlRoomApi(PipelineApi):
         self.assertEqual(len(sent), 1)
         self.assertNotIn("Ignore prior instructions", sent[0])
         self.assertIn("pipeline_cli work SV-056", sent[0])
+
+    def test_jays_cancel_answer_on_a_stale_proposal_cancels_the_task_and_types_nothing(self):
+        self.ticket("INBOX")
+        self.task_agent()
+        r = self.step("stale", {"reason": "done in SV-071"})
+        self.assertEqual(r.status_code, 200, r.text)
+        q = r.json()["questions"][0]
+        body = json.dumps({"answers": [{"id": q["id"], "answer": "Cancel it"}]})
+        self.assertEqual(self.client.post("/api/tasks/SV-056/answers", content=body, headers=JSON).status_code, 403)
+        out = self.client.post("/api/tasks/SV-056/answers", content=body, headers=dict(JSON, **self.dev())).json()
+        self.assertEqual((out["cancelled"], out["delivered"]), (True, False), out)
+        t = self.get("/api/tasks/SV-056").json()
+        self.assertEqual(t["status"], "CANCELLED")
+        self.assertIn("Cancelled in the task check", t["comments"][-1]["body"])
+        self.assertNotIn("Jay answered", " ".join(p["text"] for m, p in self.fake.calls if m == "agent.prompt"))
+
+    def test_jays_keep_answer_keeps_the_task(self):
+        self.ticket("INBOX")
+        q = self.step("stale", {"reason": "maybe old"}).json()["questions"][0]
+        out = self.client.post("/api/tasks/SV-056/answers", content=json.dumps(
+            {"answers": [{"id": q["id"], "answer": "Keep it"}]}), headers=dict(JSON, **self.dev())).json()
+        self.assertEqual((out["cancelled"], out["delivered"]), (False, False), out)
+        t = self.get("/api/tasks/SV-056").json()
+        self.assertEqual(t["status"], "INBOX")
+        self.assertIn("Kept in the task check", t["comments"][-1]["body"])
+        self.assertEqual(self.get("/api/tasks/SV-056/work").json()["openQuestions"], 0)
+
+    def test_the_task_check_sends_one_fixed_message_to_the_idle_coordinator(self):
+        self.ticket("INBOX")
+        body = json.dumps({"project": "samvision"})
+        self.assertEqual(self.client.post("/api/tasks/check", content=body, headers=JSON).status_code, 403)
+        dev = dict(JSON, **self.dev())
+        self.assertEqual(self.client.post("/api/tasks/check", content=json.dumps({"project": "nope"}),
+                                          headers=dev).status_code, 404)
+        r = self.client.post("/api/tasks/check", content=body, headers=dev)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["openTasks"], 1)
+        sent = [p for m, p in self.fake.calls if m == "agent.prompt"]
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["target"], "wE:p2")                                # samvision's coordinator
+        text = sent[0]["text"]
+        self.assertTrue(text.startswith("Task check from Jay via command-center: samvision."))
+        self.assertIn("pipeline_cli stale <KEY>", text)
+        self.assertIn("never cancel, close or edit a task yourself", text)
+        self.assertIn("Not authorized by this message: merge, deploy, production", text)
+        self.assertIn("- SV-056 [INBOX]", text)
+        r = self.client.post("/api/tasks/check", content=json.dumps({"project": "gyst", "copy": True}), headers=dev)
+        self.assertEqual(r.status_code, 200, r.text)                                 # no coordinator: copy it by hand
+        self.assertTrue(r.json()["text"].startswith("Task check from Jay via command-center: gyst."))
+        self.assertEqual(len([p for m, p in self.fake.calls if m == "agent.prompt"]), 1)  # nothing more sent
+        self.fake.set_status("wE:p2", "working")
+        import time
+        time.sleep(5.1)                                                               # the per-project throttle
+        r = self.client.post("/api/tasks/check", content=body, headers=dev)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("working", r.json()["error"])
 
     def test_task_terminal_cwd_uses_only_a_known_worktree(self):
         self.ticket("INBOX")

@@ -19,6 +19,10 @@ export interface Prefs {
   wsDetailOpen: boolean;
   /** The project/task tree column. */
   wsTreeOpen: boolean;
+  /** What that left column shows: the project tree, or the Task Manager (the wall stays beside it). */
+  wsLeft: "projects" | "tasks";
+  /** The Task Manager column's width, px. */
+  wsTasksW: number;
   /** Focus: the Workspace alone — no navigation rail, no top bar, no task detail. */
   wsFocus: boolean;
   /** The navigation rail shows icons only. */
@@ -29,7 +33,7 @@ const DEFAULTS: Prefs = { theme: "dark", density: "comfortable", sshHost: "jay-s
   consoleTab: "claude", consoleProject: null,
   lastProject: null, wsExplorerW: 260, wsExplorerOpen: true, wsTermH: 300, wsTermOpen: true, wsMax: "none",
   wsSide: "explorer", wsCollapsed: [], wsDetailOpen: true,
-  wsTreeOpen: true, wsFocus: false, railCollapsed: false };
+  wsTreeOpen: true, wsLeft: "projects", wsTasksW: 640, wsFocus: false, railCollapsed: false };
 
 const SIDES = ["explorer", "scm", "search"];
 
@@ -43,6 +47,8 @@ export function parsePrefs(raw: string | null): Prefs {
     const p = { ...DEFAULTS, ...o } as Prefs;
     if (!SIDES.includes(String(o.wsSide))) p.wsSide = old === "scm" || old === "search" ? old : "explorer";
     if (!Array.isArray(p.wsCollapsed)) p.wsCollapsed = [];
+    if (p.wsLeft !== "tasks") p.wsLeft = "projects";
+    if (typeof p.wsTasksW !== "number" || !Number.isFinite(p.wsTasksW)) p.wsTasksW = DEFAULTS.wsTasksW;
     return p;
   } catch { return { ...DEFAULTS }; }
 }

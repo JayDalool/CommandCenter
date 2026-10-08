@@ -58,8 +58,11 @@ PROJECTS = {
 # and Jay's acceptance when the change is user-facing/UI, flagged needs:jay or re-planned
 # after approval (pipeline.needs_acceptance). "owner" — Jay accepts every merge.
 # A live deployment always waits for Jay, whatever the merge policy.
+# jay_first: no new task starts (pipeline `start`) while the project has an open question for Jay, a plan
+# waiting on his approval or a blocker only he can clear; tasks that need a lawyer (needs:legal, type LEGAL)
+# do not hold it, nor do sign-offs on finished work (merge acceptance, UI review, live deploy).
 # A project overrides with a "pipeline" dict in PROJECTS above.
-PIPELINE_DEFAULTS = {"merge": "auto", "ui_review": False}
+PIPELINE_DEFAULTS = {"merge": "auto", "ui_review": False, "jay_first": True}
 
 
 def pipeline_of(key):

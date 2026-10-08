@@ -2,6 +2,9 @@
 
 Screens Jay must check. Newest first. Delete a line when it's done.
 
+- [ ] TASK CHECK · Dashboard → Check tasks → Check all projects; each Claude answers "<project> task check: …" in its pane · http://127.0.0.1:7777/#/dashboard
+- [ ] TASK CHECK · A stale proposal shows Cancel it / Keep it; Cancel it closes the task · http://127.0.0.1:7777/#/tasks?view=jay
+- [ ] WORKSPACE · ☰ Tasks: the Task Manager takes the tree's place, rooms stay open; open a task, change its Status, Open Task Room ▸ · http://127.0.0.1:7777/#/workspace
 - [ ] CONTROL ROOM · Dashboard: five project panels, Needs Jay links open the exact question · http://127.0.0.1:7777/#/dashboard
 - [ ] CONTROL ROOM · Workspace: double-click a task, Claude + Project side by side, a 5th room offers pop-out / new window · http://127.0.0.1:7777/#/workspace
 - [ ] CONTROL ROOM · Pop a pane (↗) to monitor 2: same session, the slot shows + Add Pane; Reattach brings it back · http://127.0.0.1:7777/#/workspace

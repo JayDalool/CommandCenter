@@ -32,6 +32,7 @@ ALLOWED = {
     # P4B ticket system: product data, no infrastructure reach
     ("GET", "/api/development"),
     ("GET", "/api/tasks"), ("POST", "/api/tasks"), ("GET", "/api/tasks/import-preview"),
+    ("POST", "/api/tasks/check"),
     ("GET", "/api/tasks/{key}"), ("PATCH", "/api/tasks/{key}"), ("GET", "/api/tasks/{key}/context"),
     ("POST", "/api/tasks/{key}/comments"), ("POST", "/api/tasks/{key}/relations"),
     ("POST", "/api/tasks/{key}/links"),

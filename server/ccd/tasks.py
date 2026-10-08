@@ -295,6 +295,11 @@ ALTER TABLE ticket_work ADD COLUMN checkpoint TEXT;
 ALTER TABLE ticket_work ADD COLUMN deploy TEXT;
 ALTER TABLE ticket_work ADD COLUMN released TEXT;
 """),
+    # 5: the task check. A question can carry a purpose: 'stale' is Claude proposing that a task is no longer
+    # needed; Jay's "Cancel it" answer cancels the ticket. Additive only.
+    (5, """
+ALTER TABLE ticket_questions ADD COLUMN purpose TEXT CHECK (purpose IS NULL OR purpose IN ('stale'));
+"""),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

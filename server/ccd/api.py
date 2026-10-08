@@ -53,8 +53,11 @@
     GET   /api/pty                   live terminal sessions (names, cwd, clients)
     GET   /api/tasks/{key}/work      the ticket's durable pipeline state (plan, stage, gate, roles, review head, …)
     POST  /api/tasks/{key}/work/{op} one pipeline step: plan start review verify handoff block role finding
-                                     ask replan rework evidence writer deploy-request deployed;
+                                     ask replan rework evidence writer deploy-request deployed stale;
                                      `confirm` (close an owner gate) needs Jay AND Developer Unlock
+    POST  /api/tasks/check           Jay AND Developer Unlock. the task check: a fixed message asks the project's
+                                     idle coordinator Claude to propose stale tasks and add missing ones
+                                     ({copy: true}: send nothing, return the message to paste by hand)
     POST  /api/tasks/{key}/answers   Jay AND Developer Unlock. answer Claude's questions; the last answer
                                      resumes the SAME task Claude session (never starts one)
     GET   /api/tasks/{key}/record    the ticket's task.md / workflow.md (Command Center storage, never a repo)
@@ -363,6 +366,11 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     async def task_answers(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
         return await daemon.task_answers(request.path_params["key"], body, request.state.actor, developer=dev)
+
+    async def task_check(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return await daemon.act_task_check(str(body.get("project") or ""), request.state.actor, developer=dev,
+                                           copy=bool(body.get("copy")))
 
     async def task_record(request, _):
         return daemon.task_record(request.path_params["key"])
@@ -867,6 +875,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/tasks", guarded(list_tasks), methods=["GET"]),
         Route("/api/tasks", guarded(create_task), methods=["POST"]),
         Route("/api/tasks/import-preview", guarded(import_preview), methods=["GET"]),
+        Route("/api/tasks/check", guarded(task_check), methods=["POST"]),
         Route("/api/tasks/{key}", guarded(get_task), methods=["GET"]),
         Route("/api/tasks/{key}", guarded(patch_task), methods=["PATCH"]),
         Route("/api/tasks/{key}/context", guarded(task_context), methods=["GET"]),

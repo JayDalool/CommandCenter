@@ -162,6 +162,17 @@ def seed(ts):
 
 def seed_control_room(ts):
     """The control room's own shapes: questions waiting, a blocker explained, a live deploy waiting, review rounds."""
+    from ccd import registry
+    # The fixtures build several projects' states at once; Jay first (no new start while Jay has an open question)
+    # applies to the running preview, not to setting it up.
+    registry.PIPELINE_DEFAULTS["jay_first"] = False
+    try:
+        _seed_control_room(ts)
+    finally:
+        registry.PIPELINE_DEFAULTS["jay_first"] = True
+
+
+def _seed_control_room(ts):
     from ccd.pipeline import Pipeline
     pl = Pipeline(ts, max_lanes=9)
     head = "5" * 40
@@ -211,6 +222,8 @@ def seed_control_room(ts):
     pl.review(k, "APPROVE", head, "agent:reviewer", session="review-1", pr={"ref": "JayDalool/gyst-lifeops#33", "head": head, "ciGreen": True, "draft": False})
     k = mk("mfe", 18, "Receipt totals by category", type="FEATURE")
     pl.plan(k, {"summary": "Totals per category"}, "agent:planner", model="opus")
+    k = mk("samvision", 52, "Old valuation PDF export")             # the task check: proposed as stale
+    pl.stale(k, "superseded by SV-071's new valuation layout (plans/valuation-layout.md)", "agent:coordinator")
 
 
 async def main(reseed):

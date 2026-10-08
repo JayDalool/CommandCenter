@@ -34,7 +34,9 @@ function Decisions({ ticketKey }: { ticketKey: string }) {
 
 const DISPATCH_VERBS = ["plan", "implement", "review", "verify", "continue"] as const;
 
-export function TicketDetailPane({ ticketKey, onClose }: { ticketKey: string; onClose: () => void }) {
+export function TicketDetailPane({ ticketKey, onClose, onOpenRoom }: { ticketKey: string; onClose: () => void;
+  /** In the Workspace: open this ticket's Task Room on the wall beside it. */
+  onOpenRoom?: () => void }) {
   const t = useSelector(app.store, (d) => d.details[ticketKey]);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
@@ -51,10 +53,10 @@ export function TicketDetailPane({ ticketKey, onClose }: { ticketKey: string; on
   }, [onClose]);
   if (err && !t) return <aside className="td" aria-label="Ticket"><EmptyState title={`Cannot open ${ticketKey}`} hint={err} /></aside>;
   if (!t) return <aside className="td" aria-label="Ticket"><EmptyState title={`Loading ${ticketKey}…`} /></aside>;
-  return <Detail t={t} onClose={onClose} />;
+  return <Detail t={t} onClose={onClose} onOpenRoom={onOpenRoom} />;
 }
 
-function Detail({ t, onClose }: { t: TicketDetail; onClose: () => void }) {
+function Detail({ t, onClose, onOpenRoom }: { t: TicketDetail; onClose: () => void; onOpenRoom?: () => void }) {
   const types = useSelector(app.store, (d) => d.meta?.types ?? NO_TYPES);
   const st = useSelector(app.store, (d) => d.state);
   const [editTitle, setEditTitle] = useState(false);
@@ -86,6 +88,8 @@ function Detail({ t, onClose }: { t: TicketDetail; onClose: () => void }) {
       <div className="row"><span className="key">{t.key}</span><Project k={t.project} name={proj?.name} />
         {t.archived && <span className="label">archived</span>}
         <span style={{ marginLeft: "auto" }} className="row">
+          {onOpenRoom && <button type="button" className="btn is-primary is-sm" onClick={onOpenRoom}
+            title="Open this task's room on the wall">Open Task Room ▸</button>}
           <a className="btn is-quiet is-sm" href={href("tasks", t.key)} title="Permalink">Link</a>
           <button type="button" className="btn is-quiet is-sm" onClick={onClose} aria-label="Close detail"><Kbd>Esc</Kbd></button></span></div>
       {editTitle ? <form onSubmit={(e) => { e.preventDefault(); if (title.trim() && title !== t.title) void upd({ title }); setEditTitle(false); }}>

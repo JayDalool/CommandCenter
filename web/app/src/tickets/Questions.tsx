@@ -11,7 +11,9 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
   ticketKey: string; work: TicketWork; onDone: (w: TicketWork) => void; compact?: boolean;
 }) {
   const dev = useDevActive();
-  const open = (work.questions ?? []).filter((q) => q.answer === null);
+  const pending = (work.questions ?? []).filter((q) => q.answer === null);
+  const stale = pending.filter((q) => q.purpose === "stale");
+  const open = pending.filter((q) => q.purpose !== "stale");
   const [vals, setVals] = useState<Record<number, string>>({});
   const [other, setOther] = useState<Record<number, boolean>>({});
   const [scope, setScope] = useState(false);
@@ -48,6 +50,30 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
     catch (ex) { app.toast((ex as Error).message, "bad"); } finally { setBusy(false); }
   };
 
+  // The task check: Claude proposes this task as stale; Jay's one click decides (only "Cancel it" cancels).
+  const decide = async (q: Question, answer: string) => {
+    if (!dev) { unlockDialogOpen(); return; }
+    setBusy(true);
+    try {
+      const r = await app.api.answers(ticketKey, [{ id: q.id, answer }]);
+      onDone(r.work);
+      app.toast(r.cancelled ? `${ticketKey} cancelled — not needed any more` : `${ticketKey} kept`);
+    } catch (ex) {
+      app.toast((ex as Error).message, "bad");
+    } finally { setBusy(false); }
+  };
+  const staleCards = stale.map((q) => <div key={q.id} className="qs-stale" role="group" aria-label={`Task check on ${ticketKey}`}>
+    <div className="qs-head"><b>Task check — is {ticketKey} still needed?</b></div>
+    <div className="qs-q">{q.text.replace(/^Task check: /, "")}</div>
+    <div className="row">
+      <button type="button" className="btn is-primary" disabled={busy} onClick={() => void decide(q, "Cancel it")}>Cancel it</button>
+      <button type="button" className="btn" disabled={busy} onClick={() => void decide(q, "Keep it")}>Keep it</button>
+      <span className="mono-xs muted">Asked by {q.askedBy.replace(/^agent:/, "Claude ")} <Ago at={q.askedAt} /></span>
+    </div>
+    {!dev && <div className="mono-xs muted">Deciding needs Developer Mode (once per session).</div>}
+  </div>);
+
+  if (!open.length && stale.length) return <div className="qs-stales">{staleCards}</div>;
   if (!open.length) {
     return <div className="qs-done">
       {result && !result.delivered && result.complete ? <div className="qs-undelivered" role="status">
@@ -56,7 +82,7 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
       </div> : <span className="muted">No open questions.</span>}
     </div>;
   }
-  return <form className={`qs${compact ? " is-compact" : ""}`} onSubmit={submit} aria-label={`Questions on ${ticketKey}`}>
+  return <>{staleCards}<form className={`qs${compact ? " is-compact" : ""}`} onSubmit={submit} aria-label={`Questions on ${ticketKey}`}>
     <div className="qs-head"><b>Claude needs {open.length} answer{open.length === 1 ? "" : "s"}</b></div>
     {open.map((q, i) => <div key={q.id} className="qs-item">
       <label className="qs-q" htmlFor={`q-${q.id}`}><span className="qs-n">{i + 1}</span>{q.text}</label>
@@ -78,7 +104,7 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
     <button type="submit" className="btn is-primary qs-submit" disabled={busy || !filled.length}>
       {filled.length && filled.length < open.length ? `Save ${filled.length} answer${filled.length === 1 ? "" : "s"}` : "Submit Answers"}</button>
     {!dev && <div className="mono-xs muted">Sending answers to Claude needs Developer Mode (once per session).</div>}
-  </form>;
+  </form></>;
 }
 
 export function AnsweredList({ questions }: { questions: Question[] }) {

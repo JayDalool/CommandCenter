@@ -16,7 +16,12 @@
     python -m ccd.pipeline_cli writer   SV-056 --role coordinator --owner claude [--checkpoint-file cp.json]
     python -m ccd.pipeline_cli deploy-request SV-056 --role coordinator --env live --what "…" --verification "…"
     python -m ccd.pipeline_cli deployed SV-056 --role coordinator --env live --result pass --evidence "…"
+    python -m ccd.pipeline_cli stale    SV-056 --role coordinator --reason "superseded by SV-071 (plans/x.md)"
+    python -m ccd.pipeline_cli tasks    samvision                  the project's open tasks (the task check)
+    python -m ccd.pipeline_cli add      samvision --role coordinator --title "…" --note "plans/x.md:12"
 
+The task check: `stale` asks Jay "Cancel it / Keep it" (only his answer cancels anything); `add` puts a
+missing task in the project's Inbox.
 Questions wait for Jay without ending the task session; his answers come back into the same session.
 A live deployment waits for Jay's approval (`deployed --env live` is refused until he gives it).
 
@@ -66,7 +71,8 @@ def _json_file(path):
 def build(argv):
     p = argparse.ArgumentParser(prog="ccd.pipeline_cli", description="Record a ticket pipeline step in Command Center.")
     p.add_argument("op", choices=("work", "plan", "start", "review", "verify", "handoff", "block", "role", "finding",
-                                  "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed"))
+                                  "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
+                                  "tasks", "add"))
     p.add_argument("key")
     p.add_argument("--role", choices=ROLES)
     p.add_argument("--model")
@@ -94,11 +100,12 @@ def build(argv):
     p.add_argument("--verification")
     for f in ("why", "action", "impact", "technical"):
         p.add_argument(f"--{f}")
+    p.add_argument("--title")
     p.add_argument("--scope", choices=("in", "out"), default="in")
     p.add_argument("--source", choices=("review", "owner", "verifier"), default="review")
     a = p.parse_args(argv)
     key = urllib.parse.quote(a.key, safe="")
-    if a.op != "work" and not a.role:
+    if a.op not in ("work", "tasks") and not a.role:
         p.error("--role is required: every write is recorded as agent:<role>")
     meta = {k: v for k, v in (("model", a.model), ("session", a.session)) if v}
     body = {
@@ -120,9 +127,18 @@ def build(argv):
         "writer": lambda: {"owner": a.owner, "checkpoint": _json_file(a.checkpoint_file) if a.checkpoint_file else None},
         "deploy-request": lambda: {"env": a.env, "what": a.what, "verification": a.verification},
         "deployed": lambda: {"env": a.env, "result": a.result, "evidence": a.evidence},
+        "stale": lambda: {"reason": a.reason},
     }
     if a.op == "work":
         return "GET", f"/api/tasks/{key}/work", None, None
+    if a.op == "tasks":
+        return "GET", f"/api/tasks?project={key}", None, None
+    if a.op == "add":
+        if not a.title:
+            p.error("--title is required")
+        desc = f"Added by the task check. Source: {a.note}" if a.note else "Added by the task check."
+        return "POST", "/api/tasks", {"project": a.key, "title": a.title, "description": desc,
+                                      "labels": ["task-check"]}, f"agent:{a.role}"
     return "POST", f"/api/tasks/{key}/work/{a.op}", body[a.op](), f"agent:{a.role}"
 
 
@@ -132,6 +148,11 @@ def main(argv=None):
     if code:
         sys.stderr.write(f"refused: {out.get('error') or out}\n")
         return 1
+    if method == "GET" and path.startswith("/api/tasks?"):   # tasks: one line per open ticket
+        for t in sorted(out.get("tickets") or [], key=lambda t: t.get("number") or 0):
+            if t.get("status") not in ("DONE", "DENIED", "CANCELLED"):
+                print(f"{t['key']}\t{t['status']}\t{t['title']}")
+        return 0
     print(json.dumps(out, indent=2))
     return 0
 

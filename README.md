@@ -19,11 +19,15 @@ own; when ccd is down, it builds locally exactly as before.
 
 - **herdr owns every Claude pane.** ccd never starts, splits or supervises an
   agent, and never touches a coordinator's lifecycle. Stopping or restarting ccd
-  affects no agent. Two deliberate exceptions (control room, spec §8–§9), both
+  affects no agent. Three deliberate exceptions (control room, spec §8–§9), all
   through herdr's existing `agent.prompt` on an idle pane: Jay's answers resume
-  the ticket's EXISTING task session (`sv-071`), and when a ticket closes (a
+  the ticket's EXISTING task session (`sv-071`), when a ticket closes (a
   pipeline step, or Jay with Developer Unlock) its task session is asked to
-  `/exit` once idle. A coordinator is never a task session.
+  `/exit` once idle, and **Check tasks** (Jay with Developer Unlock) sends a
+  project's idle coordinator one fixed message asking it to propose stale
+  tasks — only Jay's "Cancel it" cancels one. A coordinator is never a task session.
+- **Jay first.** No new task starts in a project while Jay has an open question,
+  a plan to approve or a blocker to clear there (tasks that need a lawyer excepted).
 - **Loopback only.** ccd binds `127.0.0.1:7777`, fixed in code. No public port,
   no Cloudflare, no Tailscale Serve, and the herdr socket is never bridged to TCP.
   The Windows client will reach it with `ssh -L 7777:127.0.0.1:7777 jay-server`.

@@ -294,6 +294,8 @@ export type VisibleStage = (typeof VISIBLE_STAGES)[number];
 export interface Question {
   id: number; batch: number; position: number; text: string; kind: "text" | "choice" | "yesno"; options: string[];
   askedAt: number; askedBy: string; answer: string | null; answeredAt: number | null; answeredBy: string | null;
+  /** "stale": the task check — Claude thinks this task is no longer needed; Jay answers Cancel it / Keep it. */
+  purpose?: "stale" | null;
 }
 export interface Evidence { id: number; at: number; actor: string; stage: string | null; kind: string; ref: string; note: string | null }
 export interface Checkpoint {
@@ -305,7 +307,12 @@ export interface DeployState {
   approvedAt: number | null; approvedBy?: string; result: "pass" | "fail" | null; evidence?: string; deployedAt?: number;
 }
 export interface TaskSession { state: "ready" | "multiple" | "none"; paneId: string | null; sessionId: string | null; status: string }
-export interface AnswersResult { work: TicketWork; complete: boolean; delivered: boolean; reason: string | null; replanned?: boolean }
+export interface AnswersResult { work: TicketWork; complete: boolean; delivered: boolean; reason: string | null; replanned?: boolean;
+  /** A task-check answer: true when "Cancel it" cancelled the ticket, false when Jay kept it. */
+  cancelled?: boolean }
+export interface TaskCheckResult { ok: boolean; project: string; coordinator: string | null; openTasks: number;
+  /** With copy: the message itself, nothing sent (a project without a coordinator Claude). */
+  text?: string }
 export interface TaskRecord { key: string; taskMd: string; workflowMd: string; dir: string | null }
 
 export interface TicketRef { key: string; title: string; status: TicketStatus }

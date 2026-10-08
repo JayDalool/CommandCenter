@@ -289,7 +289,7 @@ class Durable(Base):
             db.executescript(f"BEGIN;\n{sql}\nPRAGMA user_version = {version};\nCOMMIT;")
         db.close()
         ts = TaskStore(path, PROJECTS)
-        self.assertEqual(ts.applied, [3, 4])
+        self.assertEqual(ts.applied, [3, 4, 5])
         t, _ = ts.create("samvision", "x")
         self.assertEqual(Pipeline(ts).work(t["key"])["planState"], "none")
         ts.close()
