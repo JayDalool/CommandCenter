@@ -11,7 +11,8 @@
 #   3. frees the branch if another worktree (e.g. ~/cc-preview) has it checked out (that worktree is
 #      left on the same commit, detached — its files do not change)
 #   4. switches to the branch and fast-forwards it to origin
-#   5. installs the server requirements, builds and installs the UI as an atomic release
+#   5. installs the server requirements, builds and installs the UI as an atomic release, and rebuilds the
+#      Windows launcher offered under Settings → Desktop app
 #   6. restarts ccd (which applies any additive tasks.db migration) and waits for it to answer
 # and prints the exact rollback. It never deletes anything and never touches herdr or any agent.
 set -euo pipefail
@@ -73,6 +74,15 @@ server/.venv/bin/pip install -q -r server/requirements.txt
 echo "== UI release"
 scripts/deploy-web.sh
 
+echo "== Windows launcher (Settings → Desktop app download)"
+if command -v go >/dev/null 2>&1 || [ -x "$HOME/.local/go/bin/go" ]; then
+  scripts/build-launcher.sh >/dev/null && echo "   CommandCenter.exe $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' \
+    "${CCD_LAUNCHER_DIR:-$HOME/.local/share/command-center/launcher}/launcher.json") ready to download" \
+    || echo "   launcher build failed (Command Center itself is unaffected): run scripts/build-launcher.sh to see why"
+else
+  echo "   Go is not installed here; the Desktop app page keeps the old exe"
+fi
+
 echo "== restart ccd"
 systemctl --user restart ccd
 for i in $(seq 1 30); do
@@ -90,11 +100,15 @@ done
 cat <<EOF
 
 Live is on $BRANCH ($(git rev-parse --short HEAD)).
-Sign in: start CommandCenter.exe 0.4.0 on Windows, or run
+Next: Settings → Desktop app → download CommandCenter.exe (0.4.0), put it in place, double-click it once.
+Sign in: start CommandCenter.exe on Windows, or run
   $REPO/scripts/cc-session --url
 and open the link.
 
 Rollback (back to $PREV_BRANCH @ $PREV_SHA):
   cd $REPO && git switch $PREV_BRANCH && scripts/deploy-web.sh
   systemctl --user stop ccd && cp "$backup" "$DB" && systemctl --user start ccd
+
+Old Command Center UI tickets (dry run first, then --apply):
+  $REPO/scripts/reconcile-cc-ui.py
 EOF
