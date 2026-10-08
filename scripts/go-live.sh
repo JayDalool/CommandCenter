@@ -3,6 +3,7 @@
 #
 #   scripts/go-live.sh                                 # the control room branch
 #   scripts/go-live.sh <branch>                        # any other branch
+#   CC_REPO=/srv/server/repos/CommandCenter bash go-live.sh   # run a copy fetched from the branch
 #
 # Run it on jay-server from the live checkout (/srv/server/repos/CommandCenter). It:
 #   1. refuses if the checkout has uncommitted changes
@@ -16,7 +17,7 @@
 set -euo pipefail
 
 BRANCH="${1:-claude/amazing-keller-fpy0qw}"
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="${CC_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 DB="${CCD_DATA_DIR:-$HOME/command-center/data}/tasks.db"
 BACKUPS="$HOME/command-center/backups"
 PORT="${CCD_PORT:-7777}"
