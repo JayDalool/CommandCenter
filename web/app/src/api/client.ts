@@ -85,6 +85,10 @@ export class Api {
   taskCheck(project: string, copy = false) {
     return this.req<TaskCheckResult>("POST", "/api/tasks/check", copy ? { project, copy: true } : { project });
   }
+  /** Night shift (Developer Unlock): the project's idle coordinator works its open tasks until morning; never deploys. */
+  nightShift(project: string, copy = false) {
+    return this.req<TaskCheckResult>("POST", "/api/tasks/night-shift", copy ? { project, copy: true } : { project });
+  }
   /** Jay answers Claude's questions (Developer Unlock). The last answer resumes the same task session. */
   answers(key: string, answers: { id: number; answer: string }[], scopeChange = false) {
     return this.req<AnswersResult>("POST", `/api/tasks/${encodeURIComponent(key)}/answers`, { answers, scopeChange });

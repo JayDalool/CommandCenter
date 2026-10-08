@@ -386,6 +386,16 @@ describe("the task check", () => {
     if (asked.includes("gyst")) expect(await screen.findByText(/not identified/)).toBeInTheDocument();
   });
 
+  it("Night shift starts every project's coordinator and says it never deploys", async () => {
+    act(() => developer.set({ active: true, expiresAt: null, error: null }));
+    const night = vi.spyOn(app.api, "nightShift").mockImplementation(async (p) => ({ ok: true, project: p, coordinator: p }));
+    render(<TaskCheckDialog mode="night" onClose={() => {}} />);
+    expect(screen.getByText(/never deploys or goes live/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Start night shift in all projects" }));
+    await waitFor(() => expect(night.mock.calls.length).toBeGreaterThan(1));
+    expect((await screen.findAllByText(/is on the night shift/)).length).toBeGreaterThan(1);
+  });
+
   it("Jay first: questions, plans and blockers hold new work; lawyer tasks and merges do not", () => {
     const tk = (key: string, over: Partial<Ticket> = {}) => ticket({ key, project: "samvision", flags: [], type: null, ...over });
     const item = (ref: string, kind: string, gate?: string) => ({ id: `${kind}:${ref}`, kind, verb: "x", project: "samvision", ref,

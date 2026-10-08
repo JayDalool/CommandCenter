@@ -25,7 +25,10 @@ own; when ccd is down, it builds locally exactly as before.
   pipeline step, or Jay with Developer Unlock) its task session is asked to
   `/exit` once idle, and **Check tasks** (Jay with Developer Unlock) sends a
   project's idle coordinator one fixed message asking it to propose stale
-  tasks — only Jay's "Cancel it" cancels one. A coordinator is never a task session.
+  tasks — only Jay's "Cancel it" cancels one; **Night shift** sends each idle
+  coordinator the `/night-shift` instructions (`server/ccd/night_shift.md`):
+  work the open tasks under the pipeline until morning, merge only where no gate
+  is open, never deploy. A coordinator is never a task session.
 - **Jay first.** No new task starts in a project while Jay has an open question,
   a plan to approve or a blocker to clear there (tasks that need a lawyer excepted).
 - **Loopback only.** ccd binds `127.0.0.1:7777`, fixed in code. No public port,

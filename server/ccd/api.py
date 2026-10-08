@@ -58,6 +58,9 @@
     POST  /api/tasks/check           Jay AND Developer Unlock. the task check: a fixed message asks the project's
                                      idle coordinator Claude to propose stale tasks and add missing ones
                                      ({copy: true}: send nothing, return the message to paste by hand)
+    POST  /api/tasks/night-shift     Jay AND Developer Unlock. night shift: ccd/night_shift.md (the same text as
+                                     Claude's /night-shift) to the project's idle coordinator; it works the open
+                                     tasks under the pipeline and never deploys ({copy: true} as above)
     POST  /api/tasks/{key}/answers   Jay AND Developer Unlock. answer Claude's questions; the last answer
                                      resumes the SAME task Claude session (never starts one)
     GET   /api/tasks/{key}/record    the ticket's task.md / workflow.md (Command Center storage, never a repo)
@@ -371,6 +374,11 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
         return await daemon.act_task_check(str(body.get("project") or ""), request.state.actor, developer=dev,
                                            copy=bool(body.get("copy")))
+
+    async def night_shift(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return await daemon.act_night_shift(str(body.get("project") or ""), request.state.actor, developer=dev,
+                                            copy=bool(body.get("copy")))
 
     async def task_record(request, _):
         return daemon.task_record(request.path_params["key"])
@@ -876,6 +884,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/tasks", guarded(create_task), methods=["POST"]),
         Route("/api/tasks/import-preview", guarded(import_preview), methods=["GET"]),
         Route("/api/tasks/check", guarded(task_check), methods=["POST"]),
+        Route("/api/tasks/night-shift", guarded(night_shift), methods=["POST"]),
         Route("/api/tasks/{key}", guarded(get_task), methods=["GET"]),
         Route("/api/tasks/{key}", guarded(patch_task), methods=["PATCH"]),
         Route("/api/tasks/{key}/context", guarded(task_context), methods=["GET"]),

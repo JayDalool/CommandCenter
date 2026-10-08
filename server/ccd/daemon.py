@@ -79,6 +79,19 @@ TASK_CHECK_TEMPLATE = (
     "When done, report in one line: {project} task check: <n> stale proposed, <n> added, <n> questions.\n"
     "Open tasks now ({n}):\n{tasks}"
 )
+# Night shift: the same instructions as Claude's /night-shift command (scripts/install-claude-commands.sh links
+# ~/.claude/commands/night-shift.md to this file). Only the project key is filled in.
+NIGHT_SHIFT_FILE = Path(__file__).with_name("night_shift.md")
+
+
+def night_shift_text(project):
+    raw = NIGHT_SHIFT_FILE.read_text(encoding="utf-8")
+    if raw.startswith("---"):
+        raw = raw.split("---", 2)[2]
+    lines = [ln for ln in raw.strip().splitlines() if not ln.startswith("Project key:")]
+    return "\n".join(lines).replace("<project>", project)
+
+
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 TASK_CHECK_LIST_MAX = 5000   # characters of the ticket list in the message; the rest: `pipeline_cli tasks`
 # Agent fields that may leave ccd. Terminal titles are deliberately absent:
@@ -1801,6 +1814,48 @@ class Daemon:
             used += len(line) + 1
         return TASK_CHECK_TEMPLATE.format(project=project, n=len(open_), tasks="\n".join(lines) or "- (none)"), len(open_)
 
+    async def _to_coordinator(self, project, what, text, data):
+        """One fixed message from Jay to the project's idle coordinator Claude (task check, night shift)."""
+        proj = next((p for p in self.cfg["projects"] if p["key"] == project), None)
+        if proj is None:
+            raise ActionError(404, "unknown project")
+        self._throttle(f"{what}:{project}", 5.0)
+        if not self.herdr_state["ok"]:
+            raise ActionError(503, "herdr unreachable")
+        await self.resync("action")
+        name = coordinators.canonical(proj)
+        r = coordinators.resolution(proj, self.panes)
+        if r["state"] != "ready":
+            raise ActionError(409, f"{project}'s coordinator Claude is not identified ({r['state']}); open its Project "
+                                   f"Console and adopt it, or use Copy prompt")
+        agent = await self._fresh_agent(r["paneId"])
+        if agent["status"] not in ("idle", "done"):
+            raise ActionError(409, f"{name} is {agent['status']}; the {what.replace('-', ' ')} goes only to an idle coordinator")
+        self._event("action", f"action.{what.replace('-', '_')}", f"{what.replace('-', ' ')} → {name}", project=project,
+                    agent_id=agent["pane_id"], data={"kind": what.replace("-", "_"), **data})
+        try:
+            await self.herdr.prompt(agent["pane_id"], text)
+        except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
+            self._event("action", "action.failed", f"{what.replace('-', ' ')} to {name} failed", severity="warn",
+                        project=project, data={"kind": what.replace("-", "_"), "error": str(e)[:160]})
+            raise ActionError(502, f"herdr refused: {e}")
+        return name
+
+    async def act_night_shift(self, project, actor="jay", developer=False, copy=False):
+        """Night shift: the project's idle coordinator works its open tasks under the pipeline until morning —
+        plan, implement, review, merge where no gate is open, verify; never deploy (night_shift.md). Jay with
+        Developer Unlock. With copy, nothing is sent: the message comes back to paste by hand."""
+        if actor != "jay" or not developer:
+            raise ActionError(403, "Developer Unlock required: the night shift sends a message to Claude")
+        self._need_tasks()
+        if not any(p["key"] == project for p in self.cfg["projects"]):
+            raise ActionError(404, "unknown project")
+        text = night_shift_text(project)
+        if copy:
+            return {"ok": True, "project": project, "coordinator": None, "text": text}
+        name = await self._to_coordinator(project, "night-shift", text, {})
+        return {"ok": True, "project": project, "coordinator": name}
+
     async def act_task_check(self, project, actor="jay", developer=False, copy=False):
         """Ask the project's coordinator Claude to check its open tasks against the repo (TASK_CHECK_TEMPLATE).
         Jay with Developer Unlock (it types into Claude). Never into a busy or blocked coordinator. With copy,
@@ -1814,27 +1869,8 @@ class Daemon:
         if copy:
             text, n = self.task_check_text(project)
             return {"ok": True, "project": project, "coordinator": None, "openTasks": n, "text": text}
-        self._throttle(f"taskcheck:{project}", 5.0)
-        if not self.herdr_state["ok"]:
-            raise ActionError(503, "herdr unreachable")
-        await self.resync("action")
-        name = coordinators.canonical(proj)
-        r = coordinators.resolution(proj, self.panes)
-        if r["state"] != "ready":
-            raise ActionError(409, f"{project}'s coordinator Claude is not identified ({r['state']}); open its Project "
-                                   f"Console and adopt it, then run the check again")
-        agent = await self._fresh_agent(r["paneId"])
-        if agent["status"] not in ("idle", "done"):
-            raise ActionError(409, f"{name} is {agent['status']}; the task check goes only to an idle coordinator")
         text, n = self.task_check_text(project)
-        self._event("action", "action.task_check", f"task check → {name} ({n} open tasks)", project=project,
-                    agent_id=agent["pane_id"], data={"kind": "task_check", "count": n})
-        try:
-            await self.herdr.prompt(agent["pane_id"], text)
-        except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
-            self._event("action", "action.failed", f"task check to {name} failed", severity="warn",
-                        project=project, data={"kind": "task_check", "error": str(e)[:160]})
-            raise ActionError(502, f"herdr refused: {e}")
+        name = await self._to_coordinator(project, "task-check", text, {"count": n})
         return {"ok": True, "project": project, "coordinator": name, "openTasks": n}
 
     async def act_dispatch(self, project, task, verb, note=""):

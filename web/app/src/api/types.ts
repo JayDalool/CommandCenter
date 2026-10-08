@@ -310,7 +310,7 @@ export interface TaskSession { state: "ready" | "multiple" | "none"; paneId: str
 export interface AnswersResult { work: TicketWork; complete: boolean; delivered: boolean; reason: string | null; replanned?: boolean;
   /** A task-check answer: true when "Cancel it" cancelled the ticket, false when Jay kept it. */
   cancelled?: boolean }
-export interface TaskCheckResult { ok: boolean; project: string; coordinator: string | null; openTasks: number;
+export interface TaskCheckResult { ok: boolean; project: string; coordinator: string | null; openTasks?: number;
   /** With copy: the message itself, nothing sent (a project without a coordinator Claude). */
   text?: string }
 export interface TaskRecord { key: string; taskMd: string; workflowMd: string; dir: string | null }

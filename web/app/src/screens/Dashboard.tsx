@@ -19,7 +19,7 @@ import { useTick } from "../components/Shell";
 import { NotificationBell } from "../components/Notifications";
 import { DevDot } from "../components/DevMode";
 import { EmptyState } from "../components/ui";
-import { TaskCheckButton } from "../components/TaskCheck";
+import { NightShiftButton, TaskCheckButton } from "../components/TaskCheck";
 
 /** Events worth a manager's eye: work moving, PRs, CI, deployments, questions. Not agent chatter. */
 export function newsworthy(e: CcdEvent): boolean {
@@ -150,6 +150,7 @@ export function Dashboard() {
       <DevDot />
       <NotificationBell />
       <TaskCheckButton className="btn is-outline" />
+      <NightShiftButton className="btn is-outline" />
       <a className="btn is-outline" href={href("workspace")}>Open Workspace →</a>
     </header>
     <div className="dash-grid" style={{ ["--n" as string]: String(Math.max(1, panels.length)) }}>

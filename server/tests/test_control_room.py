@@ -600,6 +600,27 @@ class ControlRoomApi(PipelineApi):
         self.assertEqual(r.status_code, 409)
         self.assertIn("working", r.json()["error"])
 
+    def test_night_shift_sends_the_slash_command_text_and_never_allows_a_deploy(self):
+        body = json.dumps({"project": "samvision"})
+        self.assertEqual(self.client.post("/api/tasks/night-shift", content=body, headers=JSON).status_code, 403)
+        dev = dict(JSON, **self.dev())
+        r = self.client.post("/api/tasks/night-shift", content=body, headers=dev)
+        self.assertEqual(r.status_code, 200, r.text)
+        sent = [p for m, p in self.fake.calls if m == "agent.prompt"]
+        self.assertEqual([p["target"] for p in sent], ["wE:p2"])                     # samvision's coordinator only
+        text = sent[0]["text"]
+        self.assertTrue(text.startswith("Night shift from Jay via command-center."))
+        self.assertIn("pipeline_cli tasks samvision", text)
+        self.assertIn("deploy or go live, to production or anywhere else", text)
+        self.assertIn("NO open gate", text)
+        self.assertNotIn("<project>", text)
+        self.assertNotIn("description:", text)                                       # the command's frontmatter
+        r = self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "gyst", "copy": True}), headers=dev)
+        self.assertIn("pipeline_cli tasks gyst", r.json()["text"])
+        self.assertEqual(len([p for m, p in self.fake.calls if m == "agent.prompt"]), 1)
+        self.assertEqual(self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "nope"}),
+                                          headers=dev).status_code, 404)
+
     def test_task_terminal_cwd_uses_only_a_known_worktree(self):
         self.ticket("INBOX")
         self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")

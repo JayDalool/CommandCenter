@@ -2,6 +2,8 @@
 
 Screens Jay must check. Newest first. Delete a line when it's done.
 
+- [ ] NIGHT SHIFT · Dashboard → ☾ Night shift → Start in all projects; in the morning read ~/command-center/night-shift/ and the Dashboard · http://127.0.0.1:7777/#/dashboard
+- [ ] NIGHT SHIFT · In any repo's Claude type /night-shift (after go-live links it) · any Claude pane
 - [ ] TASK CHECK · Dashboard → Check tasks → Check all projects; each Claude answers "<project> task check: …" in its pane · http://127.0.0.1:7777/#/dashboard
 - [ ] TASK CHECK · A stale proposal shows Cancel it / Keep it; Cancel it closes the task · http://127.0.0.1:7777/#/tasks?view=jay
 - [ ] WORKSPACE · ☰ Tasks: the Task Manager takes the tree's place, rooms stay open; open a task, change its Status, Open Task Room ▸ · http://127.0.0.1:7777/#/workspace

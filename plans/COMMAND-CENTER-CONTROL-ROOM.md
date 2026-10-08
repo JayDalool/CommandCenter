@@ -1496,3 +1496,9 @@ Asked by Jay after two hours of use; additions, not changes to the frozen spec.
   Tasks flagged needs:legal / type LEGAL wait on a lawyer and never hold; merge acceptance, UI review and live
   deploy sign-offs do not hold either. The Dashboard panel says "New work on hold — answer these first", and
   the agent brief (`work <KEY>`) says it too.
+- **Night shift / away mode.** Dashboard → `☾ Night shift`, or `/night-shift` typed in any Claude on jay-server
+  (go-live links `~/.claude/commands/night-shift.md` to `server/ccd/night_shift.md`, the one text both use).
+  Each coordinator works its open tasks until morning: finish in progress → fresh review → merge only where no
+  gate is open → verify → plan/research → new starts only when Jay first allows. It never deploys or goes live;
+  a morning report goes to `~/command-center/night-shift/<project>/<date>.md`. A **Go Live** button (Jay sends
+  the latest merges to production) is a separate, later addition.
