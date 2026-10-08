@@ -6,7 +6,7 @@
 #   CC_REPO=/srv/server/repos/CommandCenter bash go-live.sh   # run a copy fetched from the branch
 #
 # Run it on jay-server from the live checkout (/srv/server/repos/CommandCenter). It:
-#   1. refuses if the checkout has uncommitted changes
+#   1. refuses if tracked files have uncommitted changes (untracked files such as .claude/ are left alone)
 #   2. backs up tasks.db with SQLite's backup API (~/command-center/backups/tasks.db.pre-<branch>-<stamp>)
 #   3. frees the branch if another worktree (e.g. ~/cc-preview) has it checked out (that worktree is
 #      left on the same commit, detached — its files do not change)
@@ -24,9 +24,11 @@ BACKUPS="$HOME/command-center/backups"
 PORT="${CCD_PORT:-7777}"
 cd "$REPO"
 
-if [ -n "$(git status --porcelain)" ]; then
-  echo "go-live: $REPO has uncommitted changes; commit or stash them first:" >&2
-  git status --short >&2
+# Only real changes to tracked files stop the switch. Untracked files (e.g. Claude Code's local .claude/)
+# are left exactly where they are; git itself refuses the switch if the branch would overwrite one.
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "go-live: $REPO has uncommitted changes to tracked files; commit or stash them first:" >&2
+  git status --short --untracked-files=no >&2
   exit 1
 fi
 PREV_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
