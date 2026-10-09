@@ -153,6 +153,13 @@ func (p *osPlatform) StartSSH(path string, args []string, stderr io.Writer) (Pro
 	return cmdProc{c}, nil
 }
 
+func (p *osPlatform) Output(path string, args []string) ([]byte, error) {
+	c := exec.Command(path, args...)
+	c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	c.WaitDelay = 2 * time.Second
+	return c.Output()
+}
+
 func (p *osPlatform) StartBrowser(path string, args []string) (Proc, error) {
 	c := exec.Command(path, args...)
 	if err := c.Start(); err != nil {

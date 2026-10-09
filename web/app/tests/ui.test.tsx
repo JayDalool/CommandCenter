@@ -81,10 +81,10 @@ describe("global keyboard", () => {
     await user.keyboard("{Escape}");
     await user.keyboard("3");
     expect(location.hash).toBe("#/tasks");
-    await user.keyboard("4");
-    expect(location.hash).toBe("#/development");
-    await user.keyboard("5");
+    await user.keyboard("2");
     expect(location.hash).toBe("#/workspace");
+    await user.keyboard("5");
+    expect(location.hash).toBe("#/files");
   });
 });
 

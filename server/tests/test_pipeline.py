@@ -98,16 +98,39 @@ class Stages(Base):
         for o in others:
             self.pl.plan(o, PLAN, "agent:planner")
         self.pl.start(others[0], f"{others[0]}-a", "/srv/w/a", "agent:coordinator")
-        with self.assertRaises(TaskError) as e:                      # third lane
+        with self.assertRaises(TaskError) as e:                      # third lane in the same project
             self.pl.start(others[1], f"{others[1]}-b", "/srv/w/b", "agent:coordinator")
         self.assertIn("lanes", e.exception.message)
+        self.assertIn("samvision", e.exception.message)
+
+    def test_lanes_are_counted_per_project(self):
+        sv = [self.ticket() for _ in range(3)]
+        for k in sv:
+            self.pl.plan(k, PLAN, "agent:planner")
+        for k in sv[:2]:
+            self.pl.start(k, f"{k}-x", f"/srv/w/{k}", "agent:coordinator")
+        gz, _ = self.ts.create("gyst", "Galaxy keyboard navigation", "jay")
+        self.pl.plan(gz["key"], PLAN, "agent:planner")              # SamVision's two lanes do not hold GYST
+        self.assertEqual(self.pl.start(gz["key"], f"{gz['key']}-x", "/srv/w/gz", "agent:coordinator")[0]["status"],
+                         "IN_PROGRESS")
+        self.assertEqual((self.pl.lanes("samvision"), self.pl.lanes("gyst")), (2, 1))
+        with self.assertRaises(TaskError):
+            self.pl.start(sv[2], f"{sv[2]}-x", "/srv/w/c", "agent:coordinator")
+        from ccd import registry
+        old = registry.PROJECTS["samvision"].get("pipeline")
+        registry.PROJECTS["samvision"]["pipeline"] = dict(old or {}, max_lanes=3)
+        try:
+            self.assertEqual(self.pl.start(sv[2], f"{sv[2]}-x", "/srv/w/c", "agent:coordinator")[0]["status"],
+                             "IN_PROGRESS")
+        finally:
+            registry.PROJECTS["samvision"]["pipeline"] = old
 
 
 class Review(Base):
     def test_approval_is_tied_to_the_pr_head_and_green_checks(self):
         k = self.ticket()
         self.to_review(k)
-        t, _, _ = self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", pr=self.pr(green=False))
+        t, _, _ = self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr(green=False))
         self.assertEqual(t["status"], "IN_REVIEW")                           # CI not green yet
         t, _, _ = self.pl.sync_pr(k, self.pr(green=True))
         self.assertEqual(t["status"], "READY_TO_MERGE")
@@ -120,17 +143,17 @@ class Review(Base):
         self.assertEqual((w["review"]["verdict"], w["gate"], w["review"]["head"]), (None, None, HEAD))
         self.assertNotIn("merge", w["confirmed"])                           # the authorisation was for the old head
         new = "1234567" + "0" * 33
-        self.pl.review(k, "APPROVE", new, "agent:reviewer", pr=self.pr(head=new))
+        self.pl.review(k, "APPROVE", new, "agent:reviewer", session="review-1", pr=self.pr(head=new))
         self.assertEqual((self.ts.get(k)["status"], self.pl.work(k)["gate"]), ("READY_TO_MERGE", "merge"))
 
     def test_an_approval_for_another_head_never_promotes(self):
         k = self.ticket()
         self.to_review(k)
-        t, _, _ = self.pl.review(k, "APPROVE", "fedcba9" + "0" * 33, "agent:reviewer", pr=self.pr())
+        t, _, _ = self.pl.review(k, "APPROVE", "fedcba9" + "0" * 33, "agent:reviewer", session="review-1", pr=self.pr())
         self.assertEqual(t["status"], "IN_REVIEW")
         self.assertEqual(self.pl.sync_pr(k, self.pr())[0]["status"], "IN_REVIEW")
         for draft in (True,):
-            self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", pr=self.pr(draft=draft))
+            self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr(draft=draft))
             self.assertEqual(self.ts.get(k)["status"], "IN_REVIEW")
 
     def test_two_failed_review_cycles_block_for_jay(self):
@@ -152,7 +175,7 @@ class Review(Base):
 
     def ready_and_authorised(self, k):
         self.to_review(k)
-        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", pr=self.pr())
+        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr())
         self.assertEqual((self.ts.get(k)["status"], self.pl.work(k)["gate"]), ("READY_TO_MERGE", "merge"))
 
     def test_changes_requested_after_ready_closes_the_merge_gate(self):
@@ -171,7 +194,7 @@ class Review(Base):
         self.pl.confirm(k, "merge", "jay")                                 # Jay authorises head A
         self.assertEqual(self.pl.work(k)["confirmed"], [f"merge:{HEAD}"])
         b = "b" * 40
-        t, _, _ = self.pl.review(k, "APPROVE", b, "agent:reviewer", pr=self.pr(head=b))   # before the poll sees B
+        t, _, _ = self.pl.review(k, "APPROVE", b, "agent:reviewer", session="review-1", pr=self.pr(head=b))   # before the poll sees B
         self.assertEqual((t["status"], self.pl.work(k)["gate"]), ("READY_TO_MERGE", "merge"))
         self.assertTrue(self.pl.needs()[0]["text"].startswith("Ready to merge"))
 
@@ -182,7 +205,7 @@ class Review(Base):
         self.pl.block(k, "CI infra down", "agent:coordinator")
         self.pl.confirm(k, "failure", "jay")
         b = "c" * 40
-        self.pl.review(k, "APPROVE", b, "agent:reviewer", pr=self.pr(head=b))
+        self.pl.review(k, "APPROVE", b, "agent:reviewer", session="review-1", pr=self.pr(head=b))
         self.assertEqual((self.ts.get(k)["status"], self.pl.work(k)["gate"]), ("READY_TO_MERGE", "merge"))
 
     def test_red_checks_or_draft_at_the_same_head_go_back_to_review_and_return(self):
@@ -196,7 +219,7 @@ class Review(Base):
     def test_another_pr_on_the_ticket_says_nothing_about_the_reviewed_one(self):
         k = self.ticket()
         self.to_review(k)
-        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", pr=self.pr())
+        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr())
         self.assertEqual(self.ts.get(k)["status"], "READY_TO_MERGE")
         other = {"ref": "JayDalool/SamVisionAI#2", "head": "2" * 40, "ciGreen": True, "draft": False}
         t, ch, ev = self.pl.sync_pr(k, other)
@@ -210,16 +233,16 @@ class Review(Base):
             with self.assertRaises(TaskError):
                 self.pl.review(k, verdict, head, "agent:reviewer")
         with self.assertRaises(TaskError):
-            self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", findings=[{"scope": "maybe", "summary": "x"}])
+            self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", findings=[{"scope": "maybe", "summary": "x"}])
         k2 = self.ticket()
         with self.assertRaises(TaskError):                                  # no review before a PR
-            self.pl.review(k2, "APPROVE", HEAD, "agent:reviewer")
+            self.pl.review(k2, "APPROVE", HEAD, "agent:reviewer", session="review-1")
 
 
 class Verify(Base):
     def merged(self, k):
         self.to_review(k)
-        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", pr=self.pr())
+        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr())
         self.ts.update(k, {"status": "VERIFYING"}, "system:automation", trigger="PR #1 merged")
         self.pl.merged(k, "JayDalool/SamVisionAI#1", "9" * 40)
 
@@ -289,7 +312,7 @@ class Durable(Base):
             db.executescript(f"BEGIN;\n{sql}\nPRAGMA user_version = {version};\nCOMMIT;")
         db.close()
         ts = TaskStore(path, PROJECTS)
-        self.assertEqual(ts.applied, [3])
+        self.assertEqual(ts.applied, [3, 4, 5])
         t, _ = ts.create("samvision", "x")
         self.assertEqual(Pipeline(ts).work(t["key"])["planState"], "none")
         ts.close()

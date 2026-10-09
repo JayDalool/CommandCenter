@@ -29,6 +29,25 @@ Double-click to open Command Center on Windows. It replaces running
 The ssh runs inside a Windows Job Object set to kill on close, so it also dies if the
 launcher crashes. Other ssh sessions and tunnels are never touched.
 
+## SSH sign-in (v0.4.0): no token to paste, no Developer unlock
+
+Once the tunnel answers, the launcher runs one more fixed, hidden, non-interactive command over the same
+key login:
+
+    ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR -- <host> /srv/server/repos/CommandCenter/scripts/cc-session
+
+`cc-session` runs on the server as jay, reads the developer token (0600) and asks ccd for a **one-time,
+two-minute sign-in code**; the launcher opens `http://127.0.0.1:7777/#/?signin=<code>`. The page trades the
+code — once — for the ccd token and a Developer session that lasts the working day (12 h; Lock, closing the
+browser session or a ccd restart still end it). The launcher never sees a token, only the code, and any
+failure simply opens the plain address (the page then asks as before).
+
+The page's **Sign in with SSH** button (Developer dialog and Connect screen) opens
+`commandcenter://unlock`: the launcher mints a fresh code the same way and opens one signed-in window;
+every other Command Center window picks the session up. That link takes no parameters; anything else is
+refused. Without the launcher: `ssh jay-server /srv/server/repos/CommandCenter/scripts/cc-session --url`
+and open the link it prints.
+
 ## Native terminals (v0.3.0)
 
 Each normal double-click (no arguments) registers, per user and without admin, the
@@ -67,8 +86,8 @@ a validated project key, and nothing is ever typed into the terminal.
 
 ## What it never does
 
-- It contains no token, key or password, and reads none. The ccd token is still pasted
-  once into the page (the page remembers it if you tick "remember").
+- It contains no token, key or password, and reads none. It carries only the one-time sign-in code
+  from `cc-session`'s output into the address it opens (see SSH sign-in).
 - It does not change SSH config or firewall settings. Its only registry write is the
   per-user `commandcenter:` link registration above.
 - The optional log `%LOCALAPPDATA%\CommandCenter\launcher.log` (max 256 KB, one old copy)

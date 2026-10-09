@@ -17,12 +17,14 @@ const DEV = "s".repeat(43);
 describe("Developer Unlock", () => {
   beforeEach(() => { clearToken(); setDevSession(null); localStorage.clear(); sessionStorage.clear(); });
 
-  it("keeps the session in memory only, never in browser storage", () => {
+  it("keeps the session for this browser session only: sessionStorage, never localStorage (spec §27)", () => {
     setDevSession(DEV, 3600);
     expect(devSession()).toBe(DEV);
     expect(developer.get().active).toBe(true);
-    const stored = JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage });
-    expect(stored).not.toContain(DEV);
+    expect(JSON.stringify({ ...localStorage })).not.toContain(DEV);
+    expect(sessionStorage.getItem("ccd.dev")).toContain(DEV);
+    setDevSession(null);
+    expect(sessionStorage.getItem("ccd.dev")).toBeNull();
   });
 
   it("sends X-CCD-Developer with writes once unlocked, and drops it when ccd says it expired", async () => {
@@ -51,8 +53,7 @@ describe("Developer Unlock", () => {
 describe("navigation", () => {
   it("has one Workspace entry and no Console entry; the old route still resolves", () => {
     const ids = NAV.map((n) => n.id);
-    expect(ids).toEqual(["overview", "projects", "tasks", "development", "workspace", "agents", "server", "activity",
-      "alerts", "settings"]);
+    expect(ids).toEqual(["dashboard", "workspace", "tasks", "activity", "files", "settings"]);
     expect(parse("#/console?tab=repo").screen).toBe("console");
     expect(parse("#/workspace?project=samvision&ticket=SV-056").params.get("ticket")).toBe("SV-056");
   });

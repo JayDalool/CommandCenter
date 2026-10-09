@@ -17,19 +17,31 @@ own; when ccd is down, it builds locally exactly as before.
 
 ## Rules that do not bend
 
-- **herdr owns every Claude pane.** ccd never starts, stops, splits, closes or
-  supervises an agent. Stopping or restarting ccd affects no agent.
+- **herdr owns every Claude pane.** ccd never starts, splits or supervises an
+  agent, and never touches a coordinator's lifecycle. Stopping or restarting ccd
+  affects no agent. Three deliberate exceptions (control room, spec §8–§9), all
+  through herdr's existing `agent.prompt` on an idle pane: Jay's answers resume
+  the ticket's EXISTING task session (`sv-071`), when a ticket closes (a
+  pipeline step, or Jay with Developer Unlock) its task session is asked to
+  `/exit` once idle, and **Check tasks** (Jay with Developer Unlock) sends a
+  project's idle coordinator one fixed message asking it to propose stale
+  tasks — only Jay's "Cancel it" cancels one; **Night shift** sends each idle
+  coordinator the `/night-shift` instructions (`server/ccd/night_shift.md`):
+  work the open tasks under the pipeline until morning, merge only where no gate
+  is open, never deploy. A coordinator is never a task session.
+- **Jay first.** No new task starts in a project while Jay has an open question,
+  a plan to approve or a blocker to clear there (tasks that need a lawyer excepted).
 - **Loopback only.** ccd binds `127.0.0.1:7777`, fixed in code. No public port,
   no Cloudflare, no Tailscale Serve, and the herdr socket is never bridged to TCP.
   The Windows client will reach it with `ssh -L 7777:127.0.0.1:7777 jay-server`.
+  CommandCenter.exe also signs in over that SSH login (`scripts/cc-session`), so nothing is pasted.
 - **No dangerous endpoints.** There is no API for merge, deploy, production,
-  secrets, Docker, destructive git, or config/rule changes, and no interactive
-  shell: the Workspace's Claude tab mirrors a herdr pane, and the repo/server
-  shells are designed but not built (see
-  [ADR 0004](docs/adr/0004-console-and-real-terminals.md)). Editing and
-  uploading files inside a registered project needs a second credential,
-  Developer Unlock ([docs/SECURITY.md](docs/SECURITY.md)). A test asserts the
-  route table exactly. See [docs/API.md](docs/API.md).
+  secrets, Docker, destructive git, or config/rule changes. Merges and deploys
+  are done by agents under the pipeline's gates; ccd only records them, and a
+  LIVE deploy cannot be recorded before Jay approved it. Terminals, Claude
+  input, answers and file writes need a second credential, Developer Unlock
+  (once per app session, [docs/SECURITY.md](docs/SECURITY.md)). A test asserts
+  the route table exactly. See [docs/API.md](docs/API.md).
 - **One project registry.** A project's name, ticket prefix and retired prefixes
   live in `server/ccd/registry.py` and nowhere else. GauzeMate is `GZ`; `GM-*`
   keys are history and keep working. A project with no registry row and no
@@ -72,6 +84,16 @@ From Windows: `ssh -N -L 7777:127.0.0.1:7777 jay-server`, open
 http://127.0.0.1:7777, paste the token (`ssh jay-server cat
 .config/command-center/ccd.token | clip`). Tickets live in
 `~/command-center/data/tasks.db` — back it up as data.
+
+## Go live with a branch (one step)
+
+```
+scripts/go-live.sh                 # backs up tasks.db, switches the live checkout, builds the UI, restarts ccd
+scripts/reconcile-cc-ui.py         # dry run: what the control room does to the old CC UI tickets
+scripts/reconcile-cc-ui.py --apply
+```
+
+`go-live.sh` prints the exact rollback (previous branch + the tasks.db backup) when it finishes.
 
 ## Roll back
 

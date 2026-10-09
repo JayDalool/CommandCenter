@@ -12,12 +12,28 @@ export interface Prefs {
   wsMax: "none" | "main" | "term";
   /** Which mode the one Workspace sidebar shows. wsExplorerOpen is whether the sidebar itself is open. */
   wsSide: "explorer" | "scm" | "search";
+  // Control-room Workspace (this browser only)
+  /** Project folders collapsed in the Workspace tree. */
+  wsCollapsed: string[];
+  /** The task detail column beside the tree. */
+  wsDetailOpen: boolean;
+  /** The project/task tree column. */
+  wsTreeOpen: boolean;
+  /** What that left column shows: the project tree, or the Task Manager (the wall stays beside it). */
+  wsLeft: "projects" | "tasks";
+  /** The Task Manager column's width, px. */
+  wsTasksW: number;
+  /** Focus: the Workspace alone — no navigation rail, no top bar, no task detail. */
+  wsFocus: boolean;
+  /** The navigation rail shows icons only. */
+  railCollapsed: boolean;
 }
 const KEY = "cc.prefs";
 const DEFAULTS: Prefs = { theme: "dark", density: "comfortable", sshHost: "jay-server",
   consoleTab: "claude", consoleProject: null,
   lastProject: null, wsExplorerW: 260, wsExplorerOpen: true, wsTermH: 300, wsTermOpen: true, wsMax: "none",
-  wsSide: "explorer" };
+  wsSide: "explorer", wsCollapsed: [], wsDetailOpen: true,
+  wsTreeOpen: true, wsLeft: "projects", wsTasksW: 640, wsFocus: false, railCollapsed: false };
 
 const SIDES = ["explorer", "scm", "search"];
 
@@ -30,6 +46,9 @@ export function parsePrefs(raw: string | null): Prefs {
     for (const k of ["wsMain", "consoleOpen", "consoleAgent", "consoleFull", "consoleFollow"]) delete o[k];
     const p = { ...DEFAULTS, ...o } as Prefs;
     if (!SIDES.includes(String(o.wsSide))) p.wsSide = old === "scm" || old === "search" ? old : "explorer";
+    if (!Array.isArray(p.wsCollapsed)) p.wsCollapsed = [];
+    if (p.wsLeft !== "tasks") p.wsLeft = "projects";
+    if (typeof p.wsTasksW !== "number" || !Number.isFinite(p.wsTasksW)) p.wsTasksW = DEFAULTS.wsTasksW;
     return p;
   } catch { return { ...DEFAULTS }; }
 }

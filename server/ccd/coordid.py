@@ -214,3 +214,43 @@ def adopt(key, root, entries, session_id, path=None, now=None):
     except OSError:
         raise ValueError("could not record the binding")
     return resolve(key, root, entries, data[key])
+
+
+# ---------- task sessions (plans/COMMAND-CENTER-CONTROL-ROOM.md §8) ----------
+#
+# Every actively worked ticket has its own Claude task session, named after the key in lower case
+# (sv-071): herdr's agent name or pane label, set when the session is started, so a conversation rename
+# never loses it. Titles never count; coordinators are excluded. Nothing here starts one.
+
+def task_names(key):
+    k = str(key or "").strip()
+    return {k.lower(), k.upper()} if k else set()
+
+
+def task_session(key, entries, exclude=()):
+    """{state: ready|multiple|none, paneId, sessionId, status} for ticket `key`'s task Claude session.
+
+    Only herdr's agent name or pane label count — never the terminal title, which Claude renames freely —
+    and a pane that is a project coordinator (`exclude`: its pane ids) is never a task session."""
+    names = task_names(key)
+    skip = set(exclude or ())
+    claude = [c for c in map(normalize, entries or [])
+              if c["live"] and c["agent"] == "claude" and PANE_RE.match(c["paneId"]) and c["paneId"] not in skip]
+    hits = [c for c in claude if c["name"] in names or c["label"] in names]
+    if len(hits) == 1:
+        c = hits[0]
+        return {"state": "ready", "paneId": c["paneId"], "sessionId": c["sessionId"], "status": c["status"]}
+    return {"state": "multiple" if hits else "none", "paneId": None, "sessionId": None, "status": "offline",
+            "candidates": [_public(c) for c in hits]}
+
+
+def coordinator_panes(entries, roots, bindings=None):
+    """Pane ids that resolve as any project's coordinator (never a task session). `roots`: {key: root}."""
+    bindings = load() if bindings is None else bindings
+    out = set()
+    for key, root in roots.items():
+        if root:
+            r = resolve(key, root, entries, bindings.get(key))
+            if r.get("paneId"):
+                out.add(r["paneId"])
+    return out

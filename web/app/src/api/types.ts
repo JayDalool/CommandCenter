@@ -279,7 +279,41 @@ export interface Ticket {
   blockedBy: string[];
   blocks: string[];
   subtasks: { total: number; done: number };
+  // Control room (ccd ≥ schema 4): the work facts lists need. Absent from an older ccd.
+  gate?: PipelineGate | null;
+  gateReason?: string | null;
+  openQuestions?: number;
+  deploy?: { env: string; requestedAt: number | null; approvedAt: number | null; result: string | null } | null;
+  visibleStage?: VisibleStage;
 }
+
+export const VISIBLE_STAGES = ["Planning", "Implementing", "Reviewing", "UI Testing", "Verifying", "Ready to Merge",
+  "Deploying", "Needs Jay", "Blocked", "Closed"] as const;
+export type VisibleStage = (typeof VISIBLE_STAGES)[number];
+
+export interface Question {
+  id: number; batch: number; position: number; text: string; kind: "text" | "choice" | "yesno"; options: string[];
+  askedAt: number; askedBy: string; answer: string | null; answeredAt: number | null; answeredBy: string | null;
+  /** "stale": the task check — Claude thinks this task is no longer needed; Jay answers Cancel it / Keep it. */
+  purpose?: "stale" | null;
+}
+export interface Evidence { id: number; at: number; actor: string; stage: string | null; kind: string; ref: string; note: string | null }
+export interface Checkpoint {
+  reason: string; branch: string; worktree: string; commit: string; dirty: string; changed: string[]; tests: string;
+  decisions: string; blocker: string; remaining: string; at: number; by: string; frm: string | null; to: string;
+}
+export interface DeployState {
+  env: "live" | "preview" | "dev"; what: string; verification: string; requestedAt: number; requestedBy: string;
+  approvedAt: number | null; approvedBy?: string; result: "pass" | "fail" | null; evidence?: string; deployedAt?: number;
+}
+export interface TaskSession { state: "ready" | "multiple" | "none"; paneId: string | null; sessionId: string | null; status: string }
+export interface AnswersResult { work: TicketWork; complete: boolean; delivered: boolean; reason: string | null; replanned?: boolean;
+  /** A task-check answer: true when "Cancel it" cancelled the ticket, false when Jay kept it. */
+  cancelled?: boolean }
+export interface TaskCheckResult { ok: boolean; project: string; coordinator: string | null; openTasks?: number;
+  /** With copy: the message itself, nothing sent (a project without a coordinator Claude). */
+  text?: string }
+export interface TaskRecord { key: string; taskMd: string; workflowMd: string; dir: string | null }
 
 export interface TicketRef { key: string; title: string; status: TicketStatus }
 
@@ -299,8 +333,21 @@ export interface TicketWork {
   verification: { result: "pass" | "fail"; evidence: string; at: number; by: string } | null;
   merge: { pr: string; sha: string | null; at: number } | null;
   handoff: { done: string; decisions: string; next: string; blockers: string; at: number; by: string } | null;
-  blocked: { stage: PipelineStage; reason: string; at: number } | null;
+  blocked: { stage: PipelineStage; reason: string; at: number; what?: string; why?: string; action?: string;
+    impact?: string; technical?: string } | null;
   findings: { at: number; source: string; scope: "in" | "out"; category: string; summary: string; head: string | null }[];
+  // Control room (schema 4); optional so an older ccd still renders.
+  questions?: Question[];
+  openQuestions?: number;
+  evidence?: Evidence[];
+  writer?: string | null;
+  checkpoint?: Checkpoint | null;
+  deploy?: DeployState | null;
+  released?: { ptys: string[]; claude: string | null; at: number } | null;
+  visibleStage?: VisibleStage;
+  session?: TaskSession;
+  project?: string;
+  nudge?: { delivered: boolean; reason: string | null };
 }
 export interface TimelineEvent {
   id: number; at: number; actor: string; kind: string; field: string | null;

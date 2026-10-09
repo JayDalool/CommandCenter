@@ -99,38 +99,77 @@ class DeveloperGate:
     """
     TTL = 8 * 3600
     IDLE = 2 * 3600
+    # A session minted through SSH sign-in (`scripts/cc-session`, run over Jay's own SSH key login by the
+    # Windows launcher) lasts the working day: the SSH key is the stronger proof, and the launcher mints a
+    # fresh one at every start. Lock, a ccd restart and closing the browser session still end it.
+    SSH_TTL = 12 * 3600
+    SSH_IDLE = 12 * 3600
     FAIL_WINDOW = 300
     FAIL_LIMIT = 5
+    CODE_TTL = 120          # a sign-in code is good for two minutes, once
 
     def __init__(self, secret, clock=None):
         import time as _time
         self.secret = secret
         self.clock = clock or _time.monotonic
-        self.sessions = {}  # id → (created, last_used)
+        self.sessions = {}  # id → (created, last_used, ttl, idle)
+        self.codes = {}     # one-time sign-in code → (session id, created)
         self.fails = []
 
-    def unlock(self, presented):
-        now = self.clock()
+    def _failed(self, now):
         self.fails = [t for t in self.fails if now - t < self.FAIL_WINDOW]
-        if len(self.fails) >= self.FAIL_LIMIT:
+        return len(self.fails) >= self.FAIL_LIMIT
+
+    def unlock(self, presented, ttl=None, idle=None):
+        now = self.clock()
+        if self._failed(now):
             return None, "too many wrong attempts; wait five minutes"
         if not isinstance(presented, str) or not token_ok(self.secret, presented.strip()):
             self.fails.append(now)
             return None, "that is not the developer token"
         sid = secrets.token_urlsafe(32)
-        self.sessions[sid] = (now, now)
+        self.sessions[sid] = (now, now, ttl or self.TTL, idle or self.IDLE)
         return sid, None
+
+    def handoff(self, presented):
+        """SSH sign-in: the developer secret (read by `cc-session` on the server, as jay) → a day-long
+        session and a one-time code the browser redeems. Returns (code, problem)."""
+        sid, problem = self.unlock(presented, self.SSH_TTL, self.SSH_IDLE)
+        if not sid:
+            return None, problem
+        now = self.clock()
+        self.codes = {c: v for c, v in self.codes.items() if now - v[1] <= self.CODE_TTL}
+        code = secrets.token_urlsafe(32)
+        self.codes[code] = (sid, now)
+        return code, None
+
+    def redeem(self, code):
+        """A one-time code → its session id, once, within CODE_TTL. Wrong codes count as failures."""
+        now = self.clock()
+        if self._failed(now):
+            return None, "too many wrong attempts; wait five minutes"
+        hit = None
+        if isinstance(code, str) and code:
+            for c in list(self.codes):
+                if hmac.compare_digest(c, code):
+                    hit = self.codes.pop(c)
+                    break
+        if not hit or now - hit[1] > self.CODE_TTL or hit[0] not in self.sessions:
+            self.fails.append(now)
+            return None, "that sign-in link has expired or was already used; start Command Center again"
+        return hit[0], None
 
     def check(self, sid):
         if not isinstance(sid, str) or not sid:
             return False
         now = self.clock()
-        for k, (made, used) in list(self.sessions.items()):
-            if now - made > self.TTL or now - used > self.IDLE:
+        for k, (made, used, ttl, idle) in list(self.sessions.items()):
+            if now - made > ttl or now - used > idle:
                 del self.sessions[k]
         for k in self.sessions:
             if hmac.compare_digest(k, sid):
-                self.sessions[k] = (self.sessions[k][0], now)
+                made, _, ttl, idle = self.sessions[k]
+                self.sessions[k] = (made, now, ttl, idle)
                 return True
         return False
 
@@ -139,7 +178,8 @@ class DeveloperGate:
         if not hit:
             return None
         now = self.clock()
-        return max(0, min(self.TTL - (now - hit[0]), self.IDLE - (now - hit[1])))
+        made, used, ttl, idle = hit
+        return max(0, min(ttl - (now - made), idle - (now - used)))
 
     def lock(self, sid):
         self.sessions.pop(sid, None) if isinstance(sid, str) else None

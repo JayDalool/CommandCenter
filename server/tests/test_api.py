@@ -32,6 +32,7 @@ ALLOWED = {
     # P4B ticket system: product data, no infrastructure reach
     ("GET", "/api/development"),
     ("GET", "/api/tasks"), ("POST", "/api/tasks"), ("GET", "/api/tasks/import-preview"),
+    ("POST", "/api/tasks/check"), ("POST", "/api/tasks/night-shift"),
     ("GET", "/api/tasks/{key}"), ("PATCH", "/api/tasks/{key}"), ("GET", "/api/tasks/{key}/context"),
     ("POST", "/api/tasks/{key}/comments"), ("POST", "/api/tasks/{key}/relations"),
     ("POST", "/api/tasks/{key}/links"),
@@ -52,6 +53,10 @@ ALLOWED = {
     ("POST", "/api/action/prompt"), ("POST", "/api/action/key"),
     ("POST", "/api/coordinators/adopt"),
     ("GET", "/api/tasks/{key}/work"), ("POST", "/api/tasks/{key}/work/{op}"),
+    # Control room: Jay answers Claude's questions (resumes the same task session); the readable record
+    ("POST", "/api/tasks/{key}/answers"), ("GET", "/api/tasks/{key}/record"),
+    # SSH sign-in: cc-session (over Jay's SSH login) mints a one-time code; the page redeems it once
+    ("POST", "/api/developer/handoff"), ("POST", "/api/developer/redeem"),
     ("GET", "/api/pty"), ("POST", "/api/pty/close"), ("WS", "/api/pty/{name}"),
 }
 FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec", "push",

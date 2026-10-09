@@ -19,6 +19,12 @@ export function Connect() {
     <div className="dialog-head"><span className="brand-mark" aria-hidden><i /><i /><i /><i /></span>
       <h1 id="connect-title" className="brand-name">Command Center</h1><span className="brand-host" style={{ marginLeft: "auto" }}>{host} · 127.0.0.1:{port}{port !== LIVE_PORT && " · preview"}</span></div>
     <form className="dialog-body" onSubmit={(e) => { e.preventDefault(); if (ok) void app.login(token, remember); }}>
+      <div className="stack" style={{ gap: 6, marginBottom: 12 }}>
+        <a className="btn is-primary" href="commandcenter://unlock">Sign in with SSH (CommandCenter.exe)</a>
+        <span className="muted mono-xs">Your SSH key login signs you in — no token to paste, Developer Mode on for the day. Or on the server:
+          <span className="mono"> scripts/cc-session{port !== LIVE_PORT ? ` --port ${port} --dev-dir <preview dir>` : ""} --url</span>, then open the link.</span>
+      </div>
+      <div className="caps muted" style={{ marginBottom: 6 }}>Or paste the token</div>
       <ol className="connect-steps">
         <li><span className="mono muted">1</span><span>Tunnel from Windows (keep it open):<Command cmd={commands.tunnel(host, port)} /></span></li>
         <li><span className="mono muted">2</span><span>Copy <span className="mono">~/{tokenFile(port)}</span> — this ccd's own token:<Command cmd={commands.token(host, port)} /></span></li>

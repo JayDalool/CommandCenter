@@ -2,8 +2,8 @@ import { useSyncExternalStore } from "react";
 
 export interface Route { screen: string; id: string | null; params: URLSearchParams }
 
-export const SCREENS = ["overview", "projects", "tasks", "development", "console", "agents", "server",
-  "activity", "alerts", "settings", "prs", "workspaces", "workspace"] as const;
+export const SCREENS = ["dashboard", "overview", "projects", "tasks", "development", "console", "agents", "server",
+  "activity", "alerts", "settings", "prs", "workspaces", "workspace", "files", "room", "pane"] as const;
 export type Screen = (typeof SCREENS)[number];
 
 export function parse(hash: string): Route {
@@ -11,7 +11,7 @@ export function parse(hash: string): Route {
   const [path, query = ""] = h.split("?");
   const [screen, ...rest] = path.split("/").filter(Boolean);
   return {
-    screen: (SCREENS as readonly string[]).includes(screen) ? screen : "overview",
+    screen: (SCREENS as readonly string[]).includes(screen) ? screen : "dashboard",
     id: rest.length ? decodeURIComponent(rest.join("/")) : null,
     params: new URLSearchParams(query),
   };

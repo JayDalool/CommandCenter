@@ -16,8 +16,8 @@ export interface PalItem { id: string; kind: PalKind; label: string; hint?: stri
 /** The ticket and project the Workspace is showing, read from the address when the command runs. */
 function currentWorkspace(): { project: string | null; ticket: string | null } {
   const r = parse(location.hash);
-  const onWs = r.screen === "workspace" || r.screen === "console";
-  const ticket = onWs ? r.params.get("ticket") : null;
+  const onWs = r.screen === "workspace" || r.screen === "console" || r.screen === "files";
+  const ticket = onWs ? r.params.get("ticket") ?? r.params.get("task") : null;
   const t = ticket ? app.data.tickets.find((x) => x.key === ticket) : null;
   return { ticket, project: (onWs && r.params.get("project")) || t?.project || prefs.get().consoleProject || app.data.state?.projects[0]?.key || null };
 }
@@ -31,14 +31,14 @@ export function buildItems(onNewTask: () => void): PalItem[] {
     { id: "a:needs", kind: "ACTION", label: "Show what needs Jay", keywords: "needs jay queue", run: () => go("tasks", null, { view: "jay" }) },
     { id: "a:import", kind: "ACTION", label: "Task migration preview (read-only)", keywords: "import migrate", run: () => go("settings", null, { tab: "import" }) },
     // Workspace: keyboard-first development
-    ...([["Open Workspace", {}, "workspace ide editor"], ["Explorer", { side: "explorer" }, "files tree sidebar"],
+    ...([["Open Files", {}, "files ide editor explorer upload"], ["Explorer", { side: "explorer" }, "files tree sidebar"],
       ["Source Control", { side: "scm" }, "git diff stage commit branch sidebar"], ["Search", { side: "search", search: true }, "ctrl+shift+f grep find text sidebar"],
       ["Go to file", { goto: true }, "ctrl+p file open"], ["Open Claude", { term: "claude" }, "coordinator dock terminal"],
       ["Open Project terminal", { term: "repo" }, "repo shell bash dock"], ["Open Server terminal", { term: "server" }, "shell bash home dock"],
       ["Development", { dev: true }, "ticket trail commits pr ci"],
     ] as [string, Record<string, unknown>, string][]).map(([label, detail, kw], i) => ({ id: `w:${i}`, kind: "ACTION" as const, label,
-      hint: label === "Go to file" ? "Ctrl P" : label === "Search" ? "Ctrl ⇧ F" : i > 0 ? "Workspace" : undefined, keywords: `workspace ${kw}`,
-      run: () => { if (!location.hash.startsWith("#/workspace")) go("workspace"); setTimeout(() => window.dispatchEvent(new CustomEvent("cc:workspace", { detail })), 50); } })),
+      hint: label === "Go to file" ? "Ctrl P" : label === "Search" ? "Ctrl ⇧ F" : i > 0 ? "Files" : undefined, keywords: `files ${kw}`,
+      run: () => { if (!location.hash.startsWith("#/files")) go("files"); setTimeout(() => window.dispatchEvent(new CustomEvent("cc:workspace", { detail })), 50); } })),
     // The Workspace's current ticket or project (from the address, then the last project used).
     { id: "w:gh", kind: "ACTION", label: "Open GitHub", hint: "current project", keywords: "workspace github repo", run: () => {
       const cur = currentWorkspace(), url = st?.projects.find((x) => x.key === cur.project)?.repoUrl;
@@ -60,7 +60,11 @@ export function buildItems(onNewTask: () => void): PalItem[] {
         .filter(([, uri]) => uri).map(([label, uri, hint], i) => ({ id: `nt:${i}`, kind: "ACTION" as const, label, hint,
           keywords: "native windows terminal ssh wt", run: () => { location.href = uri!; } }));
     })(),
-    ...NAV.map((s, i) => ({ id: `go:${s.id}`, kind: "GO" as const, label: s.label, hint: String(i < 9 ? i + 1 : 0), run: () => go(s.id) })),
+    ...NAV.map((s, i) => ({ id: `go:${s.id}`, kind: "GO" as const, label: s.label, hint: String(i + 1), run: () => go(s.id) })),
+    // Diagnostics: no longer primary navigation, still one command away (and under Settings → Diagnostics).
+    ...([["projects", "Projects"], ["development", "Development"], ["agents", "Agents"], ["server", "Server"], ["alerts", "Alerts"],
+      ["prs", "Pull requests"], ["workspaces", "herdr layout"]] as [string, string][]).map(([id, label]) => ({ id: `go:${id}`,
+      kind: "GO" as const, label, hint: "diagnostics", keywords: "ops diagnostics", run: () => go(id) })),
   ];
   for (const p of st?.projects ?? []) {
     items.push({ id: `p:${p.key}`, kind: "PROJECT", label: p.name, hint: p.key, keywords: `${p.key} ${p.repo}`, run: () => go("projects", p.key) });
@@ -87,9 +91,9 @@ export function buildItems(onNewTask: () => void): PalItem[] {
     if (t.archived) continue;
     items.push({ id: `t:${t.key}`, kind: "TASK", label: `${t.key} ${t.title}`, hint: STATUS_META[t.status]?.label, key: t.key,
       keywords: `${t.project} ${t.labels.join(" ")}`, run: () => go("tasks", t.key) });
-    if (["IN_PROGRESS", "IN_REVIEW", "READY_TO_IMPLEMENT", "VERIFYING"].includes(t.status))
-      items.push({ id: `tw:${t.key}`, kind: "ACTION", label: `Work on ${t.key} in Workspace`, hint: t.title,
-        keywords: `${t.project} workspace`, run: () => go("workspace", null, { project: t.project, ticket: t.key }) });
+    if (!["DONE", "DENIED", "CANCELLED"].includes(t.status))
+      items.push({ id: `tw:${t.key}`, kind: "ACTION", label: `Open ${t.key} Task Room`, hint: t.title,
+        keywords: `${t.project} workspace room`, run: () => go("workspace", null, { task: t.key, open: "1" }) });
   }
   for (const p of st?.projects ?? []) {
     for (const pr of p.prs) {

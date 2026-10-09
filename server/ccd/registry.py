@@ -39,7 +39,9 @@ import re
 # out is built from it (ccd/github.py). config.json may repeat both, not change them.
 PROJECTS = {
     "samvision":     {"name": "SamVision",        "prefix": "SV",   "legacy": (),
-                      "root": "/srv/server/apps/samvisionai",       "github": "JayDalool/SamVisionAI"},
+                      "root": "/srv/server/apps/samvisionai",       "github": "JayDalool/SamVisionAI",
+                      # SamVision's own rule: its merges need Jay (docs/jay/MORNING.md, SV-064).
+                      "pipeline": {"merge": "owner"}},
     "gauzemate":     {"name": "GauzeMate",        "prefix": "GZ",   "legacy": ("GM",),
                       "root": "/srv/server/repos/GauzeMate",        "github": "JayDalool/GauzeMate"},
     "mfe":           {"name": "MyFamilyExpenses", "prefix": "MFE",  "legacy": (),
@@ -51,10 +53,18 @@ PROJECTS = {
 }
 
 # Ticket pipeline defaults (plans/TICKET-PIPELINE-V1.md), the one place they live.
-# merge: "owner" — Jay merges or explicitly authorises it (every project during the
-# pilot); "auto-eligible" is reserved for a later low-risk CC policy (CC-025).
+# merge: "auto" — Claude may merge clean work once every applicable gate passed
+# (plans/COMMAND-CENTER-CONTROL-ROOM.md §22): tests/CI, a fresh review of the exact head,
+# and Jay's acceptance when the change is user-facing/UI, flagged needs:jay or re-planned
+# after approval (pipeline.needs_acceptance). "owner" — Jay accepts every merge.
+# A live deployment always waits for Jay, whatever the merge policy.
+# jay_first: no new task starts (pipeline `start`) while the project has an open question for Jay, a plan
+# waiting on his approval or a blocker only he can clear; tasks that need a lawyer (needs:legal, type LEGAL)
+# do not hold it, nor do sign-offs on finished work (merge acceptance, UI review, live deploy).
+# Implementation lanes: at most 2 tickets IN_PROGRESS with a worktree per project (pipeline.MAX_LANES); a
+# project may set "max_lanes" in its pipeline dict.
 # A project overrides with a "pipeline" dict in PROJECTS above.
-PIPELINE_DEFAULTS = {"merge": "owner", "ui_review": False}
+PIPELINE_DEFAULTS = {"merge": "auto", "ui_review": False, "jay_first": True}
 
 
 def pipeline_of(key):

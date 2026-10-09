@@ -26,38 +26,44 @@
 /* ---------- dark (default) ---------- */
 :root, :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #111417;          /* graphite, a breath of blue */
-  --bg-2: #0d1013;        /* status line, console well */
-  --surface: #161a1e;
-  --surface-2: #1b2024;
-  --raise: #232a30;
-  --hover: #1d2227;
-  --sel: #1d2a26;
-  --line: #242b31;
-  --line-strong: #313a42;
-  --text: #dfe4e2;
-  --text-2: #aab4b3;
-  --muted: #77848a;
-  --faint: #4f5b62;
-  --accent: #86c7a3;      /* phosphor sage */
-  --accent-ink: #0b1510;
-  --accent-soft: rgba(134, 199, 163, .13);
-  --focus: #9ad3b4;
-  --jay: #e5b05a;         /* CRT amber: everything that waits on Jay */
-  --jay-soft: rgba(229, 176, 90, .12);
-  --jay-line: rgba(229, 176, 90, .45);
-  --ok: #86c98f; --warn: #e2a854; --bad: #ec806f; --info: #8db6df;
-  --st-working: #86c98f; --st-blocked: #e5a54d; --st-failed: #ec806f; --st-review: #8db6df;
-  --st-verifying: #6cc4bc; --st-waiting: #a7aea9; --st-idle: #6c7a81; --st-done: #7fa98a; --st-unknown: #77848a;
-  --pj-samvision: #8db6df; --pj-gauzemate: #d6a06c; --pj-gyst: #94c88b; --pj-mfe: #c5a3cb; --pj-commandcenter: #86c7a3;
-  --pj-home: #77848a;
-  --human: #e5b05a; --agent: #8db6df;
-  --scrim: rgba(5, 7, 9, .62);
-  --shadow-pop: 0 18px 44px rgba(0, 0, 0, .5), 0 0 0 1px var(--line-strong);
-  --term-bg: #0b0e10; --term-text: #c9d4cf; --term-dim: #66757b;
-  --kbd-bg: #1b2024;
-  --input-bg: #0f1215;
-  --grid-dot: rgba(134, 199, 163, .05);
+  /* Control room (plans/COMMAND-CENTER-CONTROL-ROOM.md §2): deep navy, low glare, subtle borders. */
+  --bg: #0a0f18;          /* the room */
+  --bg-2: #070b12;        /* status line, terminal wells */
+  --surface: #0e1522;
+  --surface-2: #121b2b;
+  --raise: #182336;
+  --hover: #131d2e;
+  --sel: #15233a;
+  --line: #1b2738;
+  --line-strong: #283a54;
+  --text: #e3e9f2;
+  --text-2: #aab7c9;
+  --muted: #74849b;
+  --faint: #4b5b72;
+  --accent: #5b9cff;      /* control-room blue: selection, primary outline buttons */
+  --accent-ink: #06101f;
+  --accent-soft: rgba(91, 156, 255, .14);
+  --focus: #86b6ff;
+  --jay: #ff6b6b;         /* Needs Jay is red (spec §24) */
+  --jay-soft: rgba(255, 107, 107, .12);
+  --jay-line: rgba(255, 107, 107, .45);
+  --ok: #4fc97f; --warn: #e8b33d; --bad: #ff6b6b; --info: #6aa8ff;
+  --st-working: #4fc97f; --st-blocked: #f0874a; --st-failed: #ff6b6b; --st-review: #6aa8ff;
+  --st-verifying: #3cc3b5; --st-waiting: #a3adbb; --st-idle: #66768c; --st-done: #6fae86; --st-unknown: #74849b;
+  /* Project colours are functional (spec §2): SamVision red, GauzeMate green, Command Center blue,
+     GYST orange, MyFamilyExpenses purple. */
+  --pj-samvision: #ef5350; --pj-gauzemate: #3fbf6f; --pj-commandcenter: #4b8eff; --pj-gyst: #f39c3d; --pj-mfe: #a46cf2;
+  --pj-home: #74849b;
+  /* The ten visible stages (spec §24). */
+  --vs-plan: #a371f7; --vs-impl: #4b9bff; --vs-review: #e8b33d; --vs-uitest: #f2c94c; --vs-verify: #3cc3b5;
+  --vs-merge: #3fbf6f; --vs-deploy: #f39c3d; --vs-jay: #ff5f5f; --vs-blocked: #f0714a; --vs-closed: #8a96a8;
+  --human: #ff6b6b; --agent: #6aa8ff;
+  --scrim: rgba(3, 6, 12, .66);
+  --shadow-pop: 0 18px 44px rgba(0, 0, 0, .55), 0 0 0 1px var(--line-strong);
+  --term-bg: #070b11; --term-text: #cdd8e6; --term-dim: #5f7088;
+  --kbd-bg: #121b2b;
+  --input-bg: #0b111c;
+  --grid-dot: rgba(91, 156, 255, .05);
 }
 
 /* ---------- light ---------- */
@@ -80,14 +86,16 @@
   --accent-ink: #ffffff;
   --accent-soft: rgba(35, 119, 90, .10);
   --focus: #23775a;
-  --jay: #93590a;
-  --jay-soft: rgba(147, 89, 10, .09);
-  --jay-line: rgba(147, 89, 10, .4);
+  --jay: #b3261e;
+  --jay-soft: rgba(179, 38, 30, .08);
+  --jay-line: rgba(179, 38, 30, .4);
   --ok: #2a7a43; --warn: #93590a; --bad: #b2392b; --info: #2f5f98;
   --st-working: #2a7a43; --st-blocked: #9c5e00; --st-failed: #b2392b; --st-review: #2f5f98;
   --st-verifying: #15736c; --st-waiting: #5f6763; --st-idle: #8b918d; --st-done: #4c7a57; --st-unknown: #7c827f;
-  --pj-samvision: #2f5f98; --pj-gauzemate: #9c6224; --pj-gyst: #3b8241; --pj-mfe: #85598f; --pj-commandcenter: #23775a;
+  --pj-samvision: #c0392b; --pj-gauzemate: #23854a; --pj-gyst: #b8650f; --pj-mfe: #7a46c2; --pj-commandcenter: #2a63c9;
   --pj-home: #7c827f;
+  --vs-plan: #7a46c2; --vs-impl: #2a63c9; --vs-review: #9a6b00; --vs-uitest: #8a6d00; --vs-verify: #15736c;
+  --vs-merge: #23854a; --vs-deploy: #b8650f; --vs-jay: #c0392b; --vs-blocked: #b4471f; --vs-closed: #7c827f;
   --human: #93590a; --agent: #2f5f98;
   --scrim: rgba(40, 34, 22, .22);
   --shadow-pop: 0 14px 36px rgba(50, 40, 20, .18), 0 0 0 1px var(--line-strong);
@@ -103,11 +111,13 @@
     --bg: #f0eee8; --bg-2: #e6e3da; --surface: #faf9f5; --surface-2: #f4f2ec; --raise: #e8e5dc; --hover: #efece5;
     --sel: #e3ece5; --line: #e0dcd2; --line-strong: #cdc6b8; --text: #1c2022; --text-2: #42494c; --muted: #69716f;
     --faint: #9a9d97; --accent: #23775a; --accent-ink: #ffffff; --accent-soft: rgba(35, 119, 90, .10); --focus: #23775a;
-    --jay: #93590a; --jay-soft: rgba(147, 89, 10, .09); --jay-line: rgba(147, 89, 10, .4);
+    --jay: #b3261e; --jay-soft: rgba(179, 38, 30, .08); --jay-line: rgba(179, 38, 30, .4);
     --ok: #2a7a43; --warn: #93590a; --bad: #b2392b; --info: #2f5f98;
     --st-working: #2a7a43; --st-blocked: #9c5e00; --st-failed: #b2392b; --st-review: #2f5f98; --st-verifying: #15736c;
     --st-waiting: #5f6763; --st-idle: #8b918d; --st-done: #4c7a57; --st-unknown: #7c827f;
-    --pj-samvision: #2f5f98; --pj-gauzemate: #9c6224; --pj-gyst: #3b8241; --pj-mfe: #85598f; --pj-commandcenter: #23775a;
+    --pj-samvision: #c0392b; --pj-gauzemate: #23854a; --pj-gyst: #b8650f; --pj-mfe: #7a46c2; --pj-commandcenter: #2a63c9;
+    --vs-plan: #7a46c2; --vs-impl: #2a63c9; --vs-review: #9a6b00; --vs-uitest: #8a6d00; --vs-verify: #15736c;
+    --vs-merge: #23854a; --vs-deploy: #b8650f; --vs-jay: #c0392b; --vs-blocked: #b4471f; --vs-closed: #7c827f;
     --human: #93590a; --agent: #2f5f98; --scrim: rgba(40, 34, 22, .22);
     --shadow-pop: 0 14px 36px rgba(50, 40, 20, .18), 0 0 0 1px var(--line-strong);
     --term-bg: #1a1f22; --term-text: #d2dad6; --term-dim: #7a878c; --kbd-bg: #faf9f5; --input-bg: #ffffff;

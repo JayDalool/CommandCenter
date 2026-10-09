@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""cc-session — print a one-time Command Center sign-in code (see server/ccd/signin.py).
+
+CommandCenter.exe runs `ssh -T -o BatchMode=yes -- jay-server <this file>` over Jay's key login and opens
+http://127.0.0.1:7777/#/?signin=<code>, so the page needs no pasted token and no Developer unlock.
+By hand: `ssh jay-server /srv/server/repos/CommandCenter/scripts/cc-session --url`, then open the link.
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "server"))
+
+from ccd.signin import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

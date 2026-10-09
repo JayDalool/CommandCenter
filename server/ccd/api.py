@@ -37,6 +37,10 @@
     GET   /api/developer             is this tab's developer session active?
     POST  /api/developer/unlock      developer token → a short-lived in-memory session id
     POST  /api/developer/lock        end that session
+    POST  /api/developer/handoff     SSH sign-in: developer token (read by scripts/cc-session as jay) → a
+                                     day-long session + a one-time 2-minute code
+    POST  /api/developer/redeem      NO TOKEN (Host/Origin still checked): that code, once → the ccd token
+                                     and the session, so the page needs no pasting and no unlock prompt
     POST  /api/files/mkdir|rename|duplicate|remove   DEVELOPER. explorer operations, descriptor-safe
     GET   /api/search/files          every searchable path in a project (Go to File)
     GET   /api/search/text           ripgrep in a project (Search in Project); bounded, timed
@@ -48,12 +52,23 @@
     POST  /api/action/key            DEVELOPER. esc or enter into a Claude pane
     GET   /api/pty                   live terminal sessions (names, cwd, clients)
     GET   /api/tasks/{key}/work      the ticket's durable pipeline state (plan, stage, gate, roles, review head, …)
-    POST  /api/tasks/{key}/work/{op} one pipeline step: plan start review verify handoff block role finding;
+    POST  /api/tasks/{key}/work/{op} one pipeline step: plan start review verify handoff block role finding
+                                     ask replan rework evidence writer deploy-request deployed stale;
                                      `confirm` (close an owner gate) needs Jay AND Developer Unlock
+    POST  /api/tasks/check           Jay AND Developer Unlock. the task check: a fixed message asks the project's
+                                     idle coordinator Claude to propose stale tasks and add missing ones
+                                     ({copy: true}: send nothing, return the message to paste by hand)
+    POST  /api/tasks/night-shift     Jay AND Developer Unlock. night shift: ccd/night_shift.md (the same text as
+                                     Claude's /night-shift) to the project's idle coordinator; it works the open
+                                     tasks under the pipeline and never deploys ({copy: true} as above)
+    POST  /api/tasks/{key}/answers   Jay AND Developer Unlock. answer Claude's questions; the last answer
+                                     resumes the SAME task Claude session (never starts one)
+    GET   /api/tasks/{key}/record    the ticket's task.md / workflow.md (Command Center storage, never a repo)
     POST  /api/coordinators/adopt    DEVELOPER. bind the one EXISTING Claude at a project root as its
                                      coordinator {project, sessionId}; never starts or renames Claude
     POST  /api/pty/close             DEVELOPER. CLOSE SESSION: ends that one shell's process group
-    WS    /api/pty/{name}            DEVELOPER. attach to repo:<PREFIX> or server (created on first attach);
+    WS    /api/pty/{name}            DEVELOPER. attach to repo|claude|codex:<PREFIX>, repo|claude|codex:<KEY>
+                                     or server (created on first attach);
                                      developer session as subprotocol `ccd-dev.<session>`; Origin required
     GET   /api/desktop/launcher      the Windows launcher's version, SHA-256 and build commit
     GET   /api/desktop/launcher/download  CommandCenter.exe, as an attachment
@@ -89,7 +104,7 @@ from .attachments import content_disposition
 from .daemon import ActionError
 from .files import FileError
 from .gitops import ticket_branch_name
-from .pty import PtyError, session_cwd
+from .pty import PtyError
 
 NO_STORE = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
 WS_PROTOCOL = "ccd.v1"
@@ -99,6 +114,9 @@ WRITE_METHODS = ("POST", "PATCH", "PUT", "DELETE")
 # is not a CORS-safelisted type either, so a cross-site page still needs a preflight.
 STREAM_PATHS = ("/api/files/upload", "/api/attachments")
 DEV_HEADER = "x-ccd-developer"
+# SSH sign-in: the browser trades a one-time code (minted over Jay's SSH login) for the ccd token and a
+# Developer session. It cannot present a token yet, so this one route needs none; Host and Origin still apply.
+REDEEM_PATH = "/api/developer/redeem"
 DEV_WS_PREFIX = "ccd-dev."
 JSON_MAX = 3 * 1024 * 1024  # the editor's 2 MB text, JSON-escaped, with room
 
@@ -137,6 +155,11 @@ class Guard:
             problem = (403, "bad Host header")
         elif headers.get("origin") and headers["origin"] not in self.origins:
             problem = (403, "cross-origin request refused")
+        elif scope["type"] == "http" and path == REDEEM_PATH:
+            if scope.get("method") != "POST":
+                problem = (405, "redeem is POST")
+            elif headers.get("content-type", "").split(";")[0].strip() != "application/json":
+                problem = (415, "actions take application/json")
         elif (path.startswith("/api/") or path == "/api" or scope["type"] == "websocket") and path != "/api/health":
             presented = headers.get("x-ccd-token")
             if not presented and scope["type"] == "websocket":
@@ -340,8 +363,25 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
 
     async def task_work_op(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
-        return daemon.task_work_op(request.path_params["key"], request.path_params["op"], body,
-                                   request.state.actor, developer=dev)
+        return await daemon.task_work_op_async(request.path_params["key"], request.path_params["op"], body,
+                                               request.state.actor, developer=dev)
+
+    async def task_answers(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return await daemon.task_answers(request.path_params["key"], body, request.state.actor, developer=dev)
+
+    async def task_check(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return await daemon.act_task_check(str(body.get("project") or ""), request.state.actor, developer=dev,
+                                           copy=bool(body.get("copy")))
+
+    async def night_shift(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return await daemon.act_night_shift(str(body.get("project") or ""), request.state.actor, developer=dev,
+                                            copy=bool(body.get("copy")))
+
+    async def task_record(request, _):
+        return daemon.task_record(request.path_params["key"])
 
     async def task_context(request, _):
         return daemon.task_context(request.path_params["key"])
@@ -490,8 +530,11 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     async def dev_status(request):
         sid = request.headers.get(DEV_HEADER) or ""
         active = bool(gate and gate.check(sid))
+        # Which developer.token belongs to THIS ccd (a path, never its contents), so a preview does not
+        # send Jay to the live token file.
+        hint = getattr(daemon, "dev_token_hint", None)
         return _json({"active": active, "expiresIn": gate.expires_in(sid) if active else None,
-                      "configured": gate is not None})
+                      "configured": gate is not None, "tokenFile": hint})
 
     async def dev_unlock(request):
         try:
@@ -505,6 +548,35 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
             return _json({"ok": False, "error": problem}, 429 if "too many" in problem else 403)
         daemon._event("security", "developer.unlocked", "Developer Mode unlocked")
         return _json({"ok": True, "session": sid, "expiresIn": gate.expires_in(sid)})
+
+    async def dev_handoff(request):
+        """SSH sign-in, step 1 (scripts/cc-session on the server, as jay): the developer secret from its 0600
+        file → a day-long Developer session and a one-time code for the browser. Needs the ccd token too."""
+        try:
+            body = await _body(request)
+        except ActionError as e:
+            return _err(e)
+        if gate is None:
+            return _json({"ok": False, "error": "developer unlock is not configured"}, 503)
+        code, problem = gate.handoff(body.get("token"))
+        if not code:
+            return _json({"ok": False, "error": problem}, 429 if "too many" in problem else 403)
+        daemon._event("security", "developer.handoff", "SSH sign-in code issued")
+        return _json({"ok": True, "code": code, "expiresIn": gate.CODE_TTL})
+
+    async def dev_redeem(request):
+        """SSH sign-in, step 2 (the page, from #/?signin=<code>): the code → the ccd token and the session."""
+        try:
+            body = await _body(request)
+        except ActionError as e:
+            return _err(e)
+        if gate is None:
+            return _json({"ok": False, "error": "developer unlock is not configured"}, 503)
+        sid, problem = gate.redeem(body.get("code"))
+        if not sid:
+            return _json({"ok": False, "error": problem}, 429 if "too many" in problem else 403)
+        daemon._event("security", "developer.unlocked", "Developer Mode unlocked (SSH sign-in)")
+        return _json({"ok": True, "token": token, "session": sid, "expiresIn": gate.expires_in(sid)})
 
     async def dev_lock(request):
         if gate is not None:
@@ -662,7 +734,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
             await ws.close(code=4403, reason="Developer Unlock required")
             return
         try:
-            session_cwd(name, ptys.roots, ptys.home)
+            ptys.cwd_for(name)
             cols = int(ws.query_params.get("cols", "80"))
             rows = int(ws.query_params.get("rows", "24"))
         except PtyError as e:
@@ -811,11 +883,15 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/tasks", guarded(list_tasks), methods=["GET"]),
         Route("/api/tasks", guarded(create_task), methods=["POST"]),
         Route("/api/tasks/import-preview", guarded(import_preview), methods=["GET"]),
+        Route("/api/tasks/check", guarded(task_check), methods=["POST"]),
+        Route("/api/tasks/night-shift", guarded(night_shift), methods=["POST"]),
         Route("/api/tasks/{key}", guarded(get_task), methods=["GET"]),
         Route("/api/tasks/{key}", guarded(patch_task), methods=["PATCH"]),
         Route("/api/tasks/{key}/context", guarded(task_context), methods=["GET"]),
         Route("/api/tasks/{key}/work", guarded(task_work), methods=["GET"]),
         Route("/api/tasks/{key}/work/{op}", guarded(task_work_op), methods=["POST"]),
+        Route("/api/tasks/{key}/answers", guarded(task_answers), methods=["POST"]),
+        Route("/api/tasks/{key}/record", guarded(task_record), methods=["GET"]),
         Route("/api/tasks/{key}/comments", guarded(comment_task), methods=["POST"]),
         Route("/api/tasks/{key}/relations", guarded(relate_task), methods=["POST"]),
         Route("/api/tasks/{key}/links", guarded(link_task), methods=["POST"]),
@@ -833,6 +909,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/developer", dev_status, methods=["GET"]),
         Route("/api/developer/unlock", dev_unlock, methods=["POST"]),
         Route("/api/developer/lock", dev_lock, methods=["POST"]),
+        Route("/api/developer/handoff", dev_handoff, methods=["POST"]),
+        Route(REDEEM_PATH, dev_redeem, methods=["POST"]),
         *[Route(f"/api/files/{op}", ws_route(files_op, dev=True), methods=["POST"])
           for op in ("mkdir", "rename", "duplicate", "remove")],
         Route("/api/search/files", ws_route(search_files), methods=["GET"]),

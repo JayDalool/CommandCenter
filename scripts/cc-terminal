@@ -8,6 +8,7 @@ server, from the one project registry (server/ccd/registry.py).
 
     cc-terminal repo <PREFIX>     cd <registered root> && exec <login shell> -l
     cc-terminal claude <PREFIX>   exec herdr agent attach <the coordinator's pane>
+    cc-terminal task <KEY>        exec herdr agent attach <the ticket's task Claude session (sv-071)>
     cc-terminal --dry-run …       print what it would run, run nothing
 
 `claude` attaches to the coordinator herdr already runs. It never starts,
@@ -37,6 +38,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "server"))
 from ccd import coordid, registry  # noqa: E402
 
 PREFIX_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
+KEY_RE = re.compile(r"^([A-Z][A-Z0-9]{0,8}(?:-[A-Z0-9]{1,8})?)-([0-9]{1,6})$")
 # `ssh host cmd` gets a non-login PATH; herdr lives in ~/.local/bin, so find it explicitly.
 # Absolute: the exec happens after chdir, so a relative PATH entry must not be left relative.
 HERDR = os.path.abspath(shutil.which("herdr") or os.path.expanduser("~/.local/bin/herdr"))
@@ -83,10 +85,31 @@ def herdr_agents(run=subprocess.run):
     return ((data.get("result") or {}).get("agents")) or []
 
 
+def task_pane(key, agents):
+    roots = {k: p.get("root") for k, p in registry.PROJECTS.items()}
+    r = coordid.task_session(key, agents, exclude=coordid.coordinator_panes(agents, roots))
+    if r["state"] == "ready":
+        return r["paneId"]
+    if r["state"] == "multiple":
+        raise Refused(f"{len(r['candidates'])} Claude sessions are named {key.lower()}; close the extra one in herdr.")
+    raise Refused(f"no Claude task session for {key} is running (it is named {key.lower()}). Command Center never "
+                  f"starts one; ask the project coordinator to start it, then open this terminal again.")
+
+
 def plan(argv, agents_fn=herdr_agents):
     """(executable, args, cwd, title) for the request, or Refused. Pure apart from agents_fn."""
+    if len(argv) == 2 and argv[0] == "task":
+        key = argv[1]
+        m = KEY_RE.match(key) if isinstance(key, str) else None
+        if not m:
+            raise Refused("task must be a ticket key such as SV-071")
+        found = registry.resolve_prefix(m.group(1))
+        if not found:
+            raise Refused(f"{m.group(1)} is not a registered ticket prefix")
+        _, root = project_for(registry.prefix_of(found[1]))
+        return HERDR, ["herdr", "agent", "attach", task_pane(key, agents_fn())], root, f"Claude — {key}"
     if len(argv) != 2 or argv[0] not in ("repo", "claude"):
-        raise Refused("usage: cc-terminal repo|claude <PREFIX>")
+        raise Refused("usage: cc-terminal repo|claude <PREFIX> · cc-terminal task <KEY>")
     action, prefix = argv
     key, root = project_for(prefix)
     name = registry.name_of(key)
@@ -116,7 +139,7 @@ def main(argv):
         return 2
     sys.stdout.write(f"\x1b]0;{title}\x07")
     sys.stdout.flush()
-    if argv[0] == "claude" and sys.stdin.isatty():
+    if argv[0] in ("claude", "task") and sys.stdin.isatty():
         # Keys typed while the tab was opening (e.g. Enter after a browser prompt) must not
         # land in a live Claude pane: drop anything already queued before attaching.
         time.sleep(0.3)

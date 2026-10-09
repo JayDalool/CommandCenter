@@ -3,6 +3,12 @@
 Session names are fixed, never paths:
 
     repo:<PREFIX>   a login shell; cwd = that project's registered root (registry.root_of)
+    codex:<PREFIX>  Codex (if installed, else a login shell saying so); cwd = the registered root
+    repo:<KEY>      a Task Room shell; cwd = the ticket's recorded worktree when it is a known
+                    worktree of that project, else the project root (resolved by the daemon)
+    codex:<KEY>     Codex in that same worktree
+    claude:<KEY>    `scripts/cc-terminal task <KEY>`: the herdr attach client for the ticket's
+                    EXISTING task Claude session (named after the key, e.g. sv-071)
     server          a login shell; cwd = $HOME
     claude:<PREFIX> `scripts/cc-terminal claude <PREFIX>`: the herdr attach client for the
                     project's EXISTING coordinator (herdr agent attach <pane>). Closing this
@@ -44,6 +50,7 @@ import json
 import logging
 import os
 import pwd
+import re
 import secrets
 import shutil
 import signal
@@ -74,19 +81,49 @@ class PtyError(Exception):
         self.status, self.message = status, message
 
 
-def session_cwd(name, roots=None, home=None):
-    """The cwd for a session name, from the registry only. Raises PtyError otherwise."""
+KINDS = ("repo", "claude", "codex")
+# <kind>:<TICKET KEY> — a Task Room's terminal (SV-071, GM-014). Checked before the prefix form.
+TASK_NAME_RE = re.compile(r"^(repo|claude|codex):([A-Z][A-Z0-9]{0,8}(?:-[A-Z0-9]{1,8})?-[0-9]{1,6})$")
+PREFIX_NAME_RE = re.compile(r"^(repo|claude|codex):([A-Z][A-Z0-9]{1,8})$")
+# Codex runs only if it is installed; otherwise the pane says so and is a plain shell. A fixed
+# string: nothing from the browser reaches it.
+CODEX_CMD = ('if command -v codex >/dev/null 2>&1; then exec codex; else '
+             'printf "\\n  Codex is not installed on this server (codex is not on PATH).\\n'
+             '  This pane is a plain shell.\\n\\n"; exec "$SHELL" -l; fi')
+
+
+def task_key_of(name):
+    m = TASK_NAME_RE.match(name) if isinstance(name, str) else None
+    return m.group(2) if m else None
+
+
+def session_cwd(name, roots=None, home=None, task=None):
+    """The cwd for a session name, from the registry (and, for a ticket, its recorded worktree) only.
+    Raises PtyError otherwise. `task(key)` → (project root, worktree or None), or raises PtyError."""
     if name == "server":
         return home or pwd.getpwuid(os.getuid()).pw_dir
-    if isinstance(name, str) and (name.startswith("repo:") or name.startswith("claude:")):
-        prefix = name.split(":", 1)[1]
+    if not isinstance(name, str):
+        raise PtyError(400, "bad session name")
+    m = TASK_NAME_RE.match(name)
+    if m:
+        if task is None:
+            raise PtyError(404, "task terminals are not configured")
+        root, worktree = task(m.group(2))
+        # Claude attaches from the project root; the shells and Codex work in the ticket's worktree.
+        cwd = worktree if m.group(1) != "claude" and worktree else root
+        if cwd and os.path.isdir(cwd):
+            return os.path.realpath(cwd)
+        raise PtyError(404, f"{m.group(2)} has no checkout on this server")
+    m = PREFIX_NAME_RE.match(name)
+    if m:
+        prefix = m.group(2)
         roots = roots if roots is not None else {
             p["prefix"]: p.get("root") for p in registry.PROJECTS.values()}
         root = roots.get(prefix)
         if root and os.path.isdir(root):
             return os.path.realpath(root)
         raise PtyError(404, f"no registered project with prefix {prefix!r}")
-    raise PtyError(400, "session must be repo:<PREFIX>, claude:<PREFIX> or server")
+    raise PtyError(400, "session must be repo|claude|codex:<PREFIX>, repo|claude|codex:<TICKET> or server")
 
 
 class Client:
@@ -117,10 +154,11 @@ class Session:
 
 class PtyManager:
     def __init__(self, audit=None, roots=None, home=None, shell=None, env=None, own_scope=False,
-                 cc_terminal=None, python=None):
+                 cc_terminal=None, python=None, task=None):
         self.sessions = {}
         self.audit = audit or (lambda kind, text, data: None)
         self.roots = roots
+        self.task = task   # key → (project root, worktree|None); the daemon resolves it from tasks.db
         self.home = home
         pw = pwd.getpwuid(os.getuid())
         self.shell = shell or pw.pw_shell or "/bin/bash"
@@ -184,13 +222,22 @@ class PtyManager:
 
     def command_for(self, name):
         """The fixed command for a validated session name. Nothing from the browser but the prefix."""
+        if task_key_of(name) and name.startswith("claude:"):
+            # The herdr attach client for the ticket's EXISTING task Claude session (named after the
+            # key, e.g. sv-071). Never starts one: no task session means a clear message.
+            return [self.python, self.cc_terminal, "task", task_key_of(name)]
         if name.startswith("claude:"):
             # NOT a Claude process: the herdr attach client for the EXISTING coordinator, resolved
             # by the one shared helper (scripts/cc-terminal), exactly as the native terminal does.
             # The browser names only the registered prefix; the helper refuses zero or several
             # coordinators and never starts or resumes a session.
             return [self.python, self.cc_terminal, "claude", name.split(":", 1)[1]]
+        if name.startswith("codex:"):
+            return [self.shell, "-l", "-c", CODEX_CMD]
         return [self.shell, "-l"]
+
+    def cwd_for(self, name):
+        return session_cwd(name, self.roots, self.home, self.task)
 
     def exec_plan(self, name, unit=None):
         """(executable, argv) as execve will receive them, with or without the systemd scope."""
@@ -209,7 +256,7 @@ class PtyManager:
 
     async def open(self, name, cols=80, rows=24):
         """The session `name`, starting it if needed. Returns (session, created)."""
-        cwd = session_cwd(name, self.roots, self.home)
+        cwd = self.cwd_for(name)
         deadline = time.monotonic() + CLOSE_GRACE + 10.0
         while True:
             closing = None
@@ -462,3 +509,13 @@ class PtyManager:
 
     def list(self):
         return [s.public() for s in self.sessions.values()]
+
+    async def close_task(self, key):
+        """A ticket closed: end its Task Room terminals (claude: is only the attach client). Returns the names."""
+        names = [n for n in list(self.sessions) if task_key_of(n) == key]
+        for n in names:
+            try:
+                await self.close(n, "closed (task closed)")
+            except PtyError:
+                pass
+        return names

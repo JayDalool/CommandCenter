@@ -7,7 +7,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { vi } from "vitest";
 import { app, initial } from "../src/store/app";
 import { AppShell } from "../src/components/Shell";
-import { Workspace } from "../src/screens/Workspace";
+import { Files as Workspace } from "../src/screens/Files";
 import { state, tasks } from "./helpers";
 
 beforeEach(() => {
@@ -18,7 +18,7 @@ beforeEach(() => {
     root: "/srv/x", exists: true, branch: "main", github: null, coordinator: null }] });
   vi.spyOn(app.api, "listDir").mockResolvedValue({ project: "samvision", path: "", crumbs: [], entries: [], truncated: false, git: false });
   vi.spyOn(app.api, "development").mockResolvedValue({ rows: [], seq: 0, gitAsOf: null, stages: [], notes: [] });
-  location.hash = "#/workspace?project=samvision";
+  location.hash = "#/files?project=samvision";
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });

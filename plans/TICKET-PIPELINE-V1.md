@@ -106,8 +106,8 @@ already read). Ticket work sessions are named `<key>` and exist only while the
 ticket is worked; the project coordinator stays separate. No AI poller: ccd's
 existing GitHub poll and herdr events drive every automatic transition.
 
-Concurrency: `max_lanes` = 2 tickets IN_PROGRESS with an implementer at once (all
-projects); `start` refuses the third. Overlap classification stays the
+Concurrency: `max_lanes` = 2 tickets IN_PROGRESS with an implementer at once **per project**
+(2026-10-09, Jay: was all projects; a registry pipeline `max_lanes` overrides it); `start` refuses the third. Overlap classification stays the
 coordinator's judgement (recorded in the handoff).
 
 ## UI CHANGES

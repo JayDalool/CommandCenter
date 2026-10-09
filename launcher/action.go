@@ -20,6 +20,7 @@ const (
 	ActionClaude = "claude"
 	ActionRepo   = "repo"
 	ActionServer = "server"
+	ActionUnlock = "unlock" // commandcenter://unlock: sign in over SSH and open a signed-in window
 
 	uriScheme  = "commandcenter"
 	maxURI     = 200
@@ -88,6 +89,12 @@ func parseAction(uri string) (Action, error) {
 		return Action{}, errors.New("the link has more than one '?'")
 	}
 	path = strings.TrimSuffix(path, "/")
+	if strings.EqualFold(path, ActionUnlock) {
+		if hasQuery {
+			return Action{}, errors.New("unlock takes no parameters")
+		}
+		return Action{Kind: ActionUnlock}, nil
+	}
 	parts := strings.Split(path, "/")
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "terminal") {
 		return Action{}, errors.New("only commandcenter://terminal/... links are supported")
@@ -326,6 +333,21 @@ func runAction(p Platform, log *logger, uri string) int {
 	if err != nil {
 		p.Alert(fmt.Sprintf(actionFail+"the settings file has a problem:\n%s\n\n%v", cfgPath, err), true)
 		return 2
+	}
+	if a.Kind == ActionUnlock {
+		// The page asked to sign in again (its Developer session ended). Opens one signed-in window on the
+		// running tunnel; every other Command Center window picks the session up from it.
+		app := newApp(p, log)
+		url := fmt.Sprintf("http://127.0.0.1:%d", cfg.LocalPort)
+		if !app.probe(cfg.LocalPort) {
+			p.Alert(actionFail+"Command Center is not running. Start it from CommandCenter.exe.", true)
+			return 1
+		}
+		if err := app.openDetached(app.signedURL(cfg, url), winJoin(AppDir(p.Getenv), "Browser")); err != nil {
+			p.Alert(actionFail+err.Error(), true)
+			return 1
+		}
+		return 0
 	}
 	if err := openTerminal(p, log, cfg, a); err != nil {
 		log.Printf("terminal failed: %v", err)

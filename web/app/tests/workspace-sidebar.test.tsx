@@ -15,7 +15,7 @@ vi.mock("../src/workspace/Terminal", () => ({ TerminalView: ({ label }: { label:
 
 import { app, initial } from "../src/store/app";
 import { prefs, parsePrefs } from "../src/lib/prefs";
-import { Workspace, workspaceTabs } from "../src/screens/Workspace";
+import { Files as Workspace, workspaceTabs } from "../src/screens/Files";
 import { buildItems } from "../src/components/CommandPalette";
 import { state, tasks } from "./helpers";
 import type { ScmStatus } from "../src/api/types";
@@ -29,7 +29,7 @@ beforeEach(() => {
   vi.restoreAllMocks();
   const t = tasks();
   app.store.set({ ...initial, auth: "ok", state: state(), stateAt: Date.now(), tickets: t.tickets, ticketsLoaded: true, taskProjects: t.projects, meta: t.meta });
-  location.hash = "#/workspace?project=samvision";
+  location.hash = "#/files?project=samvision";
   prefs.patch({ wsSide: "explorer", wsExplorerOpen: true, wsTermOpen: true, wsMax: "none", consoleTab: "claude" });
   workspaceTabs.set(() => ({ tabs: [], views: [], active: null }));
   reveal.mockReset();
@@ -165,7 +165,7 @@ describe("legacy events and addresses", () => {
     expect(await within(mainArea()).findByRole("tab", { name: /Development/ })).toBeInTheDocument();
   });
   it("?view=search opens the Search sidebar", async () => {
-    location.hash = "#/workspace?project=samvision&view=search";
+    location.hash = "#/files?project=samvision&view=search";
     await ready();
     await waitFor(() => expect(prefs.get().wsSide).toBe("search"));
   });
@@ -189,7 +189,7 @@ describe("palette events", () => {
   });
 
   it("the palette offers every Workspace action and each dispatches the new event shape", () => {
-    location.hash = "#/workspace";
+    location.hash = "#/files";
     vi.useFakeTimers();
     const seen: unknown[] = [];
     const on = (e: Event) => seen.push((e as CustomEvent).detail);
@@ -207,7 +207,7 @@ describe("palette events", () => {
   });
 
   it("Open GitHub opens the current project's repository", () => {
-    location.hash = "#/workspace?project=samvision";
+    location.hash = "#/files?project=samvision";
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     const st = state();
     st.projects.find((p) => p.key === "samvision")!.repoUrl = "https://github.com/o/r";
