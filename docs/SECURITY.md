@@ -37,6 +37,12 @@ Rendered state only: project keys, names, repo slugs and paths; agent pane
 ids, canonical names, roles, states and working directories; PR/issue numbers,
 titles, CI marks; checkbox counts and lines from `docs/jay/*.md`; host numbers.
 
+**`/api/health` needs no token** and, since the launcher's tray notice (CC-023), carries `gates: {open, last}`:
+two integers, the number of open owner gates and the id of the newest gate/blocked event. So another local
+user or process can see how many items wait for Jay and roughly when the pipeline last needed him (the
+activity rhythm). It reveals no ticket key, title, reason or project. The alternative was to give the
+launcher a token, which `launcher/binary_test.go` forbids on purpose.
+
 Never: the GitHub token, Claude credentials, the ntfy URL or any other config
 value outside `PUBLIC_PROJECT_FIELDS`, `.env` contents, transcripts, and
 **terminal titles** (Claude titles its terminal after the conversation, which

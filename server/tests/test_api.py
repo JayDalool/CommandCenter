@@ -188,6 +188,20 @@ class Reads(ApiBase):
         self.assertIn("calls", h)
         self.assertNotIn("token", json.dumps(h).lower())
 
+    def test_health_gates_are_two_integers_and_nothing_else(self):
+        self.assertEqual(self.client.get("/api/health", headers=HOST).json()["gates"], {"open": 0, "last": 0})
+        k = self.tickets.create("gyst", "Risky change", labels=["migration"])[0]["key"]
+        self.daemon.pipeline.plan(k, {"summary": "s", "requirements": ["r"], "approach": "a", "affected": ["x"],
+                                      "risk": "high", "tests": ["t"], "questions": []}, "agent:planner")
+        raw = self.client.get("/api/health", headers=HOST)        # no token: it is open
+        g = raw.json()["gates"]
+        self.assertEqual(sorted(g), ["last", "open"])
+        self.assertEqual(g["open"], 1)
+        self.assertIsInstance(g["last"], int)
+        self.assertGreater(g["last"], 0)
+        self.assertNotIn(k, raw.text)
+        self.assertNotIn("Risky change", raw.text)
+
     def test_activity_lists_events_newest_first(self):
         ev = self.get("/api/activity?limit=5").json()["events"]
         self.assertTrue(ev)

@@ -324,7 +324,9 @@ func TestRunWindowCloseStopsTunnelAfterReconnect(t *testing.T) {
 	if f.ssh[1].kill != 1 {
 		t.Fatalf("current ssh killed %d times", f.ssh[1].kill)
 	}
-	if len(f.alerts) != 0 || f.trays != 0 {
+	// the tray is tried in window mode too (for notices); where it cannot be
+	// shown (this fake), nothing is said and the window still decides.
+	if len(f.alerts) != 0 || f.trays != 1 {
 		t.Fatalf("alerts %q trays %d", f.alerts, f.trays)
 	}
 	if got := strings.Join(f.sshArgs[0], " "); !strings.Contains(got, "-o BatchMode=yes") || !strings.HasSuffix(got, " -- jay-server") {

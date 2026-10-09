@@ -1710,6 +1710,7 @@ class Daemon:
             "host": {"asOf": self.host["asOf"], "error": self.host["error"]},
             "tasks": {"enabled": self.tasks is not None,
                       "schemaVersion": tasks_mod.SCHEMA_VERSION if self.tasks is not None else None},
+            "gates": self.pipeline.gate_counts() if self.pipeline is not None else {"open": 0, "last": 0},
             "seq": self.seq,
             "uptimeS": round(_now() - self.started, 1),
             "version": __version__,

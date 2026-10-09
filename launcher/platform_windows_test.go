@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -89,6 +90,51 @@ func TestTrayStopsOnRequest(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("tray did not stop")
 		}
+	}
+}
+
+func TestFillBalloon(t *testing.T) {
+	var nid notifyIconData
+	nid.UFlags = nifMessage | nifIcon | nifTip
+	fillBalloon(&nid, GateNoticeText(3))
+	if got := syscall.UTF16ToString(nid.SzInfo[:]); got != "A new item needs you (3 open)" {
+		t.Fatalf("info %q", got)
+	}
+	if got := syscall.UTF16ToString(nid.SzInfoTitle[:]); got != title {
+		t.Fatalf("title %q", got)
+	}
+	if nid.UFlags != nifMessage|nifIcon|nifTip|nifInfo || nid.DwInfoFlags != niifInfo {
+		t.Fatalf("flags %#x info flags %#x", nid.UFlags, nid.DwInfoFlags)
+	}
+	// longer than the 256-slot buffer: cut, still zero-terminated
+	fillBalloon(&nid, strings.Repeat("x", 400))
+	if n := len(syscall.UTF16ToString(nid.SzInfo[:])); n != 255 {
+		t.Fatalf("long text kept %d characters, want 255", n)
+	}
+}
+
+// A notice sent to a running tray must not hang or crash it, and the tray must
+// still stop on request. (Whether the balloon is drawn is for a person to see;
+// CI sessions may have no shell.)
+func TestTrayAcceptsNotices(t *testing.T) {
+	p := newPlatform()
+	defer p.Shutdown()
+	stop := make(chan struct{})
+	notices := make(chan string, 2)
+	res := make(chan error, 1)
+	go func() {
+		res <- p.Tray(TrayMenu{Tip: "test", Open: func() {}, Reconnect: func() {}, Notices: notices}, stop)
+	}()
+	time.Sleep(300 * time.Millisecond)
+	notices <- GateNoticeText(1)
+	notices <- GateNoticeText(2)
+	time.Sleep(200 * time.Millisecond)
+	close(stop)
+	select {
+	case err := <-res:
+		t.Logf("tray run: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("tray did not stop")
 	}
 }
 
