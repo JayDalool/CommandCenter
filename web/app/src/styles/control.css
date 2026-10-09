@@ -323,3 +323,14 @@
 .tc-name { display: grid; gap: 2px; min-width: 0; }
 .tc-ok { color: var(--ok); }
 .tc-bad { color: var(--bad); }
+
+/* night shift: a line per project panel, the morning report, Go Live */
+.dash-night { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); padding: 4px 2px; min-width: 0; }
+.dash-night.is-on { color: var(--text); }
+.dash-night.is-on > span:first-child { color: var(--accent); }
+.dash-night.is-jay { color: var(--jay); }
+.dash-night > .trunc { flex: 1; min-width: 0; }
+.night-report { max-height: 55vh; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--font-mono);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin: 8px 0 0; }
+.night-confirm { display: grid; gap: 8px; margin-top: 12px; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--jay) 45%, var(--line)); background: color-mix(in srgb, var(--jay) 7%, var(--surface)); }

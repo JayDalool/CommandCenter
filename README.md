@@ -28,7 +28,9 @@ own; when ccd is down, it builds locally exactly as before.
   tasks — only Jay's "Cancel it" cancels one; **Night shift** sends each idle
   coordinator the `/night-shift` skill (`server/ccd/skills/night-shift/SKILL.md`):
   work every task that does not wait for Jay end to end, merge only where no gate
-  is open (SamVision and GauzeMate: Jay merges), never deploy. A coordinator is never a task session.
+  is open (SamVision and GauzeMate: Jay merges), never deploy. ccd then reminds an
+  idle night-shift coordinator to continue until its morning report says
+  `Status: complete` (or nothing moves after 3 reminders). A coordinator is never a task session.
 - **Waiting for Jay is per task.** A task does not start while it, or a task it
   is blocked by, has an open question, plan or blocker for Jay; everything else
   keeps moving (tasks that need a lawyer never hold anything).
@@ -39,7 +41,10 @@ own; when ccd is down, it builds locally exactly as before.
 - **No dangerous endpoints.** There is no API for merge, deploy, production,
   secrets, Docker, destructive git, or config/rule changes. Merges and deploys
   are done by agents under the pipeline's gates; ccd only records them, and a
-  LIVE deploy cannot be recorded before Jay approved it. Terminals, Claude
+  LIVE deploy cannot be recorded before Jay approved it. **Go Live** is that
+  approval as one press (Jay, Developer Unlock): it approves the project's
+  pending live-deploy requests and asks its coordinator to deploy main by the
+  repository's own runbook, with its checks and rollback. ccd runs no deploy. Terminals, Claude
   input, answers and file writes need a second credential, Developer Unlock
   (once per app session, [docs/SECURITY.md](docs/SECURITY.md)). A test asserts
   the route table exactly. See [docs/API.md](docs/API.md).

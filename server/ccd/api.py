@@ -60,7 +60,13 @@
                                      ({copy: true}: send nothing, return the message to paste by hand)
     POST  /api/tasks/night-shift     Jay AND Developer Unlock. night shift: ccd/skills/night-shift/SKILL.md (the same text as
                                      Claude's /night-shift) to the project's idle coordinator; it works the open
-                                     tasks under the pipeline and never deploys ({copy: true} as above)
+                                     tasks under the pipeline and never deploys ({copy: true} as above);
+                                     Command Center then reminds an idle coordinator until its report says complete
+    GET   /api/night-shift           every project's night shift: running?, coordinator, newest morning report
+    POST  /api/night-shift/end       Jay AND Developer Unlock. stop reminders; tell the coordinator to stop safely
+    POST  /api/go-live               Jay AND Developer Unlock. GO LIVE: approves the project's pending live-deploy
+                                     requests and asks its idle coordinator to deploy main BY THE REPO'S RUNBOOK
+                                     (with its checks and rollback). ccd itself runs no deploy.
     POST  /api/tasks/{key}/answers   Jay AND Developer Unlock. answer Claude's questions; the last answer
                                      resumes the SAME task Claude session (never starts one)
     GET   /api/tasks/{key}/record    the ticket's task.md / workflow.md (Command Center storage, never a repo)
@@ -379,6 +385,17 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
         return await daemon.act_night_shift(str(body.get("project") or ""), request.state.actor, developer=dev,
                                             copy=bool(body.get("copy")))
+
+    async def night_state(request, _):
+        return daemon.night_state()
+
+    async def night_end(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return await daemon.act_night_end(str(body.get("project") or ""), request.state.actor, developer=dev)
+
+    async def go_live(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return await daemon.act_go_live(str(body.get("project") or ""), request.state.actor, developer=dev)
 
     async def task_record(request, _):
         return daemon.task_record(request.path_params["key"])
@@ -885,6 +902,9 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/tasks/import-preview", guarded(import_preview), methods=["GET"]),
         Route("/api/tasks/check", guarded(task_check), methods=["POST"]),
         Route("/api/tasks/night-shift", guarded(night_shift), methods=["POST"]),
+        Route("/api/night-shift", guarded(night_state), methods=["GET"]),
+        Route("/api/night-shift/end", guarded(night_end), methods=["POST"]),
+        Route("/api/go-live", guarded(go_live), methods=["POST"]),
         Route("/api/tasks/{key}", guarded(get_task), methods=["GET"]),
         Route("/api/tasks/{key}", guarded(patch_task), methods=["PATCH"]),
         Route("/api/tasks/{key}/context", guarded(task_context), methods=["GET"]),

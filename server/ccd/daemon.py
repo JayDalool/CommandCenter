@@ -26,6 +26,7 @@ from . import __version__, coordid, coordinators, github, model, registry, sourc
 from . import pipeline as pipeline_mod
 from . import herdr as herdr_mod
 from . import importer
+from . import nightshift as nightshift_mod
 from . import records as records_mod
 from . import tasks as tasks_mod
 from .config import STATE_DIR, public_project
@@ -78,6 +79,26 @@ TASK_CHECK_TEMPLATE = (
     "When done, report in one line: {project} task check: <n> stale proposed, <n> added, <n> questions.\n"
     "Open tasks now ({n}):\n{tasks}"
 )
+# Go Live: Jay's one press to deploy a project's merged batch. ccd runs nothing itself; the coordinator follows
+# the repository's own deploy runbook, with its checks and rollback.
+GO_LIVE_TEMPLATE = (
+    "Go Live from Jay via command-center: deploy {project} to production now.\n"
+    "Jay pressed Go Live after reading the morning report. Deploy main as it is now, following this repository's "
+    "deploy runbook exactly (docs/deployment.md, or the runbook AGENTS.md / CLAUDE.md names). If the repository has "
+    "no deploy runbook, stop and tell Jay; do not improvise a deploy.\n"
+    "1. Before: read the release candidate (the newest report in ~/command-center/night-shift/{project}/, or the PRs "
+    "merged since the last deploy) and note the version live now: that is your rollback target.\n"
+    "2. Deploy by the runbook, then run its post-deploy checks and every TEST AFTER DEPLOY step you can run yourself.\n"
+    "3. If a check fails: roll back by the runbook right away, check the old version is healthy, and say what failed.\n"
+    "4. Record it. For each ticket with an approved live deploy ({approved}): python -m ccd.pipeline_cli deployed <KEY> "
+    "--role coordinator --env live --result pass|fail --evidence \"…\". Write a deploy note to "
+    "~/command-center/deploys/{project}/<YYYY-MM-DD-HHMM>.md: commit deployed, version before, checks and results, "
+    "any rollback.\n"
+    "Authorized by this message: this one deploy of {project}'s main, the runbook's migrations and checks, and a "
+    "rollback. Not authorized: merging, force-push, changing secrets or infrastructure config, any other project.\n"
+    "Report in one line: {project} go-live: pass | rolled back | stopped — <commit> — <checks>."
+)
+
 # Night shift: the same instructions as Claude's /night-shift skill (scripts/install-claude-commands.sh links
 # ~/.claude/skills/night-shift to this folder). Only the project key is filled in.
 NIGHT_SHIFT_FILE = Path(__file__).parent / "skills" / "night-shift" / "SKILL.md"
@@ -201,6 +222,8 @@ class Daemon:
         self._stopping = False
         self.ptys = None          # pty.PtyManager, set by __main__
         self.records_dir = None   # where task records are written; None = off (tests, previews)
+        self.night = None         # nightshift.NightShift (reports + supervisor state); set by __main__
+        self._activity = {}       # project → when one of its tickets last changed (night-shift progress)
         self._record_timers = {}
         self._closing = set()
         self._dirty = asyncio.Event()
@@ -240,7 +263,7 @@ class Daemon:
 
     def start(self):
         loops = [self.herdr_loop, self.github_loop, self.git_loop, self.host_loop, self.derive_loop,
-                 self.housekeeping_loop]
+                 self.housekeeping_loop, self.night_loop]
         self._loops = [asyncio.create_task(fn(), name=fn.__name__) for fn in loops]
         self._event("daemon", "daemon.started", f"ccd {__version__} started", data={"pid": os.getpid()})
         self._dirty.set()
@@ -268,6 +291,8 @@ class Daemon:
         self.subscribers.discard(q)
 
     def _event(self, source, kind, text="", **kw):
+        if source == "tasks" and kw.get("project"):
+            self._activity[kw["project"]] = _now()
         ev = self.store.append(source, kind, text, **kw)
         for q in list(self.subscribers):
             try:
@@ -764,6 +789,86 @@ class Daemon:
             except Exception as e:  # noqa: BLE001
                 log.warning(json.dumps({"msg": "prune failed", "error": repr(e)[:200]}))
             await asyncio.sleep(86400)
+
+    # ---------- night shift supervisor (nightshift.py) ----------
+
+    NIGHT_TICK = 60
+
+    async def night_loop(self):
+        while not self._stopping:
+            await asyncio.sleep(self.NIGHT_TICK)
+            try:
+                await self.night_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 — the supervisor must never take ccd down
+                log.warning(json.dumps({"msg": "night shift tick failed", "error": repr(e)[:200]}))
+
+    async def night_tick(self):
+        """Remind each idle night-shift coordinator to continue, or end its shift (nightshift.NightShift.decide)."""
+        if self.night is None or not self.herdr_state["ok"]:
+            return
+        for proj in self.cfg["projects"]:
+            key = proj["key"]
+            if not self.night.active(key):
+                continue
+            r = coordinators.resolution(proj, self.panes)
+            status = r.get("status") if r["state"] == "ready" else None
+            action = self.night.decide(key, status, self._activity.get(key))
+            if action == "nudge":
+                try:
+                    agent = await self._fresh_agent(r["paneId"])
+                    if agent["status"] in ("idle", "done"):
+                        await self.herdr.prompt(agent["pane_id"], nightshift_mod.NUDGE_TEXT.format(project=key))
+                        self._event("action", "action.night_shift", f"night shift reminder → {coordinators.canonical(proj)}",
+                                    project=key, agent_id=agent["pane_id"], data={"kind": "night_shift_nudge"})
+                except (ActionError, OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
+                    log.warning(json.dumps({"msg": "night shift reminder failed", "project": key, "error": str(e)[:160]}))
+            elif action and action.startswith("end:"):
+                why = self.night.get(key).get("endReason") or action[4:]
+                self._event("action", "action.night_shift", f"{key} night shift ended: {why}", project=key,
+                            data={"kind": "night_shift_ended", "reason": why})
+
+    def night_state(self):
+        """Every project's night shift: state, coordinator, the newest morning report."""
+        out = {}
+        for proj in self.cfg["projects"]:
+            key = proj["key"]
+            r = coordinators.resolution(proj, self.panes) if self.herdr_state["ok"] else {"state": "none"}
+            st = self.night.get(key) if self.night else {}
+            out[key] = {"active": bool(self.night and self.night.active(key)), **{k: st.get(k) for k in (
+                "startedAt", "endedAt", "endReason", "nudges", "goLiveAt")},
+                "coordinator": {"name": coordinators.canonical(proj), "state": r["state"],
+                                "status": r.get("status") if r["state"] == "ready" else None},
+                "report": self.night.report(key) if self.night else None}
+        return {"projects": out}
+
+    async def act_night_end(self, project, actor="jay", developer=False):
+        """Jay ends a project's night shift: no more reminders, and the coordinator is told to stop safely."""
+        if actor != "jay" or not developer:
+            raise ActionError(403, "Developer Unlock required: ending the night shift sends a message to Claude")
+        proj = next((p for p in self.cfg["projects"] if p["key"] == project), None)
+        if proj is None:
+            raise ActionError(404, "unknown project")
+        if self.night is None or not self.night.end(project, "ended by Jay"):
+            raise ActionError(409, f"{project} has no night shift running")
+        self._event("action", "action.night_shift", f"{project} night shift ended by Jay", project=project,
+                    data={"kind": "night_shift_ended", "reason": "ended by Jay"})
+        told = False
+        if self.herdr_state["ok"]:
+            r = coordinators.resolution(proj, self.panes)
+            if r["state"] == "ready":
+                try:
+                    agent = await self._fresh_agent(r["paneId"])
+                    if agent["status"] == "working":   # interrupt the turn cleanly first (Esc), then say why
+                        await self.herdr.call("pane.send_keys", {"pane_id": agent["pane_id"], "keys": ["esc"]})
+                        await asyncio.sleep(1.5)
+                    if agent["status"] != "blocked":
+                        await self.herdr.prompt(agent["pane_id"], nightshift_mod.END_TEXT.format(project=project))
+                        told = True
+                except (ActionError, OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
+                    log.warning(json.dumps({"msg": "night shift end message failed", "error": str(e)[:160]}))
+        return {"ok": True, "project": project, "told": told}
 
     # ---------- workspaces (herdr layout, read-only) ----------
 
@@ -1852,7 +1957,28 @@ class Daemon:
         if copy:
             return {"ok": True, "project": project, "coordinator": None, "text": text}
         name = await self._to_coordinator(project, "night-shift", text, {})
+        if self.night is not None:
+            self.night.start(project)
         return {"ok": True, "project": project, "coordinator": name}
+
+    async def act_go_live(self, project, actor="jay", developer=False):
+        """Go Live: Jay approves every pending live deploy in the project and asks its idle coordinator to deploy
+        main by the repository's runbook (GO_LIVE_TEMPLATE). ccd runs no deploy itself."""
+        if actor != "jay" or not developer:
+            raise ActionError(403, "Developer Unlock required: Go Live deploys to production")
+        ts = self._need_tasks()
+        if not any(p["key"] == project for p in self.cfg["projects"]):
+            raise ActionError(404, "unknown project")
+        pending = [t["key"] for t in ts.list(project=project) if t["status"] not in tasks_mod.CLOSED
+                   and (self.pipeline.work(t["key"]).get("gate") == "deploy")]
+        text = GO_LIVE_TEMPLATE.format(project=project, approved=", ".join(pending) or "none")
+        # The coordinator must be reachable before anything is approved: no approval without the deploy.
+        name = await self._to_coordinator(project, "go-live", text, {"approved": pending})
+        for key in pending:
+            self._pipeline_result(*self._wrap(self.pipeline.confirm, key, "deploy", actor))
+        if self.night is not None:
+            self.night.went_live(project)
+        return {"ok": True, "project": project, "coordinator": name, "approved": pending}
 
     async def act_task_check(self, project, actor="jay", developer=False, copy=False):
         """Ask the project's coordinator Claude to check its open tasks against the repo (TASK_CHECK_TEMPLATE).

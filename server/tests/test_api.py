@@ -33,6 +33,7 @@ ALLOWED = {
     ("GET", "/api/development"),
     ("GET", "/api/tasks"), ("POST", "/api/tasks"), ("GET", "/api/tasks/import-preview"),
     ("POST", "/api/tasks/check"), ("POST", "/api/tasks/night-shift"),
+    ("GET", "/api/night-shift"), ("POST", "/api/night-shift/end"), ("POST", "/api/go-live"),
     ("GET", "/api/tasks/{key}"), ("PATCH", "/api/tasks/{key}"), ("GET", "/api/tasks/{key}/context"),
     ("POST", "/api/tasks/{key}/comments"), ("POST", "/api/tasks/{key}/relations"),
     ("POST", "/api/tasks/{key}/links"),

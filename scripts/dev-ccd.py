@@ -288,6 +288,8 @@ async def main(reseed):
                                  own_scope=not os.environ.get("CCD_DEV_NO_SCOPE"),
                                  task=lambda key: (sandbox[tasks.get(key)["project"]], None))
     daemon.records_dir = DEV / "task-records"
+    from ccd import nightshift
+    daemon.night = nightshift.NightShift(DEV / "night-shift")
 
     @contextlib.asynccontextmanager
     async def lifespan(app):

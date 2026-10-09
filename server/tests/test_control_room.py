@@ -634,6 +634,67 @@ class ControlRoomApi(PipelineApi):
         self.assertEqual(self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "nope"}),
                                           headers=dev).status_code, 404)
 
+    def night(self):
+        from ccd import nightshift
+        self.daemon.night = nightshift.NightShift(tempfile.mkdtemp(prefix="night-"))
+        return self.daemon.night
+
+    def test_night_shift_start_state_reminder_and_end(self):
+        ns = self.night()
+        dev = dict(JSON, **self.dev())
+        self.assertEqual(self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "samvision"}),
+                                          headers=dev).status_code, 200)
+        st = self.get("/api/night-shift").json()["projects"]
+        self.assertTrue(st["samvision"]["active"])
+        self.assertFalse(st["gyst"]["active"])
+        self.assertEqual(st["samvision"]["coordinator"]["state"], "ready")
+        # The coordinator has been idle past the grace: one fixed reminder goes to it.
+        s = ns.state["samvision"]
+        s["idleSince"] = s["startedAt"] - 3600
+        before = len([p for m, p in self.fake.calls if m == "agent.prompt"])
+        self.client.portal.call(self.daemon.night_tick)
+        sent = [p for m, p in self.fake.calls if m == "agent.prompt"][before:]
+        self.assertEqual([p["target"] for p in sent], ["wE:p2"])
+        self.assertIn("Night shift continues", sent[0]["text"])
+        # Ending: needs Developer Unlock; then no more reminders and the coordinator is told to stop.
+        body = json.dumps({"project": "samvision"})
+        self.assertEqual(self.client.post("/api/night-shift/end", content=body, headers=JSON).status_code, 403)
+        import time
+        time.sleep(1.1)                                                               # the per-pane prompt throttle
+        out = self.client.post("/api/night-shift/end", content=body, headers=dev).json()
+        self.assertTrue(out["told"], out)
+        self.assertIn("Jay ended the night shift", [p for m, p in self.fake.calls if m == "agent.prompt"][-1]["text"])
+        self.assertFalse(self.get("/api/night-shift").json()["projects"]["samvision"]["active"])
+        self.assertEqual(self.client.post("/api/night-shift/end", content=body, headers=dev).status_code, 409)
+
+    def test_go_live_approves_pending_live_deploys_and_asks_for_a_runbook_deploy(self):
+        self.night()
+        self.ticket("VERIFYING")
+        self.step("deploy-request", {"env": "live", "what": "valuation v2", "verification": "verifier pass"})
+        self.assertEqual(self.get("/api/tasks/SV-056/work").json()["gate"], "deploy")
+        body = json.dumps({"project": "samvision"})
+        self.assertEqual(self.client.post("/api/go-live", content=body, headers=JSON).status_code, 403)
+        r = self.client.post("/api/go-live", content=body, headers=dict(JSON, **self.dev()))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["approved"], ["SV-056"])
+        w = self.get("/api/tasks/SV-056/work").json()
+        self.assertIsNone(w["gate"])
+        self.assertTrue(w["deploy"]["approvedAt"])                                   # deployed can be recorded now
+        text = [p for m, p in self.fake.calls if m == "agent.prompt"][-1]["text"]
+        self.assertTrue(text.startswith("Go Live from Jay via command-center: deploy samvision to production now."))
+        self.assertIn("deploy runbook exactly", text)
+        self.assertIn("roll back by the runbook", text)
+        self.assertIn("(SV-056)", text)
+        self.assertTrue(self.get("/api/night-shift").json()["projects"]["samvision"]["goLiveAt"])
+
+    def test_go_live_approves_nothing_when_the_coordinator_cannot_be_reached(self):
+        self.ticket("VERIFYING")
+        self.step("deploy-request", {"env": "live", "what": "valuation v2", "verification": "verifier pass"})
+        self.fake.set_status("wE:p2", "working")
+        r = self.client.post("/api/go-live", content=json.dumps({"project": "samvision"}), headers=dict(JSON, **self.dev()))
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(self.get("/api/tasks/SV-056/work").json()["gate"], "deploy")   # still waiting for Jay
+
     def test_task_terminal_cwd_uses_only_a_known_worktree(self):
         self.ticket("INBOX")
         self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")

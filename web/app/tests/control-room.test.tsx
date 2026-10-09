@@ -7,6 +7,8 @@ import { developer, devSession, restoreDevSession, setDevSession } from "../src/
 import { prefs } from "../src/lib/prefs";
 import { stageOf, jayHref, taskHref } from "../src/lib/control";
 import { TaskCheckDialog } from "../src/components/TaskCheck";
+import { NightLine } from "../src/components/NightShift";
+import type { NightProject } from "../src/api/types";
 import { jayQueue } from "../src/tickets/model";
 import { Dashboard, newsText, projectPanels } from "../src/screens/Dashboard";
 import { Workspace } from "../src/screens/Workspace";
@@ -397,4 +399,40 @@ describe("the task check", () => {
     expect((await screen.findAllByText(/is on the night shift/)).length).toBeGreaterThan(1);
   });
 
+});
+
+describe("night shift on the Dashboard", () => {
+  const np = (over: Partial<NightProject> = {}): NightProject => ({ active: false, startedAt: 1, endedAt: 2, endReason: "complete",
+    nudges: 2, goLiveAt: null, coordinator: { name: "samvision", state: "ready", status: "idle" },
+    report: { name: "2026-10-09.md", mtime: 3, status: "complete", text: "Status: complete\n\n1. Ready to deploy\n- SV-080 PR #130 SAFE" },
+    ...over });
+
+  it("shows last night's report and Go Live asks once more before it deploys", async () => {
+    act(() => developer.set({ active: true, expiresAt: null, error: null }));
+    const go = vi.spyOn(app.api, "goLive").mockResolvedValue({ ok: true, project: "samvision", coordinator: "samvision", approved: ["SV-080"] });
+    const changed = vi.fn();
+    render(<NightLine project="samvision" name="SamVision" n={np()} onChanged={changed} />);
+    expect(screen.getByText(/Last night: complete/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Report" }));
+    expect(screen.getByLabelText("Morning report").textContent).toContain("SV-080 PR #130 SAFE");
+    fireEvent.click(screen.getByRole("button", { name: "Go Live…" }));
+    expect(go).not.toHaveBeenCalled();                                   // one more explicit step
+    expect(screen.getByText(/by the repository's deploy runbook/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Yes, go live" }));
+    await waitFor(() => expect(go).toHaveBeenCalledWith("samvision"));
+    await waitFor(() => expect(changed).toHaveBeenCalled());
+  });
+
+  it("while it runs: no Go Live, and End night shift stops it", async () => {
+    act(() => developer.set({ active: true, expiresAt: null, error: null }));
+    const end = vi.spyOn(app.api, "nightShiftEnd").mockResolvedValue({ ok: true, told: true });
+    render(<NightLine project="gyst" name="GYST" n={np({ active: true, endedAt: null, endReason: null,
+      coordinator: { name: "gyst", state: "ready", status: "working" }, report: { name: "x.md", mtime: 3, status: "working", text: "Status: working" } })}
+      onChanged={() => {}} />);
+    expect(screen.getByText(/Night shift running · Claude working · 2 reminders/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Report" }));
+    expect(screen.getByRole("button", { name: "Go Live…" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "End night shift" }));
+    await waitFor(() => expect(end).toHaveBeenCalledWith("gyst"));
+  });
 });
