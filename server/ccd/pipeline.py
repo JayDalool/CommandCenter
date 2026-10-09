@@ -325,10 +325,20 @@ class Pipeline:
                             "WHERE t.key=?", (str(key).upper(),)).fetchone()
         return bool(r) and (r[0] in ("proposed", "accepted") or r[1] is not None)
 
-    def lanes(self):
+    def lanes(self, project):
+        """Implementation lanes running in one project: its tickets IN_PROGRESS with a worktree."""
         return self.db.execute(
             "SELECT COUNT(*) FROM tickets t JOIN ticket_work w ON w.ticket_id=t.id "
-            "WHERE t.status='IN_PROGRESS' AND w.worktree IS NOT NULL").fetchone()[0]
+            "WHERE t.status='IN_PROGRESS' AND w.worktree IS NOT NULL AND t.project=?", (project,)).fetchone()[0]
+
+    def lane_limit(self, project):
+        """At most this many implementation lanes per project (registry pipeline `max_lanes`, else the default)."""
+        return int(registry.pipeline_of(project).get("max_lanes") or self.max_lanes)
+
+    def _lane_free(self, t, what="wait for one to finish"):
+        limit = self.lane_limit(t["project"])
+        if self.lanes(t["project"]) >= limit:
+            raise TaskError(409, f"{limit} implementation lanes are already running in {t['project']}; {what}")
 
     # ---------- writing ----------
 
@@ -403,8 +413,7 @@ class Pipeline:
             if not isinstance(worktree, str) or not worktree.startswith("/") or len(worktree) > 300 \
                     or not re.match(r"^/[A-Za-z0-9._/-]+$", worktree) or "/../" in worktree + "/":
                 raise TaskError(400, "worktree must be an absolute path")
-            if self.lanes() >= self.max_lanes:
-                raise TaskError(409, f"{self.max_lanes} implementation lanes are already running; wait for one to finish")
+            self._lane_free(t)
             held = self.held_by(t["project"], t["key"])
             if held:
                 refs = ", ".join(sorted({h["ref"] for h in held}))
@@ -580,8 +589,8 @@ class Pipeline:
                 return {"status": "READY_TO_IMPLEMENT"}, work, events
             if gate == "failure":
                 stage = (w["blocked"] or {}).get("stage") or "PLAN"
-                if stage == "BUILD" and self.lanes() >= self.max_lanes:
-                    raise TaskError(409, f"{self.max_lanes} implementation lanes are running; resume this one later")
+                if stage == "BUILD":
+                    self._lane_free(t, "resume this one later")
                 work.update(blocked=None, review_cycles=0 if stage == "REVIEW" else w["review"]["cycles"])
                 return {"status": RESUME_STATUS.get(stage, "RESEARCHING")}, work, events
             if gate == "deploy" and not (w["deploy"] or {}).get("requestedAt"):
@@ -793,8 +802,7 @@ class Pipeline:
             self._need(t, ("IN_REVIEW", "READY_TO_MERGE", "VERIFYING", "BLOCKED"), "rework")
             if w["planState"] != "accepted":
                 raise TaskError(409, f"{t['key']} has no accepted plan; re-plan instead")
-            if self.lanes() >= self.max_lanes:
-                raise TaskError(409, f"{self.max_lanes} implementation lanes are already running; wait for one to finish")
+            self._lane_free(t)
             # The change is being rewritten: an approval, a verification, a UI acceptance or a live-deploy
             # approval was for the old one, and an open UI / deploy / merge / failure gate no longer applies.
             work = {"review_verdict": None, "confirmed": [g for g in _no_merge(w["confirmed"]) if g not in ("ui", "deploy")],

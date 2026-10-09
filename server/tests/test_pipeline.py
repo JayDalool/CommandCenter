@@ -98,9 +98,32 @@ class Stages(Base):
         for o in others:
             self.pl.plan(o, PLAN, "agent:planner")
         self.pl.start(others[0], f"{others[0]}-a", "/srv/w/a", "agent:coordinator")
-        with self.assertRaises(TaskError) as e:                      # third lane
+        with self.assertRaises(TaskError) as e:                      # third lane in the same project
             self.pl.start(others[1], f"{others[1]}-b", "/srv/w/b", "agent:coordinator")
         self.assertIn("lanes", e.exception.message)
+        self.assertIn("samvision", e.exception.message)
+
+    def test_lanes_are_counted_per_project(self):
+        sv = [self.ticket() for _ in range(3)]
+        for k in sv:
+            self.pl.plan(k, PLAN, "agent:planner")
+        for k in sv[:2]:
+            self.pl.start(k, f"{k}-x", f"/srv/w/{k}", "agent:coordinator")
+        gz, _ = self.ts.create("gyst", "Galaxy keyboard navigation", "jay")
+        self.pl.plan(gz["key"], PLAN, "agent:planner")              # SamVision's two lanes do not hold GYST
+        self.assertEqual(self.pl.start(gz["key"], f"{gz['key']}-x", "/srv/w/gz", "agent:coordinator")[0]["status"],
+                         "IN_PROGRESS")
+        self.assertEqual((self.pl.lanes("samvision"), self.pl.lanes("gyst")), (2, 1))
+        with self.assertRaises(TaskError):
+            self.pl.start(sv[2], f"{sv[2]}-x", "/srv/w/c", "agent:coordinator")
+        from ccd import registry
+        old = registry.PROJECTS["samvision"].get("pipeline")
+        registry.PROJECTS["samvision"]["pipeline"] = dict(old or {}, max_lanes=3)
+        try:
+            self.assertEqual(self.pl.start(sv[2], f"{sv[2]}-x", "/srv/w/c", "agent:coordinator")[0]["status"],
+                             "IN_PROGRESS")
+        finally:
+            registry.PROJECTS["samvision"]["pipeline"] = old
 
 
 class Review(Base):

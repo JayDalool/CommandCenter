@@ -61,6 +61,8 @@ PROJECTS = {
 # jay_first: no new task starts (pipeline `start`) while the project has an open question for Jay, a plan
 # waiting on his approval or a blocker only he can clear; tasks that need a lawyer (needs:legal, type LEGAL)
 # do not hold it, nor do sign-offs on finished work (merge acceptance, UI review, live deploy).
+# Implementation lanes: at most 2 tickets IN_PROGRESS with a worktree per project (pipeline.MAX_LANES); a
+# project may set "max_lanes" in its pipeline dict.
 # A project overrides with a "pipeline" dict in PROJECTS above.
 PIPELINE_DEFAULTS = {"merge": "auto", "ui_review": False, "jay_first": True}
 
