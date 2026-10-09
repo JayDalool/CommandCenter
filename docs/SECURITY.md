@@ -193,7 +193,12 @@ more); no other worktree is nested inside it and no ignored folder holds a `.git
 bare repository (git deletes ignored files unseen, so an ignored subagent worktree,
 nested clone or backup repo would lose its work); no tracked file is hidden from
 `git status` (skip-worktree, assume-unchanged); no merge, rebase, cherry-pick,
-revert or bisect is in progress; herdr is connected and no pane and no process has its working directory
+revert or bisect is in progress; no tracked folder holds a `.git` folder (git shows nothing
+inside one); no commit is held only by the worktree's own HEAD reflog or `refs/worktree/*`
+(both are deleted with it; commits that a branch reflog also names, such as an amend or
+reset on the branch, do not count, so squash/fixup rebases that leave interim commits only
+in HEAD's reflog keep the worktree: the safe direction); every quick check is repeated
+right before the removal, after the slow scan of ignored folders; herdr is connected and no pane and no process has its working directory
 inside it. The only command is `git -C <repo> worktree remove <path>`: no
 `--force`, no `rm`, the branch is never deleted. Ignored files (node_modules, .venv,
 local copies of secrets) go with the directory; the branch and its pushed commits

@@ -13,7 +13,8 @@ and the first failing check is returned as the reason:
      and no ignored folder holding a `.git` or a bare repository (git ignores those, and
      `worktree remove` would delete them with their uncommitted work)
   5. no commit of the worktree is missing from every remote (ccd never fetches, so a stale
-     remote ref can only make this keep more)
+     remote ref can only make this keep more), and none that only the worktree's own HEAD reflog or
+     refs/worktree/* hold (those go with it)
   6. no herdr pane and no process has its working directory inside it, and herdr answered
      (a pane list ccd cannot see is a reason to wait)
 
@@ -38,16 +39,19 @@ def _env():
 
 
 def _git(cwd, *args, timeout=GIT_TIMEOUT):
-    """(exit code, stdout, last stderr line). A missing git or a timeout is a non-zero code."""
+    """(exit code, stdout, last stderr line). A missing git or a timeout is a non-zero code.
+
+    Output is bytes decoded with surrogateescape, so a file name that is not UTF-8 survives a round trip to
+    os.walk and friends; the stderr line is decoded with replacement because it ends up in an event."""
     try:
-        r = subprocess.run(["git", "-C", cwd, "-c", "core.quotepath=off", *args], capture_output=True, text=True,
+        r = subprocess.run(["git", "-C", cwd, "-c", "core.quotepath=off", *args], capture_output=True,
                            timeout=timeout, env=_env(), stdin=subprocess.DEVNULL)
     except FileNotFoundError:
         return 127, "", "git is not installed"
     except subprocess.TimeoutExpired:
         return 124, "", "git took too long"
-    err = r.stderr.strip().splitlines()
-    return r.returncode, r.stdout, (err[-1] if err else "")[:200]
+    err = r.stderr.decode("utf-8", "replace").strip().splitlines()
+    return r.returncode, r.stdout.decode("utf-8", "surrogateescape"), (err[-1] if err else "")[:200]
 
 
 def _inside(path, root):
@@ -111,15 +115,57 @@ def hidden_from_status(real):
     code, out, err = _git(real, "ls-files", "-v", "-z")
     if code != 0:
         return f"git ls-files failed: {err}"
+    folders = set()
     for entry in out.split("\x00"):
         if entry and (entry[0] == "S" or entry[0].islower()):
             return "it has files hidden from git status (skip-worktree or assume-unchanged)"
+        if len(entry) > 2 and "/" in entry:
+            folders.add(os.path.dirname(entry[2:]))
+    # git never lists anything inside a folder named .git, tracked folders included (docs/.git/notes.txt).
+    # Only folders that hold tracked files are looked at: ignored ones are walked by hidden_repo.
+    if any(os.path.lexists(os.path.join(real, f, ".git")) for f in folders):
+        return "a folder inside it holds a .git that git does not show"
     code, out, err = _git(real, "rev-parse", "--absolute-git-dir")
     if code != 0:
         return f"git rev-parse failed: {err}"
     gitdir = out.strip()
     if any(os.path.lexists(os.path.join(gitdir, name)) for name in IN_PROGRESS):
         return "a merge, rebase, cherry-pick, revert or bisect is in progress"
+    return None
+
+
+def unshared_commits(real):
+    """Why a commit would be lost with this worktree's own git folder, or None.
+
+    The worktree's HEAD reflog and its `refs/worktree/*` refs are deleted with it. Every commit named there
+    must be reachable from a branch, tag or remote ref, which stay. A commit that only a branch reflog also
+    names (an amend, reset or rebase on the branch) is skipped: that reflog is shared and stays."""
+    code, out, err = _git(real, "reflog", "--format=%H", "HEAD")
+    if code != 0:
+        return f"git reflog failed: {err}"
+    tips = set(out.split())
+    code, out, err = _git(real, "for-each-ref", "--format=%(objectname) %(objecttype)", "refs/worktree/")
+    if code != 0:
+        return f"git for-each-ref failed: {err}"
+    for line in out.splitlines():
+        sha, _, kind = line.partition(" ")
+        if kind != "commit":
+            return "refs/worktree holds something that is not a commit"
+        tips.add(sha)
+    if not tips:
+        return None
+    code, out, err = _git(real, "log", "-g", "--branches", "--format=%H")
+    if code != 0:
+        return f"git reflog of the branches failed: {err}"
+    tips -= set(out.split())
+    tips = sorted(tips)
+    for i in range(0, len(tips), 400):
+        code, out, err = _git(real, "rev-list", "--ignore-missing", "-n", "1", *tips[i:i + 400],
+                              "--not", "--branches", "--tags", "--remotes")
+        if code != 0:
+            return f"git rev-list failed: {err}"
+        if out.strip():
+            return "it has commits that only its own reflog or refs/worktree hold"
     return None
 
 
@@ -196,6 +242,19 @@ def blocker(repo, path, branch, pane_cwds, *, root=None, proc="/proc"):
         return "another worktree is nested inside it"
     if mine["branch"] != f"refs/heads/{branch}":
         return f"{branch} is not the branch checked out there"
+    why = _cheap(real, path, pane_cwds, proc)
+    if why:
+        return why
+    # The ignored-folder walk is the slow one, so it comes after every cheap check (it must not repeat on
+    # each poll while a pane is open). The cheap ones then run once more right before the caller removes.
+    why = hidden_repo(real)
+    if why:
+        return why
+    return _cheap(real, path, pane_cwds, proc)
+
+
+def _cheap(real, path, pane_cwds, proc):
+    """The quick checks of a worktree's contents and users, run before and again after the slow walk."""
     code, out, err = _git(real, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
     if code != 0:
         return f"git status failed: {err}"
@@ -209,6 +268,9 @@ def blocker(repo, path, branch, pane_cwds, *, root=None, proc="/proc"):
         return f"git rev-list failed: {err}"
     if out.strip():
         return "it has commits that are on no remote"
+    why = unshared_commits(real)
+    if why:
+        return why
     if pane_cwds is None:
         return "herdr is not connected, so open panes cannot be checked"
     for cwd in pane_cwds:
@@ -219,8 +281,7 @@ def blocker(repo, path, branch, pane_cwds, *, root=None, proc="/proc"):
         return "running processes could not be checked"
     if found:
         return "a process is running inside it"
-    # Last, because it walks the ignored folders: it must not repeat every poll while a pane is open.
-    return hidden_repo(real)
+    return None
 
 
 def remove(repo, path):
@@ -240,12 +301,15 @@ def run(items, pane_cwds, *, root=None, proc="/proc"):
         if not repo or not os.path.isdir(repo):
             out.append((key, project, path, "kept", "the project has no checkout on this server"))
             continue
-        why = blocker(repo, path, branch, pane_cwds, root=root, proc=proc)
-        if why is None:
-            ok, err = remove(repo, path)
-            if ok:
-                out.append((key, project, path, "removed", None))
-                continue
-            why = f"git refused to remove it: {err}"
+        try:
+            why = blocker(repo, path, branch, pane_cwds, root=root, proc=proc)
+            if why is None:
+                ok, err = remove(repo, path)
+                if ok:
+                    out.append((key, project, path, "removed", None))
+                    continue
+                why = f"git refused to remove it: {err}"
+        except Exception as e:  # noqa: BLE001 — one ticket's failure must not stop the others or lose their results
+            why = f"the checks failed with {type(e).__name__}"
         out.append((key, project, path, "kept", why))
     return out

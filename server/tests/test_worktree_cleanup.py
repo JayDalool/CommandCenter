@@ -285,6 +285,108 @@ class Keeps(Repos):
             self.addCleanup(p.kill)
             self.assertKept("process")
 
+    def test_commit_only_in_the_worktrees_head_reflog_is_kept(self):
+        git(self.wt, "checkout", "-q", "--detach")
+        commit(self.wt, "detached.txt")
+        git(self.wt, "checkout", "-q", BRANCH)
+        self.assertEqual(git(self.wt, "status", "--porcelain"), "")
+        self.assertEqual(git(self.wt, "rev-list", "HEAD", "--not", "--remotes"), "")  # the old check is satisfied
+        self.assertKept("reflog")
+        self.assertEqual(self.run_all()[0][3], "kept")
+
+    def test_commit_only_in_a_refs_worktree_ref_is_kept(self):
+        sha = git(self.wt, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "keep me").strip()
+        git(self.wt, "update-ref", "refs/worktree/keep", sha)
+        self.assertEqual(git(self.wt, "status", "--porcelain"), "")
+        self.assertKept("refs/worktree")
+
+    def test_a_tag_or_remote_branch_that_holds_the_reflog_commit_is_enough(self):
+        git(self.wt, "checkout", "-q", "--detach")
+        commit(self.wt, "detached.txt")
+        git(self.wt, "push", "-q", "origin", "HEAD:refs/heads/saved")
+        git(self.wt, "checkout", "-q", BRANCH)
+        git(self.wt, "fetch", "-q")
+        self.assertIsNone(self.blocker())
+
+    def test_amend_and_reset_on_the_pushed_branch_do_not_keep_it_forever(self):
+        commit(self.wt, "c.txt")
+        git(self.wt, "push", "-q")
+        git(self.wt, "commit", "-q", "--amend", "-m", "amended")
+        git(self.wt, "push", "-q", "-f")
+        commit(self.wt, "d.txt")
+        git(self.wt, "reset", "-q", "--hard", "HEAD~1")  # the discarded commit was never pushed
+        self.assertEqual(git(self.wt, "status", "--porcelain"), "")
+        self.assertIsNone(self.blocker())
+        self.assertEqual(self.run_all()[0][3], "removed")
+        self.assertFalse(os.path.exists(self.wt))
+
+    def test_a_file_name_that_is_not_utf8_does_not_break_the_checks(self):
+        commit(self.wt, ".gitignore", "*.log\n")
+        git(self.wt, "push", "-q")
+        with open(os.path.join(os.fsencode(self.wt), b"bad\xff.log"), "w") as f:
+            f.write("1\n")
+        self.assertIsNone(self.blocker())
+        self.assertEqual(self.run_all()[0][3], "removed")
+
+    def test_an_untracked_file_name_that_is_not_utf8_keeps_it(self):
+        with open(os.path.join(os.fsencode(self.wt), b"bad\xff.txt"), "w") as f:
+            f.write("1\n")
+        self.assertKept("changed or untracked")
+
+    def test_an_ignored_non_utf8_folder_is_still_scanned_for_repositories(self):
+        commit(self.wt, ".gitignore", "vend*/\n")
+        git(self.wt, "push", "-q")
+        d = os.path.join(os.fsencode(self.wt), b"vend\xffor")
+        os.makedirs(os.path.join(d, b"x", b".git"))
+        self.assertKept("git repository")
+
+    def test_one_tickets_exception_does_not_stop_the_others_or_lose_results(self):
+        second = self.add_worktree(os.path.join(self.root, "CC-025"), "CC-025-two")
+        third = self.add_worktree(os.path.join(self.root, "CC-026"), "CC-026-three")
+        real = worktree_cleanup.blocker
+
+        def flaky(repo, path, branch, cwds, **kw):
+            if path == second:
+                raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "boom")
+            return real(repo, path, branch, cwds, **kw)
+        items = [("CC-024", "commandcenter", self.repo, BRANCH, self.wt),
+                 ("CC-025", "commandcenter", self.repo, "CC-025-two", second),
+                 ("CC-026", "commandcenter", self.repo, "CC-026-three", third)]
+        with mock.patch.object(worktree_cleanup, "blocker", flaky):
+            out = worktree_cleanup.run(items, [], root=self.root)
+        self.assertEqual([(o[0], o[3]) for o in out],
+                         [("CC-024", "removed"), ("CC-025", "kept"), ("CC-026", "removed")])
+        self.assertIn("UnicodeDecodeError", out[1][4])
+        self.assertTrue(os.path.isdir(second))
+
+    def test_the_cheap_checks_run_again_after_the_slow_walk(self):
+        def walk_then_someone_edits(real):
+            with open(os.path.join(real, "late.txt"), "w") as f:
+                f.write("typed while we were scanning\n")
+            return None
+        with mock.patch.object(worktree_cleanup, "hidden_repo", walk_then_someone_edits):
+            out = self.run_all()
+        self.assertEqual(out[0][3], "kept")
+        self.assertIn("changed or untracked", out[0][4])
+        self.assertTrue(os.path.exists(os.path.join(self.wt, "late.txt")))
+
+    def test_a_pane_opened_during_the_walk_keeps_it(self):
+        panes = []
+        with mock.patch.object(worktree_cleanup, "hidden_repo", lambda real: panes.append(self.wt) and None):
+            out = worktree_cleanup.run([("CC-024", "commandcenter", self.repo, BRANCH, self.wt)], panes, root=self.root)
+        self.assertEqual(out[0][3], "kept")
+        self.assertIn("pane", out[0][4])
+
+    def test_a_dot_git_folder_inside_a_tracked_folder_is_kept(self):
+        os.makedirs(os.path.join(self.wt, "docs"))
+        commit(self.wt, "docs/a.txt")
+        git(self.wt, "push", "-q")
+        os.makedirs(os.path.join(self.wt, "docs", ".git"))
+        with open(os.path.join(self.wt, "docs", ".git", "notes.txt"), "w") as f:
+            f.write("unsaved\n")
+        self.assertEqual(git(self.wt, "status", "--porcelain"), "")
+        self.assertKept("holds a .git")
+
     def test_not_a_registered_worktree(self):
         clone = os.path.join(self.root, "CC-024c")
         git(self.tmp, "clone", "-q", self.remote, clone)
