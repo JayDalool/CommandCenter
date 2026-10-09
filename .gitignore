@@ -17,3 +17,5 @@ config.json
 node_modules/
 dist/
 *.tsbuildinfo
+/launcher/launcher
+/launcher/*.exe

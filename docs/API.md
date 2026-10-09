@@ -11,7 +11,7 @@ must be the same origin. Responses are JSON with `Cache-Control: no-store`.
 
 | | |
 |---|---|
-| `GET /api/health` | `{ok, herdr{ok,connected,protocol,lastEventAt,lastSnapshotAt,reconnects,resyncs,eventsReceived,warning}, gh{ok,projects{key:{asOf,error}}}, git, host, seq, uptimeS, version, pid, calls{gh,git,…}, dbBytes, lastPollAges}` — no token |
+| `GET /api/health` | `{ok, herdr{ok,connected,protocol,lastEventAt,lastSnapshotAt,reconnects,resyncs,eventsReceived,warning}, gh{ok,projects{key:{asOf,error}}}, git, host, tasks, gates{open,last}, seq, uptimeS, version, pid, calls{gh,git,…}, dbBytes, lastPollAges}` — no token. `gates` is two integers: `open` = open owner gates (the gate rows of Needs Jay; questions are not counted), `last` = id of the newest `pipeline.gate_opened` / `pipeline.blocked` event in the append-only `ticket_events` (0 when none; it only grows). The launcher reads them to show a tray notice; no keys, titles or reasons |
 | `GET /api/state` | full bootstrap: `seq` (the log position this state reflects), `latestSeq`, `agents[]`, `coordinators{samvision,gauzemate,gyst,mfe}`, `projects[]`, `needs[]`, `blocked[]`, `stale[]`, `alerts[]`, `host`, `sources`, `totals`, `herdr_error`, `brief`. Superset of the legacy board snapshot. `503` while warming up |
 | `GET /api/activity?limit=100&before=<seq>&kind=&project=` | event history, newest first; `?since=<seq>` returns oldest first |
 | `GET /api/agents/{id}/tail?lines=40` | on-demand pane output (1–200 lines). `id` is a pane id (`wE:p2`) or canonical name (`samvision`). Credential-shaped strings redacted; never stored |

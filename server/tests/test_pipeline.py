@@ -83,6 +83,34 @@ class Stages(Base):
         self.assertEqual((n["ref"], n["gate"], n["kind"]), (k, "plan", "gate"))
         self.assertTrue(n["text"].startswith("Plan needs approval"))
 
+    def test_gate_counts_are_two_integers_that_only_grow(self):
+        self.assertEqual(self.pl.gate_counts(), {"open": 0, "last": 0})
+        a = self.ticket(labels=["architecture"])
+        self.pl.plan(a, PLAN, "agent:planner")
+        c1 = self.pl.gate_counts()
+        self.assertEqual(c1["open"], 1)
+        self.assertGreater(c1["last"], 0)
+        b = self.ticket(labels=["architecture"])
+        self.pl.plan(b, PLAN, "agent:planner")
+        c2 = self.pl.gate_counts()
+        self.assertEqual(c2["open"], 2)
+        self.assertGreater(c2["last"], c1["last"])
+        self.pl.confirm(a, "plan", "jay")      # closing a gate lowers open, never `last`
+        c3 = self.pl.gate_counts()
+        self.assertEqual((c3["open"], c3["last"]), (1, c2["last"]))
+        self.pl.confirm(b, "plan", "jay")
+        self.assertEqual(self.pl.gate_counts(), {"open": 0, "last": c2["last"]})
+        self.assertTrue(all(type(v) is int for v in self.pl.gate_counts().values()))
+
+    def test_a_block_moves_the_gate_marker(self):
+        k = self.ticket()
+        self.to_review(k)
+        before = self.pl.gate_counts()["last"]
+        self.pl.block(k, "tests keep failing", "agent:coordinator")
+        after = self.pl.gate_counts()
+        self.assertGreater(after["last"], before)
+        self.assertEqual(after["open"], 1)
+
     def test_start_needs_the_ticket_branch_convention_and_a_free_lane(self):
         k = self.ticket()
         self.pl.plan(k, PLAN, "agent:planner")
