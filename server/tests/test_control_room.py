@@ -124,7 +124,8 @@ class MergeAcceptance(Base):
         self.assertFalse(needs_acceptance(t, {"confirmed": []}))
         self.assertTrue(needs_acceptance(t, {"confirmed": ["owner:accept"]}))
         self.assertEqual(registry.pipeline_of("samvision")["merge"], "owner")
-        self.assertEqual(registry.pipeline_of("gauzemate")["merge"], "auto")
+        self.assertEqual(registry.pipeline_of("gauzemate")["merge"], "owner")      # Jay accepts every GauzeMate merge
+        self.assertEqual(registry.pipeline_of("gyst")["merge"], "auto")
 
 
 class LiveDeploy(Base):
@@ -356,8 +357,8 @@ class TaskTerminals(unittest.TestCase):
 
 
 class TaskCheck(Base):
-    """The task check: Claude proposes a stale task, only Jay's answer cancels it; and Jay first — no new task
-    starts while Jay has an open question, plan or blocker in the project (lawyer tasks excepted)."""
+    """The task check: Claude proposes a stale task, only Jay's answer cancels it; and a task that waits for Jay
+    (an open question, plan or blocker on it or on a task it is blocked by) does not start — the rest do."""
     def test_a_stale_proposal_is_one_cancel_or_keep_question_once(self):
         k = self.ticket()
         self.pl.stale(k, "superseded by SV-071 (plans/valuation.md)", "agent:coordinator")
@@ -376,35 +377,41 @@ class TaskCheck(Base):
         with self.assertRaises(TaskError):
             self.pl.stale(k, "x", "agent:coordinator")
 
-    def test_jay_first_holds_a_new_start_until_his_questions_are_answered(self):
-        a, b = self.ticket(), self.ticket()
-        self.pl.plan(b, PLAN, "agent:planner")
+    def test_only_the_task_waiting_on_jay_and_tasks_blocked_by_it_wait(self):
+        a, b, c = self.ticket(), self.ticket(), self.ticket()
+        for k in (a, b, c):
+            self.pl.plan(k, PLAN, "agent:planner")
         self.pl.ask(a, ["Which layout?"], "agent:coordinator")
-        with self.assertRaises(TaskError) as e:
-            self.pl.start(b, f"{b}-x", f"/srv/w/{b}", "agent:coordinator")
+        self.ts.relate(c, "blocked_by", a, "jay")                          # c depends on a
+        with self.assertRaises(TaskError) as e:                           # a has Jay's open question
+            self.pl.start(a, f"{a}-x", f"/srv/w/{a}", "agent:coordinator")
         self.assertEqual(e.exception.status, 409)
-        self.assertIn("Jay first", e.exception.message)
+        self.assertIn("waits for Jay", e.exception.message)
+        with self.assertRaises(TaskError) as e:                           # c is blocked by a
+            self.pl.start(c, f"{c}-x", f"/srv/w/{c}", "agent:coordinator")
         self.assertIn(a, e.exception.message)
+        self.assertEqual(self.pl.start(b, f"{b}-x", f"/srv/w/{b}", "agent:coordinator")[0]["status"], "IN_PROGRESS")
         qid = self.pl.work(a)["questions"][0]["id"]
         self.pl.answer(a, [{"id": qid, "answer": "the old one"}], "jay")
-        self.assertEqual(self.pl.start(b, f"{b}-x", f"/srv/w/{b}", "agent:coordinator")[0]["status"], "IN_PROGRESS")
+        self.assertEqual(self.pl.start(c, f"{c}-x", f"/srv/w/{c}", "agent:coordinator")[0]["status"], "IN_PROGRESS")
 
-    def test_a_plan_or_blocker_holds_but_lawyer_tasks_and_sign_offs_do_not(self):
+    def test_a_blocking_plan_or_blocker_holds_but_lawyer_tasks_do_not(self):
         b = self.ticket()
-        self.pl.plan(b, PLAN, "agent:planner")
         risky = self.ticket(labels=["migration"])
         self.pl.plan(risky, PLAN, "agent:planner")                       # plan gate: Jay must approve
-        self.assertEqual([h["ref"] for h in self.pl.held_by("samvision", b)], [risky])
+        self.ts.relate(b, "blocked_by", risky, "jay")
+        self.assertEqual([h["ref"] for h in self.pl.held(b)], [risky])
         self.ts.update(risky, {"needs_legal": True}, "jay")               # waits on a lawyer, not on Jay
-        self.assertEqual(self.pl.held_by("samvision", b), [])
+        self.assertEqual(self.pl.held(b), [])
         stuck = self.ticket()
         self.pl.block(stuck, "the API key expired", "agent:coordinator")
-        self.assertEqual([h["ref"] for h in self.pl.held_by("samvision", b)], [stuck])
-        self.assertEqual(self.pl.held_by("gauzemate"), [])               # per project
+        self.assertEqual(self.pl.held(b), [])                             # not a dependency: b goes ahead
+        self.ts.relate(b, "blocked_by", stuck, "jay")
+        self.assertEqual([h["ref"] for h in self.pl.held(b)], [stuck])
         old = registry.PROJECTS["samvision"].get("pipeline")
         registry.PROJECTS["samvision"]["pipeline"] = dict(old or {}, jay_first=False)
         try:
-            self.assertEqual(self.pl.held_by("samvision", b), [])
+            self.assertEqual(self.pl.held(b), [])
         finally:
             registry.PROJECTS["samvision"]["pipeline"] = old
 
@@ -426,6 +433,10 @@ class TaskCheck(Base):
         self.assertEqual((m, path, actor), ("POST", "/api/tasks", "agent:coordinator"))
         self.assertEqual((body["project"], body["title"], body["labels"]), ("samvision", "Export CSV", ["task-check"]))
         self.assertIn("plans/x.md:12", body["description"])
+        body = pipeline_cli.build(["add", "samvision", "--role", "coordinator", "--label", "night-finding",
+                                   "--title", "Backup restore fails", "--note", "tests/test_backup.py fails"])[2]
+        self.assertEqual(body["labels"], ["night-finding"])
+        self.assertIn("night shift", body["description"])
 
 
 class ControlRoomApi(PipelineApi):
@@ -611,8 +622,10 @@ class ControlRoomApi(PipelineApi):
         text = sent[0]["text"]
         self.assertTrue(text.startswith("Night shift from Jay via command-center."))
         self.assertIn("pipeline_cli tasks samvision", text)
-        self.assertIn("deploy or go live, to production or anywhere else", text)
-        self.assertIn("NO open gate", text)
+        self.assertIn("deploy or go live, anywhere", text)
+        self.assertIn("gate null", text)
+        self.assertIn("SamVision and GauzeMate: Jay merges every PR", text)
+        self.assertIn("Status: complete", text)
         self.assertNotIn("<project>", text)
         self.assertNotIn("description:", text)                                       # the command's frontmatter
         r = self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "gyst", "copy": True}), headers=dev)

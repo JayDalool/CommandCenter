@@ -5,7 +5,7 @@ import { vi } from "vitest";
 import { app, initial } from "../src/store/app";
 import { developer, devSession, restoreDevSession, setDevSession } from "../src/api/developer";
 import { prefs } from "../src/lib/prefs";
-import { holdItems, stageOf, jayHref, taskHref } from "../src/lib/control";
+import { stageOf, jayHref, taskHref } from "../src/lib/control";
 import { TaskCheckDialog } from "../src/components/TaskCheck";
 import { jayQueue } from "../src/tickets/model";
 import { Dashboard, newsText, projectPanels } from "../src/screens/Dashboard";
@@ -391,19 +391,10 @@ describe("the task check", () => {
     const night = vi.spyOn(app.api, "nightShift").mockImplementation(async (p) => ({ ok: true, project: p, coordinator: p }));
     render(<TaskCheckDialog mode="night" onClose={() => {}} />);
     expect(screen.getByText(/never deploys or goes live/)).toBeInTheDocument();
+    expect(screen.getByText(/SamVision and GauzeMate stop at Ready to Merge/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Start night shift in all projects" }));
     await waitFor(() => expect(night.mock.calls.length).toBeGreaterThan(1));
     expect((await screen.findAllByText(/is on the night shift/)).length).toBeGreaterThan(1);
   });
 
-  it("Jay first: questions, plans and blockers hold new work; lawyer tasks and merges do not", () => {
-    const tk = (key: string, over: Partial<Ticket> = {}) => ticket({ key, project: "samvision", flags: [], type: null, ...over });
-    const item = (ref: string, kind: string, gate?: string) => ({ id: `${kind}:${ref}`, kind, verb: "x", project: "samvision", ref,
-      text: "", flags: [], since: null, url: null, gate }) as never;
-    const queue = [item("SV-1", "questions"), item("SV-2", "gate", "plan"), item("SV-3", "gate", "merge"),
-      item("SV-4", "gate", "failure"), item("SV-5", "questions")];
-    const tickets = [tk("SV-1"), tk("SV-2"), tk("SV-3"), tk("SV-4"), tk("SV-5", { flags: ["needs_legal"] })];
-    expect(holdItems(queue, tickets, "samvision").map((j) => j.ref)).toEqual(["SV-1", "SV-2", "SV-4"]);
-    expect(holdItems(queue, tickets, "gauzemate")).toEqual([]);
-  });
 });

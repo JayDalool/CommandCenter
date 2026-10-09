@@ -317,7 +317,6 @@
 .qs-stale { display: grid; gap: 8px; padding: 10px 12px; margin-bottom: 10px; border: 1px solid color-mix(in srgb, var(--jay) 45%, var(--line));
   border-radius: 8px; background: color-mix(in srgb, var(--jay) 7%, var(--surface)); }
 .qs-stales { display: grid; }
-.dash-hold { margin-top: 4px; font-size: 12px; color: var(--jay); font-weight: 600; }
 .tc-list { display: grid; gap: 6px; margin-top: 12px; }
 .tc-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 10px;
   border: 1px solid var(--line); border-left: 3px solid var(--pj); border-radius: 6px; background: var(--surface); }

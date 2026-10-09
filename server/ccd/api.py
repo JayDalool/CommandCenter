@@ -58,7 +58,7 @@
     POST  /api/tasks/check           Jay AND Developer Unlock. the task check: a fixed message asks the project's
                                      idle coordinator Claude to propose stale tasks and add missing ones
                                      ({copy: true}: send nothing, return the message to paste by hand)
-    POST  /api/tasks/night-shift     Jay AND Developer Unlock. night shift: ccd/night_shift.md (the same text as
+    POST  /api/tasks/night-shift     Jay AND Developer Unlock. night shift: ccd/skills/night-shift/SKILL.md (the same text as
                                      Claude's /night-shift) to the project's idle coordinator; it works the open
                                      tasks under the pipeline and never deploys ({copy: true} as above)
     POST  /api/tasks/{key}/answers   Jay AND Developer Unlock. answer Claude's questions; the last answer

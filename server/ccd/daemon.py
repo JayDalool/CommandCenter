@@ -74,14 +74,13 @@ TASK_CHECK_TEMPLATE = (
     "Copy no licensed data, records, addresses or secrets into a task, reason or question.\n"
     "This check changes no code: do not plan, start or implement anything, and do not edit, move or delete files.\n"
     "Not authorized by this message: merge, deploy, production, --apply, secrets, rule changes.\n"
-    "Jay first: no new task starts in {project} while Jay has an open question, a plan to approve or a blocker to "
-    "clear there (tasks that need a lawyer excepted).\n"
+    "A task waits for Jay only while it, or a task it is blocked by, has an open question or decision for him.\n"
     "When done, report in one line: {project} task check: <n> stale proposed, <n> added, <n> questions.\n"
     "Open tasks now ({n}):\n{tasks}"
 )
-# Night shift: the same instructions as Claude's /night-shift command (scripts/install-claude-commands.sh links
-# ~/.claude/commands/night-shift.md to this file). Only the project key is filled in.
-NIGHT_SHIFT_FILE = Path(__file__).with_name("night_shift.md")
+# Night shift: the same instructions as Claude's /night-shift skill (scripts/install-claude-commands.sh links
+# ~/.claude/skills/night-shift to this folder). Only the project key is filled in.
+NIGHT_SHIFT_FILE = Path(__file__).parent / "skills" / "night-shift" / "SKILL.md"
 
 
 def night_shift_text(project):
@@ -1074,12 +1073,11 @@ class Daemon:
                              f"{t['key'].lower()} (e.g. herdr pane rename to {t['key'].lower()}); Command Center's Task "
                              f"Room attaches to that name. Ask Jay questions with python -m ccd.pipeline_cli ask "
                              f"{t['key']} --role coordinator --question \"…\" — his answers come back into that session.")
-            held = self.pipeline.held_by(t["project"], t["key"])
+            held = self.pipeline.held(t["key"])
             if held:
-                ctx["brief"] += (f"\n\nJay first: {t['project']} has {len(held)} open question(s), plan(s) or blocker(s) "
-                                 f"waiting on Jay ({', '.join(sorted({h['ref'] for h in held}))[:200]}). Do not start new "
-                                 f"implementation until he has answered them; planning and finishing work already "
-                                 f"started may go on.")
+                ctx["brief"] += (f"\n\nWaits for Jay: open question(s) or decision(s) on "
+                                 f"{', '.join(sorted({h['ref'] for h in held}))[:200]}. Do not start implementing "
+                                 f"{t['key']} until he has answered; take another task meanwhile.")
         ctx["dispatchable"] = bool(coord) and t["project"] in set(
             self.cfg.get("dispatch_projects") or ("samvision", "gauzemate"))
         return ctx
@@ -1843,7 +1841,7 @@ class Daemon:
 
     async def act_night_shift(self, project, actor="jay", developer=False, copy=False):
         """Night shift: the project's idle coordinator works its open tasks under the pipeline until morning —
-        plan, implement, review, merge where no gate is open, verify; never deploy (night_shift.md). Jay with
+        plan, implement, review, merge where no gate is open, verify; never deploy (skills/night-shift/SKILL.md). Jay with
         Developer Unlock. With copy, nothing is sent: the message comes back to paste by hand."""
         if actor != "jay" or not developer:
             raise ActionError(403, "Developer Unlock required: the night shift sends a message to Claude")

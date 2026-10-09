@@ -77,7 +77,7 @@ def policy(ticket, project_key=None):
 
 
 CLOSED_STATUSES = ("DONE", "DENIED", "CANCELLED")
-HOLDING_GATES = ("plan", "failure")       # jay_first: Jay's decisions that hold new work (questions too)
+HOLDING_GATES = ("plan", "failure")       # jay_first: Jay's decisions that hold a ticket (questions too)
 STALE_OPTIONS = ("Cancel it", "Keep it")   # the task check's question; "Cancel it" cancels the ticket
 # The ten stages Jay sees (spec §24). The canonical statuses stay as they are underneath.
 VISIBLE_STAGES = ("Planning", "Implementing", "Reviewing", "UI Testing", "Verifying", "Ready to Merge", "Deploying",
@@ -306,16 +306,20 @@ class Pipeline:
             out.append(item)
         return out
 
-    def held_by(self, project, key=None):
-        """What holds new work in `project` under the jay_first rule: on tickets other than `key`, every open
-        question for Jay and every decision only Jay can make before work goes on (a plan to approve, a blocker
-        to clear). Sign-offs on finished work (merge acceptance, UI review, live deploy) do not hold it. A
-        ticket that needs a lawyer (needs:legal, type LEGAL) waits on the lawyer, not on Jay: it never holds."""
-        if not registry.pipeline_of(project).get("jay_first", True):
+    def held(self, key):
+        """What makes this ticket wait for Jay (registry `jay_first`, default on): an open question for Jay, a
+        plan to approve or a blocker only he can clear — on this ticket, or on an open ticket it is blocked by.
+        Every other ticket goes ahead. Sign-offs on finished work (merge acceptance, UI review, live deploy) do
+        not hold; a blocking ticket that needs a lawyer (needs:legal, type LEGAL) waits on the lawyer, not Jay."""
+        t = self.db.execute("SELECT id, key, project FROM tickets WHERE key=?", (str(key).upper(),)).fetchone()
+        if not t or not registry.pipeline_of(t[2]).get("jay_first", True):
             return []
-        legal = {k for (k,) in self.db.execute(
-            "SELECT key FROM tickets WHERE project=? AND (needs_legal=1 OR type='LEGAL')", (project,))}
-        return [n for n in self.needs() if n["project"] == project and n["ref"] != key and n["ref"] not in legal
+        blockers = {k for (k,) in self.db.execute(
+            "SELECT b.key FROM ticket_relations r JOIN tickets b ON b.id=r.src_id WHERE r.dst_id=? AND r.kind='blocks' "
+            "AND b.status NOT IN ('DONE','DENIED','CANCELLED') AND b.needs_legal=0 AND COALESCE(b.type,'')!='LEGAL'",
+            (t[0],))}
+        refs = blockers | {t[1]}
+        return [n for n in self.needs() if n["ref"] in refs
                 and (n["kind"] == "questions" or n.get("gate") in HOLDING_GATES)]
 
     def participating(self, key):
@@ -414,12 +418,11 @@ class Pipeline:
                     or not re.match(r"^/[A-Za-z0-9._/-]+$", worktree) or "/../" in worktree + "/":
                 raise TaskError(400, "worktree must be an absolute path")
             self._lane_free(t)
-            held = self.held_by(t["project"], t["key"])
+            held = self.held(t["key"])
             if held:
                 refs = ", ".join(sorted({h["ref"] for h in held}))
-                raise TaskError(409, f"Jay first: {t['project']} has {len(held)} open question(s) or decision(s) for Jay "
-                                     f"({refs[:200]}). New work starts after he answers them; tasks that need a lawyer "
-                                     f"do not count.")
+                raise TaskError(409, f"{t['key']} waits for Jay: open question(s) or decision(s) on {refs[:200]}. "
+                                     f"Leave it for him and take another task.")
             # The implementation runs in the ticket's task session (spec §8) unless another is named, so the
             # implementer always has a recorded session a reviewer must differ from.
             work = {"worktree": worktree, "roles": self._role(w, "implementer", model, session or t["key"].lower(), at)}

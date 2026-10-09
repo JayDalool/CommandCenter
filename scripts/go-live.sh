@@ -13,7 +13,7 @@
 #   4. switches to the branch and fast-forwards it to origin
 #   5. installs the server requirements, builds and installs the UI as an atomic release, and rebuilds the
 #      Windows launcher offered under Settings → Desktop app
-#   6. links Claude's /night-shift command into ~/.claude/commands (scripts/install-claude-commands.sh)
+#   6. links Claude's /night-shift skill into ~/.claude/skills (scripts/install-claude-commands.sh)
 #   7. restarts ccd (which applies any additive tasks.db migration) and waits for it to answer
 # and prints the exact rollback. It never deletes anything and never touches herdr or any agent.
 set -euo pipefail
@@ -86,7 +86,7 @@ else
   echo "   Go is not installed here; the Desktop app page keeps the old exe"
 fi
 
-echo "== Claude commands (/night-shift)"
+echo "== Claude skills (/night-shift)"
 scripts/install-claude-commands.sh | sed 's/^/   /'
 
 echo "== restart ccd"

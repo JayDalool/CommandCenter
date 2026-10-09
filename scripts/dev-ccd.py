@@ -163,8 +163,8 @@ def seed(ts):
 def seed_control_room(ts):
     """The control room's own shapes: questions waiting, a blocker explained, a live deploy waiting, review rounds."""
     from ccd import registry
-    # The fixtures build several projects' states at once; Jay first (no new start while Jay has an open question)
-    # applies to the running preview, not to setting it up.
+    # The fixtures build several tickets' states at once; waiting for Jay (no start while a ticket has his open
+    # question) applies to the running preview, not to setting it up.
     registry.PIPELINE_DEFAULTS["jay_first"] = False
     try:
         _seed_control_room(ts)
