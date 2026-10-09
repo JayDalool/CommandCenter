@@ -337,6 +337,27 @@ Dashboard ─▶ Workspace ─▶ Task Room
 | wall / rooms / panes / pop-out layout | `web/app/src/workspace/rooms.ts` (localStorage, shared by every window) |
 | screens | `screens/Dashboard.tsx`, `screens/Workspace.tsx`, `screens/Popout.tsx`, `workspace/Room.tsx`, `workspace/Dossier.tsx`, `tickets/{Questions,GateCard}.tsx`, `components/Notifications.tsx`; the old IDE is `screens/Files.tsx` |
 
+### Night shift, the supervisor and Go Live (CC-029, ADR 0006)
+
+```text
+Dashboard ☾ Night shift ─▶ POST /api/tasks/night-shift ─▶ coordinator pane gets skills/night-shift/SKILL.md
+                                                       └▶ NightShift.start()  (.state.json, cutoffAt = next 07:00)
+Daemon.night_loop (60 s) ─▶ night_tick ─▶ NightShift.decide(project, coordinator status, ticket activity)
+      complete report / cutoff / 6 reminders / 3 quiet ─▶ shift ends (nothing typed)
+      due ─▶ fresh read of the pane; idle ─▶ herdr prompt (fixed text) ─▶ NightShift.nudged()  (counted only now)
+Dashboard Report ─▶ Go Live… ─▶ confirm box lists goLive.approves / warnings (GET /api/night-shift)
+      ─▶ POST /api/go-live ─▶ 409 guards ─▶ GO_LIVE_TEMPLATE to the idle coordinator (PREPARE, then wait)
+                           ─▶ pipeline.confirm(deploy) per ticket (errors per ticket) ─▶ NightShift.went_live()
+Jay confirms the deploy himself in the coordinator's pane. ccd never deploys.
+```
+
+`night_loop` is the seventh background loop of `Daemon.start` (beside herdr, github, git, host, derive,
+housekeeping). Its state is `~/command-center/night-shift/.state.json` (atomic write; a restart resumes it) and the
+morning reports are `~/command-center/night-shift/<project>/*.md`, which `GET /api/night-shift` serves (64 KB each).
+Only facts decide a tick: report status, the coordinator's herdr status, ticket changes in the project
+(`Daemon._activity`) and the clock. With herdr down only "complete" and the cutoff can act. `pipeline.Pipeline.held`
+(Jay-first rule) follows direct `blocks` relations only.
+
 ### Desktop notice for new Needs Jay gates (CC-023)
 
 ```text

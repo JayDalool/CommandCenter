@@ -1,6 +1,7 @@
 // NIGHT SHIFT on the Dashboard: each project's line (running / last night), its morning report — a release
-// candidate — and the two decisions that are Jay's: End night shift, and Go Live (the coordinator deploys main by
-// the repository's own runbook; ccd runs no deploy itself).
+// candidate — and the two decisions that are Jay's: End night shift, and Go Live. Go Live approves the listed
+// tickets' live-deploy gates and asks the coordinator to PREPARE the deploy (runbook steps, checks, rollback plan);
+// Jay confirms the deploy himself in the coordinator's pane. ccd runs no deploy and sends no deploy order.
 import { useCallback, useEffect, useState } from "react";
 import { app } from "../store/app";
 import type { NightProject, NightShiftState } from "../api/types";
@@ -48,6 +49,8 @@ export function NightReportDialog({ project, name, n, onClose, onChanged }: {
     finally { setBusy(false); }
   };
   const rep = n.report;
+  const approves = n.goLive?.approves ?? [];
+  const warnings = n.goLive?.warnings ?? [];
   return <Dialog title={`${name} · night shift`} onClose={onClose}>
     <p className="mono-xs muted">
       {n.active ? `Running since ${n.startedAt ? new Date(n.startedAt * 1000).toLocaleTimeString() : "—"}`
@@ -57,20 +60,32 @@ export function NightReportDialog({ project, name, n, onClose, onChanged }: {
     {rep ? <pre className="night-report" aria-label="Morning report">{rep.text}</pre>
       : <p className="muted">No morning report yet.</p>}
     {confirm ? <div className="night-confirm" role="alertdialog" aria-label="Confirm Go Live">
-      <b>Deploy {name} to production now?</b>
-      <p className="text2">Claude deploys <b>main as it is now</b> by the repository's deploy runbook, runs its checks and rolls
-        back by the runbook if one fails. Pending live-deploy requests in {name} are approved by this.</p>
+      <b>Approve the live deploys and ask Claude to prepare {name}'s deploy?</b>
+      <p className="text2">Claude only <b>prepares</b>: the runbook steps, the checks and a rollback plan, then waits. Nothing is
+        deployed until you confirm it yourself in the coordinator's pane.</p>
+      <div>
+        <div className="mono-xs muted">{approves.length ? "Approved by this" : "Nothing is waiting for a live-deploy approval"}</div>
+        {approves.length > 0 && <ul className="night-tickets" aria-label="Tickets to approve">
+          {approves.map(t => <li key={t.key}><span className="mono">{t.key}</span> {t.title}</li>)}</ul>}
+      </div>
+      {warnings.length > 0 && <div className="night-warn" role="note" aria-label="Look at these first">
+        <div className="mono-xs">Merged into main — look at these first</div>
+        <ul className="night-tickets">
+          {warnings.map(t => <li key={t.key}><span className="mono">{t.key}</span> {t.title} <b>— {t.reason}</b></li>)}</ul>
+      </div>}
       <div className="row">
         <button type="button" className="btn is-primary" disabled={busy} data-autofocus
           onClick={() => void act(async () => { const r = await app.api.goLive(project);
+            const bad = r.errors ?? [];
+            if (bad.length) app.toast(`Not approved: ${bad.map(e => `${e.key} (${e.error})`).join("; ")}`, "bad");
             return `Go Live sent to ${r.coordinator}${r.approved.length ? ` · approved ${r.approved.join(", ")}` : ""}`; })}>
-          Yes, go live</button>
+          Yes, approve and prepare</button>
         <button type="button" className="btn is-quiet" onClick={() => setConfirm(false)}>Cancel</button>
       </div>
     </div>
       : <div className="row" style={{ marginTop: 12 }}>
         <button type="button" className="btn is-primary" disabled={busy || n.active} onClick={() => setConfirm(true)}
-          title={n.active ? "End the night shift first" : "Deploy the merged batch by the repo's runbook"}>Go Live…</button>
+          title={n.active ? "End the night shift first" : "Approve the live deploys and ask Claude to prepare the deploy"}>Go Live…</button>
         {n.active && <button type="button" className="btn" disabled={busy}
           onClick={() => void act(async () => { const r = await app.api.nightShiftEnd(project);
             return r.told ? `${name} night shift ended` : `${name} night shift ended — Claude was not reached; stop it in its pane`; })}>

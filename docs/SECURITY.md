@@ -43,6 +43,13 @@ user or process can see how many items wait for Jay and roughly when the pipelin
 activity rhythm). It reveals no ticket key, title, reason or project. The alternative was to give the
 launcher a token, which `launcher/binary_test.go` forbids on purpose.
 
+**`GET /api/night-shift` (token-gated) serves agent-written text**: the newest morning report of each project, up
+to 64 KB (`nightshift.REPORT_MAX`), read as bytes from `~/command-center/night-shift/<project>/` (a plain `.md`
+file, no symlink, project key matched against `^[a-z][a-z0-9_-]{0,31}$`). The coordinator Claude writes it, so
+it can quote anything the coordinator saw: the page shows it as text, and the instructions tell it to copy no
+licensed data, records or secrets into a report. It leaves ccd only to a client holding the ccd token, like the
+rest of the API, and is never stored in SQLite or the log.
+
 Never: the GitHub token, Claude credentials, the ntfy URL or any other config
 value outside `PUBLIC_PROJECT_FIELDS`, `.env` contents, transcripts, and
 **terminal titles** (Claude titles its terminal after the conversation, which
@@ -186,6 +193,16 @@ Developer Unlock, its task terminals close and its task session is asked to
 `/exit` once it is idle (checked for up to 10 minutes; a still-busy one is left
 running and reported). A close by a plain edit with the ccd token alone stops
 nothing: it records that the sessions were left running.
+
+The night shift adds fixed messages to the **coordinator's** pane, all through herdr `agent.prompt` and never
+into a pane that waits on a prompt (ADR 0006). Jay's presses need `jay` **and** Developer Unlock: Night shift
+(the `/night-shift` rules), End night shift (one stop-safely sentence, no Esc) and Go Live (a message to PREPARE a
+deploy, which authorizes no deploy: Jay confirms it himself in that pane). The one automatic sender is the
+**supervisor** (`nightshift.py`, `Daemon.night_loop`): while a night shift Jay started runs, it types one fixed
+reminder into an idle coordinator, at most every 10 minutes, counted only once delivered. It cannot type for
+ever: it stops after 6 reminders in a shift, after the morning cutoff (07:00 local by default, so it never
+types into a draft Jay is writing in the morning), when the report says complete, or after 3 reminders with no
+ticket or report change. The reminder text is a constant; no report or ticket text is ever typed.
 
 **Roots.** The explorer, editor and uploads reach only a registered project's
 `root` in `ccd/registry.py`. The browser sends a project key and a relative

@@ -55,9 +55,9 @@ an Inbox task: pipeline_cli add <project> --role coordinator --label night-findi
 
 ## Never, tonight or any night
 
-- deploy or go live, anywhere; no `deployed`, no `deploy-request --env live`. Jay deploys with Go Live.
+- deploy or go live, anywhere; no `deployed`, no `deploy-request --env live`. Jay's Go Live only asks for a prepared deploy, and he confirms it himself.
 - touch production data, run migrations against production, use --apply, read or print secrets.
-- merge where a gate is open, merge red CI, force-push, rewrite history, delete branches you did not create.
+- merge where a gate is open, merge red CI, force-push, rewrite history, delete branches or files you did not create.
 - change rules, CI, branch protection, permissions or this workflow.
 - work in another repository, or start, duplicate or close another Claude session.
 - copy licensed data, records, addresses or secrets into tasks, PRs, notes or reports.

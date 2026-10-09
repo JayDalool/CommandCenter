@@ -17,7 +17,14 @@ if [ -L "$OLD" ] && [ "$(readlink "$OLD")" = "$REPO/server/ccd/night_shift.md" ]
   rm -f "$OLD"
 fi
 mkdir -p "$(dirname "$DST")"
-if [ -e "$DST" ] && [ ! -L "$DST" ]; then
+if [ -L "$DST" ]; then
+  # a link already there is replaced only when it points into a Command Center checkout (ours, maybe an older one)
+  case "$(readlink "$DST")" in
+    */server/ccd/skills/night-shift) ;;
+    *) echo "install-claude-commands: $DST is a link to $(readlink "$DST"), not Command Center's; left as it is" >&2
+       exit 0 ;;
+  esac
+elif [ -e "$DST" ]; then
   echo "install-claude-commands: $DST exists and is not Command Center's; left as it is" >&2
   exit 0
 fi

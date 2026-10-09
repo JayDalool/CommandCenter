@@ -5,19 +5,23 @@ is finished, hits a pause or loses the thread; this module decides, once a minut
 to remind it to continue:
 
   report "Status: complete"         → the shift ends (complete)
-  coordinator working               → progress; nothing to do
-  coordinator blocked               → it waits on a prompt for Jay; nothing to do
+  morning cutoff (default 07:00)    → the shift ends (morning cutoff); nothing is typed into the pane
+  coordinator working or blocked    → nothing to do (blocked: it waits on a prompt for Jay)
   idle ≥ IDLE_GRACE, last reminder ≥ NUDGE_GAP ago
-     and progress since then        → remind it (one fixed sentence)
+     and MAX_NUDGES reminders sent  → the shift ends (reminder limit)
      and no progress after MAX_QUIET reminders in a row → the shift ends (no progress)
+     otherwise                      → remind it (one fixed sentence; counted only once it was delivered)
 
-Progress is anything the coordinator did since the last reminder: seen working, its report rewritten, or a ticket
-of the project changed. State lives in <night dir>/.state.json so a ccd restart resumes it.
+Hard stops: MAX_NUDGES reminders per shift and the morning cutoff, whatever the coordinator does in between.
+Progress is only a change of a ticket of the project or a rewrite of the morning report: "seen working" is not
+progress, so a coordinator that works after every reminder without changing anything still runs out.
+State lives in <night dir>/.state.json so a ccd restart resumes it.
 """
 import json
 import os
 import re
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import LEGACY
@@ -28,14 +32,22 @@ NIGHT_DIR = Path(os.environ.get("CCD_NIGHT_DIR", LEGACY / "night-shift"))
 IDLE_GRACE = 180       # s idle before a reminder: Claude often pauses briefly between steps
 NUDGE_GAP = 600        # s between reminders
 MAX_QUIET = 3          # reminders in a row with no progress → the shift ends
+MAX_NUDGES = 6         # reminders in one shift, whatever happens in between → the shift ends
+CUTOFF_DEFAULT = "07:00"   # local time: no reminder after it, the shift ends (CCD_NIGHT_CUTOFF=HH:MM)
 REPORT_MAX = 64 * 1024
 STATUS_RE = re.compile(r"^\s*Status:\s*(working|complete)\b", re.IGNORECASE)
 KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+CUTOFF_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
-NUDGE_TEXT = (
+NUDGE_WITH_REPORT = (
     "Night shift continues (Command Center): your morning report still says Status: working. Take the next item "
     "by the /night-shift rules for {project}. If nothing is left that can move without Jay, make the report's first "
     "line Status: complete and stop."
+)
+NUDGE_NO_REPORT = (
+    "Night shift continues (Command Center): there is no morning report for this shift yet. Take the next item "
+    "by the /night-shift rules for {project} and write the report as the skill says, first line Status: working. "
+    "If nothing can move without Jay, write it with Status: complete and stop."
 )
 END_TEXT = (
     "Jay ended the night shift for {project}. Finish the step you are on safely, update the morning report "
@@ -47,9 +59,20 @@ def _now():
     return time.time()
 
 
+def cutoff_after(started, hhmm=CUTOFF_DEFAULT):
+    """The first local HH:MM strictly after `started` (epoch s): the shift's morning cutoff."""
+    m = CUTOFF_RE.match(str(hhmm or "")) or CUTOFF_RE.match(CUTOFF_DEFAULT)
+    d = datetime.fromtimestamp(started)
+    c = d.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+    if c <= d:
+        c += timedelta(days=1)
+    return c.timestamp()
+
+
 class NightShift:
-    def __init__(self, root):
+    def __init__(self, root, cutoff=None):
         self.root = Path(root)
+        self.cutoff = cutoff or os.environ.get("CCD_NIGHT_CUTOFF") or CUTOFF_DEFAULT
         self.state = self._load()
 
     # ---------- state ----------
@@ -81,7 +104,9 @@ class NightShift:
         now = now or _now()
         self.state[project] = {"startedAt": now, "endedAt": None, "endReason": None, "nudges": 0, "quiet": 0,
                                "lastNudgeAt": None, "idleSince": None, "progressAt": now,
-                               "goLiveAt": (self.state.get(project) or {}).get("goLiveAt")}
+                               "cutoffAt": cutoff_after(now, self.cutoff),
+                               "goLiveAt": (self.state.get(project) or {}).get("goLiveAt"),
+                               "goLiveKeys": (self.state.get(project) or {}).get("goLiveKeys") or []}
         self.save()
 
     def end(self, project, reason, now=None):
@@ -92,9 +117,16 @@ class NightShift:
         self.save()
         return True
 
-    def went_live(self, project, now=None):
-        self.state.setdefault(project, {})["goLiveAt"] = now or _now()
+    def went_live(self, project, keys=(), now=None):
+        """Go Live was sent for these ticket keys (the Go Live guard reads it back)."""
+        self.state.setdefault(project, {}).update(goLiveAt=now or _now(), goLiveKeys=list(keys))
         self.save()
+
+    def nudge_text(self, project):
+        """The reminder, true to what exists: a report written in this shift, or none yet."""
+        s, rep = self.state.get(project) or {}, self.report(project)
+        fresh = bool(rep and rep["mtime"] >= (s.get("startedAt") or 0))
+        return (NUDGE_WITH_REPORT if fresh else NUDGE_NO_REPORT).format(project=project)
 
     # ---------- the morning report ----------
 
@@ -125,7 +157,9 @@ class NightShift:
 
     def decide(self, project, status, activity_at=None, now=None):
         """One supervisor tick for an active project. status: the coordinator's herdr status (idle, done, working,
-        blocked) or None when no coordinator is identified. Returns "nudge", "end:<reason>" or None."""
+        blocked) or None when no coordinator is identified. Returns "nudge", "end:<reason>" or None.
+        "nudge" only says one is due: the caller sends it and then calls nudged() — a reminder that was not
+        delivered, or found the coordinator busy, is not counted."""
         now = now or _now()
         s = self.state.get(project)
         if not s or not s.get("startedAt") or s.get("endedAt"):
@@ -134,14 +168,14 @@ class NightShift:
         if rep and rep["status"] == "complete" and rep["mtime"] >= s["startedAt"]:
             self.end(project, "complete", now)
             return "end:complete"
-        progress = max(x for x in (s.get("progressAt") or 0, activity_at or 0,
-                                   rep["mtime"] if rep and rep["mtime"] >= s["startedAt"] else 0))
-        changed = False
-        if status == "working":
-            progress = now
-        if progress != s.get("progressAt"):
-            s["progressAt"] = progress
-            changed = True
+        cutoff = s.get("cutoffAt") or cutoff_after(s["startedAt"], self.cutoff)
+        if now >= cutoff:
+            self.end(project, "morning cutoff", now)
+            return "end:morning cutoff"
+        progress = max(s.get("progressAt") or 0, activity_at or 0,
+                       rep["mtime"] if rep and rep["mtime"] >= s["startedAt"] else 0)
+        changed = progress != s.get("progressAt")
+        s["progressAt"] = progress
         if status not in ("idle", "done"):
             if s.get("idleSince"):
                 s["idleSince"] = None
@@ -158,11 +192,27 @@ class NightShift:
             if changed:
                 self.save()
             return None
-        s["quiet"] = 0 if (not last or progress > last) else s.get("quiet", 0) + 1
-        if s["quiet"] >= MAX_QUIET:
-            s.update(endedAt=now, endReason=f"no progress after {MAX_QUIET} reminders")
-            self.save()
+        if s.get("nudges", 0) >= MAX_NUDGES:
+            self.end(project, f"reminder limit ({MAX_NUDGES})", now)
+            return "end:reminder limit"
+        if self._quiet(s, progress) >= MAX_QUIET:
+            self.end(project, f"no progress after {MAX_QUIET} reminders", now)
             return "end:no progress"
-        s.update(lastNudgeAt=now, nudges=s.get("nudges", 0) + 1, idleSince=None)
-        self.save()
+        if changed:
+            self.save()
         return "nudge"
+
+    @staticmethod
+    def _quiet(s, progress):
+        last = s.get("lastNudgeAt")
+        return 0 if (not last or progress > last) else s.get("quiet", 0) + 1
+
+    def nudged(self, project, now=None):
+        """A reminder reached an idle coordinator: count it."""
+        now = now or _now()
+        s = self.state.get(project)
+        if not s or s.get("endedAt"):
+            return
+        s.update(quiet=self._quiet(s, s.get("progressAt") or 0), lastNudgeAt=now, nudges=s.get("nudges", 0) + 1,
+                 idleSince=None)
+        self.save()

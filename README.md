@@ -38,13 +38,15 @@ own; when ccd is down, it builds locally exactly as before.
   no Cloudflare, no Tailscale Serve, and the herdr socket is never bridged to TCP.
   The Windows client will reach it with `ssh -L 7777:127.0.0.1:7777 jay-server`.
   CommandCenter.exe also signs in over that SSH login (`scripts/cc-session`), so nothing is pasted.
-- **No dangerous endpoints.** There is no API for merge, deploy, production,
-  secrets, Docker, destructive git, or config/rule changes. Merges and deploys
+- **No dangerous endpoints.** There is no API that merges or deploys, and none
+  for production, secrets, Docker, destructive git, or config/rule changes. Merges and deploys
   are done by agents under the pipeline's gates; ccd only records them, and a
-  LIVE deploy cannot be recorded before Jay approved it. **Go Live** is that
-  approval as one press (Jay, Developer Unlock): it approves the project's
-  pending live-deploy requests and asks its coordinator to deploy main by the
-  repository's own runbook, with its checks and rollback. ccd runs no deploy. Terminals, Claude
+  LIVE deploy cannot be recorded before Jay approved it. **Go Live** is a deploy
+  API that **prepares only** (`POST /api/go-live`, Jay + Developer Unlock): it
+  approves the project's open live-deploy gates and asks its coordinator to
+  prepare the deploy (runbook steps, checks, rollback plan) and wait. Jay confirms
+  the deploy himself in the coordinator's pane; a Command Center message never
+  authorizes one (ADR 0006). ccd runs no deploy. Terminals, Claude
   input, answers and file writes need a second credential, Developer Unlock
   (once per app session, [docs/SECURITY.md](docs/SECURITY.md)). A test asserts
   the route table exactly. See [docs/API.md](docs/API.md).

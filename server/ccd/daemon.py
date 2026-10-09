@@ -79,24 +79,29 @@ TASK_CHECK_TEMPLATE = (
     "When done, report in one line: {project} task check: <n> stale proposed, <n> added, <n> questions.\n"
     "Open tasks now ({n}):\n{tasks}"
 )
-# Go Live: Jay's one press to deploy a project's merged batch. ccd runs nothing itself; the coordinator follows
-# the repository's own deploy runbook, with its checks and rollback.
+# Go Live: Jay's one press to get a project's merged batch ready to deploy. ccd runs nothing itself and the message
+# authorizes no deploy: the coordinator PREPARES (runbook steps, checks, rollback plan) and waits; Jay confirms the
+# deploy himself in the coordinator's pane. A Command Center message never authorizes a deploy.
 GO_LIVE_TEMPLATE = (
-    "Go Live from Jay via command-center: deploy {project} to production now.\n"
-    "Jay pressed Go Live after reading the morning report. Deploy main as it is now, following this repository's "
-    "deploy runbook exactly (docs/deployment.md, or the runbook AGENTS.md / CLAUDE.md names). If the repository has "
-    "no deploy runbook, stop and tell Jay; do not improvise a deploy.\n"
-    "1. Before: read the release candidate (the newest report in ~/command-center/night-shift/{project}/, or the PRs "
-    "merged since the last deploy) and note the version live now: that is your rollback target.\n"
-    "2. Deploy by the runbook, then run its post-deploy checks and every TEST AFTER DEPLOY step you can run yourself.\n"
-    "3. If a check fails: roll back by the runbook right away, check the old version is healthy, and say what failed.\n"
-    "4. Record it. For each ticket with an approved live deploy ({approved}): python -m ccd.pipeline_cli deployed <KEY> "
-    "--role coordinator --env live --result pass|fail --evidence \"…\". Write a deploy note to "
-    "~/command-center/deploys/{project}/<YYYY-MM-DD-HHMM>.md: commit deployed, version before, checks and results, "
-    "any rollback.\n"
-    "Authorized by this message: this one deploy of {project}'s main, the runbook's migrations and checks, and a "
-    "rollback. Not authorized: merging, force-push, changing secrets or infrastructure config, any other project.\n"
-    "Report in one line: {project} go-live: pass | rolled back | stopped — <commit> — <checks>."
+    "Go Live from Jay via command-center: PREPARE the deploy of {project}. Do not deploy yet.\n"
+    "Jay pressed Go Live after reading the morning report. That press approved the live-deploy gate on: {approved}. "
+    "It does not start a deploy: Jay will confirm the deploy himself in this pane once he has read your preparation.\n"
+    "Prepare by this repository's deploy runbook (docs/deployment.md, or the runbook AGENTS.md / CLAUDE.md names). If "
+    "the repository has no deploy runbook, stop and tell Jay; do not improvise one.\n"
+    "1. Read the release candidate (the newest report in ~/command-center/night-shift/{project}/, or the PRs merged "
+    "since the last deploy) and note the version live now: that is the rollback target.\n"
+    "2. Write down, in order: the runbook steps you would run, any migrations (say if there are none), the "
+    "pre-deploy checks (run the ones that touch nothing in production), the post-deploy checks and every TEST AFTER "
+    "DEPLOY step, and the rollback plan with the failure that triggers it.\n"
+    "3. Save it to ~/command-center/deploys/{project}/<YYYY-MM-DD-HHMM>-plan.md and summarise it here in at most "
+    "10 lines.\n"
+    "4. Then stop and wait for Jay. Not authorized by this message: deploying, running migrations, restarting "
+    "services, merging, force-push, changing secrets or infrastructure config, any other project. Only after Jay "
+    "confirms the deploy in this pane: deploy by the runbook, run its checks, roll back by the runbook right away if "
+    "one fails, and record each ticket ({approved}): python -m ccd.pipeline_cli deployed <KEY> --role coordinator "
+    "--env live --result pass|fail --evidence \"…\" (it is refused if the approval did not go through: tell Jay).\n"
+    "Report in one line when the preparation is ready: {project} go-live plan ready — <commit> — <checks> — "
+    "<rollback target>."
 )
 
 # Night shift: the same instructions as Claude's /night-shift skill (scripts/install-claude-commands.sh links
@@ -806,20 +811,22 @@ class Daemon:
 
     async def night_tick(self):
         """Remind each idle night-shift coordinator to continue, or end its shift (nightshift.NightShift.decide)."""
-        if self.night is None or not self.herdr_state["ok"]:
+        if self.night is None:
             return
         for proj in self.cfg["projects"]:
             key = proj["key"]
             if not self.night.active(key):
                 continue
-            r = coordinators.resolution(proj, self.panes)
+            # With herdr down there is no status: only "complete" and the morning cutoff can act, never a reminder.
+            r = coordinators.resolution(proj, self.panes) if self.herdr_state["ok"] else {"state": "none"}
             status = r.get("status") if r["state"] == "ready" else None
             action = self.night.decide(key, status, self._activity.get(key))
             if action == "nudge":
                 try:
                     agent = await self._fresh_agent(r["paneId"])
-                    if agent["status"] in ("idle", "done"):
-                        await self.herdr.prompt(agent["pane_id"], nightshift_mod.NUDGE_TEXT.format(project=key))
+                    if agent["status"] in ("idle", "done"):   # busy or blocked now: nothing sent, nothing counted
+                        await self.herdr.prompt(agent["pane_id"], self.night.nudge_text(key))
+                        self.night.nudged(key)               # counted only once it was delivered
                         self._event("action", "action.night_shift", f"night shift reminder → {coordinators.canonical(proj)}",
                                     project=key, agent_id=agent["pane_id"], data={"kind": "night_shift_nudge"})
                 except (ActionError, OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
@@ -837,10 +844,11 @@ class Daemon:
             r = coordinators.resolution(proj, self.panes) if self.herdr_state["ok"] else {"state": "none"}
             st = self.night.get(key) if self.night else {}
             out[key] = {"active": bool(self.night and self.night.active(key)), **{k: st.get(k) for k in (
-                "startedAt", "endedAt", "endReason", "nudges", "goLiveAt")},
+                "startedAt", "endedAt", "endReason", "nudges", "cutoffAt", "goLiveAt")},
                 "coordinator": {"name": coordinators.canonical(proj), "state": r["state"],
                                 "status": r.get("status") if r["state"] == "ready" else None},
-                "report": self.night.report(key) if self.night else None}
+                "report": self.night.report(key) if self.night else None,
+                "goLive": self.go_live_review(key)}
         return {"projects": out}
 
     async def act_night_end(self, project, actor="jay", developer=False):
@@ -860,9 +868,7 @@ class Daemon:
             if r["state"] == "ready":
                 try:
                     agent = await self._fresh_agent(r["paneId"])
-                    if agent["status"] == "working":   # interrupt the turn cleanly first (Esc), then say why
-                        await self.herdr.call("pane.send_keys", {"pane_id": agent["pane_id"], "keys": ["esc"]})
-                        await asyncio.sleep(1.5)
+                    # The message only, never Esc: an interrupt can leave a half-finished repository operation.
                     if agent["status"] != "blocked":
                         await self.herdr.prompt(agent["pane_id"], nightshift_mod.END_TEXT.format(project=project))
                         told = True
@@ -1967,19 +1973,77 @@ class Daemon:
         main by the repository's runbook (GO_LIVE_TEMPLATE). ccd runs no deploy itself."""
         if actor != "jay" or not developer:
             raise ActionError(403, "Developer Unlock required: Go Live deploys to production")
-        ts = self._need_tasks()
+        self._need_tasks()
         if not any(p["key"] == project for p in self.cfg["projects"]):
             raise ActionError(404, "unknown project")
-        pending = [t["key"] for t in ts.list(project=project) if t["status"] not in tasks_mod.CLOSED
-                   and (self.pipeline.work(t["key"]).get("gate") == "deploy")]
+        blocked = self._go_live_blocked(project)
+        if blocked:
+            raise ActionError(409, blocked)
+        pending = [a["key"] for a in self.go_live_review(project)["approves"]]
         text = GO_LIVE_TEMPLATE.format(project=project, approved=", ".join(pending) or "none")
-        # The coordinator must be reachable before anything is approved: no approval without the deploy.
+        # The coordinator must be reachable before anything is approved: no approval without the message. Every
+        # check that can refuse (409) runs before it; after it, a ticket that cannot be approved (its gate moved
+        # since the page loaded) is reported in `errors` and never undoes the others.
         name = await self._to_coordinator(project, "go-live", text, {"approved": pending})
+        approved, errors = [], []
         for key in pending:
-            self._pipeline_result(*self._wrap(self.pipeline.confirm, key, "deploy", actor))
+            try:
+                self._pipeline_result(*self._wrap(self.pipeline.confirm, key, "deploy", actor))
+                approved.append(key)
+            except Exception as e:  # noqa: BLE001 — one ticket must not stop the others
+                errors.append({"key": key, "error": str(e)[:160]})
         if self.night is not None:
-            self.night.went_live(project)
-        return {"ok": True, "project": project, "coordinator": name, "approved": pending}
+            self.night.went_live(project, approved)
+        return {"ok": True, "project": project, "coordinator": name, "approved": approved, "errors": errors}
+
+    def go_live_review(self, project):
+        """What Go Live would approve in `project` (tickets whose live-deploy gate is open), and what Jay should
+        look at first: tickets merged into main (VERIFYING) that are not verified, or still wait for a UI review.
+        Go Live prepares the deploy of main as it is, so those ride along."""
+        out = {"approves": [], "warnings": []}
+        if self.tasks is None or self.pipeline is None:
+            return out
+        open_ = sorted((t for t in self.tasks.list(project=project) if t["status"] not in tasks_mod.CLOSED),
+                       key=lambda t: t["number"])
+        marks = self.pipeline.compact(t["id"] for t in open_)
+        for t in open_:
+            m = marks.get(t["id"]) or {}
+            row = {"key": t["key"], "title": CONTROL_RE.sub(" ", str(t["title"])).strip()[:100]}
+            if m.get("gate") == "deploy":
+                out["approves"].append(row)
+            if t["status"] == "VERIFYING":
+                if m.get("gate") == "ui":
+                    out["warnings"].append(dict(row, reason="UI review still open"))
+                elif (m.get("verification") or {}).get("result") != "pass":
+                    out["warnings"].append(dict(row, reason="merged, not verified"))
+        return out
+
+    GO_LIVE_GAP = 1800            # s: no second Go Live this soon after the first
+    GO_LIVE_OPEN_MAX = 12 * 3600  # s: an unfinished Go Live blocks the next one for at most this long
+
+    def _go_live_blocked(self, project):
+        """Why Go Live must not run now (409 text), or None: a night shift is running, or a Go Live was sent
+        recently, or is unfinished (a ticket it approved is not recorded deployed yet)."""
+        if self.night is None:
+            return None
+        if self.night.active(project):
+            return f"{project}'s night shift is still running; end it first"
+        st = self.night.get(project)
+        at = st.get("goLiveAt")
+        age = _now() - at if at else None
+        if age is None or age >= self.GO_LIVE_OPEN_MAX:
+            return None
+        if age < self.GO_LIVE_GAP:
+            return f"Go Live was sent for {project} {int(age // 60)} min ago; let the coordinator finish"
+        for key in st.get("goLiveKeys") or []:
+            try:
+                t = self.tasks.get(key)
+                d = self.pipeline.work(key).get("deploy") or {}
+            except tasks_mod.TaskError:
+                continue
+            if t["status"] not in tasks_mod.CLOSED and d.get("approvedAt") and not d.get("result"):
+                return f"the last Go Live for {project} is unfinished: {key} is approved but not recorded deployed yet"
+        return None
 
     async def act_task_check(self, project, actor="jay", developer=False, copy=False):
         """Ask the project's coordinator Claude to check its open tasks against the repo (TASK_CHECK_TEMPLATE).

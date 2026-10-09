@@ -407,18 +407,28 @@ describe("night shift on the Dashboard", () => {
     report: { name: "2026-10-09.md", mtime: 3, status: "complete", text: "Status: complete\n\n1. Ready to deploy\n- SV-080 PR #130 SAFE" },
     ...over });
 
-  it("shows last night's report and Go Live asks once more before it deploys", async () => {
+  it("shows last night's report and Go Live lists the tickets, flags risky merges, and only prepares", async () => {
     act(() => developer.set({ active: true, expiresAt: null, error: null }));
-    const go = vi.spyOn(app.api, "goLive").mockResolvedValue({ ok: true, project: "samvision", coordinator: "samvision", approved: ["SV-080"] });
+    const go = vi.spyOn(app.api, "goLive").mockResolvedValue({ ok: true, project: "samvision", coordinator: "samvision", approved: ["SV-080"],
+      errors: [{ key: "SV-081", error: "SV-081 has no open deploy gate" }] });
     const changed = vi.fn();
-    render(<NightLine project="samvision" name="SamVision" n={np()} onChanged={changed} />);
+    const goLive = { approves: [{ key: "SV-080", title: "Valuation v2" }, { key: "SV-081", title: "Export" }],
+      warnings: [{ key: "SV-082", title: "Mobile nav", reason: "UI review still open" }, { key: "SV-083", title: "Cache", reason: "merged, not verified" }] };
+    render(<NightLine project="samvision" name="SamVision" n={np({ goLive })} onChanged={changed} />);
     expect(screen.getByText(/Last night: complete/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Report" }));
     expect(screen.getByLabelText("Morning report").textContent).toContain("SV-080 PR #130 SAFE");
     fireEvent.click(screen.getByRole("button", { name: "Go Live…" }));
     expect(go).not.toHaveBeenCalled();                                   // one more explicit step
-    expect(screen.getByText(/by the repository's deploy runbook/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Yes, go live" }));
+    const confirmBox = screen.getByRole("alertdialog", { name: "Confirm Go Live" });
+    expect(confirmBox.textContent).toContain("Claude only prepares");
+    expect(confirmBox.textContent).toContain("until you confirm it yourself");
+    expect(confirmBox.textContent).not.toMatch(/deploys main as it is now/);
+    expect(screen.getByLabelText("Tickets to approve").textContent).toMatch(/SV-080.*Valuation v2.*SV-081.*Export/);
+    const warn = screen.getByLabelText("Look at these first").textContent ?? "";
+    expect(warn).toMatch(/SV-082.*UI review still open/);
+    expect(warn).toMatch(/SV-083.*merged, not verified/);
+    fireEvent.click(screen.getByRole("button", { name: "Yes, approve and prepare" }));
     await waitFor(() => expect(go).toHaveBeenCalledWith("samvision"));
     await waitFor(() => expect(changed).toHaveBeenCalled());
   });

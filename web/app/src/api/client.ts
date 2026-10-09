@@ -97,7 +97,7 @@ export class Api {
   nightShiftEnd(project: string) {
     return this.req<{ ok: boolean; told: boolean }>("POST", "/api/night-shift/end", { project });
   }
-  /** Go Live (Developer Unlock): the coordinator deploys main by the repo's runbook; pending live deploys approved. */
+  /** Go Live (Developer Unlock): approves the open live-deploy gates and asks the coordinator to PREPARE the deploy; Jay confirms it in its pane. */
   goLive(project: string) {
     return this.req<GoLiveResult>("POST", "/api/go-live", { project });
   }

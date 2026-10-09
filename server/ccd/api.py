@@ -63,10 +63,15 @@
                                      tasks under the pipeline and never deploys ({copy: true} as above);
                                      Command Center then reminds an idle coordinator until its report says complete
     GET   /api/night-shift           every project's night shift: running?, coordinator, newest morning report
+                                     (agent-written text, at most 64 KB), cutoff time, and `goLive`: the tickets a
+                                     Go Live would approve and merged tickets that are unverified or wait on a UI review
     POST  /api/night-shift/end       Jay AND Developer Unlock. stop reminders; tell the coordinator to stop safely
-    POST  /api/go-live               Jay AND Developer Unlock. GO LIVE: approves the project's pending live-deploy
-                                     requests and asks its idle coordinator to deploy main BY THE REPO'S RUNBOOK
-                                     (with its checks and rollback). ccd itself runs no deploy.
+    POST  /api/go-live               Jay AND Developer Unlock. GO LIVE PREPARES ONLY: approves the project's open
+                                     live-deploy gates and asks its idle coordinator to PREPARE the deploy by the repo's
+                                     runbook (steps, checks, rollback plan) and wait: Jay confirms the deploy himself in
+                                     the coordinator's pane. ccd runs no deploy. 409 while the night shift runs, within
+                                     30 min of a Go Live, or while the last one is unfinished. A ticket that cannot
+                                     be approved comes back in `errors`; the others still go through.
     POST  /api/tasks/{key}/answers   Jay AND Developer Unlock. answer Claude's questions; the last answer
                                      resumes the SAME task Claude session (never starts one)
     GET   /api/tasks/{key}/record    the ticket's task.md / workflow.md (Command Center storage, never a repo)
