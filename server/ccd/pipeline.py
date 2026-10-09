@@ -337,6 +337,21 @@ class Pipeline:
                             "WHERE t.key=?", (str(key).upper(),)).fetchone()
         return bool(r) and (r[0] in ("proposed", "accepted") or r[1] is not None)
 
+    def review_head(self, key):
+        """The PR head a review was last recorded at, or None before any review."""
+        r = self.db.execute("SELECT review_head FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id "
+                            "WHERE t.key=?", (str(key).upper(),)).fetchone()
+        return r[0] if r else None
+
+    def new_head(self, key, pr):
+        """True unless a review is recorded for exactly this PR head: only a head the review has not seen
+        sends a reworked ticket back to IN_REVIEW. (As in sync_pr, an unrecorded review PR matches any PR.)"""
+        r = self.db.execute("SELECT review_head, review_pr FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id "
+                            "WHERE t.key=?", (str(key).upper(),)).fetchone()
+        if not r or not r[0]:
+            return True
+        return not (pr.get("head") == r[0] and (not r[1] or pr.get("ref") == r[1]))
+
     def lanes(self, project):
         """Implementation lanes running in one project: its tickets IN_PROGRESS with a worktree."""
         return self.db.execute(

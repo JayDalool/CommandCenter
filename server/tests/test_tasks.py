@@ -126,6 +126,16 @@ class Audit(Base):
                                  "label_added", "relation_added", "linked", "commented"])
         self.assertIn("relation_added", self.kinds("CC-002"))
 
+    def test_last_status_event_carries_the_trigger(self):
+        self.s.create("commandcenter", "a")
+        self.assertIsNone(self.s.last_status_event("CC-001"))
+        self.s.update("CC-001", {"status": "PROPOSED"}, "jay")
+        self.assertEqual(self.s.last_status_event("CC-001"),
+                         {"actor": "jay", "from": "INBOX", "to": "PROPOSED", "trigger": None})
+        self.s.update("CC-001", {"status": "READY_TO_IMPLEMENT"}, "system:automation", trigger="because")
+        last = self.s.last_status_event("CC-001")
+        self.assertEqual((last["actor"], last["trigger"]), ("system:automation", "because"))
+
     def test_history_rebuilds_the_status(self):
         self.s.create("commandcenter", "a")
         for st in ("PROPOSED", "READY_TO_IMPLEMENT", "IN_PROGRESS", "BLOCKED", "IN_PROGRESS"):

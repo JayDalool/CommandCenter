@@ -1209,7 +1209,7 @@ class Daemon:
     def _nudge_text(self, key, op, body, work):
         if op == "rework":
             return (f"Jay sent {key} back to implementation: {body.get('reason')}. Fix it in this session (same "
-                    f"worktree), then run review and verification again.")
+                    f"worktree), then push the fix; ccd moves it back to review on the new head.")
         if op == "replan":
             return (f"Jay moved {key} back to planning: {body.get('reason')}. Re-plan with Opus, record the revised plan "
                     f"and acceptance criteria (python -m ccd.pipeline_cli plan {key} …), and continue only after it is accepted.")
@@ -1483,15 +1483,16 @@ class Daemon:
     def _auto(self, key, frm, to, trigger):
         """One automatic status move, if the ticket is still in `frm` and Jay has not overridden it.
 
-        Jay wins: if the last status change was a human moving the ticket away
-        from `to`, automation does not move it back. Actor system:automation,
-        trigger recorded with the change.
+        Jay wins: if the last status change was a manual edit (no trigger recorded)
+        moving the ticket away from `to`, automation does not move it back. A pipeline
+        step (rework, review, ...) always records a trigger, so it is not an override.
+        Actor system:automation, trigger recorded with the change.
         """
         t = self.tasks.get(key)
         if t["status"] not in frm:
             return t
         last = self.tasks.last_status_event(key)
-        if last and not last["actor"].startswith("system:") and last["from"] == to:
+        if last and not last["actor"].startswith("system:") and last["trigger"] is None and last["from"] == to:
             return t
         ticket, changes = self.tasks.update(key, {"status": to}, "system:automation", trigger=trigger)
         self._announce(ticket, changes)
@@ -1548,7 +1549,13 @@ class Daemon:
                         # A pipeline ticket reaches review only through `start` (branch, worktree, lane):
                         # a PR opened before start waits; the next poll after start moves it.
                         frm = ("IN_PROGRESS",) if self.pipeline.participating(k) else ("READY_TO_IMPLEMENT", "IN_PROGRESS")
-                        self._auto(k, frm, "IN_REVIEW", f"PR #{n} is open")
+                        if not self.pipeline.participating(k):
+                            self._auto(k, frm, "IN_REVIEW", f"PR #{n} is open")
+                        elif self.pipeline.new_head(k, pr_state):
+                            # After a rework the ticket returns to review only on a head the review has not seen.
+                            sha = pr_state["head"][:7]
+                            self._auto(k, frm, "IN_REVIEW", f"PR #{n} new head {sha} after rework"
+                                       if self.pipeline.review_head(k) else f"PR #{n} is open")
                         if self.pipeline.participating(k):
                             # A pipeline ticket: only its recorded review, tied to this PR's head, decides.
                             self._pipeline_result(*self.pipeline.sync_pr(k, pr_state))
