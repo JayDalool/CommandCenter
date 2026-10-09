@@ -43,6 +43,13 @@ user or process can see how many items wait for Jay and roughly when the pipelin
 activity rhythm). It reveals no ticket key, title, reason or project. The alternative was to give the
 launcher a token, which `launcher/binary_test.go` forbids on purpose.
 
+**`GET /api/night-shift` (token-gated) serves agent-written text**: the newest morning report of each project, up
+to 64 KB (`nightshift.REPORT_MAX`), read as bytes from `~/command-center/night-shift/<project>/` (a plain `.md`
+file, no symlink, project key matched against `^[a-z][a-z0-9_-]{0,31}$`). The coordinator Claude writes it, so
+it can quote anything the coordinator saw: the page shows it as text, and the instructions tell it to copy no
+licensed data, records or secrets into a report. It leaves ccd only to a client holding the ccd token, like the
+rest of the API, and is never stored in SQLite or the log.
+
 Never: the GitHub token, Claude credentials, the ntfy URL or any other config
 value outside `PUBLIC_PROJECT_FIELDS`, `.env` contents, transcripts, and
 **terminal titles** (Claude titles its terminal after the conversation, which
@@ -186,6 +193,28 @@ Developer Unlock, its task terminals close and its task session is asked to
 `/exit` once it is idle (checked for up to 10 minutes; a still-busy one is left
 running and reported). A close by a plain edit with the ccd token alone stops
 nothing: it records that the sessions were left running.
+
+The night shift adds fixed messages to the **coordinator's** pane, all through herdr `agent.prompt` and never
+into a pane that waits on a prompt (ADR 0006). Jay's presses need `jay` **and** Developer Unlock: Night shift
+(the `/night-shift` rules), End night shift (one stop-safely sentence, no Esc) and Go Live (a message to PREPARE a
+deploy, which authorizes no deploy: Jay confirms it himself in that pane). The one automatic sender is the
+**supervisor** (`nightshift.py`, `Daemon.night_loop`): while a night shift Jay started runs, it types one fixed
+reminder into an idle coordinator, at most every 10 minutes, counted only once delivered. herdr "idle" only
+means ready for input, and `agent.prompt` pastes and presses Enter, so before each reminder ccd reads the pane's
+text (not stored or logged) and skips the reminder, uncounted, unless Claude's prompt line is plainly empty or
+shows its placeholder; a screen it cannot parse is skipped. This is a best-effort check on screen text: a draft
+it misreads, or typed between the read and the paste, can still be submitted. The hard limits bound that risk:
+it stops after 6 reminders in a shift, after the morning cutoff (07:00 local by default), when the report says
+complete, or after 3 reminders with no ticket or report change. The reminder text is a constant; no report or
+ticket text is ever typed. (Go Live, End night shift and the other buttons are Jay's own presses and do not
+make this check.)
+
+**What a Go Live approval is.** A live-deploy gate that Go Live confirms is a full approval in the pipeline:
+afterwards any agent may record `deployed --env live` for that ticket. That the deploy waits for Jay's
+confirmation in the coordinator's pane is enforced only by the message text, not by ccd. The record is marked
+(`approvedBy: "jay:go-live"`, event "approved for a prepared deploy (Jay confirms in the pane)") and Go Live
+approves only the tickets listed in the confirm box that are still open. The per-ticket Deploy Live button
+still types "Deploy it now" into the task session after Jay's approval.
 
 **Roots.** The explorer, editor and uploads reach only a registered project's
 `root` in `ccd/registry.py`. The browser sends a project key and a relative

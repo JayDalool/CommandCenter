@@ -77,7 +77,7 @@ def policy(ticket, project_key=None):
 
 
 CLOSED_STATUSES = ("DONE", "DENIED", "CANCELLED")
-HOLDING_GATES = ("plan", "failure")       # jay_first: Jay's decisions that hold new work (questions too)
+HOLDING_GATES = ("plan", "failure")       # jay_first: Jay's decisions that hold a ticket (questions too)
 STALE_OPTIONS = ("Cancel it", "Keep it")   # the task check's question; "Cancel it" cancels the ticket
 # The ten stages Jay sees (spec §24). The canonical statuses stay as they are underneath.
 VISIBLE_STAGES = ("Planning", "Implementing", "Reviewing", "UI Testing", "Verifying", "Ready to Merge", "Deploying",
@@ -318,16 +318,20 @@ class Pipeline:
                             "ORDER BY id DESC LIMIT 1").fetchone()
         return {"open": int(n), "last": int(r[0]) if r else 0}
 
-    def held_by(self, project, key=None):
-        """What holds new work in `project` under the jay_first rule: on tickets other than `key`, every open
-        question for Jay and every decision only Jay can make before work goes on (a plan to approve, a blocker
-        to clear). Sign-offs on finished work (merge acceptance, UI review, live deploy) do not hold it. A
-        ticket that needs a lawyer (needs:legal, type LEGAL) waits on the lawyer, not on Jay: it never holds."""
-        if not registry.pipeline_of(project).get("jay_first", True):
+    def held(self, key):
+        """What makes this ticket wait for Jay (registry `jay_first`, default on): an open question for Jay, a
+        plan to approve or a blocker only he can clear — on this ticket, or on an open ticket it is blocked by.
+        Every other ticket goes ahead. Sign-offs on finished work (merge acceptance, UI review, live deploy) do
+        not hold; a blocking ticket that needs a lawyer (needs:legal, type LEGAL) waits on the lawyer, not Jay."""
+        t = self.db.execute("SELECT id, key, project FROM tickets WHERE key=?", (str(key).upper(),)).fetchone()
+        if not t or not registry.pipeline_of(t[2]).get("jay_first", True):
             return []
-        legal = {k for (k,) in self.db.execute(
-            "SELECT key FROM tickets WHERE project=? AND (needs_legal=1 OR type='LEGAL')", (project,))}
-        return [n for n in self.needs() if n["project"] == project and n["ref"] != key and n["ref"] not in legal
+        blockers = {k for (k,) in self.db.execute(
+            "SELECT b.key FROM ticket_relations r JOIN tickets b ON b.id=r.src_id WHERE r.dst_id=? AND r.kind='blocks' "
+            "AND b.status NOT IN ('DONE','DENIED','CANCELLED') AND b.needs_legal=0 AND COALESCE(b.type,'')!='LEGAL'",
+            (t[0],))}
+        refs = blockers | {t[1]}
+        return [n for n in self.needs() if n["ref"] in refs
                 and (n["kind"] == "questions" or n.get("gate") in HOLDING_GATES)]
 
     def participating(self, key):
@@ -454,12 +458,11 @@ class Pipeline:
                     or not re.match(r"^/[A-Za-z0-9._/-]+$", worktree) or "/../" in worktree + "/":
                 raise TaskError(400, "worktree must be an absolute path")
             self._lane_free(t)
-            held = self.held_by(t["project"], t["key"])
+            held = self.held(t["key"])
             if held:
                 refs = ", ".join(sorted({h["ref"] for h in held}))
-                raise TaskError(409, f"Jay first: {t['project']} has {len(held)} open question(s) or decision(s) for Jay "
-                                     f"({refs[:200]}). New work starts after he answers them; tasks that need a lawyer "
-                                     f"do not count.")
+                raise TaskError(409, f"{t['key']} waits for Jay: open question(s) or decision(s) on {refs[:200]}. "
+                                     f"Leave it for him and take another task.")
             # The implementation runs in the ticket's task session (spec §8) unless another is named, so the
             # implementer always has a recorded session a reviewer must differ from.
             work = {"worktree": worktree, "roles": self._role(w, "implementer", model, session or t["key"].lower(), at)}
@@ -610,12 +613,18 @@ class Pipeline:
             return {}, {}, []
         return {"status": "DONE"}, {"gate": None, "gate_reason": None}, [("pipeline.done", "done", {})]
 
-    def confirm(self, key, gate, actor):
-        """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock)."""
+    def confirm(self, key, gate, actor, via=None):
+        """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock). `via="go-live"` marks a
+        live-deploy approval given by Go Live: approvedBy "jay:go-live", and the event says the deploy was approved
+        for a PREPARED deploy that Jay confirms in the coordinator's pane. The record still permits `deployed`
+        (the pane confirmation is Jay's, and nothing here can check it)."""
         if actor != "jay":
             raise TaskError(403, "only Jay closes an owner gate")
         if gate not in GATES:
             raise TaskError(400, f"gate must be one of {', '.join(GATES)}")
+        by = f"{actor}:{via}" if via else actor
+        said = ("approved for a prepared deploy (Jay confirms in the pane)" if via == "go-live"
+                else "Jay approved the live deployment")
 
         def fn(tid, t, w, at):
             if w["gate"] != gate:
@@ -639,14 +648,14 @@ class Pipeline:
                 # it with `deployed --env live`, and only then does the ticket close.
                 work["deploy"] = {"env": "live", "what": t["title"], "verification": (w["verification"] or {}).get("evidence") or "",
                                   "requestedAt": at, "requestedBy": "policy:needs_deploy", "approvedAt": at,
-                                  "approvedBy": actor, "result": None}
-                events.append(("pipeline.deploy_approved", "Jay approved the live deployment", {}))
+                                  "approvedBy": by, "result": None}
+                events.append(("pipeline.deploy_approved", said, {}))
                 return {}, work, events
             if gate == "deploy" and (w["deploy"] or {}).get("requestedAt") and not (w["deploy"] or {}).get("result"):
                 # Jay approved a live deployment that has not happened yet: the agent deploys next and
                 # records it with `deployed`; the ticket closes only after that, verified live.
-                work["deploy"] = dict(w["deploy"], approvedAt=at, approvedBy=actor)
-                events.append(("pipeline.deploy_approved", "Jay approved the live deployment", {}))
+                work["deploy"] = dict(w["deploy"], approvedAt=at, approvedBy=by)
+                events.append(("pipeline.deploy_approved", said, {}))
                 return {}, work, events
             if gate in ("ui", "deploy") and t["status"] == "VERIFYING" and (w["verification"] or {}).get("result") == "pass":
                 status, more, ev = self._after_verify(t, dict(w, confirmed=confirmed))

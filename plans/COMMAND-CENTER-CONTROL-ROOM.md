@@ -1497,8 +1497,30 @@ Asked by Jay after two hours of use; additions, not changes to the frozen spec.
   deploy sign-offs do not hold either. The Dashboard panel says "New work on hold — answer these first", and
   the agent brief (`work <KEY>`) says it too.
 - **Night shift / away mode.** Dashboard → `☾ Night shift`, or `/night-shift` typed in any Claude on jay-server
-  (go-live links `~/.claude/commands/night-shift.md` to `server/ccd/night_shift.md`, the one text both use).
+  (go-live links `~/.claude/skills/night-shift` to `server/ccd/skills/night-shift`, the one text both use).
   Each coordinator works its open tasks until morning: finish in progress → fresh review → merge only where no
   gate is open → verify → plan/research → new starts only when Jay first allows. It never deploys or goes live;
   a morning report goes to `~/command-center/night-shift/<project>/<date>.md`. A **Go Live** button (Jay sends
   the latest merges to production) is a separate, later addition.
+
+### Night shift v2 and Go Live (2026-10-09, approved by Jay: phases 1–3)
+
+- **Waiting for Jay is per task** (`Pipeline.held`): a ticket waits only while it, or an open ticket it is blocked
+  by, has an open question, plan approval or blocker for Jay. The project-wide hold is gone.
+- **Lanes:** 2 per project (`Pipeline.lanes(project)`, registry `max_lanes`).
+- **Jay merges** SamVision and GauzeMate (registry `merge: owner`); other projects merge where no gate is open.
+- **`/night-shift` skill** (`server/ccd/skills/night-shift/SKILL.md`, linked into `~/.claude/skills`): sort tasks
+  into waits-for-Jay and free; work free ones end to end in the repo's own workflow; with nothing free, look for
+  showstoppers only (data loss, security/privacy, crash, wrong core numbers, broken deploy/backup/rollback), at
+  most 3 per night, with evidence, as `night-finding` Inbox tasks; never deploy. The morning report is a release
+  candidate (safe / test-after-deploy with steps, migrations, rollback target and command, waiting for Jay,
+  findings, failures) whose first line is `Status: working|complete`.
+- **Supervisor** (`ccd/nightshift.py`): hard stops, ADR 0006. Every minute ccd reminds an idle coordinator whose
+  input line is empty (after 3 min idle, at most every 10 min, and only a delivered reminder counts); the shift
+  ends at `Status: complete`, after 6 reminders, at the morning cutoff (07:00 local), or after 3 reminders with no
+  ticket or report change. Command Center supervises from outside instead of trusting the model to keep itself going.
+- **Dashboard:** a night-shift line per project (running · Claude's state · reminders, or last night's result),
+  the report, **End night shift**, and **Go Live…** (a second confirm that lists the tickets): approves the
+  listed live-deploy gates and asks the coordinator to PREPARE the deploy (runbook steps, checks, rollback plan)
+  and wait; Jay confirms the deploy himself in the coordinator's pane.
+- Later (Jay, not now): a weekly UI-test run of new features (Cypress/Playwright) with a findings report.

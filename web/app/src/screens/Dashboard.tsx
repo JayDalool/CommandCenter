@@ -12,7 +12,7 @@ import { app } from "../store/app";
 import { useSelector } from "../lib/store";
 import { href } from "../lib/router";
 import { jayQueue, type JayItem } from "../tickets/model";
-import { byProjectOrder, greeting, holdItems, initials, isActive, jayHref, jayWords, pjVar, stageOf, taskHref } from "../lib/control";
+import { byProjectOrder, greeting, initials, isActive, jayHref, jayWords, pjVar, stageOf, taskHref } from "../lib/control";
 import type { CcdEvent, Ticket } from "../api/types";
 import { ago, nowS } from "../lib/time";
 import { useTick } from "../components/Shell";
@@ -20,6 +20,8 @@ import { NotificationBell } from "../components/Notifications";
 import { DevDot } from "../components/DevMode";
 import { EmptyState } from "../components/ui";
 import { NightShiftButton, TaskCheckButton } from "../components/TaskCheck";
+import { NightLine, useNightShift } from "../components/NightShift";
+import type { NightShiftState } from "../api/types";
 
 /** Events worth a manager's eye: work moving, PRs, CI, deployments, questions. Not agent chatter. */
 export function newsworthy(e: CcdEvent): boolean {
@@ -53,8 +55,6 @@ function Mark({ e }: { e: CcdEvent }) {
 
 interface PanelData {
   key: string; name: string; prefix: string; active: Ticket[]; news: CcdEvent[]; needs: JayItem[];
-  /** Jay first: what holds new work here (questions, a plan to approve, a blocker). */
-  hold: number;
   counts: { needs: number; progress: number; review: number; merge: number };
   live: CcdEvent[]; blocked: Ticket[];
 }
@@ -70,7 +70,6 @@ export function projectPanels(projects: { key: string; name: string; prefix: str
       key: p.key, name: p.name, prefix: p.prefix, active,
       news: mine.filter(newsworthy).slice(0, 2),
       needs: queue.filter((j) => j.project === p.key),
-      hold: holdItems(queue, tickets, p.key).length,
       counts: { needs: queue.filter((j) => j.project === p.key).length,
         progress: n("Planning", "Implementing", "UI Testing", "Verifying", "Deploying"), review: n("Reviewing"),
         merge: n("Ready to Merge") },
@@ -80,7 +79,7 @@ export function projectPanels(projects: { key: string; name: string; prefix: str
   });
 }
 
-function ProjectPanel({ d }: { d: PanelData }) {
+function ProjectPanel({ d, night, onNight }: { d: PanelData; night: NightShiftState | null; onNight: () => void }) {
   const top = d.news[0];
   return <section className="dash-card" style={pjVar(d.key)} aria-label={d.name}>
     <a className="dash-head" href={href("workspace", null, { project: d.key })} title={`Open ${d.name} in the Workspace`}>
@@ -97,14 +96,13 @@ function ProjectPanel({ d }: { d: PanelData }) {
           <span className="mono-xs faint">{ago(top.at, nowS())}</span></div>
       </> : <div className="muted dash-sub">No updates yet.</div>}
     </div>
+    <NightLine project={d.key} name={d.name} n={night?.projects[d.key]} onChanged={onNight} />
 
     <div className="dash-needs">
       <div className={`dash-label is-jay${d.needs.length ? "" : " is-clear"}`}>Needs Jay:</div>
       {d.needs.length ? <ul>{d.needs.slice(0, 3).map((j) => <li key={j.id}><a href={jayHref(j)} title={j.text}>{jayWords(j)}</a></li>)}
         {d.needs.length > 3 && <li className="muted"><a href={href("workspace", null, { project: d.key })}>+{d.needs.length - 3} more</a></li>}</ul>
         : <div className="muted dash-sub">Nothing — all clear.</div>}
-      {d.hold > 0 && <div className="dash-hold" title="Jay first: Claude starts no new task here until these are answered (tasks that need a lawyer don't count)">
-        New work on hold — answer {d.hold === 1 ? "this" : `these ${d.hold}`} first</div>}
     </div>
 
     {(d.live.length > 0 || d.blocked.length > 0) && <div className="dash-extra">
@@ -138,6 +136,7 @@ export function Dashboard() {
       .map((p) => ({ key: p.key, name: st?.projects.find((x) => x.key === p.key)?.name ?? p.name, prefix: p.prefix }));
   }, [taskProjects, st, tickets]);
   const panels = useMemo(() => projectPanels(projects, tickets, activity, queue), [projects, tickets, activity, queue]);
+  const [night, reloadNight] = useNightShift();
   if (!st) return <EmptyState title="Loading state from ccd…" />;
   const now = new Date();
   return <div className="dash">
@@ -154,7 +153,7 @@ export function Dashboard() {
       <a className="btn is-outline" href={href("workspace")}>Open Workspace →</a>
     </header>
     <div className="dash-grid" style={{ ["--n" as string]: String(Math.max(1, panels.length)) }}>
-      {panels.map((d) => <ProjectPanel key={d.key} d={d} />)}
+      {panels.map((d) => <ProjectPanel key={d.key} d={d} night={night} onNight={reloadNight} />)}
     </div>
   </div>;
 }

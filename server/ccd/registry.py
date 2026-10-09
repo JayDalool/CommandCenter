@@ -43,7 +43,8 @@ PROJECTS = {
                       # SamVision's own rule: its merges need Jay (docs/jay/MORNING.md, SV-064).
                       "pipeline": {"merge": "owner"}},
     "gauzemate":     {"name": "GauzeMate",        "prefix": "GZ",   "legacy": ("GM",),
-                      "root": "/srv/server/repos/GauzeMate",        "github": "JayDalool/GauzeMate"},
+                      "root": "/srv/server/repos/GauzeMate",        "github": "JayDalool/GauzeMate",
+                      "pipeline": {"merge": "owner"}},   # Jay accepts every GauzeMate merge (2026-10-09)
     "mfe":           {"name": "MyFamilyExpenses", "prefix": "MFE",  "legacy": (),
                       "root": "/srv/server/repos/MyFamilyExpenses", "github": "JayDalool/MyFamilyExpenses"},
     "commandcenter": {"name": "Command Center",   "prefix": "CC",   "legacy": (),
@@ -58,9 +59,9 @@ PROJECTS = {
 # and Jay's acceptance when the change is user-facing/UI, flagged needs:jay or re-planned
 # after approval (pipeline.needs_acceptance). "owner" — Jay accepts every merge.
 # A live deployment always waits for Jay, whatever the merge policy.
-# jay_first: no new task starts (pipeline `start`) while the project has an open question for Jay, a plan
-# waiting on his approval or a blocker only he can clear; tasks that need a lawyer (needs:legal, type LEGAL)
-# do not hold it, nor do sign-offs on finished work (merge acceptance, UI review, live deploy).
+# jay_first: a ticket does not start (pipeline `start`) while it — or an open ticket it is blocked by — has an
+# open question for Jay, a plan waiting on his approval or a blocker only he can clear (Pipeline.held). Every
+# other ticket goes ahead. Lawyer tasks (needs:legal, type LEGAL) and sign-offs on finished work do not hold.
 # Implementation lanes: at most 2 tickets IN_PROGRESS with a worktree per project (pipeline.MAX_LANES); a
 # project may set "max_lanes" in its pipeline dict.
 # A project overrides with a "pipeline" dict in PROJECTS above.

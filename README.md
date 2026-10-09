@@ -26,19 +26,28 @@ own; when ccd is down, it builds locally exactly as before.
   `/exit` once idle, and **Check tasks** (Jay with Developer Unlock) sends a
   project's idle coordinator one fixed message asking it to propose stale
   tasks — only Jay's "Cancel it" cancels one; **Night shift** sends each idle
-  coordinator the `/night-shift` instructions (`server/ccd/night_shift.md`):
-  work the open tasks under the pipeline until morning, merge only where no gate
-  is open, never deploy. A coordinator is never a task session.
-- **Jay first.** No new task starts in a project while Jay has an open question,
-  a plan to approve or a blocker to clear there (tasks that need a lawyer excepted).
+  coordinator the `/night-shift` skill (`server/ccd/skills/night-shift/SKILL.md`):
+  work every task that does not wait for Jay end to end, merge only where no gate
+  is open (SamVision and GauzeMate: Jay merges), never deploy. ccd then reminds an
+  idle night-shift coordinator to continue until its morning report says
+  `Status: complete` (or nothing moves after 3 reminders). A coordinator is never a task session.
+- **Waiting for Jay is per task.** A task does not start while it, or a task it
+  is blocked by, has an open question, plan or blocker for Jay; everything else
+  keeps moving (tasks that need a lawyer never hold anything).
 - **Loopback only.** ccd binds `127.0.0.1:7777`, fixed in code. No public port,
   no Cloudflare, no Tailscale Serve, and the herdr socket is never bridged to TCP.
   The Windows client will reach it with `ssh -L 7777:127.0.0.1:7777 jay-server`.
   CommandCenter.exe also signs in over that SSH login (`scripts/cc-session`), so nothing is pasted.
-- **No dangerous endpoints.** There is no API for merge, deploy, production,
-  secrets, Docker, destructive git, or config/rule changes. Merges and deploys
+- **No dangerous endpoints.** There is no API that merges or deploys, and none
+  for production, secrets, Docker, destructive git, or config/rule changes. Merges and deploys
   are done by agents under the pipeline's gates; ccd only records them, and a
-  LIVE deploy cannot be recorded before Jay approved it. Terminals, Claude
+  LIVE deploy cannot be recorded before Jay approved it. **Go Live** is a deploy
+  API that **prepares only** (`POST /api/go-live`, Jay + Developer Unlock): it
+  approves the project's open live-deploy gates and asks its coordinator to
+  prepare the deploy (runbook steps, checks, rollback plan) and wait. Jay confirms
+  the deploy himself in the coordinator's pane. The message orders no deploy, but
+  the approval it records is a full live-deploy approval, so that wait rests on
+  the message text, not on ccd (ADR 0006). ccd runs no deploy. Terminals, Claude
   input, answers and file writes need a second credential, Developer Unlock
   (once per app session, [docs/SECURITY.md](docs/SECURITY.md)). A test asserts
   the route table exactly. See [docs/API.md](docs/API.md).

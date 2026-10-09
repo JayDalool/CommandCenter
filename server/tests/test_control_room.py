@@ -124,7 +124,8 @@ class MergeAcceptance(Base):
         self.assertFalse(needs_acceptance(t, {"confirmed": []}))
         self.assertTrue(needs_acceptance(t, {"confirmed": ["owner:accept"]}))
         self.assertEqual(registry.pipeline_of("samvision")["merge"], "owner")
-        self.assertEqual(registry.pipeline_of("gauzemate")["merge"], "auto")
+        self.assertEqual(registry.pipeline_of("gauzemate")["merge"], "owner")      # Jay accepts every GauzeMate merge
+        self.assertEqual(registry.pipeline_of("gyst")["merge"], "auto")
 
 
 class LiveDeploy(Base):
@@ -356,8 +357,8 @@ class TaskTerminals(unittest.TestCase):
 
 
 class TaskCheck(Base):
-    """The task check: Claude proposes a stale task, only Jay's answer cancels it; and Jay first — no new task
-    starts while Jay has an open question, plan or blocker in the project (lawyer tasks excepted)."""
+    """The task check: Claude proposes a stale task, only Jay's answer cancels it; and a task that waits for Jay
+    (an open question, plan or blocker on it or on a task it is blocked by) does not start — the rest do."""
     def test_a_stale_proposal_is_one_cancel_or_keep_question_once(self):
         k = self.ticket()
         self.pl.stale(k, "superseded by SV-071 (plans/valuation.md)", "agent:coordinator")
@@ -376,35 +377,41 @@ class TaskCheck(Base):
         with self.assertRaises(TaskError):
             self.pl.stale(k, "x", "agent:coordinator")
 
-    def test_jay_first_holds_a_new_start_until_his_questions_are_answered(self):
-        a, b = self.ticket(), self.ticket()
-        self.pl.plan(b, PLAN, "agent:planner")
+    def test_only_the_task_waiting_on_jay_and_tasks_blocked_by_it_wait(self):
+        a, b, c = self.ticket(), self.ticket(), self.ticket()
+        for k in (a, b, c):
+            self.pl.plan(k, PLAN, "agent:planner")
         self.pl.ask(a, ["Which layout?"], "agent:coordinator")
-        with self.assertRaises(TaskError) as e:
-            self.pl.start(b, f"{b}-x", f"/srv/w/{b}", "agent:coordinator")
+        self.ts.relate(c, "blocked_by", a, "jay")                          # c depends on a
+        with self.assertRaises(TaskError) as e:                           # a has Jay's open question
+            self.pl.start(a, f"{a}-x", f"/srv/w/{a}", "agent:coordinator")
         self.assertEqual(e.exception.status, 409)
-        self.assertIn("Jay first", e.exception.message)
+        self.assertIn("waits for Jay", e.exception.message)
+        with self.assertRaises(TaskError) as e:                           # c is blocked by a
+            self.pl.start(c, f"{c}-x", f"/srv/w/{c}", "agent:coordinator")
         self.assertIn(a, e.exception.message)
+        self.assertEqual(self.pl.start(b, f"{b}-x", f"/srv/w/{b}", "agent:coordinator")[0]["status"], "IN_PROGRESS")
         qid = self.pl.work(a)["questions"][0]["id"]
         self.pl.answer(a, [{"id": qid, "answer": "the old one"}], "jay")
-        self.assertEqual(self.pl.start(b, f"{b}-x", f"/srv/w/{b}", "agent:coordinator")[0]["status"], "IN_PROGRESS")
+        self.assertEqual(self.pl.start(c, f"{c}-x", f"/srv/w/{c}", "agent:coordinator")[0]["status"], "IN_PROGRESS")
 
-    def test_a_plan_or_blocker_holds_but_lawyer_tasks_and_sign_offs_do_not(self):
+    def test_a_blocking_plan_or_blocker_holds_but_lawyer_tasks_do_not(self):
         b = self.ticket()
-        self.pl.plan(b, PLAN, "agent:planner")
         risky = self.ticket(labels=["migration"])
         self.pl.plan(risky, PLAN, "agent:planner")                       # plan gate: Jay must approve
-        self.assertEqual([h["ref"] for h in self.pl.held_by("samvision", b)], [risky])
+        self.ts.relate(b, "blocked_by", risky, "jay")
+        self.assertEqual([h["ref"] for h in self.pl.held(b)], [risky])
         self.ts.update(risky, {"needs_legal": True}, "jay")               # waits on a lawyer, not on Jay
-        self.assertEqual(self.pl.held_by("samvision", b), [])
+        self.assertEqual(self.pl.held(b), [])
         stuck = self.ticket()
         self.pl.block(stuck, "the API key expired", "agent:coordinator")
-        self.assertEqual([h["ref"] for h in self.pl.held_by("samvision", b)], [stuck])
-        self.assertEqual(self.pl.held_by("gauzemate"), [])               # per project
+        self.assertEqual(self.pl.held(b), [])                             # not a dependency: b goes ahead
+        self.ts.relate(b, "blocked_by", stuck, "jay")
+        self.assertEqual([h["ref"] for h in self.pl.held(b)], [stuck])
         old = registry.PROJECTS["samvision"].get("pipeline")
         registry.PROJECTS["samvision"]["pipeline"] = dict(old or {}, jay_first=False)
         try:
-            self.assertEqual(self.pl.held_by("samvision", b), [])
+            self.assertEqual(self.pl.held(b), [])
         finally:
             registry.PROJECTS["samvision"]["pipeline"] = old
 
@@ -426,6 +433,10 @@ class TaskCheck(Base):
         self.assertEqual((m, path, actor), ("POST", "/api/tasks", "agent:coordinator"))
         self.assertEqual((body["project"], body["title"], body["labels"]), ("samvision", "Export CSV", ["task-check"]))
         self.assertIn("plans/x.md:12", body["description"])
+        body = pipeline_cli.build(["add", "samvision", "--role", "coordinator", "--label", "night-finding",
+                                   "--title", "Backup restore fails", "--note", "tests/test_backup.py fails"])[2]
+        self.assertEqual(body["labels"], ["night-finding"])
+        self.assertIn("night shift", body["description"])
 
 
 class ControlRoomApi(PipelineApi):
@@ -611,8 +622,10 @@ class ControlRoomApi(PipelineApi):
         text = sent[0]["text"]
         self.assertTrue(text.startswith("Night shift from Jay via command-center."))
         self.assertIn("pipeline_cli tasks samvision", text)
-        self.assertIn("deploy or go live, to production or anywhere else", text)
-        self.assertIn("NO open gate", text)
+        self.assertIn("deploy or go live, anywhere", text)
+        self.assertIn("gate null", text)
+        self.assertIn("SamVision and GauzeMate: Jay merges every PR", text)
+        self.assertIn("Status: complete", text)
         self.assertNotIn("<project>", text)
         self.assertNotIn("description:", text)                                       # the command's frontmatter
         r = self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "gyst", "copy": True}), headers=dev)
@@ -620,6 +633,229 @@ class ControlRoomApi(PipelineApi):
         self.assertEqual(len([p for m, p in self.fake.calls if m == "agent.prompt"]), 1)
         self.assertEqual(self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "nope"}),
                                           headers=dev).status_code, 404)
+
+    def night(self):
+        from ccd import nightshift
+        self.daemon.night = nightshift.NightShift(tempfile.mkdtemp(prefix="night-"))
+        return self.daemon.night
+
+    def test_night_shift_start_state_reminder_and_end(self):
+        ns = self.night()
+        dev = dict(JSON, **self.dev())
+        self.assertEqual(self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "samvision"}),
+                                          headers=dev).status_code, 200)
+        st = self.get("/api/night-shift").json()["projects"]
+        self.assertTrue(st["samvision"]["active"])
+        self.assertFalse(st["gyst"]["active"])
+        self.assertEqual(st["samvision"]["coordinator"]["state"], "ready")
+        # The coordinator has been idle past the grace: one fixed reminder goes to it.
+        s = ns.state["samvision"]
+        s["idleSince"] = s["startedAt"] - 3600
+        self.fake.tails["wE:p2"] = self.EMPTY_PROMPT
+        before = len([p for m, p in self.fake.calls if m == "agent.prompt"])
+        self.client.portal.call(self.daemon.night_tick)
+        sent = [p for m, p in self.fake.calls if m == "agent.prompt"][before:]
+        self.assertEqual([p["target"] for p in sent], ["wE:p2"])
+        self.assertIn("Night shift continues", sent[0]["text"])
+        # Ending: needs Developer Unlock; then no more reminders and the coordinator is told to stop.
+        body = json.dumps({"project": "samvision"})
+        self.assertEqual(self.client.post("/api/night-shift/end", content=body, headers=JSON).status_code, 403)
+        import time
+        time.sleep(1.1)                                                               # the per-pane prompt throttle
+        out = self.client.post("/api/night-shift/end", content=body, headers=dev).json()
+        self.assertTrue(out["told"], out)
+        self.assertIn("Jay ended the night shift", [p for m, p in self.fake.calls if m == "agent.prompt"][-1]["text"])
+        self.assertFalse(self.get("/api/night-shift").json()["projects"]["samvision"]["active"])
+        self.assertEqual(self.client.post("/api/night-shift/end", content=body, headers=dev).status_code, 409)
+
+    EMPTY_PROMPT = "assistant text\n\u256d" + "\u2500" * 20 + "\u256e\n\u2502 > " + " " * 16 + "\u2502\n\u2570" + "\u2500" * 20 + "\u256f"
+
+    def go_live(self, project="samvision", keys=None):
+        """Press Go Live as the confirm box does: with the keys it listed (default: what GET /api/night-shift lists)."""
+        if keys is None:
+            keys = [a["key"] for a in self.get("/api/night-shift").json()["projects"][project]["goLive"]["approves"]]
+        return self.client.post("/api/go-live", content=json.dumps({"project": project, "keys": keys}),
+                                headers=dict(JSON, **self.dev()))
+
+    def prompts(self):
+        return [p for m, p in self.fake.calls if m == "agent.prompt"]
+
+    def second_deploy_ticket(self):
+        self.tickets.create("samvision", "second feature", number=57, status="VERIFYING")
+        r = self.client.post("/api/tasks/SV-057/work/deploy-request", headers=dict(JSON, **{"x-ccd-actor": "agent:coordinator"}),
+                             content=json.dumps({"env": "live", "what": "second", "verification": "verifier pass"}))
+        self.assertEqual(r.status_code, 200, r.text)
+
+    def test_go_live_approves_pending_live_deploys_and_asks_only_for_a_prepared_deploy(self):
+        self.night()
+        self.ticket("VERIFYING")
+        self.step("deploy-request", {"env": "live", "what": "valuation v2", "verification": "verifier pass"})
+        self.assertEqual(self.get("/api/tasks/SV-056/work").json()["gate"], "deploy")
+        body = json.dumps({"project": "samvision"})
+        self.assertEqual(self.client.post("/api/go-live", content=body, headers=JSON).status_code, 403)
+        r = self.go_live()
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((r.json()["approved"], r.json()["errors"]), (["SV-056"], []))
+        w = self.get("/api/tasks/SV-056/work").json()
+        self.assertIsNone(w["gate"])
+        self.assertTrue(w["deploy"]["approvedAt"])                                   # deployed can be recorded later
+        full = self.daemon.pipeline.work("SV-056")
+        self.assertEqual(full["deploy"]["approvedBy"], "jay:go-live")
+        kinds = [e for e in self.daemon.tasks.get("SV-056")["timeline"]]
+        self.assertTrue(any("approved for a prepared deploy (Jay confirms in the pane)" in str(e) for e in kinds), kinds)
+        text = self.prompts()[-1]["text"]
+        self.assertTrue(text.startswith("Go Live from Jay via command-center: PREPARE the deploy of samvision."))
+        self.assertIn("Do not deploy yet", text)
+        self.assertIn("Jay will confirm the deploy himself in this pane", text)
+        self.assertIn("rollback plan", text)
+        self.assertIn("(SV-056)", text)
+        self.assertNotIn("Authorized by this message", text)
+        self.assertNotIn("deploy samvision to production now", text)
+        self.assertTrue(self.get("/api/night-shift").json()["projects"]["samvision"]["goLiveAt"])
+
+    def test_go_live_approves_nothing_when_the_coordinator_cannot_be_reached(self):
+        self.ticket("VERIFYING")
+        self.step("deploy-request", {"env": "live", "what": "valuation v2", "verification": "verifier pass"})
+        self.fake.set_status("wE:p2", "working")
+        r = self.go_live()
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(self.get("/api/tasks/SV-056/work").json()["gate"], "deploy")   # still waiting for Jay
+
+    def test_go_live_one_ticket_that_cannot_be_approved_does_not_undo_the_rest(self):
+        ns = self.night()
+        self.ticket("VERIFYING")
+        self.step("deploy-request", {"env": "live", "what": "valuation v2", "verification": "verifier pass"})
+        self.second_deploy_ticket()
+        real = self.daemon.pipeline.confirm
+
+        def flaky(key, gate, actor, via=None):                                                  # SV-056's gate moved under us
+            if key == "SV-056":
+                raise TaskError(409, "SV-056 has no open deploy gate")
+            return real(key, gate, actor, via)
+        self.daemon.pipeline.confirm = flaky
+        r = self.go_live()
+        self.assertEqual(r.status_code, 200, r.text)                                  # never a 409 after the message
+        self.assertEqual(r.json()["approved"], ["SV-057"])
+        self.assertEqual([e["key"] for e in r.json()["errors"]], ["SV-056"])
+        self.assertIn("no open deploy gate", r.json()["errors"][0]["error"])
+        self.assertEqual(len(self.prompts()), 1)
+        self.assertEqual(ns.get("samvision")["goLiveKeys"], ["SV-057"])               # went_live is saved
+
+    def test_go_live_is_refused_while_the_night_shift_runs_while_recent_and_while_unfinished(self):
+        import time
+        ns = self.night()
+        self.ticket("VERIFYING")
+        self.step("deploy-request", {"env": "live", "what": "valuation v2", "verification": "verifier pass"})
+        ns.start("samvision")
+        r = self.go_live()
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("night shift is still running", r.json()["error"])
+        self.assertEqual((self.prompts(), self.get("/api/tasks/SV-056/work").json()["gate"]), ([], "deploy"))
+        ns.end("samvision", "ended by Jay")
+        self.assertEqual(self.go_live().status_code, 200)
+        before = len(self.prompts())
+        r = self.go_live()                                                            # a second press right after
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("min ago", r.json()["error"])
+        ns.went_live("samvision", ["SV-056"], now=time.time() - 3600)                 # older, but SV-056 is not recorded
+        self.second_deploy_ticket()
+        r = self.go_live()
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("unfinished", r.json()["error"])
+        self.assertEqual(len(self.prompts()), before)
+        self.step("deployed", {"env": "live", "result": "pass", "evidence": "health ok"})   # it is recorded: free again
+        time.sleep(5.1)
+        self.assertEqual(self.go_live().status_code, 200)
+
+    def test_night_state_lists_what_go_live_approves_and_flags_unverified_merges(self):
+        self.night()
+        self.ticket("VERIFYING")
+        self.step("deploy-request", {"env": "live", "what": "valuation v2", "verification": "verifier pass"})
+        self.tickets.create("samvision", "merged but unchecked", number=58, status="VERIFYING")
+        g = self.get("/api/night-shift").json()["projects"]["samvision"]["goLive"]
+        self.assertEqual([a["key"] for a in g["approves"]], ["SV-056"])
+        self.assertEqual([(w["key"], w["reason"]) for w in g["warnings"]], [("SV-056", "merged, not verified"), ("SV-058", "merged, not verified")])
+        self.assertEqual(self.get("/api/night-shift").json()["projects"]["gyst"]["goLive"], {"approves": [], "warnings": []})
+
+    def test_ending_the_night_shift_sends_the_message_and_never_esc(self):
+        import time
+        self.night()
+        dev = dict(JSON, **self.dev())
+        self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "samvision"}), headers=dev)
+        self.fake.set_status("wE:p2", "working")
+        time.sleep(1.1)
+        out = self.client.post("/api/night-shift/end", content=json.dumps({"project": "samvision"}), headers=dev).json()
+        self.assertTrue(out["told"], out)
+        self.assertIn("Jay ended the night shift", self.prompts()[-1]["text"])
+        self.assertEqual([p for m, p in self.fake.calls if m == "pane.send_keys"], [])
+
+    def test_a_reminder_to_a_busy_coordinator_is_not_counted_and_a_delivered_one_is(self):
+        ns = self.night()
+        self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "samvision"}), headers=dict(JSON, **self.dev()))
+        sent0 = len(self.prompts())
+        s = ns.state["samvision"]
+        s["idleSince"] = s["startedAt"] - 3600
+        self.fake.tails["wE:p2"] = self.EMPTY_PROMPT
+        self.fake.set_status("wE:p2", "working")                # busy when the fresh status is read
+        self.client.portal.call(self.daemon.night_tick)
+        self.assertEqual((len(self.prompts()), ns.get("samvision")["nudges"]), (sent0, 0))
+        self.fake.set_status("wE:p2", "idle")
+        self.client.portal.call(self.daemon.resync, "test")      # the snapshot sees it idle again
+        s["idleSince"] = s["startedAt"] - 3600
+        self.client.portal.call(self.daemon.night_tick)
+        self.assertEqual((len(self.prompts()), ns.get("samvision")["nudges"]), (sent0 + 1, 1))
+        self.assertIn("no morning report", self.prompts()[-1]["text"])
+
+    def test_go_live_approves_only_the_keys_the_confirm_box_showed_and_reports_the_rest(self):
+        self.night()
+        self.ticket("VERIFYING")
+        self.step("deploy-request", {"env": "live", "what": "valuation v2", "verification": "verifier pass"})
+        self.second_deploy_ticket()                       # SV-057 opened its gate after the page loaded
+        r = self.go_live(keys=["SV-056", "sv-099"])       # sv-099 was shown but its gate is gone
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((r.json()["approved"], r.json()["errors"]), (["SV-056"], []))
+        self.assertEqual([k["key"] for k in r.json()["skipped"]], ["SV-099"])
+        self.assertEqual(self.get("/api/tasks/SV-057/work").json()["gate"], "deploy")     # untouched, still Jay's
+        text = self.prompts()[-1]["text"]
+        self.assertIn("(SV-056)", text)
+        self.assertNotIn("SV-057", text)
+
+    def test_go_live_needs_the_list_of_keys(self):
+        self.night()
+        for body in ({"project": "samvision"}, {"project": "samvision", "keys": "SV-056"},
+                     {"project": "samvision", "keys": ["SV-056; rm"]}):
+            r = self.client.post("/api/go-live", content=json.dumps(body), headers=dict(JSON, **self.dev()))
+            self.assertEqual(r.status_code, 400, r.text)
+        self.assertEqual(self.prompts(), [])
+
+    def test_a_reminder_is_held_back_uncounted_when_the_input_line_has_a_draft_or_is_not_recognised(self):
+        ns = self.night()
+        self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "samvision"}), headers=dict(JSON, **self.dev()))
+        sent0 = len(self.prompts())
+        s = ns.state["samvision"]
+        for screen in (self.EMPTY_PROMPT.replace("> " + " " * 16, "> half a sentence Jay is typing"),
+                       "line one\nline two",              # no prompt line at all: cannot parse, so skip
+                       ""):
+            s["idleSince"] = s["startedAt"] - 3600
+            self.fake.tails["wE:p2"] = screen
+            self.client.portal.call(self.daemon.night_tick)
+            self.assertEqual((len(self.prompts()), ns.get("samvision")["nudges"]), (sent0, 0), screen)
+        self.assertTrue(ns.get("samvision")["lastSkip"])
+        s["idleSince"] = s["startedAt"] - 3600
+        self.fake.tails["wE:p2"] = self.EMPTY_PROMPT
+        self.client.portal.call(self.daemon.night_tick)
+        self.assertEqual((len(self.prompts()), ns.get("samvision")["nudges"]), (sent0 + 1, 1))
+
+    def test_the_morning_cutoff_ends_the_shift_even_with_herdr_down_and_types_nothing(self):
+        ns = self.night()
+        self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "samvision"}), headers=dict(JSON, **self.dev()))
+        sent0 = len(self.prompts())
+        ns.state["samvision"]["cutoffAt"] = 1.0
+        self.daemon.herdr_state["ok"] = False
+        self.client.portal.call(self.daemon.night_tick)
+        self.assertFalse(ns.active("samvision"))
+        self.assertEqual(ns.get("samvision")["endReason"], "morning cutoff")
+        self.assertEqual(len(self.prompts()), sent0)
 
     def test_task_terminal_cwd_uses_only_a_known_worktree(self):
         self.ticket("INBOX")

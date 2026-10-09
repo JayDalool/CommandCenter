@@ -71,16 +71,16 @@ export function TaskCheckDialog({ onClose, mode = "check" }: { onClose: () => vo
   };
 
   return <Dialog title={night ? "Night shift" : "Check tasks"} onClose={onClose}>
-    {night ? <p className="text2">Each project's Claude works its open tasks one by one until morning: finishes work in
-      progress, reviews, <b>merges only where no gate is open</b> (merges waiting for you stay waiting), verifies, plans and
-      researches, and starts new work only when nothing waits on you. It <b>never deploys or goes live</b>. Questions wait
-      for you in Needs Jay; a morning report lands in ~/command-center/night-shift/. In any Claude you can also type
+    {night ? <p className="text2">Each project's Claude works every task that doesn't wait for you, end to end: plan, build,
+      fresh review, <b>merge where no gate is open</b> (SamVision and GauzeMate stop at Ready to Merge for you), verify. With
+      nothing free left it looks for showstoppers only. It <b>never deploys or goes live</b>. Command Center keeps it going
+      until its report says complete; the report is a release candidate for Go Live. In any Claude you can also type
       <code> /night-shift</code>.</p>
       : <p className="text2">Each project's Claude compares its open tasks with the repo and every .md file that held tasks.
       Stale tasks come back to you as <b>Cancel it / Keep it</b> in Needs Jay; work missing from Command Center lands in
       the Inbox. Claude changes no code and cancels nothing itself.</p>}
-    <p className="mono-xs muted">Jay first: no new task starts in a project while you have an open question, a plan to approve or
-      a blocker to clear there. Tasks that need a lawyer don't count.</p>
+    <p className="mono-xs muted">A task waits for you only while it, or a task it is blocked by, has an open question or
+      decision for you. Everything else keeps moving.</p>
     <div className="tc-list">
       {projects.map((p) => {
         const c = st?.coordinators?.[p.key];

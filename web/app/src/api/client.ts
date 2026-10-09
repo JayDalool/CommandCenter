@@ -1,6 +1,6 @@
 import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
-import type { AnswersResult, CoordinatorState, TaskCheckResult, TaskRecord, TicketWork,
+import type { AnswersResult, CoordinatorState, GoLiveResult, NightShiftState, TaskCheckResult, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
   Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent,
 } from "./types";
@@ -88,6 +88,18 @@ export class Api {
   /** Night shift (Developer Unlock): the project's idle coordinator works its open tasks until morning; never deploys. */
   nightShift(project: string, copy = false) {
     return this.req<TaskCheckResult>("POST", "/api/tasks/night-shift", copy ? { project, copy: true } : { project });
+  }
+  /** Every project's night shift: running?, coordinator, the newest morning report. */
+  nightShiftState() {
+    return this.req<NightShiftState>("GET", "/api/night-shift");
+  }
+  /** End a night shift (Developer Unlock): no more reminders; the coordinator is told to stop safely. */
+  nightShiftEnd(project: string) {
+    return this.req<{ ok: boolean; told: boolean }>("POST", "/api/night-shift/end", { project });
+  }
+  /** Go Live (Developer Unlock): approves the open live-deploy gates and asks the coordinator to PREPARE the deploy; Jay confirms it in its pane. */
+  goLive(project: string, keys: string[]) {
+    return this.req<GoLiveResult>("POST", "/api/go-live", { project, keys });
   }
   /** Jay answers Claude's questions (Developer Unlock). The last answer resumes the same task session. */
   answers(key: string, answers: { id: number; answer: string }[], scopeChange = false) {
