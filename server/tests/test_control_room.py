@@ -697,7 +697,7 @@ class ControlRoomApi(PipelineApi):
         """Press Go Live as the confirm box does: with the keys it listed (default: what GET /api/night-shift lists)."""
         if keys is None:
             keys = [a["key"] for a in self.get("/api/night-shift").json()["projects"][project]["goLive"]["approves"]]
-        return self.client.post("/api/go-live", content=json.dumps({"project": project, "keys": keys}),
+        return self.client.post("/api/jay/go-live", content=json.dumps({"project": project, "keys": keys}),
                                 headers=dict(JSON, **self.dev()))
 
     def prompts(self):
@@ -715,7 +715,7 @@ class ControlRoomApi(PipelineApi):
         self.step("deploy-request", {"env": "live", "what": "valuation v2", "verification": "verifier pass"})
         self.assertEqual(self.get("/api/tasks/SV-056/work").json()["gate"], "deploy")
         body = json.dumps({"project": "samvision"})
-        self.assertEqual(self.client.post("/api/go-live", content=body, headers=JSON).status_code, 403)
+        self.assertEqual(self.client.post("/api/jay/go-live", content=body, headers=JSON).status_code, 403)
         r = self.go_live()
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual((r.json()["approved"], r.json()["errors"]), (["SV-056"], []))
@@ -872,7 +872,7 @@ class ControlRoomApi(PipelineApi):
         self.night()
         for body in ({"project": "samvision"}, {"project": "samvision", "keys": "SV-056"},
                      {"project": "samvision", "keys": ["SV-056; rm"]}):
-            r = self.client.post("/api/go-live", content=json.dumps(body), headers=dict(JSON, **self.dev()))
+            r = self.client.post("/api/jay/go-live", content=json.dumps(body), headers=dict(JSON, **self.dev()))
             self.assertEqual(r.status_code, 400, r.text)
         self.assertEqual(self.prompts(), [])
 
@@ -907,7 +907,7 @@ class ControlRoomApi(PipelineApi):
 
     def test_a_paused_project_gets_no_agent_work_and_samvision_gets_careful_mode(self):
         dev = dict(JSON, **self.dev())
-        for path in ("/api/tasks/night-shift", "/api/tasks/check", "/api/go-live"):
+        for path in ("/api/tasks/night-shift", "/api/tasks/check", "/api/jay/go-live"):
             r = self.client.post(path, content=json.dumps({"project": "gauzemate"}), headers=dev)
             self.assertEqual(r.status_code, 409, path)
             self.assertIn("paused", r.json()["error"])
@@ -953,6 +953,77 @@ class ControlRoomApi(PipelineApi):
             pipeline_cli.call = old
         self.assertTrue(buf.getvalue().startswith("PAUSED: Jay paused GauzeMate"))
         self.assertNotIn("GZ-1", buf.getvalue())
+
+    def ready_pr(self, number, key_no, head, ci=True):
+        """A SamVision ticket at Ready to Merge: reviewed head, PR open and green (Jay's merge gate open)."""
+        from .helpers import pr
+        t, _ = self.tickets.create("samvision", f"feature {key_no}", number=key_no, status="INBOX")
+        key = t["key"]
+        h = dict(JSON, **{"x-ccd-actor": "agent:planner"})
+        self.client.post(f"/api/tasks/{key}/work/plan", content=json.dumps({"plan": {"summary": "x"}}), headers=h)
+        h = dict(JSON, **{"x-ccd-actor": "agent:coordinator"})
+        r = self.client.post(f"/api/tasks/{key}/work/start", content=json.dumps(
+            {"branch": f"{key}-f", "worktree": f"/srv/w/{key}"}), headers=h)
+        self.assertEqual(r.status_code, 200, r.text)
+        prs = [x for x in self.gh.data["samvision"].get("prs") or [] if x["number"] != number]
+        self.gh.data["samvision"]["prs"] = prs + [dict(pr(number, f"{key}: x", ci="SUCCESS" if ci else "FAILURE"),
+                                                       headRefName=f"{key}-f", headRefOid=head)]
+        self.poll()
+        h = dict(JSON, **{"x-ccd-actor": "agent:reviewer"})
+        self.client.post(f"/api/tasks/{key}/work/review", content=json.dumps(
+            {"verdict": "APPROVE", "head": head, "session": f"review-{key}"}), headers=h)
+        return key
+
+    def test_merge_approves_exactly_the_ready_heads_in_order_and_asks_for_one_at_a_time(self):
+        b = self.ready_pr(131, 81, "b1" * 20)
+        a = self.ready_pr(130, 80, "a1" * 20)
+        self.tickets.relate(a, "blocked_by", b, "jay")                               # b must go first anyway
+        c = self.ready_pr(129, 79, "c1" * 20)
+        for k in (a, b, c):
+            self.assertEqual(self.tickets.get(k)["status"], "READY_TO_MERGE")
+            self.assertEqual(self.get(f"/api/tasks/{k}/work").json()["gate"], "merge")   # SamVision: Jay merges
+        listing = self.get("/api/jay/merge").json()["projects"]["samvision"]
+        self.assertEqual([r["key"] for r in listing["ready"]], [c, b, a])            # oldest PR first, blockers before
+        body = json.dumps({"project": "samvision"})
+        self.assertEqual(self.client.post("/api/jay/merge", content=body, headers=JSON).status_code, 403)
+        r = self.client.post("/api/jay/merge", content=body, headers=dict(JSON, **self.dev()))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual([m["key"] for m in r.json()["merging"]], [c, b, a])
+        for k, head in ((a, "a1" * 20), (b, "b1" * 20), (c, "c1" * 20)):
+            w = self.get(f"/api/tasks/{k}/work").json()
+            self.assertIsNone(w["gate"])
+            self.assertIn(f"merge:{head}", w["confirmed"])                           # for that exact head only
+        text = [p for m, p in self.fake.calls if m == "agent.prompt"][-1]["text"]
+        self.assertTrue(text.startswith("Merge from Jay via command-center: merge samvision's ready PRs now"))
+        self.assertLess(text.index(c), text.index(b))
+        self.assertLess(text.index(b), text.index(a))
+        self.assertIn("Never rebase, update or push to the branch", text)
+        self.assertIn("Wait for CI on main", text)
+        self.assertIn("Not authorized: deploying or going live", text)
+
+    def test_merge_skips_what_is_not_mergeable_and_never_messages_for_nothing(self):
+        k = self.ready_pr(140, 90, "d1" * 20)
+        real = self.daemon._open_prs
+        # Between two GitHub polls the PR got a new commit: the approval no longer covers it.
+        self.daemon._open_prs = lambda t: [dict(p, head="e1" * 20) for p in real(t)]
+        try:
+            ready, skipped = self.daemon.merge_batch("samvision")
+        finally:
+            self.daemon._open_prs = real
+        self.assertEqual((ready, [x["key"] for x in skipped]), ([], [k]))
+        self.assertIn("head changed", skipped[0]["reason"])
+        before = [p for m, p in self.fake.calls if m == "agent.prompt"]
+        dev = dict(JSON, **self.dev())
+        r = self.client.post("/api/jay/merge", content=json.dumps({"project": "samvision", "keys": ["SV-999"]}), headers=dev)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("SV-999: not Ready to Merge", r.json()["error"])
+        self.assertEqual([p for m, p in self.fake.calls if m == "agent.prompt"], before)   # nothing sent
+        self.assertEqual(self.get(f"/api/tasks/{k}/work").json()["gate"], "merge")         # nothing approved
+        r = self.client.post("/api/jay/merge", content=json.dumps({"project": "samvision", "keys": "SV-1"}), headers=dev)
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post("/api/jay/merge", content=json.dumps({"project": "gauzemate"}), headers=dev)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("paused", r.json()["error"])
 
     def test_task_terminal_cwd_uses_only_a_known_worktree(self):
         self.ticket("INBOX")

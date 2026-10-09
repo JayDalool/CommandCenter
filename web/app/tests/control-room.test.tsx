@@ -9,6 +9,7 @@ import { stageOf, jayHref, jayWords, taskHref } from "../src/lib/control";
 import { NeedsTable } from "../src/screens/needs";
 import { TaskCheckDialog } from "../src/components/TaskCheck";
 import { NightLine, reportInShift } from "../src/components/NightShift";
+import { MergeDialog } from "../src/components/Merge";
 import type { NightProject } from "../src/api/types";
 import { jayQueue } from "../src/tickets/model";
 import { Dashboard, newsText, projectPanels } from "../src/screens/Dashboard";
@@ -542,5 +543,31 @@ describe("night shift on the Dashboard", () => {
     expect(screen.getByRole("button", { name: "Go Live…" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "End night shift" }));
     await waitFor(() => expect(end).toHaveBeenCalledWith("gyst"));
+  });
+});
+
+describe("merge ready", () => {
+  it("lists each project's PRs in merge order, skips paused ones, and merges only after a second Yes", async () => {
+    act(() => developer.set({ active: true, expiresAt: null, error: null }));
+    vi.spyOn(app.api, "mergeReady").mockResolvedValue({ projects: {
+      samvision: { paused: null, skipped: [{ key: "SV-090", reason: "CI is not green" }], ready: [
+        { key: "SV-079", title: "Older PR first", pr: "JayDalool/SamVisionAI#129", head: "c1".repeat(20), gate: "merge" },
+        { key: "SV-081", title: "Then this", pr: "JayDalool/SamVisionAI#131", head: "b1".repeat(20), gate: "merge" }] },
+      gauzemate: { paused: "Jay paused GauzeMate until he adds designs and files", skipped: [], ready: [] },
+    } });
+    const merge = vi.spyOn(app.api, "merge").mockResolvedValue({ ok: true, project: "samvision", coordinator: "samvision",
+      merging: [{ key: "SV-079", pr: "#129", head: "c1" }, { key: "SV-081", pr: "#131", head: "b1" }], skipped: [] });
+    render(<MergeDialog onClose={() => {}} />);
+    expect(await screen.findByText("Older PR first")).toBeInTheDocument();
+    const items = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
+    expect(items.findIndex((t) => t.includes("SV-079"))).toBeLessThan(items.findIndex((t) => t.includes("SV-081")));
+    expect(screen.getByText(/not mergeable: CI is not green/)).toBeInTheDocument();
+    expect(screen.getByText(/Paused — Jay paused GauzeMate/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Merge all ready (2)" }));
+    expect(merge).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Yes, merge" }));
+    await waitFor(() => expect(merge).toHaveBeenCalledWith("samvision"));
+    expect(merge).toHaveBeenCalledTimes(1);                                     // the paused project is never sent
+    expect(await screen.findByText(/samvision is merging SV-079 → SV-081/)).toBeInTheDocument();
   });
 });

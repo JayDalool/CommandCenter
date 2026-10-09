@@ -16,7 +16,7 @@ starts the morning deploy) were added with two features that type into a Claude 
 
 ## Decision
 
-1. **Go Live prepares only.** `POST /api/go-live` (Jay + Developer Unlock) approves the live-deploy gates
+1. **Go Live prepares only.** `POST /api/go-live` (since moved to `POST /api/jay/go-live`) (Jay + Developer Unlock) approves the live-deploy gates
    of the tickets the confirm box listed that are still open (any others: `skipped`) and sends one fixed message (`daemon.GO_LIVE_TEMPLATE`) asking the idle coordinator to
    PREPARE the deploy by the repository's runbook: steps, migrations, checks, rollback plan, saved to
    `~/command-center/deploys/<project>/` — and then wait. The message says Jay will confirm the deploy himself in

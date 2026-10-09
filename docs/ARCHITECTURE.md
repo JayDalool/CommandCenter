@@ -367,7 +367,7 @@ Daemon.night_loop (60 s) ─▶ night_tick ─▶ NightShift.decide(project, coo
       complete report / cutoff / 6 reminders / 3 quiet ─▶ shift ends (nothing typed)
       due ─▶ fresh read of the pane; idle ─▶ herdr prompt (fixed text) ─▶ NightShift.nudged()  (counted only now)
 Dashboard Report ─▶ Go Live… ─▶ confirm box lists goLive.approves / warnings (GET /api/night-shift)
-      ─▶ POST /api/go-live ─▶ 409 guards ─▶ GO_LIVE_TEMPLATE to the idle coordinator (PREPARE, then wait)
+      ─▶ POST /api/jay/go-live ─▶ 409 guards ─▶ GO_LIVE_TEMPLATE to the idle coordinator (PREPARE, then wait)
                            ─▶ pipeline.confirm(deploy) per ticket (errors per ticket) ─▶ NightShift.went_live()
 Jay confirms the deploy himself in the coordinator's pane. ccd never deploys.
 ```
