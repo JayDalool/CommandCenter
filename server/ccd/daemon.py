@@ -1190,7 +1190,8 @@ class Daemon:
         elif op == "replan":
             r = self._wrap(pl.replan, key, body.get("reason"), actor)
         elif op == "rework":
-            r = self._wrap(pl.rework, key, body.get("reason"), actor)
+            r = self._wrap(pl.rework, key, body.get("reason"), actor,
+                           open_prs=self._open_prs(self._wrap(self.tasks.get, key)))
         elif op == "evidence":
             r = self._wrap(pl.evidence, key, body.get("kind"), body.get("ref"), body.get("note"), actor, body.get("stage"))
         elif op == "writer":
@@ -1552,10 +1553,13 @@ class Daemon:
                         if not self.pipeline.participating(k):
                             self._auto(k, frm, "IN_REVIEW", f"PR #{n} is open")
                         elif self.pipeline.new_head(k, pr_state):
-                            # After a rework the ticket returns to review only on a head the review has not seen.
+                            # After a rework the ticket returns to review only on a PR or head that neither the
+                            # review nor the rework (its recorded open PRs) has seen.
                             sha = pr_state["head"][:7]
-                            self._auto(k, frm, "IN_REVIEW", f"PR #{n} new head {sha} after rework"
-                                       if self.pipeline.review_head(k) else f"PR #{n} is open")
+                            why = (f"PR #{n} new head {sha} after rework" if self.pipeline.rework_prs(k) is not None
+                                   else f"PR #{n} new head {sha}" if self.pipeline.review_head(k)
+                                   else f"PR #{n} is open")
+                            self._auto(k, frm, "IN_REVIEW", why)
                         if self.pipeline.participating(k):
                             # A pipeline ticket: only its recorded review, tied to this PR's head, decides.
                             self._pipeline_result(*self.pipeline.sync_pr(k, pr_state))

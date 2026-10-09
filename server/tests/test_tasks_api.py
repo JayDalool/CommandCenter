@@ -532,6 +532,52 @@ class PipelineApi(Automation):
         self.poll()
         self.assertEqual(self.status(), "IN_REVIEW")
 
+    def test_a_second_rework_at_an_unreviewed_head_is_not_reversed(self):
+        a, b, c = "94" * 20, "95" * 20, "96" * 20
+        self.to_review_at(a)
+        self.step("review", {"verdict": "REQUEST_CHANGES", "head": a, "session": "review-1"}, "agent:reviewer")
+        self.step("rework", {"reason": "first"})
+        self.at_head(b)
+        self.poll()
+        self.assertEqual(self.status(), "IN_REVIEW")                 # b was never reviewed
+        r = self.step("rework", {"reason": "second, before any review of b"})
+        self.assertEqual(r.json()["status"], "IN_PROGRESS", r.text)
+        for _ in range(2):                                           # b != the reviewed head a, but b is known
+            self.poll()
+            self.assertEqual(self.status(), "IN_PROGRESS")
+        self.at_head(c)
+        self.poll()
+        self.assertEqual(self.status(), "IN_REVIEW")
+        self.assertIn(c[:7], self.tickets.last_status_event("SV-056")["trigger"])
+
+    def test_an_unrelated_open_pr_does_not_undo_a_rework(self):
+        a = "94" * 20
+        self.to_review_at(a)
+        self.step("review", {"verdict": "REQUEST_CHANGES", "head": a, "session": "review-1"}, "agent:reviewer")
+        self.tickets.link("SV-056", "github", "pr", "JayDalool/SamVisionAI#300",
+                          "https://github.com/JayDalool/SamVisionAI/pull/300", "notes", "jay")
+        self.gh.data["samvision"]["prs"].append(
+            dict(pr(300, "unrelated notes"), headRefName="notes", headRefOid="c3" * 20))
+        self.poll()                                                  # ccd sees both PRs open
+        self.assertEqual(self.status(), "IN_REVIEW")
+        self.step("rework", {"reason": "fix it"})                    # both open PRs are recorded with the rework
+        for _ in range(2):
+            self.poll()
+            self.assertEqual(self.status(), "IN_PROGRESS")
+
+    def test_a_replacement_pr_returns_a_reworked_ticket_to_review(self):
+        a = "94" * 20
+        self.to_review_at(a)
+        self.step("review", {"verdict": "REQUEST_CHANGES", "head": a, "session": "review-1"}, "agent:reviewer")
+        self.step("rework", {"reason": "start over"})
+        self.poll()
+        self.assertEqual(self.status(), "IN_PROGRESS")
+        replacement = dict(pr(301, "SV-056: the feature again"), headRefName="SV-056-again", headRefOid="d4" * 20)
+        self.gh.data["samvision"]["prs"] = [replacement]             # the old PR closed, a new one opened
+        self.poll()
+        self.assertEqual(self.status(), "IN_REVIEW")
+        self.assertIn("after rework", self.tickets.last_status_event("SV-056")["trigger"])
+
     def test_jay_status_edit_still_wins_on_a_pipeline_ticket(self):
         self.to_review_at("94" * 20)
         r = self.patch({"status": "IN_PROGRESS"}, "jay", self.unlock())      # Jay's manual edit: no trigger
