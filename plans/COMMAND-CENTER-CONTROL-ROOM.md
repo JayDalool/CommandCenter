@@ -1527,3 +1527,6 @@ Asked by Jay after two hours of use; additions, not changes to the frozen spec.
   listed live-deploy gates and asks the coordinator to PREPARE the deploy (runbook steps, checks, rollback plan)
   and wait; Jay confirms the deploy himself in the coordinator's pane.
 - Later (Jay, not now): a weekly UI-test run of new features (Cypress/Playwright) with a findings report.
+- **Paused and careful projects** (2026-10-09, Jay): GauzeMate is paused (registry `paused`) — no agent works on
+  it through Command Center until Jay removes the line. SamVision runs the night shift in careful mode
+  (`careful.md`): research first, LOW-risk implementation only, one at a time, Jay merges, never deploys.

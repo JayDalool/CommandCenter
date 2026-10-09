@@ -524,6 +524,13 @@ describe("night shift on the Dashboard", () => {
     });
   });
 
+  it("a paused project says so and its row can't be started", async () => {
+    render(<NightLine project="gauzemate" name="GauzeMate" n={np({ paused: "Jay paused GauzeMate until he adds designs and files", report: null })}
+      onChanged={() => {}} />);
+    expect(screen.getByText(/Paused — until he adds designs and files/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Report" })).toBeNull();
+  });
+
   it("while it runs: no Go Live, and End night shift stops it", async () => {
     act(() => developer.set({ active: true, expiresAt: null, error: null }));
     const end = vi.spyOn(app.api, "nightShiftEnd").mockResolvedValue({ ok: true, told: true });

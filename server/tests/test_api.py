@@ -338,10 +338,16 @@ class Actions(ApiBase):
         self.assertEqual([m for m, _ in self.fake.calls if m == "agent.prompt"], [])
 
     def test_dispatch_never_interrupts_a_busy_coordinator(self):
-        self.fake.set_status("wE:p4", "working")
-        r = self.post("/api/action/dispatch", {"project": "gauzemate", "taskId": "#24", "verb": "plan"})
+        self.fake.set_status("wE:p2", "working")
+        r = self.post("/api/action/dispatch", {"project": "samvision", "taskId": "#24", "verb": "plan"})
         self.assertEqual(r.status_code, 409)
         self.assertIn("working", r.json()["error"])
+
+    def test_dispatch_refuses_a_paused_project(self):
+        r = self.post("/api/action/dispatch", {"project": "gauzemate", "taskId": "#24", "verb": "plan"})
+        self.assertEqual(r.status_code, 409)                     # registry: Jay paused GauzeMate
+        self.assertIn("paused", r.json()["error"])
+        self.assertEqual([m for m, _ in self.fake.calls if m == "agent.prompt"], [])
 
     def test_dispatch_refuses_a_coordinator_the_resolver_cannot_identify(self):
         from ccd import coordid

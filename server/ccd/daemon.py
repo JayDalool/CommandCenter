@@ -124,12 +124,21 @@ GATE_DEPLOY_TEMPLATE = (
 NIGHT_SHIFT_FILE = Path(__file__).parent / "skills" / "night-shift" / "SKILL.md"
 
 
+CAREFUL_FILE = NIGHT_SHIFT_FILE.with_name("careful.md")
+
+
 def night_shift_text(project):
+    """The /night-shift text for one project; a careful project (registry night: careful) gets careful.md too."""
     raw = NIGHT_SHIFT_FILE.read_text(encoding="utf-8")
     if raw.startswith("---"):
         raw = raw.split("---", 2)[2]
     lines = [ln for ln in raw.strip().splitlines() if not ln.startswith("Project key:")]
-    return "\n".join(lines).replace("<project>", project)
+    text = "\n".join(lines)
+    if registry.night_mode(project) == "careful":
+        careful = [ln for ln in CAREFUL_FILE.read_text(encoding="utf-8").strip().splitlines()
+                   if not ln.startswith("Applies to:")]
+        text += "\n\n" + "\n".join(careful)
+    return text.replace("<project>", project)
 
 
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -901,6 +910,9 @@ class Daemon:
             key = proj["key"]
             if not self.night.active(key):
                 continue
+            if registry.paused(key):
+                self.night.end(key, "paused by Jay")
+                continue
             # With herdr down there is no status: only "complete" and the morning cutoff can act, never a reminder.
             r = coordinators.resolution(proj, self.panes) if self.herdr_state["ok"] else {"state": "none"}
             status = r.get("status") if r["state"] == "ready" else None
@@ -935,7 +947,8 @@ class Daemon:
             key = proj["key"]
             r = coordinators.resolution(proj, self.panes) if self.herdr_state["ok"] else {"state": "none"}
             st = self.night.get(key) if self.night else {}
-            out[key] = {"active": bool(self.night and self.night.active(key)), **{k: st.get(k) for k in (
+            out[key] = {"active": bool(self.night and self.night.active(key)), "paused": registry.paused(key),
+                        "mode": registry.night_mode(key), **{k: st.get(k) for k in (
                 "startedAt", "endedAt", "endReason", "nudges", "cutoffAt", "goLiveAt")},
                 "coordinator": {"name": coordinators.canonical(proj), "state": r["state"],
                                 "status": r.get("status") if r["state"] == "ready" else None},
@@ -1056,6 +1069,7 @@ class Daemon:
         ts = self._need_tasks()
         return {"tickets": self._with_work(ts.list(project=project, include_archived=include_archived)),
                 "projects": ts.projects(), "meta": dict(ts.meta(), visibleStages=list(pipeline_mod.VISIBLE_STAGES)),
+                "paused": {p["key"]: registry.paused(p["key"]) for p in self.cfg["projects"] if registry.paused(p["key"])},
                 "seq": self.seq}
 
     def task_get(self, key):
@@ -1294,6 +1308,8 @@ class Daemon:
         if extra:
             raise ActionError(400, f"cannot set {', '.join(sorted(extra))} on create")
         fields = {k: v for k, v in body.items() if k in CREATE_FIELDS}
+        if actor != "jay":
+            self._not_paused(str(body.get("project") or ""), "agent work")
         ticket, changes = self._wrap(ts.create, str(body.get("project") or ""), body.get("title"), actor, **fields)
         self._task_event("task.created", ticket, f"created · {ticket['title']}", {"status": ticket["status"]})
         return self._with_work([ticket])[0]
@@ -1357,6 +1373,8 @@ class Daemon:
         self._need_tasks()
         if op not in self.PIPELINE_OPS:
             raise ActionError(404, f"unknown pipeline step {op}")
+        if actor != "jay" and self.tasks.exists(key):
+            self._not_paused(self.tasks.get(key)["project"], "agent work")
         if not isinstance(body, dict):
             raise ActionError(400, "body must be an object")
         pl = self.pipeline
@@ -2196,6 +2214,12 @@ class Daemon:
             used += len(line) + 1
         return TASK_CHECK_TEMPLATE.format(project=project, n=len(open_), tasks="\n".join(lines) or "- (none)"), len(open_)
 
+    @staticmethod
+    def _not_paused(project, what="work"):
+        why = registry.paused(project)
+        if why:
+            raise ActionError(409, f"{project} is paused ({why}); no {what} until Jay resumes it")
+
     async def _to_coordinator(self, project, what, text, data):
         """One fixed message from Jay to the project's idle coordinator Claude (task check, night shift)."""
         proj = next((p for p in self.cfg["projects"] if p["key"] == project), None)
@@ -2232,6 +2256,7 @@ class Daemon:
         self._need_tasks()
         if not any(p["key"] == project for p in self.cfg["projects"]):
             raise ActionError(404, "unknown project")
+        self._not_paused(project, "night shift")
         text = night_shift_text(project)
         if copy:
             return {"ok": True, "project": project, "coordinator": None, "text": text}
@@ -2249,6 +2274,7 @@ class Daemon:
         self._need_tasks()
         if not any(p["key"] == project for p in self.cfg["projects"]):
             raise ActionError(404, "unknown project")
+        self._not_paused(project, "deploy")
         if not isinstance(keys, list) or len(keys) > 200 or not all(
                 isinstance(k, str) and re.fullmatch(r"[A-Za-z]{1,8}-\d{1,6}", k) for k in keys):
             raise ActionError(400, "keys must be the list of ticket keys the confirm box showed")
@@ -2336,6 +2362,7 @@ class Daemon:
         proj = next((p for p in self.cfg["projects"] if p["key"] == project), None)
         if proj is None:
             raise ActionError(404, "unknown project")
+        self._not_paused(project, "task check")
         if copy:
             text, n = self.task_check_text(project)
             return {"ok": True, "project": project, "coordinator": None, "openTasks": n, "text": text}
@@ -2356,6 +2383,7 @@ class Daemon:
             raise ActionError(404, "unknown project")
         if project not in allowed:
             raise ActionError(409, f"{project} has no coordinator; tasks go to a lane (see the dispatch skill)")
+        self._not_paused(project, "dispatch")
         if verb not in DISPATCH_VERBS:
             raise ActionError(400, f"verb must be one of {', '.join(DISPATCH_VERBS)}")
         is_ticket = isinstance(task, str) and self.tasks is not None and bool(TICKET_KEY_RE.match(task)) \

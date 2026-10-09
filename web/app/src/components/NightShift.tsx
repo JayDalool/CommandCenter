@@ -30,6 +30,8 @@ export function NightLine({ project, name, n, onChanged }: {
   project: string; name: string; n: NightProject | undefined; onChanged: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  if (n?.paused) return <div className="dash-night is-paused"><span aria-hidden>⏸</span>
+    <span className="trunc" title={n.paused}>Paused — {n.paused.replace(/^Jay paused \S+ /, "")}</span></div>;
   if (!n || (!n.active && !n.report)) return null;
   const rep = n.report;
   // the shift's end reason only describes a report written in that shift; otherwise the report speaks for itself

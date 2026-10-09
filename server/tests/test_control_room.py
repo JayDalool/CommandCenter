@@ -905,6 +905,55 @@ class ControlRoomApi(PipelineApi):
         self.assertEqual(ns.get("samvision")["endReason"], "morning cutoff")
         self.assertEqual(len(self.prompts()), sent0)
 
+    def test_a_paused_project_gets_no_agent_work_and_samvision_gets_careful_mode(self):
+        dev = dict(JSON, **self.dev())
+        for path in ("/api/tasks/night-shift", "/api/tasks/check", "/api/go-live"):
+            r = self.client.post(path, content=json.dumps({"project": "gauzemate"}), headers=dev)
+            self.assertEqual(r.status_code, 409, path)
+            self.assertIn("paused", r.json()["error"])
+        self.assertEqual([p for m, p in self.fake.calls if m == "agent.prompt"], [])
+        agent = dict(JSON, **{"x-ccd-actor": "agent:coordinator"})
+        r = self.client.post("/api/tasks", content=json.dumps({"project": "gauzemate", "title": "x"}), headers=agent)
+        self.assertEqual(r.status_code, 409)                                         # agents add nothing
+        gz = self.client.post("/api/tasks", content=json.dumps({"project": "gauzemate", "title": "Jay's design task"}),
+                              headers=JSON)
+        self.assertEqual(gz.status_code, 201)                                        # Jay still can
+        key = gz.json()["key"]
+        r = self.client.post(f"/api/tasks/{key}/work/plan", content=json.dumps({"plan": {"summary": "x"}}), headers=agent)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("paused", self.get("/api/tasks?project=gauzemate").json()["paused"]["gauzemate"])
+        st = self.get("/api/night-shift").json()["projects"]
+        self.assertTrue(st["gauzemate"]["paused"])
+        self.assertEqual((st["samvision"]["mode"], st["gyst"]["mode"]), ("careful", "normal"))
+        from ccd import daemon as daemon_mod
+        sv, gy = daemon_mod.night_shift_text("samvision"), daemon_mod.night_shift_text("gyst")
+        self.assertIn("Careful mode", sv)
+        self.assertIn("One implementation at a time", sv)
+        self.assertNotIn("Careful mode", gy)
+
+    def test_careful_md_names_exactly_the_careful_projects(self):
+        from ccd import daemon as daemon_mod
+        first = daemon_mod.CAREFUL_FILE.read_text().splitlines()[0]
+        listed = {k.strip() for k in first.split(":", 1)[1].split(",")}
+        self.assertEqual(listed, {k for k in registry.PROJECTS if registry.night_mode(k) == "careful"})
+
+    def test_the_cli_says_paused_and_lists_nothing(self):
+        import contextlib
+        import io
+        from ccd import pipeline_cli
+        out = {"tickets": [{"key": "GZ-1", "number": 1, "status": "INBOX", "title": "x"}],
+               "paused": {"gauzemate": "Jay paused GauzeMate"}}
+        old = pipeline_cli.call
+        pipeline_cli.call = lambda *a, **k: (0, out)
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                pipeline_cli.main(["tasks", "gauzemate"])
+        finally:
+            pipeline_cli.call = old
+        self.assertTrue(buf.getvalue().startswith("PAUSED: Jay paused GauzeMate"))
+        self.assertNotIn("GZ-1", buf.getvalue())
+
     def test_task_terminal_cwd_uses_only_a_known_worktree(self):
         self.ticket("INBOX")
         self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")

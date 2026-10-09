@@ -329,6 +329,7 @@
 .dash-night.is-on { color: var(--text); }
 .dash-night.is-on > span:first-child { color: var(--accent); }
 .dash-night.is-jay { color: var(--jay); }
+.dash-night.is-paused { color: var(--warn); }
 .dash-night > .trunc { flex: 1; min-width: 0; }
 .night-report { max-height: 55vh; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--font-mono);
   background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin: 8px 0 0; }

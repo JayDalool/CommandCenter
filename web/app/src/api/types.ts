@@ -465,6 +465,10 @@ export interface NightReport { name: string; mtime: number; status: "working" | 
 /** One ticket in the Go Live confirm box: `reason` is set only for merged tickets Jay should look at first. */
 export interface GoLiveTicket { key: string; title: string; reason?: string }
 export interface NightProject {
+  /** Why Jay paused the project (no agent works on it), or null. */
+  paused?: string | null;
+  /** careful: research first, one task at a time, risky work stops at a plan. */
+  mode?: "normal" | "careful";
   active: boolean; startedAt: number | null; endedAt: number | null; endReason: string | null; nudges: number | null;
   cutoffAt?: number | null; goLiveAt: number | null; goLive?: { approves: GoLiveTicket[]; warnings: GoLiveTicket[] }; coordinator: { name: string; state: string; status: string | null }; report: NightReport | null;
 }
