@@ -462,6 +462,10 @@ export interface PtySession { name: string; cwd: string; clients: number; create
 /** The night shift (ccd nightshift.py): the newest morning report and the supervisor's state per project. */
 export interface NightReport { name: string; mtime: number; status: "working" | "complete" | null; text: string }
 export interface NightProject {
+  /** Why Jay paused the project (no agent works on it), or null. */
+  paused?: string | null;
+  /** careful: research first, one task at a time, risky work stops at a plan. */
+  mode?: "normal" | "careful";
   active: boolean; startedAt: number | null; endedAt: number | null; endReason: string | null; nudges: number | null;
   goLiveAt: number | null; coordinator: { name: string; state: string; status: string | null }; report: NightReport | null;
 }

@@ -151,6 +151,11 @@ def main(argv=None):
         sys.stderr.write(f"refused: {out.get('error') or out}\n")
         return 1
     if method == "GET" and path.startswith("/api/tasks?"):   # tasks: one line per open ticket
+        project = urllib.parse.parse_qs(path.split("?", 1)[1]).get("project", [""])[0]
+        why = (out.get("paused") or {}).get(project)
+        if why:
+            print(f"PAUSED: {why}. Do no work on this project: no planning, coding, reviews or merges.")
+            return 0
         for t in sorted(out.get("tickets") or [], key=lambda t: t.get("number") or 0):
             if t.get("status") not in ("DONE", "DENIED", "CANCELLED"):
                 print(f"{t['key']}\t{t['status']}\t{t['title']}")

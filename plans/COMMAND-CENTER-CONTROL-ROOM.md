@@ -1522,3 +1522,6 @@ Asked by Jay after two hours of use; additions, not changes to the frozen spec.
   the report, **End night shift**, and **Go Live…** (a second confirm): approves the project's pending live
   deploys and asks the coordinator to deploy main by the repository's runbook with its checks and rollback.
 - Later (Jay, not now): a weekly UI-test run of new features (Cypress/Playwright) with a findings report.
+- **Paused and careful projects** (2026-10-09, Jay): GauzeMate is paused (registry `paused`) — no agent works on
+  it through Command Center until Jay removes the line. SamVision runs the night shift in careful mode
+  (`careful.md`): research first, LOW-risk implementation only, one at a time, Jay merges, never deploys.

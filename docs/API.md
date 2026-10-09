@@ -138,6 +138,13 @@ blocker only he can clear (`Pipeline.held`). Every other ticket goes ahead. A bl
 type LEGAL) never holds; sign-offs on finished work (merge acceptance, UI review, live deploy) do not either.
 Implementation lanes: at most 2 per project (`max_lanes` in the registry pipeline overrides).
 
+**Paused projects** (registry `paused`, e.g. GauzeMate while Jay adds designs): no night shift, task check, dispatch
+or Go Live (409), no pipeline step recorded by an agent and no ticket created by an agent; Jay still can. `GET
+/api/tasks` carries `paused: {key: reason}` and `pipeline_cli tasks <project>` prints `PAUSED: …` instead of
+the list. **Careful projects** (registry `night: careful`, SamVision): the night-shift text also carries
+`skills/night-shift/careful.md` — research before any change, only LOW-risk implementation at night, one at a
+time, risky areas stop at a plan. `GET /api/night-shift` reports `paused` and `mode` per project.
+
 New pipeline steps on `POST /api/tasks/{key}/work/{op}` (agents: `python -m ccd.pipeline_cli <op>`):
 
 | op | body | effect |

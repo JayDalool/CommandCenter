@@ -41,10 +41,15 @@ PROJECTS = {
     "samvision":     {"name": "SamVision",        "prefix": "SV",   "legacy": (),
                       "root": "/srv/server/apps/samvisionai",       "github": "JayDalool/SamVisionAI",
                       # SamVision's own rule: its merges need Jay (docs/jay/MORNING.md, SV-064).
-                      "pipeline": {"merge": "owner"}},
+                      "pipeline": {"merge": "owner"},
+                      # Jay (2026-10-09): a lot of research, very careful — the night shift's careful mode.
+                      "night": "careful"},
     "gauzemate":     {"name": "GauzeMate",        "prefix": "GZ",   "legacy": ("GM",),
                       "root": "/srv/server/repos/GauzeMate",        "github": "JayDalool/GauzeMate",
-                      "pipeline": {"merge": "owner"}},   # Jay accepts every GauzeMate merge (2026-10-09)
+                      "pipeline": {"merge": "owner"},    # Jay accepts every GauzeMate merge (2026-10-09)
+                      # Paused by Jay (2026-10-09) until he adds designs and files: no agent works on it.
+                      # Remove this line to resume.
+                      "paused": "Jay paused GauzeMate until he adds designs and files"},
     "mfe":           {"name": "MyFamilyExpenses", "prefix": "MFE",  "legacy": (),
                       "root": "/srv/server/repos/MyFamilyExpenses", "github": "JayDalool/MyFamilyExpenses"},
     "commandcenter": {"name": "Command Center",   "prefix": "CC",   "legacy": (),
@@ -66,6 +71,17 @@ PROJECTS = {
 # project may set "max_lanes" in its pipeline dict.
 # A project overrides with a "pipeline" dict in PROJECTS above.
 PIPELINE_DEFAULTS = {"merge": "auto", "ui_review": False, "jay_first": True}
+
+
+def paused(key):
+    """Why the project is paused (no agent works on it: no night shift, task check, dispatch, Go Live or agent
+    pipeline step), or None."""
+    return (PROJECTS.get(key) or {}).get("paused") or None
+
+
+def night_mode(key):
+    """The night shift's mode for the project: "normal", or "careful" (research first, one task at a time)."""
+    return (PROJECTS.get(key) or {}).get("night") or "normal"
 
 
 def pipeline_of(key):

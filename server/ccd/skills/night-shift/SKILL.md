@@ -9,6 +9,9 @@ until nothing is left that can move without him, then leave a morning report he 
 Project key: <project> is this repo's Command Center project — samvision, gauzemate, commandcenter, gyst or mfe.
 Tasks: python -m ccd.pipeline_cli tasks <project>      One task's state: python -m ccd.pipeline_cli work <KEY>
 
+First: if `pipeline_cli tasks <project>` prints PAUSED, Jay has paused this project — do no work on it at all;
+say so in one line and stop. If <project> is listed in careful.md (~/.claude/skills/night-shift/careful.md), follow it too.
+
 HOW you do each step is this repo's own workflow: AGENTS.md, CLAUDE.md and its pipeline agents (planner,
 implementer, reviewer, verifier) win over anything here. This file says WHAT to work on, in which order, and
 what is never allowed.
