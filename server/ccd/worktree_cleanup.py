@@ -8,9 +8,10 @@ and the first failing check is returned as the reason:
      and no component below those roots is a symlink
   2. git lists it as a linked worktree of the ticket's repo: not the main checkout, not locked
   3. the ticket's own branch is checked out there (a Claude Code `agent-*` worktree never matches)
-  4. `git status` is empty: nothing modified, staged or untracked; no other worktree is nested
-     inside it and no ignored folder holds a `.git` (git ignores those, and `worktree remove`
-     would delete them with their uncommitted work)
+  4. `git status` is empty: nothing modified, staged or untracked; no file hidden from status
+     (skip-worktree, assume-unchanged); no merge/rebase in progress; no other worktree nested inside it
+     and no ignored folder holding a `.git` or a bare repository (git ignores those, and
+     `worktree remove` would delete them with their uncommitted work)
   5. no commit of the worktree is missing from every remote (ccd never fetches, so a stale
      remote ref can only make this keep more)
   6. no herdr pane and no process has its working directory inside it, and herdr answered
@@ -96,12 +97,39 @@ def list_worktrees(repo):
     return rows
 
 
+IN_PROGRESS = ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "rebase-merge", "rebase-apply",
+               "sequencer")
+
+
+def hidden_from_status(real):
+    """Why `git status` cannot be trusted to show everything, or None.
+
+    A tracked file flagged skip-worktree (sparse checkout) or assume-unchanged is never compared with the
+    index, so an edit to it is invisible to status and to git's own check in `worktree remove`.
+    `ls-files -v` marks those with `S` or a lowercase letter. An unfinished merge, cherry-pick, revert, rebase
+    or bisect lives in the worktree's own git folder and is deleted with it, whatever status says."""
+    code, out, err = _git(real, "ls-files", "-v", "-z")
+    if code != 0:
+        return f"git ls-files failed: {err}"
+    for entry in out.split("\x00"):
+        if entry and (entry[0] == "S" or entry[0].islower()):
+            return "it has files hidden from git status (skip-worktree or assume-unchanged)"
+    code, out, err = _git(real, "rev-parse", "--absolute-git-dir")
+    if code != 0:
+        return f"git rev-parse failed: {err}"
+    gitdir = out.strip()
+    if any(os.path.lexists(os.path.join(gitdir, name)) for name in IN_PROGRESS):
+        return "a merge, rebase, cherry-pick, revert or bisect is in progress"
+    return None
+
+
 def hidden_repo(real):
     """Why an ignored part of the worktree may hold work git cannot see, or None.
 
     `git worktree remove` checks tracked and untracked files but deletes ignored ones unseen. An
     ignored folder with a `.git` entry is another repo or worktree (a Claude Code subagent's, a nested
-    clone), and its uncommitted work would go too. Plain ignored files (node_modules, .venv) do not count."""
+    clone), and its uncommitted work would go too; so does a bare repository (HEAD + objects/ + refs/).
+    Plain ignored files (node_modules, .venv) do not count."""
     code, out, err = _git(real, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
     if code != 0:
         return f"git could not list its ignored files: {err}"
@@ -114,12 +142,17 @@ def hidden_repo(real):
             return "an ignored folder inside it holds a git repository"
         if not entry.endswith("/"):
             continue
-        for here, dirs, files in os.walk(top, followlinks=False):
+        unreadable = []
+        for here, dirs, files in os.walk(top, followlinks=False, onerror=unreadable.append):
             seen += 1
             if ".git" in dirs or ".git" in files:
                 return "an ignored folder inside it holds a git repository"
+            if "HEAD" in files and "objects" in dirs and "refs" in dirs:
+                return "an ignored folder inside it holds a bare git repository"
             if seen > SCAN_LIMIT:
                 return "it has too many ignored folders to check for nested repositories"
+        if unreadable:
+            return "an ignored folder could not be read, so nested repositories cannot be ruled out"
     return None
 
 
@@ -163,19 +196,19 @@ def blocker(repo, path, branch, pane_cwds, *, root=None, proc="/proc"):
         return "another worktree is nested inside it"
     if mine["branch"] != f"refs/heads/{branch}":
         return f"{branch} is not the branch checked out there"
-    code, out, err = _git(real, "status", "--porcelain", "--untracked-files=all")
+    code, out, err = _git(real, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
     if code != 0:
         return f"git status failed: {err}"
     if out.strip():
         return "it has changed or untracked files"
+    why = hidden_from_status(real)
+    if why:
+        return why
     code, out, err = _git(real, "rev-list", "HEAD", "--not", "--remotes", "-n", "1")
     if code != 0:
         return f"git rev-list failed: {err}"
     if out.strip():
         return "it has commits that are on no remote"
-    why = hidden_repo(real)
-    if why:
-        return why
     if pane_cwds is None:
         return "herdr is not connected, so open panes cannot be checked"
     for cwd in pane_cwds:
@@ -186,7 +219,8 @@ def blocker(repo, path, branch, pane_cwds, *, root=None, proc="/proc"):
         return "running processes could not be checked"
     if found:
         return "a process is running inside it"
-    return None
+    # Last, because it walks the ignored folders: it must not repeat every poll while a pane is open.
+    return hidden_repo(real)
 
 
 def remove(repo, path):

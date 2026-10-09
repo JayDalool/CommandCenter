@@ -181,6 +181,110 @@ class Keeps(Repos):
         with mock.patch("os.path.realpath", lambda p: p + "-moved" if p == self.wt else p):
             self.assertIn("symlink", worktree_cleanup.path_problem(self.repo, self.wt, self.root))
 
+    def _edit_hidden(self, flag):
+        git(self.wt, "update-index", flag, "README.md")
+        with open(os.path.join(self.wt, "README.md"), "a") as f:
+            f.write("unsaved edit\n")
+        # the whole point: git itself sees nothing
+        self.assertEqual(git(self.wt, "status", "--porcelain"), "")
+
+    def test_skip_worktree_edit_is_kept(self):
+        self._edit_hidden("--skip-worktree")
+        self.assertKept("hidden from git status")
+        self.assertEqual(self.run_all()[0][3], "kept")
+
+    def test_assume_unchanged_edit_is_kept(self):
+        self._edit_hidden("--assume-unchanged")
+        self.assertKept("hidden from git status")
+        self.assertEqual(self.run_all()[0][3], "kept")
+
+    def test_flags_set_back_to_normal_do_not_block(self):
+        git(self.wt, "update-index", "--skip-worktree", "README.md")
+        git(self.wt, "update-index", "--no-skip-worktree", "README.md")
+        git(self.wt, "update-index", "--assume-unchanged", "README.md")
+        git(self.wt, "update-index", "--no-assume-unchanged", "README.md")
+        self.assertIsNone(self.blocker())
+
+    def test_bare_repository_in_an_ignored_folder_is_kept(self):
+        commit(self.wt, ".gitignore", "vendor/\n*.git/\n")
+        git(self.wt, "push", "-q")
+        os.makedirs(os.path.join(self.wt, "vendor"))
+        git(self.tmp, "init", "-q", "--bare", os.path.join(self.wt, "vendor", "x.git"))
+        self.assertEqual(git(self.wt, "status", "--porcelain"), "")
+        self.assertKept("bare git repository")
+        self.assertEqual(self.run_all()[0][3], "kept")
+
+    def test_bare_repository_directly_under_an_ignored_folder_is_kept(self):
+        commit(self.wt, ".gitignore", "backup.git/\n")
+        git(self.wt, "push", "-q")
+        git(self.tmp, "init", "-q", "--bare", os.path.join(self.wt, "backup.git"))
+        self.assertEqual(git(self.wt, "status", "--porcelain"), "")
+        self.assertKept("bare git repository")
+
+    def test_ignored_worktree_of_a_different_repo_is_kept(self):
+        other = os.path.join(self.tmp, "other")
+        git(self.tmp, "init", "-q", "-b", "main", other)
+        commit(other, "o.txt")
+        commit(self.wt, ".gitignore", "vendor/\n")
+        git(self.wt, "push", "-q")
+        os.makedirs(os.path.join(self.wt, "vendor"))
+        nested = os.path.join(self.wt, "vendor", "ow")
+        git(other, "worktree", "add", "-q", "-b", "side", nested)
+        with open(os.path.join(nested, "work.txt"), "w") as f:
+            f.write("unsaved\n")
+        self.assertTrue(os.path.isfile(os.path.join(nested, ".git")))  # a gitfile, not a folder
+        self.assertEqual(git(self.wt, "status", "--porcelain"), "")
+        self.assertKept("git repository")
+        self.assertEqual(self.run_all()[0][3], "kept")
+        self.assertTrue(os.path.exists(os.path.join(nested, "work.txt")))
+
+    def test_unreadable_ignored_folder_is_kept(self):
+        commit(self.wt, ".gitignore", "secret/\n")
+        git(self.wt, "push", "-q")
+        d = os.path.join(self.wt, "secret", "inner")
+        os.makedirs(d)
+        os.chmod(os.path.join(self.wt, "secret"), 0)
+        self.addCleanup(os.chmod, os.path.join(self.wt, "secret"), 0o755)
+        if os.access(os.path.join(self.wt, "secret"), os.R_OK):
+            self.skipTest("running as a user that ignores permissions")
+        self.assertKept("could not be read")
+
+    def test_merge_in_progress_is_kept_even_with_a_clean_status(self):
+        head = git(self.wt, "rev-parse", "HEAD").strip()
+        gitdir = git(self.wt, "rev-parse", "--absolute-git-dir").strip()
+        with open(os.path.join(gitdir, "MERGE_HEAD"), "w") as f:
+            f.write(head + "\n")
+        self.assertKept("in progress")
+
+    def test_rebase_in_progress_is_kept(self):
+        gitdir = git(self.wt, "rev-parse", "--absolute-git-dir").strip()
+        os.makedirs(os.path.join(gitdir, "rebase-merge"))
+        self.assertKept("in progress")
+
+    def test_dirty_submodule_hidden_by_ignore_all_is_kept(self):
+        sub = os.path.join(self.tmp, "sub")
+        git(self.tmp, "init", "-q", "-b", "main", sub)
+        commit(sub, "s.txt")
+        git(self.wt, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "lib")
+        git(self.wt, "config", "-f", ".gitmodules", "submodule.lib.ignore", "all")
+        git(self.wt, "add", ".gitmodules")
+        git(self.wt, "commit", "-q", "-m", "submodule")
+        git(self.wt, "push", "-q")
+        with open(os.path.join(self.wt, "lib", "s.txt"), "a") as f:
+            f.write("unsaved\n")
+        self.assertEqual(git(self.wt, "status", "--porcelain"), "")  # hidden by ignore=all
+        self.assertKept("changed or untracked")
+        self.assertEqual(self.run_all()[0][3], "kept")
+
+    def test_the_ignored_scan_runs_after_the_pane_and_process_checks(self):
+        with mock.patch.object(worktree_cleanup, "hidden_repo", side_effect=AssertionError("walked")):
+            self.assertKept("pane", cwds=[self.wt])
+            self.assertKept("herdr is not connected", cwds=None)
+            p = subprocess.Popen(["sleep", "30"], cwd=self.wt)
+            self.addCleanup(p.wait)
+            self.addCleanup(p.kill)
+            self.assertKept("process")
+
     def test_not_a_registered_worktree(self):
         clone = os.path.join(self.root, "CC-024c")
         git(self.tmp, "clone", "-q", self.remote, clone)

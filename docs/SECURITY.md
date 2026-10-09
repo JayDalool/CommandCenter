@@ -189,9 +189,11 @@ below those folders; git lists it as a linked worktree of the ticket's repo
 (not the main checkout, not locked) with the ticket's own branch checked out (so
 Claude Code's `agent-*` worktrees never match); `git status` is empty; no commit is
 missing from the remotes ccd last saw (it never fetches, so a stale ref only keeps
-more); no other worktree is nested inside it and no ignored folder holds a `.git`
-(git deletes ignored files unseen, so an ignored subagent worktree or nested clone
-would lose its uncommitted work); herdr is connected and no pane and no process has its working directory
+more); no other worktree is nested inside it and no ignored folder holds a `.git` or a
+bare repository (git deletes ignored files unseen, so an ignored subagent worktree,
+nested clone or backup repo would lose its work); no tracked file is hidden from
+`git status` (skip-worktree, assume-unchanged); no merge, rebase, cherry-pick,
+revert or bisect is in progress; herdr is connected and no pane and no process has its working directory
 inside it. The only command is `git -C <repo> worktree remove <path>`: no
 `--force`, no `rm`, the branch is never deleted. Ignored files (node_modules, .venv,
 local copies of secrets) go with the directory; the branch and its pushed commits
