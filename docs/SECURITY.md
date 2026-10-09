@@ -189,16 +189,17 @@ below those folders; git lists it as a linked worktree of the ticket's repo
 (not the main checkout, not locked) with the ticket's own branch checked out (so
 Claude Code's `agent-*` worktrees never match); `git status` is empty; no commit is
 missing from the remotes ccd last saw (it never fetches, so a stale ref only keeps
-more); no other worktree is nested inside it and no ignored folder holds a `.git` or a
-bare repository (git deletes ignored files unseen, so an ignored subagent worktree,
-nested clone or backup repo would lose its work); no tracked file is hidden from
-`git status` (skip-worktree, assume-unchanged); no merge, rebase, cherry-pick,
-revert or bisect is in progress; no tracked folder holds a `.git` folder (git shows nothing
-inside one); no commit is held only by the worktree's own HEAD reflog or `refs/worktree/*`
-(both are deleted with it; commits that a branch reflog also names, such as an amend or
-reset on the branch, do not count, so squash/fixup rebases that leave interim commits only
-in HEAD's reflog keep the worktree: the safe direction); every quick check is repeated
-right before the removal, after the slow scan of ignored folders; herdr is connected and no pane and no process has its working directory
+more); no other worktree is nested inside it; one walk of the whole tree (symlinks not
+followed, at most 200,000 folders, about 0.1 s for a 60,000-entry tree) finds no entry named
+`.git` (folder, gitfile or symlink, in any tracked, untracked or ignored folder, however
+empty its parent) and no folder shaped like a bare repository: git shows nothing inside
+those and `worktree remove` would delete them; no tracked file is hidden from
+`git status` (skip-worktree, assume-unchanged); no merge, rebase, cherry-pick, revert or
+bisect is in progress; no commit is held only by the worktree's own HEAD reflog or
+`refs/worktree/*` (both are deleted with it; commits that a branch reflog also names,
+such as an amend or reset on the branch, do not count); every quick check is repeated
+right before the removal, after the walk; herdr is connected and no pane and no process
+has its working directory
 inside it. The only command is `git -C <repo> worktree remove <path>`: no
 `--force`, no `rm`, the branch is never deleted. Ignored files (node_modules, .venv,
 local copies of secrets) go with the directory; the branch and its pushed commits
@@ -206,6 +207,16 @@ stay, so `git worktree add <path> <branch>` brings the work back. Any failed che
 keeps the worktree and records `pipeline.worktree_kept` once per reason. No route,
 no browser input and no agent can start it or name a path; the path is the one a
 pipeline `start` recorded. Kill switch: `"worktree_cleanup": false` in config.json.
+
+*Known limits of the removal.* (1) After a removal, a commit dropped by an amend or reset on
+the branch survives only in the branch's reflog, until that reflog expires or the branch is
+deleted; it is not on any remote. (2) A commit held only by a `refs/worktree/*` ref's reflog
+(a contrived setup; the ref itself is checked) is not seen. (3) A squash or fixup rebase leaves
+interim commits only in HEAD's reflog, so that worktree is kept: the safe direction. (4) The
+herdr pane list is read once before the checks; a pane opened afterwards is caught only
+through the `/proc` working-directory check. (5) Processes of other users cannot be read.
+(6) Ignored files with real content (local databases, secret copies) go with the directory:
+Jay's decision.
 
 **Roots.** The explorer, editor and uploads reach only a registered project's
 `root` in `ccd/registry.py`. The browser sends a project key and a relative

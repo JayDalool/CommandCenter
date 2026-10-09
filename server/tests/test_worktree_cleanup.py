@@ -174,7 +174,7 @@ class Keeps(Repos):
         with open(os.path.join(clone, "wip.txt"), "w") as f:
             f.write("unsaved\n")
         self.assertEqual(git(self.wt, "status", "--porcelain"), "")
-        self.assertKept("git repository")
+        self.assertKept("holds a .git")
         self.assertEqual(self.run_all()[0][3], "kept")
 
     def test_realpath_must_equal_the_recorded_path(self):
@@ -234,7 +234,7 @@ class Keeps(Repos):
             f.write("unsaved\n")
         self.assertTrue(os.path.isfile(os.path.join(nested, ".git")))  # a gitfile, not a folder
         self.assertEqual(git(self.wt, "status", "--porcelain"), "")
-        self.assertKept("git repository")
+        self.assertKept("holds a .git")
         self.assertEqual(self.run_all()[0][3], "kept")
         self.assertTrue(os.path.exists(os.path.join(nested, "work.txt")))
 
@@ -338,7 +338,7 @@ class Keeps(Repos):
         git(self.wt, "push", "-q")
         d = os.path.join(os.fsencode(self.wt), b"vend\xffor")
         os.makedirs(os.path.join(d, b"x", b".git"))
-        self.assertKept("git repository")
+        self.assertKept("holds a .git")
 
     def test_one_tickets_exception_does_not_stop_the_others_or_lose_results(self):
         second = self.add_worktree(os.path.join(self.root, "CC-025"), "CC-025-two")
@@ -370,12 +370,22 @@ class Keeps(Repos):
         self.assertIn("changed or untracked", out[0][4])
         self.assertTrue(os.path.exists(os.path.join(self.wt, "late.txt")))
 
-    def test_a_pane_opened_during_the_walk_keeps_it(self):
-        panes = []
-        with mock.patch.object(worktree_cleanup, "hidden_repo", lambda real: panes.append(self.wt) and None):
-            out = worktree_cleanup.run([("CC-024", "commandcenter", self.repo, BRANCH, self.wt)], panes, root=self.root)
+    def test_a_process_started_during_the_walk_keeps_it(self):
+        # production builds the pane list once before the thread starts, so it is /proc that catches this
+        started = []
+
+        def walk_then_a_shell_opens(real):
+            p = subprocess.Popen(["sleep", "30"], cwd=real)
+            self.addCleanup(p.wait)
+            self.addCleanup(p.kill)
+            started.append(p)
+            return None
+        with mock.patch.object(worktree_cleanup, "hidden_repo", walk_then_a_shell_opens):
+            out = self.run_all()
+        self.assertTrue(started)
         self.assertEqual(out[0][3], "kept")
-        self.assertIn("pane", out[0][4])
+        self.assertIn("process", out[0][4])
+        self.assertTrue(os.path.isdir(self.wt))
 
     def test_a_dot_git_folder_inside_a_tracked_folder_is_kept(self):
         os.makedirs(os.path.join(self.wt, "docs"))
@@ -386,6 +396,56 @@ class Keeps(Repos):
             f.write("unsaved\n")
         self.assertEqual(git(self.wt, "status", "--porcelain"), "")
         self.assertKept("holds a .git")
+
+    def _hidden_notes(self, *parts, as_file=False):
+        d = os.path.join(self.wt, *parts[:-1])
+        os.makedirs(d, exist_ok=True)
+        target = os.path.join(d, parts[-1])
+        if as_file:
+            with open(target, "w") as f:
+                f.write("gitdir: nowhere\n")
+        else:
+            os.makedirs(target)
+            with open(os.path.join(target, "notes.txt"), "w") as f:
+                f.write("unsaved\n")
+        self.assertEqual(git(self.wt, "status", "--porcelain"), "")  # invisible to git
+        self.assertKept("holds a .git")
+        self.assertEqual(self.run_all()[0][3], "kept")
+
+    def test_case_a_dot_git_in_an_untracked_folder_holding_nothing_else(self):
+        self._hidden_notes("new", ".git")
+
+    def test_case_b_dot_git_next_to_a_folder_that_holds_the_only_tracked_file(self):
+        os.makedirs(os.path.join(self.wt, "a", "b"))
+        commit(self.wt, "a/b/c.txt")
+        git(self.wt, "push", "-q")
+        self._hidden_notes("a", ".git")
+
+    def test_case_c_dot_git_in_a_folder_below_tracked_files(self):
+        os.makedirs(os.path.join(self.wt, "docs"))
+        commit(self.wt, "docs/a.txt")
+        git(self.wt, "push", "-q")
+        self._hidden_notes("docs", "sub", ".git")
+
+    def test_case_d_a_plain_file_named_dot_git(self):
+        self._hidden_notes("x", ".git", as_file=True)
+
+    def test_a_dot_git_symlink_is_kept(self):
+        os.makedirs(os.path.join(self.wt, "y"))
+        os.symlink("/nonexistent", os.path.join(self.wt, "y", ".git"))
+        self.assertEqual(git(self.wt, "status", "--porcelain"), "")
+        self.assertKept("holds a .git")
+
+    def test_the_worktrees_own_gitfile_does_not_count_and_symlinks_are_not_followed(self):
+        os.symlink(self.repo, os.path.join(self.wt, "link-to-the-main-checkout"))
+        commit(self.wt, ".gitignore", "link-to-the-main-checkout\n")
+        git(self.wt, "push", "-q")
+        self.assertIsNone(worktree_cleanup.hidden_repo(self.wt))
+
+    def test_a_walk_over_the_limit_keeps_it(self):
+        os.makedirs(os.path.join(self.wt, "m", "n"))
+        with mock.patch.object(worktree_cleanup, "SCAN_LIMIT", 1):
+            self.assertIn("too many", worktree_cleanup.hidden_repo(self.wt))
 
     def test_not_a_registered_worktree(self):
         clone = os.path.join(self.root, "CC-024c")

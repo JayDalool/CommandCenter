@@ -10,7 +10,7 @@ and the first failing check is returned as the reason:
   3. the ticket's own branch is checked out there (a Claude Code `agent-*` worktree never matches)
   4. `git status` is empty: nothing modified, staged or untracked; no file hidden from status
      (skip-worktree, assume-unchanged); no merge/rebase in progress; no other worktree nested inside it
-     and no ignored folder holding a `.git` or a bare repository (git ignores those, and
+     and no `.git` entry or bare repository anywhere below it (git shows nothing inside those, and
      `worktree remove` would delete them with their uncommitted work)
   5. no commit of the worktree is missing from every remote (ccd never fetches, so a stale
      remote ref can only make this keep more), and none that only the worktree's own HEAD reflog or
@@ -27,7 +27,7 @@ import subprocess
 
 WORKTREES_ROOT = "/srv/server/worktrees"
 GIT_TIMEOUT = 30
-SCAN_LIMIT = 200000  # folders visited when looking for a repository hidden in ignored files
+SCAN_LIMIT = 200000  # folders visited when looking for a repository git cannot see
 REMOVE_TIMEOUT = 300
 
 
@@ -115,16 +115,9 @@ def hidden_from_status(real):
     code, out, err = _git(real, "ls-files", "-v", "-z")
     if code != 0:
         return f"git ls-files failed: {err}"
-    folders = set()
     for entry in out.split("\x00"):
         if entry and (entry[0] == "S" or entry[0].islower()):
             return "it has files hidden from git status (skip-worktree or assume-unchanged)"
-        if len(entry) > 2 and "/" in entry:
-            folders.add(os.path.dirname(entry[2:]))
-    # git never lists anything inside a folder named .git, tracked folders included (docs/.git/notes.txt).
-    # Only folders that hold tracked files are looked at: ignored ones are walked by hidden_repo.
-    if any(os.path.lexists(os.path.join(real, f, ".git")) for f in folders):
-        return "a folder inside it holds a .git that git does not show"
     code, out, err = _git(real, "rev-parse", "--absolute-git-dir")
     if code != 0:
         return f"git rev-parse failed: {err}"
@@ -170,35 +163,28 @@ def unshared_commits(real):
 
 
 def hidden_repo(real):
-    """Why an ignored part of the worktree may hold work git cannot see, or None.
+    """Why part of the worktree may hold work git cannot see, or None. One walk of the whole tree.
 
-    `git worktree remove` checks tracked and untracked files but deletes ignored ones unseen. An
-    ignored folder with a `.git` entry is another repo or worktree (a Claude Code subagent's, a nested
-    clone), and its uncommitted work would go too; so does a bare repository (HEAD + objects/ + refs/).
-    Plain ignored files (node_modules, .venv) do not count."""
-    code, out, err = _git(real, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
-    if code != 0:
-        return f"git could not list its ignored files: {err}"
+    `git worktree remove` looks at tracked and untracked files but deletes the rest unseen, and git shows
+    nothing inside a folder named `.git`. So the tree is walked (symlinks not followed) and ANY entry named
+    `.git` (a folder, a gitfile, a symlink, in a tracked, untracked or ignored folder, however deep or empty
+    its parent) keeps the worktree, as does any folder shaped like a bare repository (HEAD + objects/ + refs/).
+    That covers a Claude Code subagent's worktree, a nested clone, a backup repo and a stray `.git` folder.
+    The worktree's own `.git` gitfile at the top is expected and skipped. Plain files (node_modules, .venv)
+    only cost walk time. A walk that cannot finish (unreadable folder, more than SCAN_LIMIT folders) keeps it."""
     seen = 0
-    for entry in out.split("\x00"):
-        if not entry:
-            continue
-        top = os.path.join(real, entry)
-        if os.path.basename(entry.rstrip("/")) == ".git":
-            return "an ignored folder inside it holds a git repository"
-        if not entry.endswith("/"):
-            continue
-        unreadable = []
-        for here, dirs, files in os.walk(top, followlinks=False, onerror=unreadable.append):
-            seen += 1
-            if ".git" in dirs or ".git" in files:
-                return "an ignored folder inside it holds a git repository"
-            if "HEAD" in files and "objects" in dirs and "refs" in dirs:
-                return "an ignored folder inside it holds a bare git repository"
-            if seen > SCAN_LIMIT:
-                return "it has too many ignored folders to check for nested repositories"
-        if unreadable:
-            return "an ignored folder could not be read, so nested repositories cannot be ruled out"
+    unreadable = []
+    for here, dirs, files in os.walk(real, followlinks=False, onerror=unreadable.append):
+        seen += 1
+        names = set(dirs) | set(files)
+        if ".git" in names and here != real:
+            return "it holds a .git (a nested repository or worktree) inside"
+        if "HEAD" in files and "objects" in dirs and "refs" in dirs:
+            return "it holds a bare git repository inside"
+        if seen > SCAN_LIMIT:
+            return "it has too many folders to check for nested repositories"
+    if unreadable:
+        return "a folder could not be read, so nested repositories cannot be ruled out"
     return None
 
 
@@ -245,7 +231,7 @@ def blocker(repo, path, branch, pane_cwds, *, root=None, proc="/proc"):
     why = _cheap(real, path, pane_cwds, proc)
     if why:
         return why
-    # The ignored-folder walk is the slow one, so it comes after every cheap check (it must not repeat on
+    # The whole-tree walk is the slow one, so it comes after every cheap check (it must not repeat on
     # each poll while a pane is open). The cheap ones then run once more right before the caller removes.
     why = hidden_repo(real)
     if why:
