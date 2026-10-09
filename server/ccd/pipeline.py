@@ -337,6 +337,34 @@ class Pipeline:
                             "WHERE t.key=?", (str(key).upper(),)).fetchone()
         return bool(r) and (r[0] in ("proposed", "accepted") or r[1] is not None)
 
+    def review_head(self, key):
+        """The PR head a review was last recorded at, or None before any review."""
+        r = self.db.execute("SELECT review_head FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id "
+                            "WHERE t.key=?", (str(key).upper(),)).fetchone()
+        return r[0] if r else None
+
+    def rework_prs(self, key):
+        """The open PRs {(ref, head)} recorded by the ticket's latest rework, or None if it never had one."""
+        r = self.db.execute("SELECT e.data FROM ticket_events e JOIN tickets t ON t.id=e.ticket_id "
+                            "WHERE t.key=? AND e.kind='pipeline.rework' ORDER BY e.id DESC LIMIT 1",
+                            (str(key).upper(),)).fetchone()
+        if not r:
+            return None
+        prs = json.loads(r[0] or "{}").get("prs") or []
+        return {(p.get("ref"), p.get("head")) for p in prs if isinstance(p, dict)}
+
+    def new_head(self, key, pr):
+        """True when this (PR, head) is one the pipeline has not already dealt with: not the reviewed head, and
+        not an open PR recorded when the ticket was last sent back to implementation. Only such a head or
+        PR sends a reworked ticket back to IN_REVIEW. (As in sync_pr, an unrecorded review PR matches any PR.)"""
+        if (pr.get("ref"), pr.get("head")) in (self.rework_prs(key) or ()):
+            return False
+        r = self.db.execute("SELECT review_head, review_pr FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id "
+                            "WHERE t.key=?", (str(key).upper(),)).fetchone()
+        if not r or not r[0]:
+            return True
+        return not (pr.get("head") == r[0] and (not r[1] or pr.get("ref") == r[1]))
+
     def lanes(self, project):
         """Implementation lanes running in one project: its tickets IN_PROGRESS with a worktree."""
         return self.db.execute(
@@ -804,8 +832,13 @@ class Pipeline:
             return status, work, [("pipeline.replan", f"back to planning: {reason}", {"from": t["status"]})]
         return self._tx(key, actor, fn)
 
-    def rework(self, key, reason, actor):
-        """Back to Implementation: an ordinary defect found in review, UI testing or verification."""
+    def rework(self, key, reason, actor, open_prs=()):
+        """Back to Implementation: an ordinary defect found in review, UI testing or verification.
+
+        `open_prs` ({ref, head} of the ticket's open PRs, from ccd's last GitHub poll) goes into the rework
+        event: those PRs are what the rework was about, so only a different head or PR returns the ticket to review."""
+        prs = [{"ref": str(p.get("ref")), "head": str(p.get("head") or "")} for p in open_prs or ()
+               if isinstance(p, dict) and p.get("ref")]
         reason = _text(reason, 300, "reason", multiline=False)
         if not reason:
             raise TaskError(400, "say what needs fixing")
@@ -822,7 +855,7 @@ class Pipeline:
             if w["gate"] in ("merge", "failure", "ui", "deploy"):
                 work.update(gate=None, gate_reason=None)
             return {"status": "IN_PROGRESS"}, work, [("pipeline.rework", f"back to implementation: {reason}",
-                                                      {"from": t["status"]})]
+                                                      {"from": t["status"], "prs": prs})]
         return self._tx(key, actor, fn)
 
     def evidence(self, key, kind, ref, note, actor, stage=None):

@@ -180,12 +180,14 @@ deterministic triggers, each recorded as `system:automation` with its trigger:
 | dispatch `plan` accepted by an idle coordinator | INBOX/PROPOSED → RESEARCHING |
 | dispatch `implement` accepted | READY_TO_IMPLEMENT → IN_PROGRESS |
 | open PR whose title or a branch segment **leads** with the key (same project) | link PR, set branch; READY_TO_IMPLEMENT/IN_PROGRESS → IN_REVIEW |
+| pipeline ticket after `rework`: a PR or head that is neither the reviewed head nor an open PR recorded by the rework | IN_PROGRESS → IN_REVIEW (polls at known heads leave it IN_PROGRESS) |
 | linked PR approved, checks green, not draft | IN_REVIEW → READY_TO_MERGE |
 | linked PR stops being ready | READY_TO_MERGE → IN_REVIEW |
 | linked PR merged (found through `ticket_links`) | IN_REVIEW/READY_TO_MERGE → VERIFYING |
 
 Never automatic: DONE (a verifier's or Jay's call), anything from a key merely
-mentioned in a title, and re-applying a move Jay reversed by hand.
+mentioned in a title, and re-applying a move Jay reversed by hand (a manual status edit; pipeline steps such as
+`rework` always record a trigger and do not count as an override).
 
 **Needs Jay.** `state.needs` = derived needs (merge-ready PRs, red main, My
 actions, `needs:*` issue labels) + blocked agents (`state.blocked`) + every open
