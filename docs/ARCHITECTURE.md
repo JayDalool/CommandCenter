@@ -337,6 +337,21 @@ Dashboard ─▶ Workspace ─▶ Task Room
 | wall / rooms / panes / pop-out layout | `web/app/src/workspace/rooms.ts` (localStorage, shared by every window) |
 | screens | `screens/Dashboard.tsx`, `screens/Workspace.tsx`, `screens/Popout.tsx`, `workspace/Room.tsx`, `workspace/Dossier.tsx`, `tickets/{Questions,GateCard}.tsx`, `components/Notifications.tsx`; the old IDE is `screens/Files.tsx` |
 
+### Desktop notice for new Needs Jay gates (CC-023)
+
+```text
+pipeline.gate_opened / pipeline.blocked ─▶ ticket_events (append-only)
+ccd  Pipeline.gate_counts()  ─▶  GET /api/health  gates {open, last}   (no token, two integers)
+launcher  gates.go  poll every 30 s (only while it holds the tunnel)
+   first reading = silent baseline; `last` grew and open > 0 ─▶ notice
+launcher  tray_windows.go  Shell_NotifyIconW NIF_INFO balloon ─▶ click = tray "Open Command Center"
+```
+
+The launcher holds no token (binary_test enforces it), so health is the only thing it can read. `gates.go` is
+pure and tested on Linux (`ParseGates`, `gateWatch.Observe`, `app.watchGates`); `run.go` `waitForUser` now shows
+the tray in Edge-window mode too, and Quit stops the tunnel. A second launcher or a reused tunnel polls nothing
+and shows no icon. Items are named nowhere: names and click-to-ticket would need an in-page Notification.
+
 Navigation is six items: Dashboard, Workspace, Task Manager, Activity / Logs, Files, Settings. Projects,
 Development, Agents, Server, Alerts and Pull requests keep their routes and are under Settings → Diagnostics,
 Activity / Logs and Ctrl+K.

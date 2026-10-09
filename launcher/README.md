@@ -3,7 +3,7 @@
 Double-click to open Command Center on Windows. It replaces running
 `scripts/windows/CommandCenter.ps1` by hand.
 
-## What it does (v0.3.0)
+## What it does (v0.5.0)
 
 1. If another CommandCenter.exe is already running (per-user mutex
    `Local\CommandCenterLauncher-7777`), it starts no second tunnel: it waits up to
@@ -18,11 +18,14 @@ Double-click to open Command Center on Windows. It replaces running
 5. Opens Edge (else Chrome) as an app window with its own profile in
    `%LOCALAPPDATA%\CommandCenter\Browser`. When that window closes, it stops the ssh it
    started and exits.
-6. Without Edge or Chrome (or when Edge hands the window to an Edge that was already
-   running, so the launcher cannot see it close), it opens the default browser and shows
-   a tray icon instead: right- or left-click for **Open Command Center**, **Reconnect**
-   (restarts only its own ssh, at once) and **Quit** (stops its ssh and exits). If no
-   tray icon can be shown, it falls back to a "Click OK to stop the tunnel" box.
+6. While it holds the tunnel it shows a tray icon (also next to the Edge window): right- or
+   left-click for **Open Command Center**, **Reconnect** (restarts only its own ssh, at once),
+   **Open server terminal** and **Quit** (stops its ssh and exits, even if the window is
+   still open). Without Edge or Chrome (or when Edge hands the window to an Edge that was
+   already running, so the launcher cannot see it close), it opens the default browser and
+   the tray icon is the only way to stop it. If no tray icon can be shown, it falls back to a
+   "Click OK to stop the tunnel" box in those two cases, and in window mode simply goes on
+   without the icon.
 7. If ssh drops while the window is open, it reconnects (2 s, 5 s, 10 s, 20 s, then
    30 s; gives up after 8 tries and says why).
 
@@ -47,6 +50,21 @@ The page's **Sign in with SSH** button (Developer dialog and Connect screen) ope
 every other Command Center window picks the session up. That link takes no parameters; anything else is
 refused. Without the launcher: `ssh jay-server /srv/server/repos/CommandCenter/scripts/cc-session --url`
 and open the link it prints.
+
+## v0.5.0 tray notices: new Needs Jay items
+
+The launcher holds no token, so it can only read what ccd shows without one. `GET /api/health`
+carries two integers, `gates: {open, last}`: the number of open owner gates and the id of the
+newest `pipeline.gate_opened` / `pipeline.blocked` event (it only ever grows). While it holds
+the tunnel the launcher reads that every 30 s:
+
+- the first reading is a silent baseline (nothing pops up when you start it);
+- when `last` has grown and `open` is above zero, the tray icon shows a balloon, "A new item
+  needs you (3 open)". It names nothing; clicking it does what **Open Command Center** does
+  (a signed-in window on the Overview, where Needs Jay is);
+- a failed read (tunnel reconnecting, older ccd without `gates`) is silent;
+- a second launcher, or one that found Command Center already running, polls nothing and shows
+  no icon. Windows' Focus Assist can hide the balloon; the item still waits in Needs Jay.
 
 ## Native terminals (v0.3.0)
 

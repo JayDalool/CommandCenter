@@ -306,6 +306,18 @@ class Pipeline:
             out.append(item)
         return out
 
+    def gate_counts(self):
+        """Two integers for the unauthenticated /api/health (the desktop launcher reads them): how many owner
+        gates are open, and the id of the newest pipeline.gate_opened / pipeline.blocked event (ticket_events
+        is append-only, so the id only grows). Counts only: no keys, titles or reasons."""
+        (n,) = self.db.execute(
+            "SELECT COUNT(*) FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id WHERE w.gate IS NOT NULL "
+            "AND t.archived=0 AND t.status NOT IN ('DONE','DENIED','CANCELLED')").fetchone()
+        # no index on kind: SQLite reads ticket_events backwards from the newest id and stops at the first match
+        r = self.db.execute("SELECT id FROM ticket_events WHERE kind IN ('pipeline.gate_opened','pipeline.blocked') "
+                            "ORDER BY id DESC LIMIT 1").fetchone()
+        return {"open": int(n), "last": int(r[0]) if r else 0}
+
     def held_by(self, project, key=None):
         """What holds new work in `project` under the jay_first rule: on tickets other than `key`, every open
         question for Jay and every decision only Jay can make before work goes on (a plan to approve, a blocker

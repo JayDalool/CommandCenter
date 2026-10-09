@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -36,11 +37,16 @@ type Platform interface {
 // TrayMenu is the tray icon's tooltip and actions. Open, Reconnect and
 // Terminal run on their own goroutine; they must not block the tray's message
 // loop. A nil Terminal hides "Open server terminal".
+//
+// Every string received on Notices is shown as a balloon on the icon (a new
+// Needs Jay item); clicking the balloon does what Open does. A nil Notices
+// shows none.
 type TrayMenu struct {
 	Tip       string
 	Open      func()
 	Reconnect func()
 	Terminal  func()
+	Notices   <-chan string
 }
 
 const title = "Command Center"
@@ -61,6 +67,9 @@ type app struct {
 	newTunnel  func(start func(*tailBuffer) (Proc, error), probe func() bool, log *logger) *tunnel
 	// signin mints a one-time SSH sign-in code (signin.go); nil = never sign in.
 	signin func(Config) (string, error)
+	// gateRead reads ccd's open-gate counters; gateEvery is the poll interval (gates.go).
+	gateRead  func(port int) (GateReading, error)
+	gateEvery time.Duration
 }
 
 func newApp(p Platform, log *logger) *app {
@@ -73,6 +82,8 @@ func newApp(p Platform, log *logger) *app {
 		poll:       500 * time.Millisecond,
 		newTunnel:  newTunnel,
 		signin:     sshSignin(p),
+		gateRead:   ReadGates,
+		gateEvery:  gatePollEvery,
 	}
 }
 
@@ -199,27 +210,23 @@ func (a *app) run() int {
 		return 1
 	}
 
+	// New Needs Jay items: poll health while we hold the tunnel (until stop closes).
+	notices := make(chan string, 4)
+	go a.watchGates(cfg.LocalPort, stop, notices)
+
 	trayStop := make(chan struct{})
+	stopTray := sync.OnceFunc(func() { close(trayStop) })
 	closed := make(chan struct{})
 	go func() {
 		defer close(closed)
-		if b != nil {
-			started := time.Now()
-			_ = b.Wait()
-			if time.Since(started) >= a.handoff {
-				a.log.Printf("browser closed; stopping tunnel")
-				return
-			}
-			a.log.Printf("browser handed off to an existing window")
-		}
-		a.waitForUser(cfg, url, profile, t, trayStop)
+		a.waitForUser(cfg, url, profile, t, b, notices, trayStop, stopTray)
 	}()
 
 	select {
 	case <-closed:
 	case err := <-gaveUp:
 		supervised = false
-		close(trayStop) // removes the tray icon, if one is shown
+		stopTray() // removes the tray icon, if one is shown
 		select {
 		case <-closed:
 		case <-time.After(2 * time.Second): // a MessageBox stays until we exit
@@ -236,34 +243,81 @@ func (a *app) run() int {
 	return 0
 }
 
-// waitForUser runs when we cannot see the window close (default browser, or
-// Edge handed the window to a running instance): a tray icon whose Quit stops
-// the tunnel, or, if no tray icon can be shown, the old "Click OK" box.
-func (a *app) waitForUser(cfg Config, url, profile string, t *tunnel, stop <-chan struct{}) {
-	err := a.p.Tray(TrayMenu{
-		Tip: "Command Center (tunnel to " + cfg.Host + ")",
-		Open: func() {
-			if err := a.openDetached(a.signedURL(cfg, url), profile); err != nil {
-				a.log.Printf("tray open: %v", err)
+// waitForUser blocks until the tunnel should stop. The tray icon is always
+// shown: Quit stops the tunnel, and gate notices appear on it. When we can see
+// the browser window (b != nil), closing it also stops the tunnel. When we
+// cannot (default browser, or Edge handed the window to a running instance),
+// only Quit does; if no tray icon can be shown either, the old "Click OK" box
+// does.
+func (a *app) waitForUser(cfg Config, url, profile string, t *tunnel, b Proc, notices <-chan string,
+	trayStop <-chan struct{}, stopTray func()) {
+	trayRes := make(chan error, 1)
+	go func() {
+		trayRes <- a.p.Tray(TrayMenu{
+			Tip: "Command Center (tunnel to " + cfg.Host + ")",
+			Open: func() {
+				if err := a.openDetached(a.signedURL(cfg, url), profile); err != nil {
+					a.log.Printf("tray open: %v", err)
+				}
+			},
+			Reconnect: func() {
+				a.log.Printf("tray: reconnect")
+				t.Reconnect()
+			},
+			Terminal: func() {
+				if err := openTerminal(a.p, a.log, cfg, Action{Kind: ActionServer}); err != nil {
+					a.log.Printf("tray terminal: %v", err)
+					a.p.Alert(actionFail+err.Error(), true)
+				}
+			},
+			Notices: notices,
+		}, trayStop)
+	}()
+	var tray <-chan error = trayRes
+	// Whatever ends this function, take the icon down before the process exits.
+	defer func() {
+		stopTray()
+		if tray != nil {
+			select {
+			case <-tray:
+			case <-time.After(2 * time.Second):
 			}
-		},
-		Reconnect: func() {
-			a.log.Printf("tray: reconnect")
-			t.Reconnect()
-		},
-		Terminal: func() {
-			if err := openTerminal(a.p, a.log, cfg, Action{Kind: ActionServer}); err != nil {
-				a.log.Printf("tray terminal: %v", err)
-				a.p.Alert(actionFail+err.Error(), true)
-			}
-		},
-	}, stop)
-	if err == nil {
-		a.log.Printf("tray: quit")
-		return
+		}
+	}()
+
+	var windowClosed chan bool // nil (never ready) when we cannot see the window
+	if b != nil {
+		windowClosed = make(chan bool, 1)
+		go func() {
+			started := time.Now()
+			_ = b.Wait()
+			windowClosed <- time.Since(started) >= a.handoff
+		}()
 	}
-	a.log.Printf("tray unavailable: %v", err)
-	a.p.Alert("Command Center is running.\n\nClick OK to stop the tunnel.", false)
+	tracking, trayFailed := b != nil, false
+	for {
+		select {
+		case closedForGood := <-windowClosed:
+			if closedForGood {
+				a.log.Printf("browser closed; stopping tunnel")
+				return
+			}
+			a.log.Printf("browser handed off to an existing window")
+			tracking, windowClosed = false, nil
+		case err := <-tray:
+			tray = nil
+			if err == nil {
+				a.log.Printf("tray: closed (Quit, or the run is ending)")
+				return
+			}
+			a.log.Printf("tray unavailable: %v", err)
+			trayFailed = true
+		}
+		if !tracking && trayFailed {
+			a.p.Alert("Command Center is running.\n\nClick OK to stop the tunnel.", false)
+			return
+		}
+	}
 }
 
 // secondLaunch: another launcher holds the mutex, so it owns (or is opening)

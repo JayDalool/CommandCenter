@@ -106,7 +106,7 @@ done
 cat <<EOF
 
 Live is on $BRANCH ($(git rev-parse --short HEAD)).
-Next: Settings → Desktop app → download CommandCenter.exe (0.4.0), put it in place, double-click it once.
+Next: Settings → Desktop app → download CommandCenter.exe (0.5.0), put it in place, double-click it once.
 Sign in: start CommandCenter.exe on Windows, or run
   $REPO/scripts/cc-session --url
 and open the link.
