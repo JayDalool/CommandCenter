@@ -66,9 +66,10 @@
                                      (agent-written text, at most 64 KB), cutoff time, and `goLive`: the tickets a
                                      Go Live would approve and merged tickets that are unverified or wait on a UI review
     POST  /api/night-shift/end       Jay AND Developer Unlock. stop reminders; tell the coordinator to stop safely
-    POST  /api/go-live               Jay AND Developer Unlock. GO LIVE PREPARES ONLY: approves the project's open
-                                     live-deploy gates and asks its idle coordinator to PREPARE the deploy by the repo's
-                                     runbook (steps, checks, rollback plan) and wait: Jay confirms the deploy himself in
+    POST  /api/go-live               Jay AND Developer Unlock. {project, keys}: GO LIVE PREPARES ONLY: approves the
+                                     listed tickets' live-deploy gates that are still open (the rest: `skipped`)
+                                     and asks its idle coordinator to PREPARE the deploy by the repo's runbook
+                                     (steps, checks, rollback plan) and wait: Jay confirms the deploy himself in
                                      the coordinator's pane. ccd runs no deploy. 409 while the night shift runs, within
                                      30 min of a Go Live, or while the last one is unfinished. A ticket that cannot
                                      be approved comes back in `errors`; the others still go through.
@@ -400,7 +401,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
 
     async def go_live(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
-        return await daemon.act_go_live(str(body.get("project") or ""), request.state.actor, developer=dev)
+        return await daemon.act_go_live(str(body.get("project") or ""), request.state.actor, developer=dev,
+                                        keys=body.get("keys"))
 
     async def task_record(request, _):
         return daemon.task_record(request.path_params["key"])

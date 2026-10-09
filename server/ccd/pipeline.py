@@ -585,12 +585,18 @@ class Pipeline:
             return {}, {}, []
         return {"status": "DONE"}, {"gate": None, "gate_reason": None}, [("pipeline.done", "done", {})]
 
-    def confirm(self, key, gate, actor):
-        """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock)."""
+    def confirm(self, key, gate, actor, via=None):
+        """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock). `via="go-live"` marks a
+        live-deploy approval given by Go Live: approvedBy "jay:go-live", and the event says the deploy was approved
+        for a PREPARED deploy that Jay confirms in the coordinator's pane. The record still permits `deployed`
+        (the pane confirmation is Jay's, and nothing here can check it)."""
         if actor != "jay":
             raise TaskError(403, "only Jay closes an owner gate")
         if gate not in GATES:
             raise TaskError(400, f"gate must be one of {', '.join(GATES)}")
+        by = f"{actor}:{via}" if via else actor
+        said = ("approved for a prepared deploy (Jay confirms in the pane)" if via == "go-live"
+                else "Jay approved the live deployment")
 
         def fn(tid, t, w, at):
             if w["gate"] != gate:
@@ -614,14 +620,14 @@ class Pipeline:
                 # it with `deployed --env live`, and only then does the ticket close.
                 work["deploy"] = {"env": "live", "what": t["title"], "verification": (w["verification"] or {}).get("evidence") or "",
                                   "requestedAt": at, "requestedBy": "policy:needs_deploy", "approvedAt": at,
-                                  "approvedBy": actor, "result": None}
-                events.append(("pipeline.deploy_approved", "Jay approved the live deployment", {}))
+                                  "approvedBy": by, "result": None}
+                events.append(("pipeline.deploy_approved", said, {}))
                 return {}, work, events
             if gate == "deploy" and (w["deploy"] or {}).get("requestedAt") and not (w["deploy"] or {}).get("result"):
                 # Jay approved a live deployment that has not happened yet: the agent deploys next and
                 # records it with `deployed`; the ticket closes only after that, verified live.
-                work["deploy"] = dict(w["deploy"], approvedAt=at, approvedBy=actor)
-                events.append(("pipeline.deploy_approved", "Jay approved the live deployment", {}))
+                work["deploy"] = dict(w["deploy"], approvedAt=at, approvedBy=by)
+                events.append(("pipeline.deploy_approved", said, {}))
                 return {}, work, events
             if gate in ("ui", "deploy") and t["status"] == "VERIFYING" and (w["verification"] or {}).get("result") == "pass":
                 status, more, ev = self._after_verify(t, dict(w, confirmed=confirmed))

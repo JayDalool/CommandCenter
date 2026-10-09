@@ -825,6 +825,14 @@ class Daemon:
                 try:
                     agent = await self._fresh_agent(r["paneId"])
                     if agent["status"] in ("idle", "done"):   # busy or blocked now: nothing sent, nothing counted
+                        # "idle" only means ready for input, not that the input box is empty: agent.prompt pastes
+                        # and presses Enter, so a half-typed draft of Jay's would be submitted. Read the pane's
+                        # text (never stored or logged) and send only when the input line is plainly empty;
+                        # a draft, or a screen we cannot parse, means skip (best effort, not counted).
+                        screen = await self.herdr.read_tail(agent["pane_id"], 40)
+                        if nightshift_mod.input_is_empty(screen["text"]) is not True:
+                            self.night.skipped(key, "input line not empty or not recognised")
+                            continue
                         await self.herdr.prompt(agent["pane_id"], self.night.nudge_text(key))
                         self.night.nudged(key)               # counted only once it was delivered
                         self._event("action", "action.night_shift", f"night shift reminder → {coordinators.canonical(proj)}",
@@ -1968,18 +1976,26 @@ class Daemon:
             self.night.start(project)
         return {"ok": True, "project": project, "coordinator": name}
 
-    async def act_go_live(self, project, actor="jay", developer=False):
-        """Go Live: Jay approves every pending live deploy in the project and asks its idle coordinator to deploy
-        main by the repository's runbook (GO_LIVE_TEMPLATE). ccd runs no deploy itself."""
+    async def act_go_live(self, project, actor="jay", developer=False, keys=None):
+        """Go Live: Jay approves the live-deploy gates the confirm box showed (`keys`) that are still open, and asks
+        the project's idle coordinator to PREPARE the deploy by the repository's runbook and wait
+        (GO_LIVE_TEMPLATE). Jay confirms the deploy himself in the coordinator's pane. ccd runs no deploy itself."""
         if actor != "jay" or not developer:
-            raise ActionError(403, "Developer Unlock required: Go Live deploys to production")
+            raise ActionError(403, "Developer Unlock required: Go Live approves live deploys and messages Claude")
         self._need_tasks()
         if not any(p["key"] == project for p in self.cfg["projects"]):
             raise ActionError(404, "unknown project")
+        if not isinstance(keys, list) or len(keys) > 200 or not all(
+                isinstance(k, str) and re.fullmatch(r"[A-Za-z]{1,8}-\d{1,6}", k) for k in keys):
+            raise ActionError(400, "keys must be the list of ticket keys the confirm box showed")
+        shown = [k.upper() for k in dict.fromkeys(keys)]
         blocked = self._go_live_blocked(project)
         if blocked:
             raise ActionError(409, blocked)
-        pending = [a["key"] for a in self.go_live_review(project)["approves"]]
+        # Approve only what Jay saw AND is still open: a gate that opened after the page loaded stays open for him.
+        open_now = [a["key"] for a in self.go_live_review(project)["approves"]]
+        pending = [k for k in shown if k in open_now]
+        skipped = [{"key": k, "reason": "its live-deploy gate is no longer open"} for k in shown if k not in open_now]
         text = GO_LIVE_TEMPLATE.format(project=project, approved=", ".join(pending) or "none")
         # The coordinator must be reachable before anything is approved: no approval without the message. Every
         # check that can refuse (409) runs before it; after it, a ticket that cannot be approved (its gate moved
@@ -1988,13 +2004,14 @@ class Daemon:
         approved, errors = [], []
         for key in pending:
             try:
-                self._pipeline_result(*self._wrap(self.pipeline.confirm, key, "deploy", actor))
+                self._pipeline_result(*self._wrap(self.pipeline.confirm, key, "deploy", actor, "go-live"))
                 approved.append(key)
             except Exception as e:  # noqa: BLE001 — one ticket must not stop the others
                 errors.append({"key": key, "error": str(e)[:160]})
         if self.night is not None:
             self.night.went_live(project, approved)
-        return {"ok": True, "project": project, "coordinator": name, "approved": approved, "errors": errors}
+        return {"ok": True, "project": project, "coordinator": name, "approved": approved, "skipped": skipped,
+                "errors": errors}
 
     def go_live_review(self, project):
         """What Go Live would approve in `project` (tickets whose live-deploy gate is open), and what Jay should

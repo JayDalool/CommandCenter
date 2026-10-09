@@ -59,6 +59,32 @@ def _now():
     return time.time()
 
 
+BOX_CHARS = set("─━│┃╭╮╯╰┌┐└┘ \t")
+PROMPT_RE = re.compile(r"^\s*(?:[│┃]\s*)?(?:>|❯)(?:\s+(.*?))?\s*(?:[│┃])?\s*$")
+
+
+def input_is_empty(text):
+    """Is Claude Code's input line empty? From the pane's text only, so best effort. True only when the LAST prompt
+    line (`>` or `❯`, optionally inside a box) is empty or shows the dim `Try "…"` placeholder and nothing but box
+    borders or blanks follow it before the next border. False when it holds text (or a further line of a draft).
+    None when no prompt line can be parsed: the caller treats None like False and sends nothing."""
+    lines = str(text or "").splitlines()[-60:]
+    at = next((i for i in range(len(lines) - 1, -1, -1) if PROMPT_RE.match(lines[i])), None)
+    if at is None:
+        return None
+    typed = (PROMPT_RE.match(lines[at]).group(1) or "").strip()
+    if typed and not typed.startswith('Try "'):
+        return False
+    for ln in lines[at + 1:]:
+        rest = ln.strip().strip("│┃").strip()
+        if not rest:
+            continue
+        if all(c in BOX_CHARS for c in rest):
+            return True          # the box's bottom border: nothing was typed inside
+        return False             # text under the prompt before any border: a multi-line draft
+    return True
+
+
 def cutoff_after(started, hhmm=CUTOFF_DEFAULT):
     """The first local HH:MM strictly after `started` (epoch s): the shift's morning cutoff."""
     m = CUTOFF_RE.match(str(hhmm or "")) or CUTOFF_RE.match(CUTOFF_DEFAULT)
@@ -135,23 +161,29 @@ class NightShift:
         if not KEY_RE.match(project or ""):
             return None
         d = self.root / project
+        found = []
         try:
-            files = [f for f in d.iterdir() if f.suffix == ".md" and f.is_file() and not f.is_symlink()]
+            for f in d.iterdir():
+                try:   # a report can vanish between the listing and the stat: skip it
+                    if f.suffix == ".md" and not f.is_symlink() and f.is_file():
+                        found.append((f.stat().st_mtime, f))
+                except OSError:
+                    continue
         except OSError:
             return None
-        if not files:
-            return None
-        f = max(files, key=lambda p: p.stat().st_mtime)
-        try:
-            with open(f, "rb") as fh:
-                raw = fh.read(REPORT_MAX + 1)
-        except OSError:
-            return None
-        text = raw[:REPORT_MAX].decode("utf-8", "replace")
-        first = text.splitlines()[0] if text else ""
-        m = STATUS_RE.match(first)
-        return {"name": f.name, "mtime": f.stat().st_mtime, "status": m.group(1).lower() if m else None,
-                "text": text + ("\n[…truncated]" if len(raw) > REPORT_MAX else "")}
+        for _, f in sorted(found, key=lambda x: x[0], reverse=True):
+            try:
+                with open(f, "rb") as fh:
+                    raw = fh.read(REPORT_MAX + 1)
+                    mtime = os.fstat(fh.fileno()).st_mtime
+            except OSError:
+                continue   # gone or unreadable now: the next newest one
+            text = raw[:REPORT_MAX].decode("utf-8", "replace")
+            first = text.splitlines()[0] if text else ""
+            m = STATUS_RE.match(first)
+            return {"name": f.name, "mtime": mtime, "status": m.group(1).lower() if m else None,
+                    "text": text + ("\n[…truncated]" if len(raw) > REPORT_MAX else "")}
+        return None
 
     # ---------- the decision ----------
 
@@ -207,12 +239,21 @@ class NightShift:
         last = s.get("lastNudgeAt")
         return 0 if (not last or progress > last) else s.get("quiet", 0) + 1
 
+    def skipped(self, project, reason, now=None):
+        """A due reminder was held back (the input line was not empty). Not counted; the state keeps the last reason."""
+        s = self.state.get(project)
+        if s and not s.get("endedAt") and s.get("lastSkip") != reason:
+            s["lastSkip"] = reason
+            s["lastSkipAt"] = now or _now()
+            self.save()
+
     def nudged(self, project, now=None):
         """A reminder reached an idle coordinator: count it."""
         now = now or _now()
         s = self.state.get(project)
         if not s or s.get("endedAt"):
             return
+        s.pop("lastSkip", None)
         s.update(quiet=self._quiet(s, s.get("progressAt") or 0), lastNudgeAt=now, nudges=s.get("nudges", 0) + 1,
                  idleSince=None)
         self.save()

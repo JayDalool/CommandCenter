@@ -98,8 +98,8 @@ export class Api {
     return this.req<{ ok: boolean; told: boolean }>("POST", "/api/night-shift/end", { project });
   }
   /** Go Live (Developer Unlock): approves the open live-deploy gates and asks the coordinator to PREPARE the deploy; Jay confirms it in its pane. */
-  goLive(project: string) {
-    return this.req<GoLiveResult>("POST", "/api/go-live", { project });
+  goLive(project: string, keys: string[]) {
+    return this.req<GoLiveResult>("POST", "/api/go-live", { project, keys });
   }
   /** Jay answers Claude's questions (Developer Unlock). The last answer resumes the same task session. */
   answers(key: string, answers: { id: number; answer: string }[], scopeChange = false) {

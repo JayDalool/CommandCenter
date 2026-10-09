@@ -5,7 +5,7 @@ from datetime import datetime
 import unittest
 
 from ccd import nightshift
-from ccd.nightshift import IDLE_GRACE, MAX_NUDGES, MAX_QUIET, NUDGE_GAP, NightShift, cutoff_after
+from ccd.nightshift import IDLE_GRACE, MAX_NUDGES, MAX_QUIET, NUDGE_GAP, NightShift, cutoff_after, input_is_empty
 
 
 class Supervisor(unittest.TestCase):
@@ -152,6 +152,28 @@ class Supervisor(unittest.TestCase):
         self.assertTrue(again.end("samvision", "ended by Jay"))
         self.assertFalse(again.end("samvision", "twice"))
 
+    def test_a_report_that_vanishes_between_the_listing_and_the_stat_is_skipped(self):
+        self.report("working", self.t0 + 10)
+        d = os.path.join(self.dir, "samvision")
+        newest = os.path.join(d, "2026-10-10.md")
+        with open(newest, "w") as f:
+            f.write("Status: complete\n")
+        os.utime(newest, (self.t0 + 99, self.t0 + 99))
+        from pathlib import Path
+        from unittest import mock
+        real_stat = Path.stat
+
+        def flaky(self_, *a, **kw):                      # the newest file is deleted just as it is stat'ed
+            if str(self_) == newest:
+                raise FileNotFoundError(newest)
+            return real_stat(self_, *a, **kw)
+        with mock.patch.object(Path, "stat", flaky):
+            rep = self.ns.report("samvision")
+        self.assertEqual(rep["name"], "2026-10-09.md")
+        os.remove(newest)
+        os.remove(os.path.join(d, "2026-10-09.md"))
+        self.assertIsNone(self.ns.report("samvision"))
+
     def test_the_reminder_is_true_to_whether_a_report_exists(self):
         none = self.ns.nudge_text("samvision")
         self.assertIn("no morning report", none)
@@ -164,6 +186,33 @@ class Supervisor(unittest.TestCase):
         self.assertIn("still says Status: working", text)
         self.assertIn("/night-shift", text)
         self.assertIn("Status: complete", text)
+
+
+class InputLine(unittest.TestCase):
+    """input_is_empty: true only when Claude Code's prompt line is plainly empty (best effort, from screen text)."""
+    BOX = "\u256d" + "\u2500" * 20 + "\u256e\n\u2502 > {} \u2502\n\u2570" + "\u2500" * 20 + "\u256f"
+    RULE = "\u2500" * 30
+
+    def test_empty_and_placeholder_prompts_are_empty(self):
+        self.assertTrue(input_is_empty("done.\n" + self.BOX.format(" " * 14)))
+        self.assertTrue(input_is_empty("done.\n" + self.BOX.format('Try "fix lint errors"')))
+        self.assertTrue(input_is_empty(f"done.\n{self.RULE}\n\u276f \n{self.RULE}\n  ? for shortcuts"))
+        self.assertTrue(input_is_empty(f"{self.RULE}\n> \n{self.RULE}"))
+
+    def test_a_draft_is_not_empty(self):
+        self.assertFalse(input_is_empty("done.\n" + self.BOX.format("fix the thing, then".ljust(14))))
+        self.assertFalse(input_is_empty(f"{self.RULE}\n\u276f half a sentence\n{self.RULE}\n  ? for shortcuts"))
+        # a draft that continues on a second line under the prompt
+        self.assertFalse(input_is_empty(f"{self.RULE}\n\u276f first line\n  second line\n{self.RULE}"))
+        # older output above does not matter: only the LAST prompt line counts
+        self.assertFalse(input_is_empty(f"> old\n{self.RULE}\n> now typing\n{self.RULE}"))
+
+    def test_an_unparseable_screen_is_none(self):
+        for text in ("", None, "line one\nline two", "Working... (esc to interrupt)"):
+            self.assertIsNone(input_is_empty(text))
+
+    def test_text_under_the_prompt_without_a_border_is_not_trusted(self):
+        self.assertFalse(input_is_empty("> \n? for shortcuts"))
 
 
 if __name__ == "__main__":

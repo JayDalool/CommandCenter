@@ -651,6 +651,7 @@ class ControlRoomApi(PipelineApi):
         # The coordinator has been idle past the grace: one fixed reminder goes to it.
         s = ns.state["samvision"]
         s["idleSince"] = s["startedAt"] - 3600
+        self.fake.tails["wE:p2"] = self.EMPTY_PROMPT
         before = len([p for m, p in self.fake.calls if m == "agent.prompt"])
         self.client.portal.call(self.daemon.night_tick)
         sent = [p for m, p in self.fake.calls if m == "agent.prompt"][before:]
@@ -667,8 +668,14 @@ class ControlRoomApi(PipelineApi):
         self.assertFalse(self.get("/api/night-shift").json()["projects"]["samvision"]["active"])
         self.assertEqual(self.client.post("/api/night-shift/end", content=body, headers=dev).status_code, 409)
 
-    def go_live(self, project="samvision"):
-        return self.client.post("/api/go-live", content=json.dumps({"project": project}), headers=dict(JSON, **self.dev()))
+    EMPTY_PROMPT = "assistant text\n\u256d" + "\u2500" * 20 + "\u256e\n\u2502 > " + " " * 16 + "\u2502\n\u2570" + "\u2500" * 20 + "\u256f"
+
+    def go_live(self, project="samvision", keys=None):
+        """Press Go Live as the confirm box does: with the keys it listed (default: what GET /api/night-shift lists)."""
+        if keys is None:
+            keys = [a["key"] for a in self.get("/api/night-shift").json()["projects"][project]["goLive"]["approves"]]
+        return self.client.post("/api/go-live", content=json.dumps({"project": project, "keys": keys}),
+                                headers=dict(JSON, **self.dev()))
 
     def prompts(self):
         return [p for m, p in self.fake.calls if m == "agent.prompt"]
@@ -692,6 +699,10 @@ class ControlRoomApi(PipelineApi):
         w = self.get("/api/tasks/SV-056/work").json()
         self.assertIsNone(w["gate"])
         self.assertTrue(w["deploy"]["approvedAt"])                                   # deployed can be recorded later
+        full = self.daemon.pipeline.work("SV-056")
+        self.assertEqual(full["deploy"]["approvedBy"], "jay:go-live")
+        kinds = [e for e in self.daemon.tasks.get("SV-056")["timeline"]]
+        self.assertTrue(any("approved for a prepared deploy (Jay confirms in the pane)" in str(e) for e in kinds), kinds)
         text = self.prompts()[-1]["text"]
         self.assertTrue(text.startswith("Go Live from Jay via command-center: PREPARE the deploy of samvision."))
         self.assertIn("Do not deploy yet", text)
@@ -717,10 +728,10 @@ class ControlRoomApi(PipelineApi):
         self.second_deploy_ticket()
         real = self.daemon.pipeline.confirm
 
-        def flaky(key, gate, actor):                                                  # SV-056's gate moved under us
+        def flaky(key, gate, actor, via=None):                                                  # SV-056's gate moved under us
             if key == "SV-056":
                 raise TaskError(409, "SV-056 has no open deploy gate")
-            return real(key, gate, actor)
+            return real(key, gate, actor, via)
         self.daemon.pipeline.confirm = flaky
         r = self.go_live()
         self.assertEqual(r.status_code, 200, r.text)                                  # never a 409 after the message
@@ -784,6 +795,7 @@ class ControlRoomApi(PipelineApi):
         sent0 = len(self.prompts())
         s = ns.state["samvision"]
         s["idleSince"] = s["startedAt"] - 3600
+        self.fake.tails["wE:p2"] = self.EMPTY_PROMPT
         self.fake.set_status("wE:p2", "working")                # busy when the fresh status is read
         self.client.portal.call(self.daemon.night_tick)
         self.assertEqual((len(self.prompts()), ns.get("samvision")["nudges"]), (sent0, 0))
@@ -793,6 +805,46 @@ class ControlRoomApi(PipelineApi):
         self.client.portal.call(self.daemon.night_tick)
         self.assertEqual((len(self.prompts()), ns.get("samvision")["nudges"]), (sent0 + 1, 1))
         self.assertIn("no morning report", self.prompts()[-1]["text"])
+
+    def test_go_live_approves_only_the_keys_the_confirm_box_showed_and_reports_the_rest(self):
+        self.night()
+        self.ticket("VERIFYING")
+        self.step("deploy-request", {"env": "live", "what": "valuation v2", "verification": "verifier pass"})
+        self.second_deploy_ticket()                       # SV-057 opened its gate after the page loaded
+        r = self.go_live(keys=["SV-056", "sv-099"])       # sv-099 was shown but its gate is gone
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((r.json()["approved"], r.json()["errors"]), (["SV-056"], []))
+        self.assertEqual([k["key"] for k in r.json()["skipped"]], ["SV-099"])
+        self.assertEqual(self.get("/api/tasks/SV-057/work").json()["gate"], "deploy")     # untouched, still Jay's
+        text = self.prompts()[-1]["text"]
+        self.assertIn("(SV-056)", text)
+        self.assertNotIn("SV-057", text)
+
+    def test_go_live_needs_the_list_of_keys(self):
+        self.night()
+        for body in ({"project": "samvision"}, {"project": "samvision", "keys": "SV-056"},
+                     {"project": "samvision", "keys": ["SV-056; rm"]}):
+            r = self.client.post("/api/go-live", content=json.dumps(body), headers=dict(JSON, **self.dev()))
+            self.assertEqual(r.status_code, 400, r.text)
+        self.assertEqual(self.prompts(), [])
+
+    def test_a_reminder_is_held_back_uncounted_when_the_input_line_has_a_draft_or_is_not_recognised(self):
+        ns = self.night()
+        self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "samvision"}), headers=dict(JSON, **self.dev()))
+        sent0 = len(self.prompts())
+        s = ns.state["samvision"]
+        for screen in (self.EMPTY_PROMPT.replace("> " + " " * 16, "> half a sentence Jay is typing"),
+                       "line one\nline two",              # no prompt line at all: cannot parse, so skip
+                       ""):
+            s["idleSince"] = s["startedAt"] - 3600
+            self.fake.tails["wE:p2"] = screen
+            self.client.portal.call(self.daemon.night_tick)
+            self.assertEqual((len(self.prompts()), ns.get("samvision")["nudges"]), (sent0, 0), screen)
+        self.assertTrue(ns.get("samvision")["lastSkip"])
+        s["idleSince"] = s["startedAt"] - 3600
+        self.fake.tails["wE:p2"] = self.EMPTY_PROMPT
+        self.client.portal.call(self.daemon.night_tick)
+        self.assertEqual((len(self.prompts()), ns.get("samvision")["nudges"]), (sent0 + 1, 1))
 
     def test_the_morning_cutoff_ends_the_shift_even_with_herdr_down_and_types_nothing(self):
         ns = self.night()

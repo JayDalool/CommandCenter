@@ -75,8 +75,10 @@ export function NightReportDialog({ project, name, n, onClose, onChanged }: {
       </div>}
       <div className="row">
         <button type="button" className="btn is-primary" disabled={busy} data-autofocus
-          onClick={() => void act(async () => { const r = await app.api.goLive(project);
+          onClick={() => void act(async () => { const r = await app.api.goLive(project, approves.map(t => t.key));
             const bad = r.errors ?? [];
+            const gone = r.skipped ?? [];
+            if (gone.length) app.toast(`Skipped (no longer open): ${gone.map(e => e.key).join(", ")}`, "bad");
             if (bad.length) app.toast(`Not approved: ${bad.map(e => `${e.key} (${e.error})`).join("; ")}`, "bad");
             return `Go Live sent to ${r.coordinator}${r.approved.length ? ` · approved ${r.approved.join(", ")}` : ""}`; })}>
           Yes, approve and prepare</button>

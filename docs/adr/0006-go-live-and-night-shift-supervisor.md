@@ -16,8 +16,8 @@ starts the morning deploy) were added with two features that type into a Claude 
 
 ## Decision
 
-1. **Go Live prepares only.** `POST /api/go-live` (Jay + Developer Unlock) approves the project's open
-   live-deploy gates and sends one fixed message (`daemon.GO_LIVE_TEMPLATE`) asking the idle coordinator to
+1. **Go Live prepares only.** `POST /api/go-live` (Jay + Developer Unlock) approves the live-deploy gates
+   of the tickets the confirm box listed that are still open (any others: `skipped`) and sends one fixed message (`daemon.GO_LIVE_TEMPLATE`) asking the idle coordinator to
    PREPARE the deploy by the repository's runbook: steps, migrations, checks, rollback plan, saved to
    `~/command-center/deploys/<project>/` — and then wait. The message says Jay will confirm the deploy himself in
    that pane and lists what is not authorized. ccd runs no deploy and sends no deploy order.
@@ -26,10 +26,19 @@ starts the morning deploy) were added with two features that type into a Claude 
    record yet, for at most 12 hours). Every check that can refuse runs before the message is sent; after it, a
    ticket that cannot be approved comes back in `errors` and does not stop the others.
 3. **The confirm box shows what Go Live does**: the tickets it approves, and merged tickets that are unverified
-   or wait on a UI review (`goLive` in `GET /api/night-shift`).
+   or wait on a UI review (`goLive` in `GET /api/night-shift`). The press sends those keys and nothing else is
+   approved: a gate that opened after the page loaded stays open for Jay.
+   **What the approval is.** A gate Go Live confirms is a full live-deploy approval in the pipeline: afterwards any
+   agent may record `deployed --env live` for that ticket. That the deploy waits for Jay's confirmation in the
+   coordinator's pane is enforced by the text of the message, not by ccd. What ccd adds is a distinct record:
+   `approvedBy: "jay:go-live"` and the event "approved for a prepared deploy (Jay confirms in the pane)".
 4. **The supervisor has a hard stop.** At most 6 reminders per shift and a morning cutoff (07:00 local, set by
    `CCD_NIGHT_CUTOFF`), whatever the coordinator does. Progress is only a ticket or report change; "working" is
-   not progress. A reminder counts only after it was delivered to an idle pane. The reminder text says whether a
+   not progress. A reminder counts only after it was delivered to an idle pane **whose input line is empty**:
+   herdr "idle" only means ready for input, and `agent.prompt` pastes and presses Enter, so before each reminder
+   ccd reads the pane's text and skips (without counting) unless Claude's prompt line is plainly empty. That is a
+   best-effort check on screen text: a prompt it cannot parse is skipped, but a draft it misreads, or typed in the
+   moments between the read and the paste, can still be submitted. The cutoff and the 6-reminder cap bound it. The reminder text says whether a
    report exists. With herdr down, the cutoff still ends the shift. Ending the shift at the cutoff types nothing.
 5. **End night shift sends the message only**, never Esc: an interrupt can leave a half-finished repository
    operation.
@@ -46,7 +55,10 @@ starts the morning deploy) were added with two features that type into a Claude 
 
 ## Consequences
 
-- A deploy always has a human step: Jay's own confirmation in the coordinator's pane, after reading its plan.
+- The message itself orders no deploy and asks Claude to wait for Jay in the pane. That wait is a convention
+  carried by the message text: the approval Go Live records would let an agent record a live deploy, and ccd
+  cannot check what Jay said in the pane. The per-ticket **Deploy Live** button (`GateCard.tsx`) still types
+  "Deploy it now" after Jay approves; it is not changed here (follow-up ticket).
 - Go Live can be refused for up to 12 hours after a press if the coordinator never records the deploy. Jay can
   still deploy by hand; a later Go Live needs that record (or the 12 hours) first.
 - A long, quiet night can end at the cutoff with work left. The morning report says what is left.

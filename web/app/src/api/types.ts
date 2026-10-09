@@ -469,5 +469,5 @@ export interface NightProject {
 }
 export interface NightShiftState { projects: Record<string, NightProject> }
 export interface GoLiveResult {
-  ok: boolean; project: string; coordinator: string; approved: string[]; errors?: { key: string; error: string }[];
+  ok: boolean; project: string; coordinator: string; approved: string[]; skipped?: { key: string; reason: string }[]; errors?: { key: string; error: string }[];
 }

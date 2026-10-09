@@ -45,8 +45,9 @@ own; when ccd is down, it builds locally exactly as before.
   API that **prepares only** (`POST /api/go-live`, Jay + Developer Unlock): it
   approves the project's open live-deploy gates and asks its coordinator to
   prepare the deploy (runbook steps, checks, rollback plan) and wait. Jay confirms
-  the deploy himself in the coordinator's pane; a Command Center message never
-  authorizes one (ADR 0006). ccd runs no deploy. Terminals, Claude
+  the deploy himself in the coordinator's pane. The message orders no deploy, but
+  the approval it records is a full live-deploy approval, so that wait rests on
+  the message text, not on ccd (ADR 0006). ccd runs no deploy. Terminals, Claude
   input, answers and file writes need a second credential, Developer Unlock
   (once per app session, [docs/SECURITY.md](docs/SECURITY.md)). A test asserts
   the route table exactly. See [docs/API.md](docs/API.md).

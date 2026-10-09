@@ -1515,10 +1515,12 @@ Asked by Jay after two hours of use; additions, not changes to the frozen spec.
   most 3 per night, with evidence, as `night-finding` Inbox tasks; never deploy. The morning report is a release
   candidate (safe / test-after-deploy with steps, migrations, rollback target and command, waiting for Jay,
   findings, failures) whose first line is `Status: working|complete`.
-- **Supervisor** (`ccd/nightshift.py`): no time limit. Every minute ccd reminds an idle coordinator whose report
-  still says working (after 3 min idle, at most every 10 min); `complete` ends it, so do 3 reminders with no
-  progress. Command Center supervises from outside instead of trusting the model to keep itself going.
+- **Supervisor** (`ccd/nightshift.py`): hard stops, ADR 0006. Every minute ccd reminds an idle coordinator whose
+  input line is empty (after 3 min idle, at most every 10 min, and only a delivered reminder counts); the shift
+  ends at `Status: complete`, after 6 reminders, at the morning cutoff (07:00 local), or after 3 reminders with no
+  ticket or report change. Command Center supervises from outside instead of trusting the model to keep itself going.
 - **Dashboard:** a night-shift line per project (running · Claude's state · reminders, or last night's result),
-  the report, **End night shift**, and **Go Live…** (a second confirm): approves the project's pending live
-  deploys and asks the coordinator to deploy main by the repository's runbook with its checks and rollback.
+  the report, **End night shift**, and **Go Live…** (a second confirm that lists the tickets): approves the
+  listed live-deploy gates and asks the coordinator to PREPARE the deploy (runbook steps, checks, rollback plan)
+  and wait; Jay confirms the deploy himself in the coordinator's pane.
 - Later (Jay, not now): a weekly UI-test run of new features (Cypress/Playwright) with a findings report.

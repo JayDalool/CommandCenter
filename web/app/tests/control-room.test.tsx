@@ -429,7 +429,7 @@ describe("night shift on the Dashboard", () => {
     expect(warn).toMatch(/SV-082.*UI review still open/);
     expect(warn).toMatch(/SV-083.*merged, not verified/);
     fireEvent.click(screen.getByRole("button", { name: "Yes, approve and prepare" }));
-    await waitFor(() => expect(go).toHaveBeenCalledWith("samvision"));
+    await waitFor(() => expect(go).toHaveBeenCalledWith("samvision", ["SV-080", "SV-081"]));   // the keys the box listed
     await waitFor(() => expect(changed).toHaveBeenCalled());
   });
 
