@@ -8,7 +8,9 @@ and the first failing check is returned as the reason:
      and no component below those roots is a symlink
   2. git lists it as a linked worktree of the ticket's repo: not the main checkout, not locked
   3. the ticket's own branch is checked out there (a Claude Code `agent-*` worktree never matches)
-  4. `git status` is empty: nothing modified, staged or untracked
+  4. `git status` is empty: nothing modified, staged or untracked; no other worktree is nested
+     inside it and no ignored folder holds a `.git` (git ignores those, and `worktree remove`
+     would delete them with their uncommitted work)
   5. no commit of the worktree is missing from every remote (ccd never fetches, so a stale
      remote ref can only make this keep more)
   6. no herdr pane and no process has its working directory inside it, and herdr answered
@@ -23,6 +25,7 @@ import subprocess
 
 WORKTREES_ROOT = "/srv/server/worktrees"
 GIT_TIMEOUT = 30
+SCAN_LIMIT = 200000  # folders visited when looking for a repository hidden in ignored files
 REMOVE_TIMEOUT = 300
 
 
@@ -68,6 +71,8 @@ def path_problem(repo, path, root=None):
         cur = os.path.join(cur, part)
         if os.path.islink(cur):
             return "its path goes through a symlink"
+    if os.path.realpath(norm) != norm:
+        return "its path goes through a symlink"
     return None
 
 
@@ -89,6 +94,33 @@ def list_worktrees(repo):
             elif line == "bare":
                 cur["bare"] = True
     return rows
+
+
+def hidden_repo(real):
+    """Why an ignored part of the worktree may hold work git cannot see, or None.
+
+    `git worktree remove` checks tracked and untracked files but deletes ignored ones unseen. An
+    ignored folder with a `.git` entry is another repo or worktree (a Claude Code subagent's, a nested
+    clone), and its uncommitted work would go too. Plain ignored files (node_modules, .venv) do not count."""
+    code, out, err = _git(real, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+    if code != 0:
+        return f"git could not list its ignored files: {err}"
+    seen = 0
+    for entry in out.split("\x00"):
+        if not entry:
+            continue
+        top = os.path.join(real, entry)
+        if os.path.basename(entry.rstrip("/")) == ".git":
+            return "an ignored folder inside it holds a git repository"
+        if not entry.endswith("/"):
+            continue
+        for here, dirs, files in os.walk(top, followlinks=False):
+            seen += 1
+            if ".git" in dirs or ".git" in files:
+                return "an ignored folder inside it holds a git repository"
+            if seen > SCAN_LIMIT:
+                return "it has too many ignored folders to check for nested repositories"
+    return None
 
 
 def processes_inside(path, proc="/proc"):
@@ -127,6 +159,8 @@ def blocker(repo, path, branch, pane_cwds, *, root=None, proc="/proc"):
         return "it is the main checkout"
     if mine["locked"]:
         return "it is locked"
+    if any(r is not mine and _inside(os.path.realpath(r["path"]), real) for r in rows):
+        return "another worktree is nested inside it"
     if mine["branch"] != f"refs/heads/{branch}":
         return f"{branch} is not the branch checked out there"
     code, out, err = _git(real, "status", "--porcelain", "--untracked-files=all")
@@ -139,6 +173,9 @@ def blocker(repo, path, branch, pane_cwds, *, root=None, proc="/proc"):
         return f"git rev-list failed: {err}"
     if out.strip():
         return "it has commits that are on no remote"
+    why = hidden_repo(real)
+    if why:
+        return why
     if pane_cwds is None:
         return "herdr is not connected, so open panes cannot be checked"
     for cwd in pane_cwds:

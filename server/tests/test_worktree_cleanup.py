@@ -103,6 +103,18 @@ class Removal(Repos):
         self.assertEqual(self.run_all(path=inside, branch=BRANCH + "-b")[0][3], "removed")
         self.assertFalse(os.path.exists(inside))
 
+    def test_ordinary_ignored_files_do_not_block_removal(self):
+        commit(self.wt, ".gitignore", "node_modules/\n.venv/\n*.log\n")
+        git(self.wt, "push", "-q")
+        for d in ("node_modules/pkg/lib", ".venv/lib/site-packages"):
+            os.makedirs(os.path.join(self.wt, d))
+            with open(os.path.join(self.wt, d, "f.js"), "w") as f:
+                f.write("1\n")
+        with open(os.path.join(self.wt, "run.log"), "w") as f:
+            f.write("1\n")
+        self.assertIsNone(self.blocker())
+        self.assertEqual(self.run_all()[0][3], "removed")
+
     def test_a_missing_path_is_silently_skipped(self):
         shutil.rmtree(self.wt)
         self.assertEqual(self.run_all(), [])
@@ -138,6 +150,36 @@ class Keeps(Repos):
         path = os.path.join(self.root, "dir", "CC-024b")
         git(self.repo, "worktree", "add", "-q", "-b", BRANCH + "-e", os.path.join(self.tmp, "real", "CC-024b"))
         self.assertIn("symlink", self.blocker(path=path, branch=BRANCH + "-e"))
+
+    def test_ignored_nested_linked_worktree_with_a_dirty_file_is_kept(self):
+        # a Claude Code subagent worktree inside the ticket worktree, ignored like GauzeMate's .git/info/exclude
+        commit(self.wt, ".gitignore", ".claude/\n")
+        git(self.wt, "push", "-q")
+        nested = os.path.join(self.wt, ".claude", "worktrees", "agent-x")
+        os.makedirs(os.path.dirname(nested))
+        git(self.repo, "worktree", "add", "-q", "-b", "worktree-agent-x", nested)
+        with open(os.path.join(nested, "work.txt"), "w") as f:
+            f.write("unsaved\n")
+        self.assertEqual(git(self.wt, "status", "--porcelain"), "")
+        self.assertKept("nested")
+        self.assertEqual(self.run_all()[0][3], "kept")
+        self.assertTrue(os.path.exists(os.path.join(nested, "work.txt")))
+
+    def test_ignored_nested_clone_with_a_git_folder_is_kept(self):
+        commit(self.wt, ".gitignore", "vendor/\n")
+        git(self.wt, "push", "-q")
+        os.makedirs(os.path.join(self.wt, "vendor"))
+        clone = os.path.join(self.wt, "vendor", "other")
+        git(self.tmp, "clone", "-q", self.remote, clone)
+        with open(os.path.join(clone, "wip.txt"), "w") as f:
+            f.write("unsaved\n")
+        self.assertEqual(git(self.wt, "status", "--porcelain"), "")
+        self.assertKept("git repository")
+        self.assertEqual(self.run_all()[0][3], "kept")
+
+    def test_realpath_must_equal_the_recorded_path(self):
+        with mock.patch("os.path.realpath", lambda p: p + "-moved" if p == self.wt else p):
+            self.assertIn("symlink", worktree_cleanup.path_problem(self.repo, self.wt, self.root))
 
     def test_not_a_registered_worktree(self):
         clone = os.path.join(self.root, "CC-024c")
