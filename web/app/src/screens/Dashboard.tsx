@@ -21,6 +21,7 @@ import { DevDot } from "../components/DevMode";
 import { EmptyState } from "../components/ui";
 import { NightShiftButton, TaskCheckButton } from "../components/TaskCheck";
 import { NightLine, useNightShift } from "../components/NightShift";
+import { MergeButton } from "../components/Merge";
 import type { NightShiftState } from "../api/types";
 
 /** Events worth a manager's eye: work moving, PRs, CI, deployments, questions. Not agent chatter. */
@@ -148,6 +149,7 @@ export function Dashboard() {
       <span className="sl-fill" />
       <DevDot />
       <NotificationBell />
+      <MergeButton className="btn is-outline" />
       <TaskCheckButton className="btn is-outline" />
       <NightShiftButton className="btn is-outline" />
       <a className="btn is-outline" href={href("workspace")}>Open Workspace →</a>

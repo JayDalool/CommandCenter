@@ -64,7 +64,12 @@
                                      Command Center then reminds an idle coordinator until its report says complete
     GET   /api/night-shift           every project's night shift: running?, coordinator, newest morning report
     POST  /api/night-shift/end       Jay AND Developer Unlock. stop reminders; tell the coordinator to stop safely
-    POST  /api/go-live               Jay AND Developer Unlock. GO LIVE: approves the project's pending live-deploy
+    GET   /api/jay/merge             per project: the Ready-to-Merge tickets Jay can merge now, in merge order, and
+                                     the ones that cannot (head changed, CI not green, …)
+    POST  /api/jay/merge             Jay AND Developer Unlock. MERGE: approves exactly those reviewed, green heads
+                                     ({project, keys?}) and asks the idle coordinator to merge them one at a time
+                                     in that order, CI on main between merges. ccd itself merges nothing.
+    POST  /api/jay/go-live           Jay AND Developer Unlock. GO LIVE: approves the project's pending live-deploy
                                      requests and asks its idle coordinator to deploy main BY THE REPO'S RUNBOOK
                                      (with its checks and rollback). ccd itself runs no deploy.
     POST  /api/tasks/{key}/answers   Jay AND Developer Unlock. answer Claude's questions; the last answer
@@ -392,6 +397,18 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     async def night_end(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
         return await daemon.act_night_end(str(body.get("project") or ""), request.state.actor, developer=dev)
+
+    async def merge_ready(request, _):
+        out = {}
+        for p in daemon.cfg["projects"]:
+            ready, skipped = daemon.merge_batch(p["key"])
+            out[p["key"]] = {"ready": ready, "skipped": skipped, "paused": registry.paused(p["key"])}
+        return {"projects": out}
+
+    async def merge(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return await daemon.act_merge(str(body.get("project") or ""), body.get("keys"), request.state.actor,
+                                      developer=dev)
 
     async def go_live(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
@@ -904,7 +921,11 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/tasks/night-shift", guarded(night_shift), methods=["POST"]),
         Route("/api/night-shift", guarded(night_state), methods=["GET"]),
         Route("/api/night-shift/end", guarded(night_end), methods=["POST"]),
-        Route("/api/go-live", guarded(go_live), methods=["POST"]),
+        # Jay's presses (/api/jay/…): Jay with Developer Unlock approves exactly what is listed and asks the
+        # project's coordinator to act by the repository's own workflow. ccd itself merges and deploys nothing.
+        Route("/api/jay/merge", guarded(merge_ready), methods=["GET"]),
+        Route("/api/jay/merge", guarded(merge), methods=["POST"]),
+        Route("/api/jay/go-live", guarded(go_live), methods=["POST"]),
         Route("/api/tasks/{key}", guarded(get_task), methods=["GET"]),
         Route("/api/tasks/{key}", guarded(patch_task), methods=["PATCH"]),
         Route("/api/tasks/{key}/context", guarded(task_context), methods=["GET"]),

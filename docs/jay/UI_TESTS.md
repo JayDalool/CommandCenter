@@ -3,6 +3,7 @@
 Screens Jay must check. Newest first. Delete a line when it's done.
 
 - [ ] NIGHT SHIFT · Dashboard → ☾ Night shift → Start; each panel shows "Night shift running"; in the morning its Report shows the release candidate · http://127.0.0.1:7777/#/dashboard
+- [ ] MERGE · Dashboard → ⇉ Merge ready: each repo's ready PRs in order → Merge all ready → Yes; each Claude merges one at a time · http://127.0.0.1:7777/#/dashboard
 - [ ] GO LIVE · Report → Go Live… → Yes: Claude deploys by the runbook, runs checks, writes ~/command-center/deploys/<project>/ · http://127.0.0.1:7777/#/dashboard
 - [ ] NIGHT SHIFT · In any repo's Claude type /night-shift (after go-live links it) · any Claude pane
 - [ ] TASK CHECK · Dashboard → Check tasks → Check all projects; each Claude answers "<project> task check: …" in its pane · http://127.0.0.1:7777/#/dashboard

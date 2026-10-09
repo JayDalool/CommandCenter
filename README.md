@@ -41,10 +41,14 @@ own; when ccd is down, it builds locally exactly as before.
 - **No dangerous endpoints.** There is no API for merge, deploy, production,
   secrets, Docker, destructive git, or config/rule changes. Merges and deploys
   are done by agents under the pipeline's gates; ccd only records them, and a
-  LIVE deploy cannot be recorded before Jay approved it. **Go Live** is that
-  approval as one press (Jay, Developer Unlock): it approves the project's
-  pending live-deploy requests and asks its coordinator to deploy main by the
-  repository's own runbook, with its checks and rollback. ccd runs no deploy. Terminals, Claude
+  LIVE deploy cannot be recorded before Jay approved it. Two **Jay presses**
+  (`/api/jay/…`, Jay with Developer Unlock, a second confirm in the UI) are the
+  only exceptions, and a test keeps it to these two: **Merge ready** approves
+  exactly the reviewed, green PR heads and asks each repo's coordinator to merge
+  them one at a time (CI on main between merges); **Go Live** approves the
+  project's pending live-deploy requests and asks its coordinator to deploy main
+  by the repository's own runbook, with its checks and rollback. ccd itself
+  merges and deploys nothing. Terminals, Claude
   input, answers and file writes need a second credential, Developer Unlock
   (once per app session, [docs/SECURITY.md](docs/SECURITY.md)). A test asserts
   the route table exactly. See [docs/API.md](docs/API.md).

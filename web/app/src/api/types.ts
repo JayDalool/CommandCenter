@@ -471,3 +471,13 @@ export interface NightProject {
 }
 export interface NightShiftState { projects: Record<string, NightProject> }
 export interface GoLiveResult { ok: boolean; project: string; coordinator: string; approved: string[] }
+
+/** Merge (ccd /api/jay/merge): per project, what Jay can merge now — reviewed head, PR open and green — in order. */
+export interface MergeItem { key: string; title: string; pr: string; head: string; gate: string | null }
+export interface MergeReady {
+  projects: Record<string, { ready: MergeItem[]; skipped: { key: string; reason: string }[]; paused: string | null }>;
+}
+export interface MergeResult {
+  ok: boolean; project: string; coordinator: string; merging: { key: string; pr: string; head: string }[];
+  skipped: { key: string; reason: string }[];
+}

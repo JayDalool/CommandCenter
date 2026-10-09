@@ -335,3 +335,11 @@
   background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin: 8px 0 0; }
 .night-confirm { display: grid; gap: 8px; margin-top: 12px; padding: 10px 12px; border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--jay) 45%, var(--line)); background: color-mix(in srgb, var(--jay) 7%, var(--surface)); }
+
+/* merge ready: per project, the PRs in merge order */
+.mg-proj { display: grid; gap: 4px; }
+.mg-list { display: grid; gap: 2px; margin: 0 0 4px 34px; padding: 0; list-style: decimal; font-size: 12px; }
+.mg-list li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mg-list li > .trunc { flex: 1; min-width: 0; }
+.mg-list li.is-skip { list-style: none; margin-left: -16px; }
+.mg-ok { font-size: 11px; color: var(--jay); border: 1px solid color-mix(in srgb, var(--jay) 45%, var(--line)); border-radius: 4px; padding: 0 4px; }

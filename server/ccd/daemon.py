@@ -99,6 +99,27 @@ GO_LIVE_TEMPLATE = (
     "Report in one line: {project} go-live: pass | rolled back | stopped — <commit> — <checks>."
 )
 
+# Merge: Jay's one press to merge a project's Ready-to-Merge PRs. ccd merges nothing itself; it approves exactly
+# the reviewed, green heads listed and the coordinator merges them one at a time in that order.
+MERGE_TEMPLATE = (
+    "Merge from Jay via command-center: merge {project}'s ready PRs now, one at a time, in this order:\n"
+    "{items}\n"
+    "Jay approved exactly these PRs at exactly these heads. For each one, in order:\n"
+    "1. Check: the PR is open, its head is still the approved head above, CI is green on that head, and GitHub "
+    "can merge it into main without a new commit on the branch. If not — the head changed, CI is not green, there "
+    "is a conflict, or GitHub wants the branch updated first — skip it and say why. Never rebase, update or push "
+    "to the branch: a new head needs a new review.\n"
+    "2. Merge it the way this repository merges (its existing convention, e.g. gh pr merge <n> --merge). Never "
+    "--admin, never force.\n"
+    "3. Wait for CI on main for that merge commit. If main goes red: stop merging this repository, say which merge "
+    "broke main, and leave the rest for Jay. Do not revert unless this repository's workflow says to.\n"
+    "After the last merge, verify main by this repository's own verification workflow and record each merged "
+    "ticket: python -m ccd.pipeline_cli verify <KEY> --role verifier --result pass|fail --evidence \"…\".\n"
+    "Authorized by this message: merging exactly the PRs and heads listed above. Not authorized: deploying or "
+    "going live, pushing to main, force-push, --admin, editing any branch, merging anything else.\n"
+    "Report in one line: {project} merge: <n> merged, <n> skipped (why), main CI <green|red>."
+)
+
 # Night shift: the same instructions as Claude's /night-shift skill (scripts/install-claude-commands.sh links
 # ~/.claude/skills/night-shift to this folder). Only the project key is filled in.
 NIGHT_SHIFT_FILE = Path(__file__).parent / "skills" / "night-shift" / "SKILL.md"
@@ -1985,6 +2006,86 @@ class Daemon:
         if self.night is not None:
             self.night.start(project)
         return {"ok": True, "project": project, "coordinator": name}
+
+    def merge_batch(self, project, keys=None):
+        """The project's Ready-to-Merge tickets Jay can merge now, in merge order, and the ones that cannot.
+
+        Mergeable: READY_TO_MERGE, an APPROVE recorded for a head, and the last GitHub poll sees exactly that
+        PR open at that head, green and not a draft. Order: a ticket another one is blocked by goes first, then
+        oldest PR first. Returns (ready [{key, title, pr, head, gate}], skipped [{key, reason}])."""
+        ts = self._need_tasks()
+        wanted = {str(k).upper() for k in keys} if keys else None
+        ready, skipped = [], []
+        for row in ts.list(project=project):
+            if row["status"] != "READY_TO_MERGE" or (wanted is not None and row["key"] not in wanted):
+                continue
+            t = ts.get(row["key"])
+            w = self.pipeline.work(t["key"])
+            rv = w["review"]
+            prs = {p["ref"]: p for p in self._open_prs(t)}
+            ref = rv.get("pr") or (next(iter(prs)) if len(prs) == 1 else None)
+            pr = prs.get(ref) if ref else None
+            reason = ("no approved review" if rv["verdict"] != "APPROVE" or not rv["head"]
+                      else "its PR is not open (or several are linked)" if not pr
+                      else "the PR head changed since the review" if pr["head"] != rv["head"]
+                      else "CI is not green" if not pr["ciGreen"]
+                      else "the PR is a draft" if pr["draft"] else None)
+            if reason:
+                skipped.append({"key": t["key"], "reason": reason})
+                continue
+            title = CONTROL_RE.sub(" ", str(t["title"])).strip()[:90]
+            ready.append({"key": t["key"], "title": title, "pr": ref, "head": rv["head"], "gate": w["gate"],
+                          "blockedBy": t.get("blockedBy") or []})
+        if wanted:
+            found = {r["key"] for r in ready} | {s_["key"] for s_ in skipped}
+            skipped += [{"key": k, "reason": "not Ready to Merge"} for k in sorted(wanted - found)]
+
+        def pr_no(r):
+            try:
+                return int(str(r["pr"]).rsplit("#", 1)[1])
+            except (IndexError, ValueError):
+                return 10 ** 9
+        ready.sort(key=pr_no)
+        ordered, placed = [], set()
+        keys_ready = {r["key"] for r in ready}
+
+        def place(r, seen=()):
+            if r["key"] in placed or r["key"] in seen:
+                return
+            for b in r["blockedBy"]:
+                if b in keys_ready:
+                    place(next(x for x in ready if x["key"] == b), seen + (r["key"],))
+            placed.add(r["key"])
+            ordered.append(r)
+        for r in ready:
+            place(r)
+        return [{k: v for k, v in r.items() if k != "blockedBy"} for r in ordered], skipped
+
+    async def act_merge(self, project, keys=None, actor="jay", developer=False):
+        """Merge: Jay approves exactly the project's mergeable Ready-to-Merge heads (merge_batch) and asks its idle
+        coordinator to merge them one at a time in that order (MERGE_TEMPLATE). ccd merges nothing itself."""
+        if actor != "jay" or not developer:
+            raise ActionError(403, "Developer Unlock required: Merge approves and merges pull requests")
+        self._need_tasks()
+        if not any(p["key"] == project for p in self.cfg["projects"]):
+            raise ActionError(404, "unknown project")
+        self._not_paused(project, "merge")
+        if keys is not None and (not isinstance(keys, list) or len(keys) > 50
+                                 or not all(isinstance(k, str) and TICKET_KEY_RE.match(k.upper()) for k in keys)):
+            raise ActionError(400, "keys must be a list of ticket keys")
+        ready, skipped = self.merge_batch(project, keys)
+        if not ready:
+            why = "; ".join(f"{x['key']}: {x['reason']}" for x in skipped)[:300]
+            raise ActionError(409, f"{project} has nothing ready to merge" + (f" ({why})" if why else ""))
+        items = "\n".join(f"{i}. {r['key']} — {r['pr']} — head {r['head'][:12]} — {r['title']}"
+                          for i, r in enumerate(ready, 1))
+        text = MERGE_TEMPLATE.format(project=project, items=items)
+        name = await self._to_coordinator(project, "merge", text, {"keys": [r["key"] for r in ready]})
+        for r in ready:
+            if r["gate"] == "merge":     # Jay's authorisation, recorded for this exact head (merge:<sha>)
+                self._pipeline_result(*self._wrap(self.pipeline.confirm, r["key"], "merge", actor))
+        return {"ok": True, "project": project, "coordinator": name,
+                "merging": [{k: r[k] for k in ("key", "pr", "head")} for r in ready], "skipped": skipped}
 
     async def act_go_live(self, project, actor="jay", developer=False):
         """Go Live: Jay approves every pending live deploy in the project and asks its idle coordinator to deploy

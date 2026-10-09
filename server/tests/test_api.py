@@ -33,7 +33,8 @@ ALLOWED = {
     ("GET", "/api/development"),
     ("GET", "/api/tasks"), ("POST", "/api/tasks"), ("GET", "/api/tasks/import-preview"),
     ("POST", "/api/tasks/check"), ("POST", "/api/tasks/night-shift"),
-    ("GET", "/api/night-shift"), ("POST", "/api/night-shift/end"), ("POST", "/api/go-live"),
+    ("GET", "/api/night-shift"), ("POST", "/api/night-shift/end"),
+    ("GET", "/api/jay/merge"), ("POST", "/api/jay/merge"), ("POST", "/api/jay/go-live"),
     ("GET", "/api/tasks/{key}"), ("PATCH", "/api/tasks/{key}"), ("GET", "/api/tasks/{key}/context"),
     ("POST", "/api/tasks/{key}/comments"), ("POST", "/api/tasks/{key}/relations"),
     ("POST", "/api/tasks/{key}/links"),
@@ -60,6 +61,7 @@ ALLOWED = {
     ("POST", "/api/developer/handoff"), ("POST", "/api/developer/redeem"),
     ("GET", "/api/pty"), ("POST", "/api/pty/close"), ("WS", "/api/pty/{name}"),
 }
+JAY_PRESSES = {"/api/jay/merge", "/api/jay/go-live"}
 FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec", "push",
                    "reset", "force", "sudo",
                    "shell", "run", "kill", "restart", "delete", "worktree", "settings")
@@ -122,8 +124,17 @@ class Surface(ApiBase):
 
     def test_no_route_names_a_forbidden_capability(self):
         for _, path in ALLOWED:
+            if path in JAY_PRESSES:
+                continue
             for word in FORBIDDEN_WORDS:
                 self.assertNotIn(word, path.lower(), f"{path} mentions {word}")
+
+    def test_only_the_approved_jay_presses_live_under_api_jay(self):
+        # Merge and Go Live (2026-10-09, Jay): Jay + Developer Unlock approve exactly what is listed and ask the
+        # coordinator to act by the repo's workflow; ccd merges and deploys nothing. Nothing else may join them.
+        self.assertEqual({p for _, p in ALLOWED if p.startswith("/api/jay/")}, JAY_PRESSES)
+        for path in ("/api/jay/merge", "/api/jay/go-live"):
+            self.assertEqual(self.post(path, {"project": "samvision"}).status_code, 403, path)
 
     def test_unknown_paths_404_and_wrong_methods_405(self):
         self.assertEqual(self.get("/api/merge").status_code, 404)

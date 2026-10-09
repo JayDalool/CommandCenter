@@ -1525,3 +1525,7 @@ Asked by Jay after two hours of use; additions, not changes to the frozen spec.
 - **Paused and careful projects** (2026-10-09, Jay): GauzeMate is paused (registry `paused`) — no agent works on
   it through Command Center until Jay removes the line. SamVision runs the night shift in careful mode
   (`careful.md`): research first, LOW-risk implementation only, one at a time, Jay merges, never deploys.
+- **Merge ready** (2026-10-09, Jay): Dashboard → `⇉ Merge ready` lists, per project, the Ready-to-Merge PRs whose
+  review covers the current head with green CI, in merge order; one press (and a second Yes) approves exactly those
+  heads and each repository's coordinator merges them one at a time, waiting for CI on main and stopping if main
+  goes red. Merge and Go Live live under `/api/jay/` — the only routes allowed to name merge/deploy work.
