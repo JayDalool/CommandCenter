@@ -52,6 +52,9 @@ DEFAULTS = {
     "task_projects": [{"key": "commandcenter"}],
     # Workspace uploads and attachments, per file.
     "upload_max_mb": 50,
+    # Remove a DONE ticket's clean, fully pushed worktree after ccd's git poll (ccd/worktree_cleanup.py).
+    # false = never remove anything.
+    "worktree_cleanup": True,
 }
 
 # The only project fields that may leave the server.

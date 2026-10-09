@@ -231,6 +231,23 @@ link already exists is reported as `existing`, so a second `--apply` creates
 nothing; a source added later gets the next free number. A MY_ACTIONS line with no ticket ID is identified by a hash of its text, so editing such a line and re-running the import creates a second ticket. Kept IDs (SV-056,
 GM-014) never touch the counter's own numbers: it only moves past them.
 
+*Worktree cleanup (CC-024).* The pipeline never deletes a worktree inside a step
+(`release` only frees the writer). Instead the end of ccd's git poll
+(`Daemon.poll_git_once` → `clean_worktrees`) asks `Pipeline.done_worktrees()` for DONE tickets
+with a recorded worktree and hands them, with herdr's pane directories, to
+`ccd/worktree_cleanup.py`, in a thread:
+
+```
+git poll ─▶ DONE tickets with a worktree ─▶ checks (path root, linked worktree + ticket branch,
+            clean status, no commit missing from remotes, no herdr pane, no process in it)
+         ─▶ all pass: git -C <repo> worktree remove <path>   (no --force, branch kept)
+         ─▶ event task.pipeline  data.kind = pipeline.worktree_removed | pipeline.worktree_kept
+```
+
+A kept worktree is recorded once per reason (`git:wt_kept` in ccd.db's kv table, so a
+restart does not repeat it). Config `worktree_cleanup` (default true) turns it off;
+tests and `scripts/dev-ccd.py` set it false. No schema change, no API route.
+
 ## P4B revision: information architecture
 
 Ten sections, in Jay's order. Pull requests live inside **Development** and the

@@ -2,6 +2,7 @@
 
 Screens Jay must check. Newest first. Delete a line when it's done.
 
+- [ ] CC-024 · Server → Worktrees panel says finished tickets' clean worktrees are removed · http://127.0.0.1:7777/#/server
 - [ ] NIGHT SHIFT · Dashboard → ☾ Night shift → Start in all projects; in the morning read ~/command-center/night-shift/ and the Dashboard · http://127.0.0.1:7777/#/dashboard
 - [ ] NIGHT SHIFT · In any repo's Claude type /night-shift (after go-live links it) · any Claude pane
 - [ ] TASK CHECK · Dashboard → Check tasks → Check all projects; each Claude answers "<project> task check: …" in its pane · http://127.0.0.1:7777/#/dashboard

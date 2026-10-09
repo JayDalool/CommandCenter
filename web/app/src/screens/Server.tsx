@@ -81,7 +81,7 @@ export function Server() {
             <td className="mono-xs faint">{p.pid}</td><td className="is-num mono-xs">{p.rssMB} MB</td></tr>)}
             {!h.procs && <tr><td className="muted">Arrives with the next host poll.</td></tr>}</tbody></table>
         </Panel>
-        <Panel title="Worktrees" meta="lane worktrees per project · never deleted automatically">
+        <Panel title="Worktrees" meta="lane worktrees per project · a finished ticket's clean, pushed worktree is removed automatically">
           <table className="tbl"><tbody>{wt.map((w) => <tr key={w.k} className={w.n > 6 ? "is-attn" : ""}><td>{w.k}</td>
             <td className={`is-num mono ${w.n > 6 ? "warn-t" : ""}`}>{w.n}</td><td className="muted">{w.n > 6 ? "over the limit of 6 — cleanup is Jay's call" : ""}</td></tr>)}</tbody></table>
         </Panel>

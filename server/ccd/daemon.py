@@ -28,6 +28,7 @@ from . import herdr as herdr_mod
 from . import importer
 from . import records as records_mod
 from . import tasks as tasks_mod
+from . import worktree_cleanup
 from .config import STATE_DIR, public_project
 
 log = logging.getLogger("ccd")
@@ -486,6 +487,53 @@ class Daemon:
             # remembered agent set from the last run must survive until it is compared.
             self.panes = self._attribute(self.panes)
             self._prev_agents = self._agent_digest(self.panes)
+        self._dirty.set()
+        try:
+            await self.clean_worktrees()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — cleanup is optional; the poll above already succeeded
+            log.warning(json.dumps({"msg": "worktree cleanup crashed", "error": repr(e)[:200]}))
+
+    async def clean_worktrees(self):
+        """After the git poll: remove each DONE ticket's worktree that is clean and fully pushed.
+        All checks and the one `git worktree remove` live in worktree_cleanup.py; this only feeds it
+        the ticket rows and herdr's pane directories (None while herdr is down) and records the outcome.
+        A kept worktree is recorded once per reason, not every poll."""
+        if self.pipeline is None or not self.cfg.get("worktree_cleanup", True):
+            return
+        items = []
+        for key, project, branch, path in self.pipeline.done_worktrees():
+            items.append((key, project, registry.root_of(project), branch, path))
+        if not items:
+            return
+        ready = self.herdr_state["connected"] and self.herdr_state["lastSnapshotAt"] is not None
+        cwds = [p.get("cwd") or "" for p in self.panes] if ready else None
+        results = await asyncio.to_thread(worktree_cleanup.run, items, cwds)
+        kept, _ = self.store.get("git:wt_kept", {})
+        kept = dict(kept or {})
+        seen = {key for key, *_ in items}
+        changed = False
+        for key, project, path, outcome, reason in results:
+            if outcome == "removed":
+                kept.pop(key, None)
+                changed = True
+                gone = os.path.normpath(path)
+                for k, paths in list(self.git["worktrees"].items()):
+                    self.git["worktrees"][k] = [x for x in paths or [] if os.path.normpath(x) != gone]
+                self.store.put("git:worktrees", self.git["worktrees"])
+                self._event("tasks", "task.pipeline", f"{key} worktree removed: {path}", project=project, ref=key,
+                            data={"kind": "pipeline.worktree_removed"})
+            elif kept.get(key) != reason:
+                kept[key] = reason
+                changed = True
+                self._event("tasks", "task.pipeline", f"{key} worktree kept: {reason}", project=project, ref=key,
+                            data={"kind": "pipeline.worktree_kept", "reason": reason})
+        for key in [k for k in kept if k not in seen]:
+            del kept[key]
+            changed = True
+        if changed:
+            self.store.put("git:wt_kept", kept)
         self._dirty.set()
 
     async def git_loop(self):

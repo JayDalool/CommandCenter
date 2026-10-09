@@ -42,7 +42,11 @@ Kinds: `agent.started|exited|state_changed|blocked`, `pr.opened|closed|ci_change
 `alert.raised|cleared`, `host.container_down|oom_kill`,
 `daemon.started|stopped|herdr_connected|herdr_lost|github_failed|github_recovered`,
 `action.answer|focus|ack|dispatch|failed`,
-`task.created|updated|commented` (ref = ticket key; data.kind = field).
+`task.created|updated|commented` (ref = ticket key; data.kind = field),
+`task.pipeline` (ref = ticket key; data.kind = the pipeline step, e.g. `pipeline.started`,
+`pipeline.worktree_removed` — the DONE ticket's worktree was removed after ccd's git poll found it
+clean and fully pushed; `pipeline.worktree_kept` — it was kept, data.reason says why, recorded once
+per reason, not every poll).
 
 Client recipe: `GET /api/state` → keep `{state, seq}` → `WS ?since=seq` →
 apply events; on `events_lost` or disconnect, repeat.
@@ -62,8 +66,10 @@ host/origin, `404` unknown target, `409` wrong state, `415` not JSON, `429`
 too fast, `502` herdr refused, `503` herdr unreachable.
 
 **Not in the API, by design:** merge, deploy, production commands, `--apply`,
-secrets, Docker, destructive git, worktree removal, config or rule changes,
-issue creation, starting or stopping agents.
+secrets, Docker, destructive git, worktree removal by request, config or rule changes,
+issue creation, starting or stopping agents. (ccd itself removes a DONE ticket's clean,
+fully pushed worktree after its git poll; there is no route for it. See the `pipeline.worktree_*`
+events below.)
 
 
 ## Tickets (P4B)

@@ -181,6 +181,23 @@ Developer Unlock, its task terminals close and its task session is asked to
 running and reported). A close by a plain edit with the ccd token alone stops
 nothing: it records that the sessions were left running.
 
+**Worktree removal (CC-024).** ccd deletes a directory on its own in exactly one
+case: a DONE ticket's recorded worktree, at the end of ccd's git poll, and only when
+every check holds (`ccd/worktree_cleanup.py`): the path is strictly inside
+`/srv/server/worktrees/` or `<project root>/.claude/worktrees/` with no symlink
+below those folders; git lists it as a linked worktree of the ticket's repo
+(not the main checkout, not locked) with the ticket's own branch checked out (so
+Claude Code's `agent-*` worktrees never match); `git status` is empty; no commit is
+missing from the remotes ccd last saw (it never fetches, so a stale ref only keeps
+more); herdr is connected and no pane and no process has its working directory
+inside it. The only command is `git -C <repo> worktree remove <path>`: no
+`--force`, no `rm`, the branch is never deleted. Ignored files (node_modules, .venv,
+local copies of secrets) go with the directory; the branch and its pushed commits
+stay, so `git worktree add <path> <branch>` brings the work back. Any failed check
+keeps the worktree and records `pipeline.worktree_kept` once per reason. No route,
+no browser input and no agent can start it or name a path; the path is the one a
+pipeline `start` recorded. Kill switch: `"worktree_cleanup": false` in config.json.
+
 **Roots.** The explorer, editor and uploads reach only a registered project's
 `root` in `ccd/registry.py`. The browser sends a project key and a relative
 path, never a root. Every path is refused if it holds NUL, control characters,

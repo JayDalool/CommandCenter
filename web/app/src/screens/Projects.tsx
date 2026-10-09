@@ -149,7 +149,7 @@ function Cockpit({ p }: { p: ProjectView }) {
           <div className="panel-body is-pad" style={{ display: "grid", gap: 4 }}>
             <dl><DetailRow label="checkout"><span className="mono-xs">{p.path}</span></DetailRow></dl>
             {wts.map((w) => <div key={w} className="mono-xs text2 trunc" title={w}>{w}</div>)}
-            {wts.length > 6 && <div className="warn-t">{wts.length} worktrees — over the limit. Cleanup is Jay's call; nothing is deleted automatically.</div>}
+            {wts.length > 6 && <div className="warn-t">{wts.length} worktrees — over the limit. A finished ticket's worktree is removed automatically only when it is clean and pushed; any other cleanup is Jay's call.</div>}
             {stale.map((s) => <div key={s.text} className="warn-t mono-xs">{s.text}</div>)}
             {!wts.length && !stale.length && <span className="muted">No lane worktrees.</span>}
           </div>

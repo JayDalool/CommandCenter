@@ -249,7 +249,7 @@ async def main(reseed):
     cfg["projects"] = copy.deepcopy(PROJECTS)
     for p in cfg["projects"]:
         p.update(session=p["key"], ui_tests="docs/jay/UI_TESTS.md", actions="docs/jay/MY_ACTIONS.md", links=[], commands=[])
-    cfg.update(github_seconds=60, host_seconds=30, git_seconds=600)
+    cfg.update(github_seconds=60, host_seconds=30, git_seconds=600, worktree_cleanup=False)  # the dev ccd never removes directories
     store = Store(config.STATE_DIR / "ccd.db")
     tasks = TaskStore(config.DATA_DIR / "tasks.db", config.task_projects(cfg))
     seed(tasks)
