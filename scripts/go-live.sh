@@ -12,7 +12,7 @@
 #
 # Run it on jay-server from the live checkout (/srv/server/repos/CommandCenter). It:
 #   1. refuses if tracked files have uncommitted changes (untracked files such as .claude/ are left alone)
-#   2. fetches, prints the target sha and the new commits, and refuses if the local branch has diverged
+#   2. fetches, prints the target sha, the new commits and the commits leaving live, and refuses if the local branch has diverged
 #      (--dry-run stops here and writes nothing)
 #   3. backs up tasks.db with SQLite's backup API (~/command-center/backups/tasks.db.pre-<branch>-<stamp>)
 #   4. frees the branch if another worktree (e.g. ~/cc-preview) has it checked out (that worktree is
@@ -45,6 +45,10 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+# BRANCH must be a plain branch name: never a refspec (main:refs/heads/x, feature:refs/remotes/origin/main, main:).
+case "$BRANCH" in *:*|*@\{*) usage ;; esac
+git check-ref-format --branch "$BRANCH" >/dev/null 2>&1 || usage
+git check-ref-format "refs/heads/$BRANCH" >/dev/null 2>&1 || usage
 if [ "$BRANCH" != main ] && [ "$I_KNOW" != 1 ]; then
   echo "go-live: $BRANCH is not main; deploy only reviewed main, or add --i-know" >&2
   exit 2
@@ -80,7 +84,7 @@ EOF
 }
 
 echo "== fetch $BRANCH"
-git fetch -q origin "$BRANCH"
+git fetch -q origin "refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
 TARGET="$(git rev-parse "origin/$BRANCH")"
 echo "== deploying $BRANCH @ $TARGET"
 if [ "$BRANCH" != main ]; then
@@ -88,6 +92,9 @@ if [ "$BRANCH" != main ]; then
 fi
 log="$(git log --oneline "HEAD..origin/$BRANCH")"
 echo "${log:-(already at target)}"
+leaving="$(git log --oneline "origin/$BRANCH..HEAD")"
+echo "leaving live:"
+echo "${leaving:-(none)}"
 
 # A local branch that is not behind origin (diverged or ahead) cannot be fast-forwarded: stop before any change.
 if git show-ref -q --verify "refs/heads/$BRANCH" && ! git merge-base --is-ancestor "$BRANCH" "origin/$BRANCH"; then

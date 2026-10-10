@@ -182,6 +182,65 @@ class GoLiveTest(unittest.TestCase):
         self.assertIn("uncommitted changes", r.stderr)
         self.assert_untouched(before)
 
+    def refs(self):
+        return git(self.repo, "for-each-ref"), git(self.origin, "for-each-ref")
+
+    def test_h_refspec_branch_values_are_refused_and_change_no_refs(self):
+        self.push_feature("feature work")
+        before = self.head()
+        refs = self.refs()
+        for value in ("main:refs/heads/x", "feature:refs/remotes/origin/main", "main:"):
+            for extra in ((), ("--dry-run",)):
+                with self.subTest(value=value, extra=extra):
+                    r = self.run_script("--branch", value, "--i-know", *extra)
+                    self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                    self.assertIn("usage:", r.stderr)
+                    self.assertNotIn("== fetch", r.stdout)
+                    self.assertEqual(self.refs(), refs)
+                    self.assert_untouched(before)
+
+    def test_i_other_invalid_branch_names_are_refused(self):
+        before = self.head()
+        refs = self.refs()
+        for value in ("a..b", "a b", "x.lock", "a~1", "@{-1}", "feature/"):
+            with self.subTest(value=value):
+                r = self.run_script("--branch", value, "--i-know", "--dry-run")
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertEqual(self.refs()[0], refs[0])
+                self.assert_untouched(before)
+
+    def test_j_dry_run_lists_commits_leaving_live(self):
+        git(self.repo, "switch", "-q", "-c", "work")
+        git(self.repo, "commit", "-q", "--allow-empty", "-m", "only on the live checkout")
+        before = self.head()
+        new = self.push_main("arriving from main")
+        r = self.run_script("--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"== deploying main @ {new}", r.stdout)
+        arriving, leaving = r.stdout.split("leaving live:")
+        self.assertIn("arriving from main", arriving)
+        self.assertNotIn("only on the live checkout", arriving)
+        self.assertIn("only on the live checkout", leaving.split("Rollback would be:")[0])
+        self.assertNotIn("arriving from main", leaving)
+        self.assert_untouched(before)
+
+    def test_k_nothing_leaving_live_prints_none(self):
+        before = self.head()
+        r = self.run_script("--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("leaving live:\n(none)\n", r.stdout)
+        self.assert_untouched(before)
+
+    def test_l_feature_branch_fetch_updates_only_its_tracking_ref(self):
+        feat = self.push_feature("risky change")
+        before = self.head()
+        main_ref = git(self.repo, "rev-parse", "refs/remotes/origin/main")
+        r = self.run_script("--branch", "feature", "--i-know", "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(git(self.repo, "rev-parse", "refs/remotes/origin/feature"), feat)
+        self.assertEqual(git(self.repo, "rev-parse", "refs/remotes/origin/main"), main_ref)
+        self.assert_untouched(before)
+
 
 if __name__ == "__main__":
     unittest.main()
