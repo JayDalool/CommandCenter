@@ -77,6 +77,19 @@ audited before it runs. herdr methods outside an explicit allowlist
 (`herdr.ALLOWED_METHODS`) are refused before they reach the socket — ccd cannot
 close, split, start or move anything even by mistake.
 
+**One GitHub write, off by default (CC-025, ADR 0007).** ccd can run `gh pr merge` for a reviewed, low-risk
+Command Center PR. It needs all of: `auto_merge: true` in `config.json` (default `false`), registry merge policy
+`low-risk` (only `commandcenter`), and no file `~/command-center/state/auto-merge.stop` (the kill switch, checked
+immediately before every merge; `touch` it to stop at once, delete it to resume). `ccd/merge_policy.py` decides:
+only added or modified files under `server/tests/**`, `web/app/tests/**`, `docs/**/*.md` and `README.md`, at most
+10 files and 300 lines, never `server/ccd/**`, `scripts/**`, `launcher/**`, `.github/**`, `web/app/src/**`,
+lockfiles, manifests, `AGENTS.md`, `CLAUDE.md`, `.claude/**`, `plans/**`, `docs/SECURITY.md` or `docs/adr/**`.
+The command is `gh pr merge N --repo <registry repo> --merge --match-head-commit <reviewed head>`: never `--admin`,
+`--auto`, `--squash` or `--delete-branch`, and GitHub refuses it if the head changed. ccd uses the `gh` login of the
+user it runs as; no token is read, stored or logged by ccd. Everything else (and any failure) opens a merge gate for
+Jay. Audit: security events `merge.policy` (state at startup) and `merge.auto` (each merge, hold or failure), ticket
+events `pipeline.auto_merged / auto_merge_held / auto_merge_failed` (actor `system:auto-merge`). Agents never merge.
+
 
 ## P4B additions
 

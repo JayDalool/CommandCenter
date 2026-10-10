@@ -2,6 +2,7 @@
 
 Steps only Jay can do. Newest first. Delete a line when it's done.
 
+- [ ] CC-025 · Auto-merge: set auto_merge true, watch one docs PR · docs/jay/MY_ACTIONS.md
 - [ ] CC-023 · Install launcher 0.5.0; new gate shows a tray notice · http://127.0.0.1:7777/#/settings?tab=desktop
 - [ ] SV-064 · Review and merge SamVision PR #114 (approved, CI green) · https://github.com/JayDalool/SamVisionAI/pull/114
 - [ ] CC-008 · Give the 2 unclassified GYST tickets a status · docs/jay/MORNING.md
