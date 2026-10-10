@@ -24,7 +24,7 @@ review) and everything else to keep waiting for him.
    most 10 files and 300 lines, and none of the denylist (`server/ccd/**`, `scripts/**`, `launcher/**`,
    `.github/**`, `web/app/src/**`, lockfiles and manifests, `plans/**`, `docs/SECURITY.md`, `docs/adr/**`; any
    dot-folder or dot-file at any depth such as `.claude/`, `.mcp.json` and `.codex/`; any `__pycache__`; and
-   `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `SKILL.md` anywhere). The denylist always wins. A project with no allowlist never qualifies. A PR that changes this policy can therefore never
+   `AGENTS.md`, `AGENTS.override.md`, `AGENT.md`, `CLAUDE.md`, `CLAUDE.local.md`, `GEMINI.md`, `SKILL.md` anywhere). The denylist always wins. A project with no allowlist never qualifies. A PR that changes this policy can therefore never
    auto-merge. The ticket must carry no needs:jay, needs:legal, UI or deploy flag, no SECURITY / LEGAL / DESIGN
    type, no plan-gate label and no `owner:accept`.
 4. **The review must still hold at merge time**: verdict APPROVE, `review_head` equal to the PR's head in a fresh

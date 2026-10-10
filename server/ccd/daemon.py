@@ -226,7 +226,10 @@ class Daemon:
         self.auto_merge_stop = AUTO_MERGE_STOP
         self._am_busy = False
         self._am_next = {}    # ticket key → time.monotonic() before which it is not looked at again
-        self._am_waiting = {}  # ticket key → (reviewed head, time.monotonic() when it first had to wait)
+        # ticket key → (review stamp, time.monotonic() when it first had to wait): the 30-minute pending clock.
+        # Memory only, on purpose: a restart merely delays the gate by up to 30 minutes, it never merges earlier.
+        # An entry is dropped when its ticket leaves the candidates (e.g. back to review) or its stamp changes.
+        self._am_waiting = {}
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
@@ -1767,8 +1770,12 @@ class Daemon:
             return
         self._am_busy = True
         try:
-            for project in self._auto_merge_projects():
-                for key in self.pipeline.merge_candidates(project):
+            todo = [(p, self.pipeline.merge_candidates(p)) for p in self._auto_merge_projects()]
+            live = {k for _, keys in todo for k in keys}
+            for key in [k for k in self._am_waiting if k not in live]:
+                del self._am_waiting[key]    # left READY_TO_MERGE (or was decided): a return starts a new clock
+            for project, keys in todo:
+                for key in keys:
                     if self._auto_merge_stopped() or self._stopping:
                         return
                     try:
@@ -1809,9 +1816,10 @@ class Daemon:
             return
         d = merge_policy.classify(project, t, w, pr, pr_ref, open_prs, pipeline_mod.policy(t, project)["merge"])
         if d.wait:
-            since = self._am_waiting.setdefault(key, (head, time.monotonic()))
-            if since[0] != head:
-                since = self._am_waiting[key] = (head, time.monotonic())
+            stamp = self._review_stamp(w)
+            since = self._am_waiting.setdefault(key, (stamp, time.monotonic()))
+            if since[0] != stamp:
+                since = self._am_waiting[key] = (stamp, time.monotonic())
             if time.monotonic() - since[1] > self.AUTO_MERGE_WAIT_LIMIT:
                 self._am_waiting.pop(key, None)
                 self._auto_merge_hold(t, head, f"{'; '.join(d.reasons[:2])} for over "
@@ -1823,10 +1831,16 @@ class Daemon:
         if not d.ok:
             self._auto_merge_hold(t, head, "; ".join(d.reasons[:3]))
             return
-        # Everything above awaited: re-read the ticket, then check the kill switch, then merge, with no await between.
+        # Everything above awaited: re-read the ticket, re-check it, then the kill switch, then merge, with no await
+        # between. A label or flag added while `gh pr view` ran (a `ui` label, needs:jay) holds the merge here.
+        t2 = self.tasks.get(key)
         w2 = self.pipeline.work(key)
-        if self.tasks.get(key)["status"] != "READY_TO_MERGE" or w2["gate"] or w2["review"]["head"] != head \
+        if t2["status"] != "READY_TO_MERGE" or w2["gate"] or w2["review"]["head"] != head \
                 or w2["review"]["verdict"] != "APPROVE":
+            return
+        late = merge_policy.ticket_reasons(t2, w2)
+        if late:
+            self._auto_merge_hold(t2, head, "; ".join(late[:3]))
             return
         if self._auto_merge_stopped():
             return
@@ -1839,6 +1853,13 @@ class Daemon:
         self._event("security", "merge.auto", f"ccd merged {pr_ref} for {key} at {head[:7]} ({'no CI checks' if d.ci == 'none' else 'CI green'})",
                     project=project, ref=key, data={"number": int(number), "ci": d.ci})
         self._pipeline_result(*self.pipeline.auto_merged(key, head, pr_ref, d.ci))
+
+    @staticmethod
+    def _review_stamp(w):
+        """What the pending clock is for: the reviewed head, its PR and when the reviewer was recorded. A new
+        review (even at the same head) or a new head starts a new clock."""
+        rv = w["review"]
+        return (rv.get("head"), rv.get("pr"), ((w.get("roles") or {}).get("reviewer") or {}).get("at"))
 
     def _auto_merge_hold(self, ticket, head, reason, failed=False):
         """Open the merge gate with the reason (once per head) and tell the owner queue."""
