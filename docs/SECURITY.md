@@ -158,7 +158,7 @@ Command Center's own other windows — pop-out terminals and rooms, a second
 Workspace window — over a same-origin `BroadcastChannel`; never localStorage, a
 URL or the page. Sessions end on LOCK (in any window: every window locks), when
 the browser session ends, 2 h idle, 8 h total, or a ccd restart. Five wrong
-tokens in five minutes lock unlocking for five minutes. Write routes answer 403
+developer tokens at unlock and handoff in five minutes lock both for five minutes; both need the ccd token. Write routes answer 403
 to the ccd token alone. The ccd token reaches a pop-out window the same way when
 the browser does not copy `sessionStorage` into it.
 
@@ -169,8 +169,8 @@ proof and CommandCenter.exe already makes one for its tunnel. Over it the launch
 working day (12 h, no shorter idle limit) and a **one-time code, valid 120 s**. The launcher opens
 `#/?signin=<code>` (a URL fragment: never sent to any server); the page strips it at once and trades it at
 `POST /api/developer/redeem` — the one `/api` route that takes no ccd token, still behind the Host and
-Origin checks, JSON-only — for the ccd token and the session. Wrong or reused codes count toward the same
-five-in-five-minutes lockout as wrong developer tokens; ccd logs that a code was issued, never the code.
+Origin checks, JSON-only — for the ccd token and the session. Wrong or reused codes are refused and not counted: a code is 256 random
+bits, good once for 120 s, and counting tokenless guesses would let any local user lock Jay out. ccd logs that a code was issued, never the code.
 A page cannot mint a code: minting needs both tokens, which only a process running as jay can read.
 `commandcenter://unlock` (any web page can open it) can only make the launcher open Command Center's own
 address with a fresh code, which only Command Center's own origin can read.
