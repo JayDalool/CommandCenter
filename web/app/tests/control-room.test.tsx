@@ -9,6 +9,7 @@ import { stageOf, jayHref, taskHref } from "../src/lib/control";
 import { TaskCheckDialog } from "../src/components/TaskCheck";
 import { NightLine } from "../src/components/NightShift";
 import { MergeDialog } from "../src/components/Merge";
+import { UiTestsDialog } from "../src/components/UiTests";
 import type { NightProject } from "../src/api/types";
 import { jayQueue } from "../src/tickets/model";
 import { Dashboard, newsText, projectPanels } from "../src/screens/Dashboard";
@@ -468,5 +469,35 @@ describe("merge ready", () => {
     await waitFor(() => expect(merge).toHaveBeenCalledWith("samvision"));
     expect(merge).toHaveBeenCalledTimes(1);                                     // the paused project is never sent
     expect(await screen.findByText(/samvision is merging SV-079 → SV-081/)).toBeInTheDocument();
+  });
+});
+
+describe("UI tests", () => {
+  const run = { run: "2026-10-10-0930", status: "complete" as const, report: "Status: complete", summary: { features: 3, passed: 9, failed: 2 },
+    findings: [
+      { id: "F1", severity: "major" as const, title: "Merge list keeps merged PRs", feature: "CC-033", steps: ["Open", "Merge"],
+        expected: "They leave", actual: "They stay", evidence: "tests/e2e/merge.spec.ts", decision: null },
+      { id: "F2", severity: "minor" as const, title: "Night line cut at 375 px", feature: "", steps: [], expected: "", actual: "", evidence: "",
+        decision: null }] };
+
+  it("runs on request, and nothing is fixed until Jay presses Fix it", async () => {
+    act(() => developer.set({ active: true, expiresAt: null, error: null }));
+    vi.spyOn(app.api, "uiTests").mockResolvedValue({ projects: {
+      commandcenter: { paused: null, fixMode: "ask", runs: [run.run], latest: run },
+      gauzemate: { paused: "Jay paused GauzeMate until he adds designs and files", fixMode: "ask", runs: [], latest: null } } });
+    const start = vi.spyOn(app.api, "uiTest").mockResolvedValue({ ok: true, project: "commandcenter", coordinator: "commandcenter" });
+    const decide = vi.spyOn(app.api, "uiDecide").mockResolvedValue({ ok: true, finding: "F1", decision: "fix", ticket: "CC-040" });
+    render(<UiTestsDialog onClose={() => {}} />);
+    expect(await screen.findByText(/3 features · 9 passed · 2 failed · 2 findings \(2 to decide\)/)).toBeInTheDocument();
+    const runs = screen.getAllByRole("button", { name: "Run UI tests" });
+    expect(runs.filter((b) => (b as HTMLButtonElement).disabled)).toHaveLength(1);        // GauzeMate is paused
+    fireEvent.click(runs.find((b) => !(b as HTMLButtonElement).disabled)!);
+    await waitFor(() => expect(start).toHaveBeenCalledWith("commandcenter"));
+    fireEvent.click(screen.getByRole("button", { name: "Report" }));
+    expect(screen.getByText("Merge list keeps merged PRs")).toBeInTheDocument();
+    expect(decide).not.toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole("button", { name: "Fix it" })[0]);
+    await waitFor(() => expect(decide).toHaveBeenCalledWith("commandcenter", "2026-10-10-0930", "F1", "fix"));
+    expect(await screen.findByText("CC-040")).toBeInTheDocument();
   });
 });

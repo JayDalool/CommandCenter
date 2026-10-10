@@ -27,8 +27,10 @@ from . import pipeline as pipeline_mod
 from . import herdr as herdr_mod
 from . import importer
 from . import nightshift as nightshift_mod
+from . import uitests as uitests_mod
 from . import records as records_mod
 from . import tasks as tasks_mod
+from . import config as config_mod
 from .config import STATE_DIR, public_project
 
 log = logging.getLogger("ccd")
@@ -142,6 +144,18 @@ def night_shift_text(project):
     return text.replace("<project>", project)
 
 
+UI_TEST_FILE = NIGHT_SHIFT_FILE.parent.parent / "ui-test" / "SKILL.md"
+
+
+def ui_test_text(project):
+    """The /ui-test text for one project, with its fix mode (registry ui_fix: ask | auto)."""
+    raw = UI_TEST_FILE.read_text(encoding="utf-8")
+    if raw.startswith("---"):
+        raw = raw.split("---", 2)[2]
+    lines = [ln for ln in raw.strip().splitlines() if not ln.startswith("Project key:")]
+    return "\n".join(lines).replace("<project>", project).replace("<fix_mode>", registry.ui_fix(project))
+
+
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 TASK_CHECK_LIST_MAX = 5000   # characters of the ticket list in the message; the rest: `pipeline_cli tasks`
 # Agent fields that may leave ccd. Terminal titles are deliberately absent:
@@ -253,6 +267,7 @@ class Daemon:
         self.ptys = None          # pty.PtyManager, set by __main__
         self.records_dir = None   # where task records are written; None = off (tests, previews)
         self.night = None         # nightshift.NightShift (reports + supervisor state); set by __main__
+        self.uitests = None       # uitests.UiTests (UI test runs and Jay's decisions); set by __main__
         self._activity = {}       # project → when one of its tickets last changed (night-shift progress)
         self._record_timers = {}
         self._closing = set()
@@ -838,7 +853,7 @@ class Daemon:
         """Remind each idle night-shift coordinator to continue, or end its shift (nightshift.NightShift.decide)."""
         if self.night is None or not self.herdr_state["ok"]:
             return
-        for proj in self.cfg["projects"]:
+        for proj in self._projects():
             key = proj["key"]
             if not self.night.active(key):
                 continue
@@ -865,7 +880,7 @@ class Daemon:
     def night_state(self):
         """Every project's night shift: state, coordinator, the newest morning report."""
         out = {}
-        for proj in self.cfg["projects"]:
+        for proj in self._projects():
             key = proj["key"]
             r = coordinators.resolution(proj, self.panes) if self.herdr_state["ok"] else {"state": "none"}
             st = self.night.get(key) if self.night else {}
@@ -881,7 +896,7 @@ class Daemon:
         """Jay ends a project's night shift: no more reminders, and the coordinator is told to stop safely."""
         if actor != "jay" or not developer:
             raise ActionError(403, "Developer Unlock required: ending the night shift sends a message to Claude")
-        proj = next((p for p in self.cfg["projects"] if p["key"] == project), None)
+        proj = self._project(project)
         if proj is None:
             raise ActionError(404, "unknown project")
         if self.night is None or not self.night.end(project, "ended by Jay"):
@@ -992,7 +1007,7 @@ class Daemon:
         ts = self._need_tasks()
         return {"tickets": self._with_work(ts.list(project=project, include_archived=include_archived)),
                 "projects": ts.projects(), "meta": dict(ts.meta(), visibleStages=list(pipeline_mod.VISIBLE_STAGES)),
-                "paused": {p["key"]: registry.paused(p["key"]) for p in self.cfg["projects"] if registry.paused(p["key"])},
+                "paused": {p["key"]: registry.paused(p["key"]) for p in self._projects() if registry.paused(p["key"])},
                 "seq": self.seq}
 
     def task_get(self, key):
@@ -1802,7 +1817,7 @@ class Daemon:
         """Bind an EXISTING Claude at the project root as its coordinator (Workspace → Adopt).
 
         Nothing is started, resumed, renamed or typed into; only the binding file changes."""
-        proj = next((p for p in self.cfg["projects"] if p["key"] == project), None)
+        proj = self._project(project)
         if not proj:
             raise ActionError(404, "unknown project")
         if not self.herdr_state["ok"]:
@@ -1956,6 +1971,13 @@ class Daemon:
             used += len(line) + 1
         return TASK_CHECK_TEMPLATE.format(project=project, n=len(open_), tasks="\n".join(lines) or "- (none)"), len(open_)
 
+    def _projects(self):
+        """Every project Jay works in: the polled ones plus ticket-only ones (config task_projects, e.g. commandcenter)."""
+        return config_mod.task_projects(self.cfg)
+
+    def _project(self, key):
+        return next((p for p in self._projects() if p["key"] == key), None)
+
     @staticmethod
     def _not_paused(project, what="work"):
         why = registry.paused(project)
@@ -1964,7 +1986,7 @@ class Daemon:
 
     async def _to_coordinator(self, project, what, text, data):
         """One fixed message from Jay to the project's idle coordinator Claude (task check, night shift)."""
-        proj = next((p for p in self.cfg["projects"] if p["key"] == project), None)
+        proj = self._project(project)
         if proj is None:
             raise ActionError(404, "unknown project")
         self._throttle(f"{what}:{project}", 5.0)
@@ -1996,7 +2018,7 @@ class Daemon:
         if actor != "jay" or not developer:
             raise ActionError(403, "Developer Unlock required: the night shift sends a message to Claude")
         self._need_tasks()
-        if not any(p["key"] == project for p in self.cfg["projects"]):
+        if not self._project(project) is not None:
             raise ActionError(404, "unknown project")
         self._not_paused(project, "night shift")
         text = night_shift_text(project)
@@ -2006,6 +2028,72 @@ class Daemon:
         if self.night is not None:
             self.night.start(project)
         return {"ok": True, "project": project, "coordinator": name}
+
+    async def act_ui_test(self, project, actor="jay", developer=False, copy=False):
+        """A UI test run, when Jay asks: the project's idle coordinator tests the UI features merged since its last
+        run with Playwright, keeps the tests, and reports findings for Jay to decide (skills/ui-test/SKILL.md)."""
+        if actor != "jay" or not developer:
+            raise ActionError(403, "Developer Unlock required: a UI test run sends a message to Claude")
+        self._need_tasks()
+        if not self._project(project) is not None:
+            raise ActionError(404, "unknown project")
+        self._not_paused(project, "UI test run")
+        text = ui_test_text(project)
+        if copy:
+            return {"ok": True, "project": project, "coordinator": None, "text": text}
+        name = await self._to_coordinator(project, "ui-test", text, {})
+        return {"ok": True, "project": project, "coordinator": name}
+
+    def ui_tests_state(self):
+        """Every project's latest UI test run (report, findings with Jay's decisions), its fix mode, recent runs."""
+        out = {}
+        for p in self._projects():
+            key = p["key"]
+            out[key] = {"paused": registry.paused(key), "fixMode": registry.ui_fix(key),
+                        "runs": self.uitests.runs(key)[:10] if self.uitests else [],
+                        "latest": self.uitests.latest(key) if self.uitests else None}
+        return {"projects": out}
+
+    UI_PRIORITY = {"showstopper": "URGENT", "major": "HIGH", "minor": "LOW"}
+
+    def act_ui_decide(self, project, run, finding, decision, actor="jay", developer=False):
+        """Jay's decision on one UI test finding. fix: a BUG ticket labelled ui-finding enters the pipeline (the night
+        shift or the coordinator plans and fixes it, under the repo's merge rules); skip: recorded."""
+        if actor != "jay" or not developer:
+            raise ActionError(403, "Developer Unlock required: deciding a UI finding")
+        if self.uitests is None:
+            raise ActionError(503, "UI test runs are not configured")
+        if not self._project(project) is not None:
+            raise ActionError(404, "unknown project")
+        if decision not in uitests_mod.DECISIONS:
+            raise ActionError(400, "decision must be fix or skip")
+        r = self.uitests.run(project, str(run or ""))
+        f = next((x for x in (r or {}).get("findings") or [] if x["id"] == finding), None)
+        if f is None:
+            raise ActionError(404, f"no finding {finding} in {project}'s run {run}")
+        if f["decision"]:
+            raise ActionError(409, f"{finding} is already decided: {f['decision']['decision']}")
+        ticket = None
+        if decision == "fix":
+            if registry.paused(project):
+                raise ActionError(409, f"{project} is paused; resume it before fixing")
+            lines = [f"From the UI test run {run} ({f['id']}, {f['severity']}).", ""]
+            if f["feature"]:
+                lines.append(f"Feature: {f['feature']}")
+            if f["steps"]:
+                lines += ["", "Steps:"] + [f"{i}. {x}" for i, x in enumerate(f["steps"], 1)]
+            lines += ["", f"Expected: {f['expected'] or '—'}", f"Actual: {f['actual'] or '—'}"]
+            if f["evidence"]:
+                lines.append(f"Evidence: {f['evidence']}")
+            lines += ["", "Jay chose: fix it. When fixed, the test marked expected-to-fail for this finding must pass."]
+            t = self.task_create({"project": project, "title": f"UI: {f['title']}"[:200], "description": "\n".join(lines),
+                                  "type": "BUG", "priority": self.UI_PRIORITY[f["severity"]], "labels": ["ui-finding"]},
+                                 actor)
+            ticket = t["key"]
+        d = self.uitests.decide(project, run, finding, decision, ticket)
+        self._event("tasks", "task.ui_finding", f"{project} {finding}: {decision}" + (f" → {ticket}" if ticket else ""),
+                    project=project, ref=ticket, data={"kind": "ui_finding", "run": run, "decision": decision})
+        return {"ok": True, "finding": finding, **d}
 
     def merge_batch(self, project, keys=None):
         """The project's Ready-to-Merge tickets Jay can merge now, in merge order, and the ones that cannot.
@@ -2067,7 +2155,7 @@ class Daemon:
         if actor != "jay" or not developer:
             raise ActionError(403, "Developer Unlock required: Merge approves and merges pull requests")
         self._need_tasks()
-        if not any(p["key"] == project for p in self.cfg["projects"]):
+        if not self._project(project) is not None:
             raise ActionError(404, "unknown project")
         self._not_paused(project, "merge")
         if keys is not None and (not isinstance(keys, list) or len(keys) > 50
@@ -2093,7 +2181,7 @@ class Daemon:
         if actor != "jay" or not developer:
             raise ActionError(403, "Developer Unlock required: Go Live deploys to production")
         ts = self._need_tasks()
-        if not any(p["key"] == project for p in self.cfg["projects"]):
+        if not self._project(project) is not None:
             raise ActionError(404, "unknown project")
         self._not_paused(project, "deploy")
         pending = [t["key"] for t in ts.list(project=project) if t["status"] not in tasks_mod.CLOSED
@@ -2114,7 +2202,7 @@ class Daemon:
         if actor != "jay" or not developer:
             raise ActionError(403, "Developer Unlock required: the task check sends a message to Claude")
         self._need_tasks()
-        proj = next((p for p in self.cfg["projects"] if p["key"] == project), None)
+        proj = self._project(project)
         if proj is None:
             raise ActionError(404, "unknown project")
         self._not_paused(project, "task check")
@@ -2133,7 +2221,7 @@ class Daemon:
         skill's non-authorisation preamble word for word.
         """
         allowed = set(self.cfg.get("dispatch_projects") or ("samvision", "gauzemate"))
-        proj = next((p for p in self.cfg["projects"] if p["key"] == project), None)
+        proj = self._project(project)
         if proj is None:
             raise ActionError(404, "unknown project")
         if project not in allowed:

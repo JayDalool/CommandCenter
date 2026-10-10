@@ -1521,7 +1521,6 @@ Asked by Jay after two hours of use; additions, not changes to the frozen spec.
 - **Dashboard:** a night-shift line per project (running · Claude's state · reminders, or last night's result),
   the report, **End night shift**, and **Go Live…** (a second confirm): approves the project's pending live
   deploys and asks the coordinator to deploy main by the repository's runbook with its checks and rollback.
-- Later (Jay, not now): a weekly UI-test run of new features (Cypress/Playwright) with a findings report.
 - **Paused and careful projects** (2026-10-09, Jay): GauzeMate is paused (registry `paused`) — no agent works on
   it through Command Center until Jay removes the line. SamVision runs the night shift in careful mode
   (`careful.md`): research first, LOW-risk implementation only, one at a time, Jay merges, never deploys.
@@ -1529,3 +1528,8 @@ Asked by Jay after two hours of use; additions, not changes to the frozen spec.
   review covers the current head with green CI, in merge order; one press (and a second Yes) approves exactly those
   heads and each repository's coordinator merges them one at a time, waiting for CI on main and stopping if main
   goes red. Merge and Go Live live under `/api/jay/` — the only routes allowed to name merge/deploy work.
+- **UI test runs** (2026-10-10, Jay): on request only (Dashboard → UI tests, or `/ui-test`). The coordinator tests the
+  user-visible features merged since the project's last run with Playwright against a local/preview app, keeps the
+  tests (one PR under the repo's merge rules), and reports findings (showstopper / major / minor, with steps).
+  Fix mode `ask` for the first weeks (registry `ui_fix`): Jay presses Fix it (a `ui-finding` BUG task enters the
+  pipeline) or Skip on each finding; `auto` later lets Claude open and fix showstopper/major findings itself.

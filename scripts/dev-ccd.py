@@ -160,6 +160,25 @@ def seed(ts):
     seed_control_room(ts)
 
 
+def seed_ui_tests(root):
+    """One finished UI test run for the preview (CommandCenter), so the report and Fix it / Skip can be tried."""
+    import json as _json
+    d = root / "commandcenter" / "2026-10-10-0930"
+    if d.exists():
+        return
+    d.mkdir(parents=True)
+    (d / "report.md").write_text("Status: complete\n\nFeatures tested: 3 (CC-031 dashboard, CC-033 merge ready, "
+                                 "CC-034 night line)\nTest PR: #44 (ui-tests-2026-10-10)\n\n2 findings, see below.\n")
+    (d / "findings.json").write_text(_json.dumps({"summary": {"features": 3, "passed": 9, "failed": 2}, "findings": [
+        {"id": "F1", "severity": "major", "title": "Merge ready dialog keeps the old list after a merge",
+         "feature": "CC-033 Merge ready", "steps": ["Open Merge ready", "Merge one project", "Look at the list"],
+         "expected": "The merged PRs leave the list", "actual": "They stay until the dialog is reopened",
+         "evidence": "tests/e2e/merge.spec.ts: 'list refreshes after merge'"},
+        {"id": "F2", "severity": "minor", "title": "Night line text is cut at 375 px",
+         "feature": "CC-034 Night line", "steps": ["Open the Dashboard at 375 px"], "expected": "Readable",
+         "actual": "Ellipsis after 'Night shift run…'", "evidence": "tests/e2e/night.spec.ts"}]}))
+
+
 def seed_control_room(ts):
     """The control room's own shapes: questions waiting, a blocker explained, a live deploy waiting, review rounds."""
     from ccd import registry
@@ -288,8 +307,10 @@ async def main(reseed):
                                  own_scope=not os.environ.get("CCD_DEV_NO_SCOPE"),
                                  task=lambda key: (sandbox[tasks.get(key)["project"]], None))
     daemon.records_dir = DEV / "task-records"
-    from ccd import nightshift
+    from ccd import nightshift, uitests
     daemon.night = nightshift.NightShift(DEV / "night-shift")
+    daemon.uitests = uitests.UiTests(DEV / "ui-tests")
+    seed_ui_tests(DEV / "ui-tests")
 
     @contextlib.asynccontextmanager
     async def lifespan(app):

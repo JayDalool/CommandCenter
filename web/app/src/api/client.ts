@@ -1,6 +1,6 @@
 import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
-import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, TaskCheckResult, TaskRecord, TicketWork,
+import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
   Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent,
 } from "./types";
@@ -96,6 +96,19 @@ export class Api {
   /** End a night shift (Developer Unlock): no more reminders; the coordinator is told to stop safely. */
   nightShiftEnd(project: string) {
     return this.req<{ ok: boolean; told: boolean }>("POST", "/api/night-shift/end", { project });
+  }
+  /** A UI test run, when Jay asks (Developer Unlock): the coordinator tests the UI merged since its last run. */
+  uiTest(project: string, copy = false) {
+    return this.req<TaskCheckResult>("POST", "/api/tasks/ui-test", copy ? { project, copy: true } : { project });
+  }
+  /** Every project's latest UI test run and Jay's decisions. */
+  uiTests() {
+    return this.req<UiTestsState>("GET", "/api/ui-tests");
+  }
+  /** Jay decides one finding: fix (a ui-finding task enters the pipeline) or skip. */
+  uiDecide(project: string, run: string, finding: string, decision: "fix" | "skip") {
+    return this.req<{ ok: boolean; finding: string; decision: string; ticket: string | null }>("POST", "/api/ui-tests/decide",
+      { project, run, finding, decision });
   }
   /** What each project can merge now (reviewed head, PR open and green), in merge order. */
   mergeReady() {

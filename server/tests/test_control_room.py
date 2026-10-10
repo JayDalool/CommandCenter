@@ -815,6 +815,64 @@ class ControlRoomApi(PipelineApi):
         self.assertEqual(r.status_code, 409)
         self.assertIn("paused", r.json()["error"])
 
+    def test_a_ui_test_run_is_sent_on_request_and_jay_decides_each_finding(self):
+        from ccd import uitests
+        root = tempfile.mkdtemp(prefix="ui-")
+        self.daemon.uitests = uitests.UiTests(root)
+        dev = dict(JSON, **self.dev())
+        body = json.dumps({"project": "samvision"})
+        self.assertEqual(self.client.post("/api/tasks/ui-test", content=body, headers=JSON).status_code, 403)
+        r = self.client.post("/api/tasks/ui-test", content=body, headers=dev)
+        self.assertEqual(r.status_code, 200, r.text)
+        text = [p for m, p in self.fake.calls if m == "agent.prompt"][-1]["text"]
+        self.assertTrue(text.startswith("UI test run from Jay via command-center for samvision."))
+        self.assertIn("Fix mode: ask", text)
+        self.assertIn("text snapshots only", text)
+        self.assertNotIn("<project>", text)
+        self.assertEqual(self.client.post("/api/tasks/ui-test", content=json.dumps({"project": "gauzemate"}),
+                                          headers=dev).status_code, 409)        # paused
+        # The coordinator wrote its run; Jay decides.
+        d = os.path.join(root, "samvision", "2026-10-10-0930")
+        os.makedirs(d)
+        with open(os.path.join(d, "report.md"), "w") as f:
+            f.write("Status: complete\n")
+        with open(os.path.join(d, "findings.json"), "w") as f:
+            json.dump({"summary": {"features": 2, "passed": 5, "failed": 2}, "findings": [
+                {"id": "F1", "severity": "major", "title": "Quick CMA tab forgets the property", "feature": "SV-073",
+                 "steps": ["Open a property", "Reload"], "expected": "Same property", "actual": "Empty tab",
+                 "evidence": "tests/e2e/quick-cma.spec.ts"},
+                {"id": "F2", "severity": "minor", "title": "Label wraps at 375 px"}]}, f)
+        st = self.get("/api/ui-tests").json()["projects"]["samvision"]
+        self.assertEqual((st["fixMode"], st["latest"]["run"], len(st["latest"]["findings"])), ("ask", "2026-10-10-0930", 2))
+        dec = lambda f, d_, h=dev: self.client.post("/api/ui-tests/decide", headers=h, content=json.dumps(  # noqa: E731
+            {"project": "samvision", "run": "2026-10-10-0930", "finding": f, "decision": d_}))
+        self.assertEqual(dec("F1", "fix", JSON).status_code, 403)
+        r = dec("F1", "fix")
+        self.assertEqual(r.status_code, 200, r.text)
+        key = r.json()["ticket"]
+        t = self.get(f"/api/tasks/{key}").json()
+        self.assertEqual((t["type"], t["priority"], t["labels"], t["status"]), ("BUG", "HIGH", ["ui-finding"], "INBOX"))
+        self.assertTrue(t["title"].startswith("UI: Quick CMA tab"))
+        self.assertIn("Expected: Same property", t["description"])
+        self.assertEqual(dec("F1", "skip").status_code, 409)                       # decided once
+        self.assertEqual(dec("F2", "skip").json()["decision"], "skip")
+        self.assertEqual(dec("F9", "fix").status_code, 404)
+        self.assertEqual(dec("F2", "merge").status_code, 400)
+        found = {f["id"]: f["decision"] for f in self.get("/api/ui-tests").json()["projects"]["samvision"]["latest"]["findings"]}
+        self.assertEqual((found["F1"]["ticket"], found["F2"]["decision"]), (key, "skip"))
+
+    def test_ticket_only_projects_get_the_same_presses(self):
+        # commandcenter holds tickets but has no repo ccd polls (config task_projects): it is still a project for
+        # the night shift, task check, UI tests and the merge list.
+        self.assertNotIn("commandcenter", [p["key"] for p in self.daemon.cfg["projects"]])
+        self.assertIn("commandcenter", self.get("/api/night-shift").json()["projects"])
+        self.assertIn("commandcenter", self.get("/api/ui-tests").json()["projects"])
+        self.assertIn("commandcenter", self.get("/api/jay/merge").json()["projects"])
+        r = self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "commandcenter", "copy": True}),
+                             headers=dict(JSON, **self.dev()))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIn("pipeline_cli tasks commandcenter", r.json()["text"])
+
     def test_task_terminal_cwd_uses_only_a_known_worktree(self):
         self.ticket("INBOX")
         self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")

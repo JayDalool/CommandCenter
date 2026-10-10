@@ -28,7 +28,9 @@ own; when ccd is down, it builds locally exactly as before.
   tasks — only Jay's "Cancel it" cancels one; **Night shift** sends each idle
   coordinator the `/night-shift` skill (`server/ccd/skills/night-shift/SKILL.md`):
   work every task that does not wait for Jay end to end, merge only where no gate
-  is open (SamVision and GauzeMate: Jay merges), never deploy. ccd then reminds an
+  is open (SamVision and GauzeMate: Jay merges), never deploy; **UI tests** (on
+  request) sends the `/ui-test` skill: Playwright tests of the UI merged since the
+  last run, kept in the repo, findings for Jay to Fix it / Skip. ccd then reminds an
   idle night-shift coordinator to continue until its morning report says
   `Status: complete` (or nothing moves after 3 reminders). A coordinator is never a task session.
 - **Waiting for Jay is per task.** A task does not start while it, or a task it
