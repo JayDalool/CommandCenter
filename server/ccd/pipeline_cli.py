@@ -101,7 +101,7 @@ def build(argv):
     for f in ("why", "action", "impact", "technical"):
         p.add_argument(f"--{f}")
     p.add_argument("--title")
-    p.add_argument("--label", choices=("task-check", "night-finding"), default="task-check")
+    p.add_argument("--label", choices=("task-check", "night-finding", "ui-finding"), default="task-check")
     p.add_argument("--scope", choices=("in", "out"), default="in")
     p.add_argument("--source", choices=("review", "owner", "verifier"), default="review")
     a = p.parse_args(argv)
@@ -137,7 +137,7 @@ def build(argv):
     if a.op == "add":
         if not a.title:
             p.error("--title is required")
-        by = "the night shift" if a.label == "night-finding" else "the task check"
+        by = {"night-finding": "the night shift", "ui-finding": "a UI test run"}.get(a.label, "the task check")
         desc = f"Added by {by}. Evidence / source: {a.note}" if a.note else f"Added by {by}."
         return "POST", "/api/tasks", {"project": a.key, "title": a.title, "description": desc,
                                       "labels": [a.label]}, f"agent:{a.role}"

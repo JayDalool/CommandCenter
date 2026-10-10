@@ -485,3 +485,17 @@ export interface MergeResult {
   ok: boolean; project: string; coordinator: string; merging: { key: string; pr: string; head: string }[];
   skipped: { key: string; reason: string }[];
 }
+
+/** UI test runs (ccd uitests.py): the latest run per project and Jay's decision on each finding. */
+export interface UiFinding {
+  id: string; severity: "showstopper" | "major" | "minor"; title: string; feature: string; steps: string[];
+  expected: string; actual: string; evidence: string;
+  decision: { decision: "fix" | "skip"; ticket: string | null; at: number } | null;
+}
+export interface UiRun {
+  run: string; status: "working" | "complete" | null; report: string;
+  summary: { features?: number; passed?: number; failed?: number }; findings: UiFinding[];
+}
+export interface UiTestsState {
+  projects: Record<string, { paused: string | null; fixMode: "ask" | "auto"; runs: string[]; latest: UiRun | null }>;
+}

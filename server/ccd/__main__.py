@@ -15,7 +15,7 @@ import sys
 
 import uvicorn
 
-from . import __version__, attachments, config, files, gitops, nightshift, pty, records, search, security
+from . import __version__, attachments, config, files, gitops, nightshift, pty, records, search, security, uitests
 from .api import create_app
 from .daemon import Daemon
 from .herdr import Herdr
@@ -99,6 +99,7 @@ def build(cfg=None):
                                  own_scope=True, task=daemon.task_cwd)
     daemon.records_dir = records.RECORDS_DIR
     daemon.night = nightshift.NightShift(nightshift.NIGHT_DIR)
+    daemon.uitests = uitests.UiTests(uitests.UI_TEST_DIR)
 
     @contextlib.asynccontextmanager
     async def lifespan(app):

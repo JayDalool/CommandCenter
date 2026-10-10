@@ -62,6 +62,12 @@
                                      Claude's /night-shift) to the project's idle coordinator; it works the open
                                      tasks under the pipeline and never deploys ({copy: true} as above);
                                      Command Center then reminds an idle coordinator until its report says complete
+    POST  /api/tasks/ui-test         Jay AND Developer Unlock. a UI test run, when Jay asks: skills/ui-test/SKILL.md to
+                                     the project's idle coordinator (Playwright tests of the UI merged since the
+                                     last run, kept as a suite; findings reported) ({copy: true} as above)
+    GET   /api/ui-tests              per project: latest run (report, findings with Jay's decisions), fix mode
+    POST  /api/ui-tests/decide       Jay AND Developer Unlock. {project, run, finding, decision: fix|skip}: fix makes
+                                     a BUG ticket labelled ui-finding (it enters the pipeline); skip is recorded
     GET   /api/night-shift           every project's night shift: running?, coordinator, newest morning report
                                      (agent-written text, at most 64 KB), cutoff time, and `goLive`: the tickets a
                                      Go Live would approve and merged tickets that are unverified or wait on a UI review
@@ -397,6 +403,19 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         return await daemon.act_night_shift(str(body.get("project") or ""), request.state.actor, developer=dev,
                                             copy=bool(body.get("copy")))
 
+    async def ui_test(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return await daemon.act_ui_test(str(body.get("project") or ""), request.state.actor, developer=dev,
+                                        copy=bool(body.get("copy")))
+
+    async def ui_tests_state(request, _):
+        return daemon.ui_tests_state()
+
+    async def ui_decide(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.act_ui_decide(str(body.get("project") or ""), body.get("run"), str(body.get("finding") or ""),
+                                    str(body.get("decision") or ""), request.state.actor, developer=dev)
+
     async def night_state(request, _):
         return daemon.night_state()
 
@@ -406,7 +425,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
 
     async def merge_ready(request, _):
         out = {}
-        for p in daemon.cfg["projects"]:
+        for p in daemon._projects():
             ready, skipped = daemon.merge_batch(p["key"])
             out[p["key"]] = {"ready": ready, "skipped": skipped, "paused": registry.paused(p["key"])}
         return {"projects": out}
@@ -935,6 +954,9 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/tasks/check", guarded(task_check), methods=["POST"]),
         Route("/api/tasks/night-shift", guarded(night_shift), methods=["POST"]),
         Route("/api/night-shift", guarded(night_state), methods=["GET"]),
+        Route("/api/tasks/ui-test", guarded(ui_test), methods=["POST"]),
+        Route("/api/ui-tests", guarded(ui_tests_state), methods=["GET"]),
+        Route("/api/ui-tests/decide", guarded(ui_decide), methods=["POST"]),
         Route("/api/night-shift/end", guarded(night_end), methods=["POST"]),
         # Jay's presses (/api/jay/…): Jay with Developer Unlock approves exactly what is listed and asks the
         # project's coordinator to act by the repository's own workflow. ccd itself merges and deploys nothing.

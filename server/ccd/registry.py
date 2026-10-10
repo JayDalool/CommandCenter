@@ -88,6 +88,15 @@ def night_mode(key):
     return (PROJECTS.get(key) or {}).get("night") or "normal"
 
 
+def ui_fix(key):
+    """What a UI test run does with its findings: "ask" — Jay decides each one in Command Center (the first weeks,
+    Jay 2026-10-10) — or "auto" — Claude makes a task per showstopper/major finding and fixes it."""
+    return (PROJECTS.get(key) or {}).get("ui_fix") or UI_FIX_DEFAULT
+
+
+UI_FIX_DEFAULT = "ask"
+
+
 def pipeline_of(key):
     return dict(PIPELINE_DEFAULTS, **((PROJECTS.get(key) or {}).get("pipeline") or {}))
 

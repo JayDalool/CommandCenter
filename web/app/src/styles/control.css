@@ -345,3 +345,14 @@
 .mg-list li > .trunc { flex: 1; min-width: 0; }
 .mg-list li.is-skip { list-style: none; margin-left: -16px; }
 .mg-ok { font-size: 11px; color: var(--jay); border: 1px solid color-mix(in srgb, var(--jay) 45%, var(--line)); border-radius: 4px; padding: 0 4px; }
+
+/* UI tests: findings with Fix it / Skip */
+.ui-findings { display: grid; gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; max-height: 52vh; overflow: auto; }
+.ui-f { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.ui-f.is-showstopper { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); }
+.ui-f.is-major { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+.ui-sev { font: 600 10px/1 var(--font-mono); text-transform: uppercase; padding: 3px 5px; border-radius: 3px; color: var(--muted); border: 1px solid var(--line); }
+.ui-sev.is-showstopper { color: var(--bad); border-color: currentColor; }
+.ui-sev.is-major { color: var(--warn); border-color: currentColor; }
+.ui-steps { margin: 0 0 0 18px; padding: 0; font-size: 12px; color: var(--text-2); }
+.ui-report { margin-top: 10px; }
