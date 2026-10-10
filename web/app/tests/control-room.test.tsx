@@ -249,15 +249,24 @@ it("the scope tick never carries over to another ticket", () => {
 describe("gates in manager words (spec §11, §22)", () => {
   beforeEach(() => developer.set({ active: true, expiresAt: null, error: null }));
 
-  it("a live deployment waits for Jay: Deploy Live closes the deploy gate", async () => {
+  it("a live deployment waits for Jay: Approve live deploy closes the deploy gate", async () => {
     const op = vi.spyOn(app.api, "workOp").mockResolvedValue(work({ deploy: { approvedAt: 2 } as never }));
     render(<GateCard ticketKey="CC-031" work={work({ status: "VERIFYING", gate: "deploy", deploy: { env: "live", what: "The new Dashboard",
       verification: "UI tests 14/14", requestedAt: 1, requestedBy: "agent:coordinator", approvedAt: null, result: null } })} onDone={() => {}} />);
     const card = screen.getByRole("region", { name: "Ready for live deployment" });
     expect(within(card).getByText("The new Dashboard")).toBeInTheDocument();
     expect(within(card).getByText("UI tests 14/14")).toBeInTheDocument();
-    fireEvent.click(within(card).getByRole("button", { name: "Deploy Live" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Approve live deploy" }));
     await waitFor(() => expect(op).toHaveBeenCalledWith("CC-031", "confirm", { gate: "deploy" }));
+  });
+
+  it("once approved, the Deploying card says Claude prepares and Jay confirms in its pane", () => {
+    render(<GateCard ticketKey="CC-031" work={work({ status: "VERIFYING", deploy: { env: "live", what: "x", verification: "y", requestedAt: 1,
+      requestedBy: "agent:coordinator", approvedAt: 2, result: null } as never })} onDone={() => {}} />);
+    const card = screen.getByRole("region", { name: "Deploying" });
+    expect(within(card).getByText("Approved — confirm the deploy in Claude's pane")).toBeInTheDocument();
+    expect(card.textContent).toMatch(/Claude prepares the deploy \(steps, checks, rollback\) and waits for you there/);
+    expect(card.textContent).not.toMatch(/Claude deploys/);
   });
 
   it("a blocker explains first, offers Fix and continue / Re-plan, and keeps technical details folded", async () => {

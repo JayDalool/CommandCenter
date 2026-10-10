@@ -47,7 +47,10 @@ own; when ccd is down, it builds locally exactly as before.
   prepare the deploy (runbook steps, checks, rollback plan) and wait. Jay confirms
   the deploy himself in the coordinator's pane. The message orders no deploy, but
   the approval it records is a full live-deploy approval, so that wait rests on
-  the message text, not on ccd (ADR 0006). ccd runs no deploy. Terminals, Claude
+  the message text, not on ccd (ADR 0006). The per-ticket **Approve live deploy**
+  button works the same way: a real live-deploy approval, marked `jay:gate`, and
+  a message that asks Claude to prepare and wait for Jay in the pane (the wait
+  rests on the message text only). ccd runs no deploy. Terminals, Claude
   input, answers and file writes need a second credential, Developer Unlock
   (once per app session, [docs/SECURITY.md](docs/SECURITY.md)). A test asserts
   the route table exactly. See [docs/API.md](docs/API.md).

@@ -5,7 +5,7 @@
 //   plan      the plan needs approval              [Approve plan] [Re-plan]
 //   merge     reviewed and green, needs acceptance [Accept — allow merge] [Request changes]
 //   ui        UI review ready                      [UI accepted] [Needs fixes]
-//   deploy    Ready for live deployment — what will go live · verification completed  [Deploy Live]
+//   deploy    Ready for live deployment — what will go live · verification completed  [Approve live deploy]
 //
 // Every button is an existing pipeline step recorded as Jay; the ones that close a gate need
 // Developer Unlock (ccd checks it too). The task's Claude session is told what Jay decided.
@@ -65,8 +65,8 @@ export function GateCard({ ticketKey, work, onDone }: { ticketKey: string; work:
   }
   if (deploying) {
     return <section className="gate is-deploy" aria-label="Deploying" id="gate">
-      <h3>Deploying live</h3>
-      <p className="muted">You approved it <Ago at={work.deploy!.approvedAt} />. Claude deploys, verifies live and records the result; then the task closes.</p>
+      <h3>Approved — confirm the deploy in Claude's pane</h3>
+      <p className="muted">You approved it <Ago at={work.deploy!.approvedAt} />. Claude prepares the deploy (steps, checks, rollback) and waits for you there; then it deploys, verifies and records it.</p>
     </section>;
   }
   if (gate === "deploy") {
@@ -78,7 +78,7 @@ export function GateCard({ ticketKey, work, onDone }: { ticketKey: string; work:
         <dt>Verification completed</dt><dd>{d?.verification || work.verification?.evidence || "—"}</dd>
       </dl>
       <div className="gate-actions">
-        <button type="button" className="btn is-primary" disabled={busy} onClick={() => confirm("deploy", "Live deployment approved")}>Deploy Live</button>
+        <button type="button" className="btn is-primary" disabled={busy} onClick={() => confirm("deploy", "Live deploy approved — Claude prepares; confirm in its pane")}>Approve live deploy</button>
         <button type="button" className="btn" disabled={busy} onClick={() => rework("not ready to go live: ")}>Not yet — fix first</button>
       </div>
     </section>;
