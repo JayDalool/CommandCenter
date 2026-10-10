@@ -361,6 +361,25 @@ Only facts decide a tick: report status, the coordinator's herdr status, ticket 
 (Jay-first rule) follows direct `blocks` relations only.
 
 scripts/go-live.sh deploys origin/main only (CC-030); another branch needs `--branch <name> --i-know`, and `--dry-run` prints the target without changing anything.
+### Auto-merge of reviewed low-risk PRs (CC-025, ADR 0007)
+
+```text
+Daemon.rederive ─▶ _ticket_automation (GitHub poll → ticket status, as before)
+                └▶ await _auto_merge()      only if config auto_merge is true and no ~/command-center/state/auto-merge.stop
+      for each registry project with merge "low-risk" and an allowlist (commandcenter):
+        Pipeline.merge_candidates: READY_TO_MERGE, no gate, APPROVE recorded, nothing recorded for that head yet
+          ─▶ gh pr view N --repo R --json …            (worker thread: the event loop never waits on gh)
+          ─▶ merge_policy.classify(...)                (pure: paths, size, flags, review head, PR state, CI)
+                ok   ─▶ stop file checked again ─▶ gh pr merge N --repo R --merge --match-head-commit <head>
+                          ─▶ pipeline.auto_merged ─▶ GitHub poll sees the merge ─▶ pipeline.merged ─▶ VERIFYING
+                no / gh failed ─▶ Pipeline.hold_merge: merge gate in Needs Jay with the reason (never retried)
+                wait (CI running, mergeability unknown) / head moved ─▶ look again later, no gate
+```
+
+Pieces: `ccd/merge_policy.py` (allowlist, denylist, `classify`), `Pipeline.merge_candidates / hold_merge /
+auto_merged`, `Daemon._auto_merge` and `gh_cli` (the injectable `gh` runner), registry `merge` values `owner` |
+`low-risk`, `config.AUTO_MERGE_STOP`. While `auto_merge` is off a low-risk project behaves like `owner`
+(`Pipeline.auto_merge`): the ready PR opens a merge gate. ccd never deploys; verify and deploy are unchanged.
 
 ### Desktop notice for new Needs Jay gates (CC-023)
 

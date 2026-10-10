@@ -844,6 +844,9 @@ Required if:
 When gates pass:
 - Claude may merge.
 
+(Superseded by CC-025, docs/adr/0007-auto-merge-policy.md: agents never merge; ccd merges only reviewed low-risk
+Command Center PRs when Jay has switched it on, everything else is Jay's.)
+
 ## Live Deployment
 Before deployment to a LIVE environment:
 
@@ -1448,7 +1451,7 @@ Search, Developer Unlock, loopback, launcher, atomic releases, audit, exact-head
 | 18 project console | room kind `project`: coordinator via the existing resolver (Adopt flow kept), `codex:<PREFIX>`, `repo:<PREFIX>`, `server` |
 | 19–20 Codex | `codex:` terminals (Codex if installed); `writer` step: one writer, handover with checkpoint, sent to the task session |
 | 21 review | exact-head binding as before; implementer may not approve (actor or session) |
-| 22 merge / deploy | merge default `auto` with Gate 3 (UI, needs:jay, re-plan, owner projects → merge gate); SamVision stays `owner`; live deploy: `deploy-request` opens the gate, `deployed --env live` refused until Jay's Deploy Live; preview/dev automatic |
+| 22 merge / deploy | (merge policy replaced by CC-025: values `owner` / `low-risk`, `auto` removed, see docs/adr/0007-auto-merge-policy.md) merge default `auto` with Gate 3 (UI, needs:jay, re-plan, owner projects → merge gate); SamVision stays `owner`; live deploy: `deploy-request` opens the gate, `deployed --env live` refused until Jay's Deploy Live; preview/dev automatic |
 | 23 evidence | `ticket_evidence`, `ccd/records.py` → `~/command-center/task-records/<project>/<KEY>/{task.md, workflow.md, files/}` |
 | 24 stages | `pipeline.visible_stage` (server) / `lib/control.ts stageOf` (fallback), colours in `styles/tokens.css --vs-*` |
 | 25 closed | tree, wall picker and Activity (default) hide closed tickets; Task Manager history keeps them |
