@@ -248,6 +248,8 @@ still work and nothing was deleted.
 | Workspace | files, source control, search, editor; one terminal dock: Claude · Project · Server |
 | Agents · Server · Activity · Alerts · Settings | unchanged |
 
+The CI step in the Development row is `.github/workflows/ci.yml`: it runs the backend unittest suite and the web typecheck and tests on every pull request to `main` and on every push to `main` (it cannot be a required check on the free GitHub plan, so the reviewer reads its result).
+
 **Overview** is deliberately four panels and nothing else: NEEDS JAY, ACTIVE
 WORK, SYSTEM STATUS, RECENT ACTIVITY. No KPI strip, no pipeline widget, no
 server meters — those belong to the sections that own them. Tickets in flight
