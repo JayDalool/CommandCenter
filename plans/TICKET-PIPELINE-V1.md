@@ -156,10 +156,19 @@ Migration 3 only adds tables, but a previous ccd refuses a newer schema version,
 so code rollback = restore the pre-migration tasks.db backup (taken before the
 deploy) and switch back to the previous checkout. UI: atomic release switch back to the previous release.
 
+## WORKTREE CLEANUP (CC-024, approved by Jay 2026-10-08)
+
+Moved out of DEFERRED. After ccd's git poll, a DONE ticket's recorded worktree is removed with
+`git worktree remove` (never `--force`, branch kept) only when it is under
+`/srv/server/worktrees/` or `<project root>/.claude/worktrees/`, a linked worktree with the
+ticket's branch checked out, clean, fully pushed, and no herdr pane or process is inside it.
+Ignored files go with it. Otherwise it stays and `pipeline.worktree_kept` says why, once.
+Switch: config `worktree_cleanup`. Details: docs/SECURITY.md, docs/ARCHITECTURE.md.
+
 ## DEFERRED (CC follow-ups)
 
 Desktop notifications from the launcher; overlap
-classifier; worktree auto-removal after DONE; pattern learning over findings;
+classifier; pattern learning over findings;
 Jira/Slack/email (drafts-first principle documented only).
 
 ## RESULT (2026-10-06)

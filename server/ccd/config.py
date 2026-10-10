@@ -56,6 +56,9 @@ DEFAULTS = {
     "task_projects": [{"key": "commandcenter"}],
     # Workspace uploads and attachments, per file.
     "upload_max_mb": 50,
+    # Remove a DONE ticket's clean, fully pushed worktree after ccd's git poll (ccd/worktree_cleanup.py).
+    # false = never remove anything.
+    "worktree_cleanup": True,
     # ccd may merge low-risk reviewed PRs itself (CC-025). Off until Jay sets it true; read at start.
     # A project must also say pipeline merge "low-risk" in ccd/registry.py.
     "auto_merge": False,

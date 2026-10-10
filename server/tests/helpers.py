@@ -31,7 +31,7 @@ def cfg(**over):
         p.update(session=p["key"], ui_tests="docs/jay/UI_TESTS.md", actions="docs/jay/MY_ACTIONS.md",
                  links=[], commands=[])
     c.update(reconcile_seconds=0.4, github_seconds=3600, host_seconds=3600, git_seconds=3600,
-             plans_dir=tempfile.mkdtemp(prefix="plans-"))
+             plans_dir=tempfile.mkdtemp(prefix="plans-"), worktree_cleanup=False)
     c.update(over)
     return c
 

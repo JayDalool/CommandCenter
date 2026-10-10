@@ -399,6 +399,12 @@ class Pipeline:
         if self.lanes(t["project"]) >= limit:
             raise TaskError(409, f"{limit} implementation lanes are already running in {t['project']}; {what}")
 
+    def done_worktrees(self):
+        """[(key, project, branch, worktree)] of every DONE ticket that still has a recorded worktree."""
+        return self.db.execute(
+            "SELECT t.key, t.project, t.branch, w.worktree FROM tickets t JOIN ticket_work w ON w.ticket_id=t.id "
+            "WHERE t.status='DONE' AND w.worktree IS NOT NULL ORDER BY t.id").fetchall()
+
     # ---------- writing ----------
 
     def _tx(self, key, actor, fn):
@@ -1067,7 +1073,8 @@ class Pipeline:
         return self._tx(key, actor, fn)
 
     def release(self, key, summary, actor="system:automation"):
-        """The ticket closed: record what was released (sessions, writer). The worktree is never deleted here."""
+        """The ticket closed: record what was released (sessions, writer). The worktree is not deleted here;
+        ccd's git poll removes it later when it is clean and fully pushed (ccd/worktree_cleanup.py)."""
         def fn(tid, t, w, at):
             if w.get("released"):
                 return {}, {}, []
