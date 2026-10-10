@@ -1625,6 +1625,11 @@ class Daemon:
           linked PR no longer ready, ticket READY_TO_MERGE                 → IN_REVIEW
           linked PR merged (found by link, not title), IN_REVIEW/READY_TO_MERGE → VERIFYING
 
+        A merge moves a ticket once; a reopened ticket waits for a new merge. GitHub keeps listing a merged PR,
+        so the move is skipped when automation already made it for that PR (a status event with trigger
+        "PR #n merged"), or when the pipeline already recorded that merge. Known gap: a by-hand move to
+        VERIFYING leaves no automation event, so an old merge can still fire after a later reopen.
+
         Once per fresh GitHub poll per project. Never closes a ticket
         (VERIFYING → DONE is a verifier's or Jay's call) and never undoes a
         status Jay set by hand.
@@ -1690,8 +1695,14 @@ class Daemon:
             for m in data.get("merged") if isinstance(data.get("merged"), list) else []:
                 try:
                     ref = f"{p['repo']}#{m['number']}"
+                    why = f"PR #{m['number']} merged"
                     for k in self.tasks.keys_linked("github", "pr", ref):
-                        self._auto(k, ("IN_REVIEW", "READY_TO_MERGE"), "VERIFYING", f"PR #{m['number']} merged")
+                        # A merge moves a ticket once. GitHub keeps listing a merged PR for a while, so after a
+                        # reopen or rework the old merge must not send the ticket on to VERIFYING again.
+                        if self.tasks.moved_by(k, "VERIFYING", why) or (
+                                self.pipeline.participating(k) and self.pipeline.merged_pr(k) == ref):
+                            continue
+                        self._auto(k, ("IN_REVIEW", "READY_TO_MERGE"), "VERIFYING", why)
                         if self.pipeline.participating(k):
                             self._pipeline_result(*self.pipeline.merged(k, ref, ((m.get("mergeCommit") or {}).get("oid"))))
                 except Exception as e:  # noqa: BLE001

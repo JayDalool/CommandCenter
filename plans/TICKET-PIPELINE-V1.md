@@ -76,7 +76,7 @@ No existing column changes; nothing is rewritten. Backed up before applying.
 | `review REQUEST_CHANGES` | IN_REVIEW | IN_REVIEW (cycle+1) | 2 cycles → BLOCKED, gate `failure` |
 | new PR head ≠ review_head (GitHub) | READY_TO_MERGE | IN_REVIEW | approval and any merge authorisation invalidated |
 | a new `plan` | PLAN stages | as `plan` | a plan Jay approved before is not carried over |
-| merged (GitHub, existing) | IN_REVIEW / READY_TO_MERGE | VERIFYING | merge gate clears |
+| merged (GitHub, existing) | IN_REVIEW / READY_TO_MERGE | VERIFYING | merge gate clears; once per PR, so a fix PR after a failed verification needs its own review and merge |
 | `verify pass` (verifier) | VERIFYING | DONE, or gate `ui`/`deploy` if still owed | |
 | `verify fail` | VERIFYING | BLOCKED | gate `failure` |
 | `confirm <gate>` (Jay) | gate open | next state (ui after verify → DONE) | clears |

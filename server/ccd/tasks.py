@@ -743,6 +743,14 @@ class TaskStore:
                             (key,)).fetchone()
         return {"actor": r[0], "from": r[1], "to": r[2], "trigger": r[3]} if r else None
 
+    def moved_by(self, key, to, trigger):
+        """True if automation ever moved the ticket to `to` for exactly this trigger (a status event whose actor
+        starts with `system:`). Lets a once-only rule such as "a PR's merge moves a ticket once" survive a reopen."""
+        r = self.db.execute("SELECT 1 FROM ticket_events e JOIN tickets t ON t.id=e.ticket_id WHERE t.key=? "
+                            "AND e.field='status' AND e.to_value=? AND e.trigger=? AND e.actor LIKE 'system:%' LIMIT 1",
+                            (key, to, trigger)).fetchone()
+        return r is not None
+
     # ---------- writing ----------
 
     def _audit(self, tid, actor, kind, field=None, frm=None, to=None, trigger=None, data=None, at=None):

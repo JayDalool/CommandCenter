@@ -124,6 +124,41 @@ class Automation(ApiBase):
         self.assertEqual(self.tickets.get("SV-056")["prNumber"], 95)
         self.assertEqual(self.tickets.get("SV-057")["status"], "READY_TO_IMPLEMENT")
 
+    MERGED_94 = [{"number": 94, "title": "SV-056: the feature", "url": "u", "mergedAt": "2026-10-03T00:00:00Z",
+                  "mergeCommit": {"oid": "f" * 40}}]
+
+    def test_a_merge_moves_a_ticket_once_and_a_reopen_waits_for_a_new_merge(self):
+        self.ticket("IN_PROGRESS")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefName="sv-056-feature")]
+        self.poll()
+        self.gh.data["samvision"]["prs"] = []
+        self.gh.data["samvision"]["merged"] = self.MERGED_94
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "VERIFYING")
+        self.tickets.update("SV-056", {"status": "IN_PROGRESS"}, "jay")          # Jay reopens it
+        self.gh.data["samvision"]["prs"] = [dict(pr(95, "SV-056: the fix"), headRefName="sv-056-feature")]
+        for _ in range(2):                                                         # #94 is still in the merged list
+            self.poll()
+            self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+        # a NEW merge still moves it
+        self.gh.data["samvision"]["prs"] = []
+        self.gh.data["samvision"]["merged"] = [{"number": 95, "title": "SV-056: the fix", "url": "u",
+                                                "mergedAt": "2026-10-04T00:00:00Z"}] + self.MERGED_94
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "VERIFYING")
+
+    def test_a_ticket_set_back_to_review_by_hand_is_not_sent_on_by_an_old_merge(self):
+        self.ticket("IN_PROGRESS")
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefName="sv-056-feature")]
+        self.poll()
+        self.gh.data["samvision"]["prs"] = []
+        self.gh.data["samvision"]["merged"] = self.MERGED_94
+        self.poll()
+        self.tickets.update("SV-056", {"status": "DONE"}, "jay")
+        self.tickets.update("SV-056", {"status": "IN_REVIEW"}, "jay")
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+
     def test_other_projects_keys_are_not_linked(self):
         self.tickets.create("gauzemate", "gz thing")
         self.gh.data["samvision"]["prs"] = [pr(96, "mentions GZ-001 in passing")]
@@ -657,6 +692,48 @@ class PipelineApi(Automation):
         self.tickets.update("SV-056", {"labels": []}, "jay")                            # even if it changed anyway…
         w = self.step("plan", {"plan": {"summary": "v2"}}, "agent:planner").json()
         self.assertEqual((w["gate"], w["planState"], w["status"]), ("plan", "proposed", "RESEARCHING"))
+
+    def test_a_fix_pr_after_a_failed_verification_needs_review_and_merge_again(self):
+        merged_94 = self.MERGED_94
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "the feature"}}, "agent:planner")
+        self.step("start", {"branch": "SV-056-feature", "worktree": "/srv/server/worktrees/sv/SV-056"})
+        head = "94" * 20
+        self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: the feature"), headRefName="SV-056-feature", headRefOid=head)]
+        self.poll()
+        self.step("review", {"verdict": "APPROVE", "head": head, "session": "review-1"}, "agent:reviewer")
+        self.gh.data["samvision"]["prs"] = []
+        self.gh.data["samvision"]["merged"] = merged_94
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "VERIFYING")
+        self.assertEqual(self.step("verify", {"result": "fail", "evidence": "health 500"}, "agent:verifier").json()["status"],
+                         "BLOCKED")
+        r = self.step("rework", {"reason": "fix the 500"})
+        self.assertEqual(r.json()["status"], "IN_PROGRESS", r.text)
+        # the fix goes up as a NEW PR #97; #94 is still among GitHub's recently merged PRs
+        head97 = "97" * 20
+        self.gh.data["samvision"]["prs"] = [dict(pr(97, "SV-056: fix the 500"), headRefName="SV-056-feature",
+                                                 headRefOid=head97)]
+        for _ in range(2):
+            self.poll()
+            self.assertEqual(self.get("/api/tasks/SV-056/work").json()["status"], "IN_REVIEW")
+        r = self.step("verify", {"result": "pass", "evidence": "looks fine"}, "agent:verifier")
+        self.assertEqual(r.status_code, 409, r.text)
+        # #97 is approved at its head, then merged: VERIFYING once, the merge record is #97
+        self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": head97, "session": "review-2"},
+                                   "agent:reviewer").json()["status"], "READY_TO_MERGE")
+        self.gh.data["samvision"]["prs"] = []
+        self.gh.data["samvision"]["merged"] = [{"number": 97, "title": "SV-056: fix the 500", "url": "u",
+                                                "mergedAt": "2026-10-05T00:00:00Z",
+                                                "mergeCommit": {"oid": "e" * 40}}] + merged_94
+        for _ in range(2):
+            self.poll()
+            w = self.get("/api/tasks/SV-056/work").json()
+            self.assertEqual(w["status"], "VERIFYING")
+            self.assertEqual(w["merge"]["pr"], "JayDalool/SamVisionAI#97")
+        unreviewed = [e for e in self.get("/api/activity?limit=200").json()["events"] if e["kind"] == "task.pipeline"
+                      and e["data"].get("kind") == "pipeline.unreviewed_merge"]
+        self.assertEqual(unreviewed, [])
 
     def test_a_ui_gate_cannot_be_skipped_by_marking_done(self):
         self.ticket("INBOX")
