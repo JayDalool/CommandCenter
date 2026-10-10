@@ -356,6 +356,12 @@ class Pipeline:
                             "WHERE t.key=?", (str(key).upper(),)).fetchone()
         return r[0] if r else None
 
+    def merged_pr(self, key):
+        """The PR ref whose merge was recorded for the ticket (ticket_work.merge.pr), or None."""
+        r = self.db.execute("SELECT w.merge FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id WHERE t.key=?",
+                            (str(key).upper(),)).fetchone()
+        return (json.loads(r[0]) or {}).get("pr") if r and r[0] else None
+
     def rework_prs(self, key):
         """The open PRs {(ref, head)} recorded by the ticket's latest rework, or None if it never had one."""
         r = self.db.execute("SELECT e.data FROM ticket_events e JOIN tickets t ON t.id=e.ticket_id "

@@ -183,7 +183,7 @@ deterministic triggers, each recorded as `system:automation` with its trigger:
 | pipeline ticket after `rework`: a PR or head that is neither the reviewed head nor an open PR recorded by the rework | IN_PROGRESS → IN_REVIEW (polls at known heads leave it IN_PROGRESS) |
 | linked PR approved, checks green, not draft | IN_REVIEW → READY_TO_MERGE |
 | linked PR stops being ready | READY_TO_MERGE → IN_REVIEW |
-| linked PR merged (found through `ticket_links`) | IN_REVIEW/READY_TO_MERGE → VERIFYING |
+| linked PR merged (found through `ticket_links`), once per PR: not again after a reopen or rework | IN_REVIEW/READY_TO_MERGE → VERIFYING |
 
 Never automatic: DONE (a verifier's or Jay's call), anything from a key merely
 mentioned in a title, and re-applying a move Jay reversed by hand (a manual status edit; pipeline steps such as
