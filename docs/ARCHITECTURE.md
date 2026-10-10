@@ -360,6 +360,8 @@ Only facts decide a tick: report status, the coordinator's herdr status, ticket 
 (`Daemon._activity`) and the clock. With herdr down only "complete" and the cutoff can act. `pipeline.Pipeline.held`
 (Jay-first rule) follows direct `blocks` relations only.
 
+scripts/go-live.sh deploys origin/main only (CC-030); another branch needs `--branch <name> --i-know`, and `--dry-run` prints the target without changing anything.
+
 ### Desktop notice for new Needs Jay gates (CC-023)
 
 ```text

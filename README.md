@@ -94,15 +94,17 @@ http://127.0.0.1:7777, paste the token (`ssh jay-server cat
 .config/command-center/ccd.token | clip`). Tickets live in
 `~/command-center/data/tasks.db` — back it up as data.
 
-## Go live with a branch (one step)
+## Go live (main)
 
 ```
-scripts/go-live.sh                 # backs up tasks.db, switches the live checkout, builds the UI, restarts ccd
+scripts/go-live.sh --dry-run       # prints the origin/main sha, the new commits and the rollback; changes nothing
+scripts/go-live.sh                 # deploys origin/main: backs up tasks.db, switches the live checkout, builds the UI, restarts ccd
+scripts/go-live.sh --branch <name> --i-know   # emergency hotfix only: another branch, not reviewed
 scripts/reconcile-cc-ui.py         # dry run: what the control room does to the old CC UI tickets
 scripts/reconcile-cc-ui.py --apply
 ```
 
-`go-live.sh` prints the exact rollback (previous branch + the tasks.db backup) when it finishes.
+main is the reviewed release line. `go-live.sh` prints the exact rollback (previous commit + the tasks.db backup) when it finishes.
 
 ## Roll back
 
