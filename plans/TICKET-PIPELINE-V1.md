@@ -59,7 +59,7 @@ No existing column changes; nothing is rewritten. Backed up before applying.
 | gate | opens when |
 |---|---|
 | PLAN (OWNER_PLAN) | needsJay or needsLegal, or a label in `security, migration, destructive, architecture, product-decision, ambiguous, financial, legal, gate:plan`; else AUTO_PLAN |
-| MERGE (OWNER_MERGE) | project `merge_policy` = `owner` (default for every project in the pilot); `auto-eligible` only for a later low-risk CC policy |
+| MERGE (OWNER_MERGE) | project `merge` = `owner` (the default, every project but Command Center); Command Center is `low-risk` (CC-025, ADR 0007): ccd merges a reviewed docs/tests PR itself when Jay has switched `auto_merge` on, and opens this gate for anything else |
 | UI (OWNER_UI_REVIEW) | needsUIReview, or type DESIGN, or label `ui` |
 | DEPLOY (OWNER_DEPLOY) | needsDeploy |
 
@@ -122,7 +122,8 @@ verification, handoff. Needs Jay gains the gate categories. No new screens.
 `pipeline.plan`, `pipeline.plan_approved`, `pipeline.started`, `pipeline.review`,
 `pipeline.review_stale`, `pipeline.ready_to_merge`, `pipeline.verified`,
 `pipeline.gate_opened`, `pipeline.gate_confirmed`, `pipeline.blocked`,
-`pipeline.handoff` — plus the existing status/link events. System events stay
+`pipeline.handoff`, `pipeline.auto_merged`, `pipeline.auto_merge_held`,
+`pipeline.auto_merge_failed` (CC-025) — plus the existing status/link events. System events stay
 separate from human comments.
 
 ## FAILURE / RESUME
@@ -157,7 +158,7 @@ deploy) and switch back to the previous checkout. UI: atomic release switch back
 
 ## DEFERRED (CC follow-ups)
 
-Desktop notifications from the launcher; auto-merge for low-risk CC; overlap
+Desktop notifications from the launcher; overlap
 classifier; worktree auto-removal after DONE; pattern learning over findings;
 Jira/Slack/email (drafts-first principle documented only).
 

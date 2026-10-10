@@ -8,7 +8,8 @@ from ccd import pipeline_cli, tasks
 from ccd.pipeline import MAX_REVIEW_CYCLES, Pipeline, policy, stage_of
 from ccd.tasks import TaskError, TaskStore
 
-PROJECTS = [{"key": "samvision", "name": "SamVision", "prefix": "SV"}, {"key": "gyst", "name": "GYST", "prefix": "GYST"}]
+PROJECTS = [{"key": "samvision", "name": "SamVision", "prefix": "SV"}, {"key": "gyst", "name": "GYST", "prefix": "GYST"},
+            {"key": "commandcenter", "name": "Command Center", "prefix": "CC"}]
 PLAN = {"summary": "Show the valuation comparison", "requirements": ["table of comps"], "approach": "new view",
         "affected": ["web/valuation.tsx"], "risk": "low", "tests": ["unit", "ui"], "questions": []}
 HEAD = "abcdef1234567890abcdef1234567890abcdef12"

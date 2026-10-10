@@ -22,14 +22,14 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import __version__, coordid, coordinators, github, model, registry, sources
+from . import __version__, coordid, coordinators, github, merge_policy, model, registry, sources
 from . import pipeline as pipeline_mod
 from . import herdr as herdr_mod
 from . import importer
 from . import nightshift as nightshift_mod
 from . import records as records_mod
 from . import tasks as tasks_mod
-from .config import STATE_DIR, public_project
+from .config import AUTO_MERGE_STOP, STATE_DIR, public_project
 
 log = logging.getLogger("ccd")
 
@@ -210,12 +210,23 @@ def oom_kills_24h():
 
 
 class Daemon:
-    def __init__(self, cfg, store, herdr, *, github_fn=None, host_fn=None, git_fn=None, oom_fn=None, tasks=None):
+    def __init__(self, cfg, store, herdr, *, github_fn=None, host_fn=None, git_fn=None, oom_fn=None, tasks=None,
+                 gh_cli=None):
         self.cfg = cfg
         self.store = store
         self.herdr = herdr
         self.tasks = tasks  # TaskStore, durable product data (tasks.db); None = task system off
         self.pipeline = pipeline_mod.Pipeline(tasks) if tasks is not None else None
+        # Auto-merge (CC-025): the config switch is read once, here. `gh_cli(args) -> (code, stdout, stderr)` is the
+        # only way ccd writes to GitHub; tests give it a fake. The stop file is checked before every merge.
+        self.auto_merge_on = cfg.get("auto_merge") is True
+        if self.pipeline is not None:
+            self.pipeline.auto_merge = self.auto_merge_on
+        self.gh_cli = gh_cli or sources._run
+        self.auto_merge_stop = AUTO_MERGE_STOP
+        self._am_busy = False
+        self._am_next = {}    # ticket key → time.monotonic() before which it is not looked at again
+        self._am_waiting = {}  # ticket key → (reviewed head, time.monotonic() when it first had to wait)
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
@@ -271,6 +282,7 @@ class Daemon:
                  self.housekeeping_loop, self.night_loop]
         self._loops = [asyncio.create_task(fn(), name=fn.__name__) for fn in loops]
         self._event("daemon", "daemon.started", f"ccd {__version__} started", data={"pid": os.getpid()})
+        self._log_merge_policy()
         self._dirty.set()
 
     async def stop(self):
@@ -614,6 +626,7 @@ class Daemon:
         self._decorate(snap)
         self._diff_and_alert(snap)    # synchronous: what it logs IS this snapshot
         self._ticket_automation()
+        await self._auto_merge()
         snap["seq"] = self.seq if quiet else snap_seq
         self.snap = snap
 
@@ -1252,14 +1265,15 @@ class Daemon:
         """The ticket's linked PRs that the last GitHub poll saw open, as pipeline PR states."""
         g = (self.gh.get(ticket["project"]) or {}).get("data") or {}
         refs = {link["ref"] for link in ticket.get("links") or [] if link.get("provider") == "github" and link.get("kind") == "pr"}
-        repo = next((p.get("repo") for p in self.cfg["projects"] if p["key"] == ticket["project"]), None)
+        repo = next((p.get("repo") for p in self.cfg["projects"] if p["key"] == ticket["project"]), None) \
+            or registry.github_of(ticket["project"])
         out = []
         for pr in g.get("prs") if isinstance(g.get("prs"), list) else []:
             ref = f"{repo}#{pr.get('number')}"
             if ref in refs:
                 ci = model.ci_mark(pr.get("statusCheckRollup"))
                 out.append({"ref": ref, "head": pr.get("headRefOid") or "", "ciGreen": ci in ("✓", "–"),
-                            "draft": bool(pr.get("isDraft"))})
+                            "ciNone": ci == "–", "draft": bool(pr.get("isDraft"))})
         return out
 
     def _pr_state(self, ticket):
@@ -1563,7 +1577,9 @@ class Daemon:
                         ref=ticket["key"], data={"kind": kind},
                         severity="action" if kind in ("pipeline.gate_opened", "pipeline.blocked",
                                                       "pipeline.unreviewed_merge", "pipeline.questions",
-                                                      "pipeline.deploy_requested", "pipeline.replan") else "info")
+                                                      "pipeline.deploy_requested", "pipeline.replan",
+                                                      "pipeline.auto_merge_held", "pipeline.auto_merged",
+                                                      "pipeline.auto_merge_failed") else "info")
         if events:
             self._record_soon(ticket["key"])
 
@@ -1621,7 +1637,8 @@ class Daemon:
 
           open PR whose title or branch LEADS with a key (same project) → link it, set branch
           ...ticket READY_TO_IMPLEMENT or IN_PROGRESS                      → IN_REVIEW
-          linked PR approved, checks green, not draft, ticket IN_REVIEW    → READY_TO_MERGE
+          linked PR approved, no failing or pending check ("–": no checks at all, said as such), not draft,
+          ticket IN_REVIEW                                                 → READY_TO_MERGE
           linked PR no longer ready, ticket READY_TO_MERGE                 → IN_REVIEW
           linked PR merged (found by link, not title), IN_REVIEW/READY_TO_MERGE → VERIFYING
 
@@ -1651,9 +1668,10 @@ class Daemon:
                     ci = model.ci_mark(pr.get("statusCheckRollup"))
                     ready = pr.get("reviewDecision") == "APPROVED" and ci in ("✓", "–") and not pr.get("isDraft")
                     # What the pipeline needs to tie a recorded review to this PR's current head.
-                    # "–" (no checks configured) counts as green, as for GitHub approvals above.
+                    # "–" (no checks configured) counts as ready, as for GitHub approvals above, but the
+                    # pipeline says "no CI checks" for it, never "green" (ciNone).
                     pr_state = {"ref": ref, "head": pr.get("headRefOid") or "", "ciGreen": ci in ("✓", "–"),
-                                "draft": bool(pr.get("isDraft"))}
+                                "ciNone": ci == "–", "draft": bool(pr.get("isDraft"))}
                     for k in keys:
                         if not self.tasks.has_link(k, "github", "pr", ref):
                             t, _ = self.tasks.link(k, "github", "pr", ref, github.pr_ref_url(ref), pr.get("title"),
@@ -1681,7 +1699,8 @@ class Daemon:
                             # A pipeline ticket: only its recorded review, tied to this PR's head, decides.
                             self._pipeline_result(*self.pipeline.sync_pr(k, pr_state))
                         elif ready:
-                            self._auto(k, ("IN_REVIEW",), "READY_TO_MERGE", f"PR #{n} approved, checks green, not draft")
+                            self._auto(k, ("IN_REVIEW",), "READY_TO_MERGE",
+                                       f"PR #{n} approved, {'no CI checks' if ci == '–' else 'checks green'}, not draft")
                         else:
                             self._auto(k, ("READY_TO_MERGE",), "IN_REVIEW",
                                        f"PR #{n} no longer approved with green checks")
@@ -1696,6 +1715,138 @@ class Daemon:
                             self._pipeline_result(*self.pipeline.merged(k, ref, ((m.get("mergeCommit") or {}).get("oid"))))
                 except Exception as e:  # noqa: BLE001
                     log.warning(json.dumps({"msg": "ticket automation skipped a merge", "error": repr(e)[:200]}))
+
+    # ---------- auto-merge (CC-025, docs/adr/0007-auto-merge-policy.md) ----------
+
+    AUTO_MERGE_WAIT_LIMIT = 30 * 60   # seconds a PR may stay pending (CI running, mergeability unknown) before a gate
+
+    AUTO_MERGE_FIELDS = ("state,isDraft,mergeable,baseRefName,headRefOid,isCrossRepository,files,additions,deletions,"
+                         "statusCheckRollup")
+
+    def _auto_merge_projects(self):
+        """Registry projects whose merge policy is low-risk AND that have an allowlist: the only ones ccd merges for."""
+        return [k for k in registry.PROJECTS
+                if pipeline_mod.policy({"project": k}, k)["merge"] == "low-risk" and merge_policy.ALLOW.get(k)]
+
+    def _log_merge_policy(self):
+        """Startup: whether ccd may merge anything, as a security event (the audit trail of the first GitHub write)."""
+        self._event("security", "merge.policy", self._merge_policy_text(), data={"status": self._merge_policy_state()})
+
+    def _merge_policy_state(self):
+        return "enabled" if self.auto_merge_on and self._auto_merge_projects() else "disabled"
+
+    def _merge_policy_text(self):
+        projects = ", ".join(self._auto_merge_projects()) or "none"
+        stopped = " (stop file present)" if self._auto_merge_stopped() else ""
+        return (f"auto-merge {'ON' if self.auto_merge_on else 'OFF'} (config auto_merge); "
+                f"low-risk projects in the registry: {projects}{stopped}")
+
+    def _auto_merge_stopped(self):
+        """The kill switch: the stop file exists. Anything but "does not exist" counts as stopped."""
+        try:
+            return Path(self.auto_merge_stop).exists()
+        except OSError:
+            return True
+
+    def _gh_json(self, args):
+        code, out, err = self.gh_cli(args)
+        if code != 0:
+            raise OSError((err.strip().splitlines() or ["gh failed"])[-1][:160])
+        return json.loads(out)
+
+    async def _auto_merge(self):
+        """Merge the reviewed PRs of low-risk projects that the classifier accepts. Runs after _ticket_automation.
+
+        Needs BOTH switches (config `auto_merge` true, registry merge "low-risk") and no stop file. For each
+        READY_TO_MERGE ticket with no gate: a fresh `gh pr view`, merge_policy.classify, then either the merge
+        (`gh pr merge N --repo R --merge --match-head-commit <reviewed head>`: GitHub refuses it if the head moved) or
+        a merge gate in Needs Jay with the reason. gh runs in a worker thread, so the event loop never waits on it.
+        A hold or a failure is final for that head (Pipeline.merge_candidates): never retried, never --admin.
+        """
+        if self.tasks is None or not self.auto_merge_on or self._am_busy:
+            return
+        self._am_busy = True
+        try:
+            for project in self._auto_merge_projects():
+                for key in self.pipeline.merge_candidates(project):
+                    if self._auto_merge_stopped() or self._stopping:
+                        return
+                    try:
+                        await self._auto_merge_one(project, key)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:  # noqa: BLE001 — one ticket must not stop the others or the derive
+                        log.warning(json.dumps({"msg": "auto-merge skipped a ticket", "key": key, "error": repr(e)[:200]}))
+        finally:
+            self._am_busy = False
+
+    async def _auto_merge_one(self, project, key):
+        if self._am_next.get(key, 0) > time.monotonic():
+            return
+        repo = registry.github_of(project)
+        t = self.tasks.get(key)
+        w = self.pipeline.work(key)
+        rv = w["review"]
+        head = rv["head"]
+        open_prs = [p["ref"] for p in self._open_prs(t)]
+        pr_ref = rv["pr"] if rv.get("pr") and rv["pr"].rpartition("#")[0] == repo else (open_prs[0] if len(open_prs) == 1 else None)
+        number = (pr_ref or "").rpartition("#")[2]
+        if not number.isdigit():
+            self._auto_merge_hold(t, head, "no single open PR to merge was found for this ticket")
+            return
+        try:
+            pr = await asyncio.to_thread(self._gh_json, ["gh", "pr", "view", number, "--repo", repo,
+                                                         "--json", self.AUTO_MERGE_FIELDS])
+        except (OSError, ValueError) as e:   # gh or GitHub is down: look again in a few minutes, change nothing
+            self._am_next[key] = time.monotonic() + 300
+            self._event("tasks", "task.pipeline", f"{key} auto-merge could not read PR #{number}: {e}"[:300], severity="warn",
+                        project=project, ref=key, data={"kind": "pipeline.auto_merge_unreadable"})
+            return
+        if not isinstance(pr, dict) or pr.get("state") == "MERGED":
+            return    # merged already (by Jay, or by us a moment ago): the GitHub poll moves the ticket
+        if pr.get("headRefOid") != head:   # a newer head: the GitHub poll sends the ticket back to review; nothing to hold
+            self._am_next[key] = time.monotonic() + 60
+            return
+        d = merge_policy.classify(project, t, w, pr, pr_ref, open_prs, pipeline_mod.policy(t, project)["merge"])
+        if d.wait:
+            since = self._am_waiting.setdefault(key, (head, time.monotonic()))
+            if since[0] != head:
+                since = self._am_waiting[key] = (head, time.monotonic())
+            if time.monotonic() - since[1] > self.AUTO_MERGE_WAIT_LIMIT:
+                self._am_waiting.pop(key, None)
+                self._auto_merge_hold(t, head, f"{'; '.join(d.reasons[:2])} for over "
+                                               f"{self.AUTO_MERGE_WAIT_LIMIT // 60} minutes")
+                return
+            self._am_next[key] = time.monotonic() + 60
+            return
+        self._am_waiting.pop(key, None)
+        if not d.ok:
+            self._auto_merge_hold(t, head, "; ".join(d.reasons[:3]))
+            return
+        # Everything above awaited: re-read the ticket, then check the kill switch, then merge, with no await between.
+        w2 = self.pipeline.work(key)
+        if self.tasks.get(key)["status"] != "READY_TO_MERGE" or w2["gate"] or w2["review"]["head"] != head \
+                or w2["review"]["verdict"] != "APPROVE":
+            return
+        if self._auto_merge_stopped():
+            return
+        code, out, err = await asyncio.to_thread(self.gh_cli, ["gh", "pr", "merge", number, "--repo", repo, "--merge",
+                                                              "--match-head-commit", head])
+        if code != 0:
+            why = (err.strip().splitlines() or ["gh pr merge failed"])[-1][:200]
+            self._auto_merge_hold(t, head, f"gh could not merge it: {why}", failed=True)
+            return
+        self._event("security", "merge.auto", f"ccd merged {pr_ref} for {key} at {head[:7]} ({'no CI checks' if d.ci == 'none' else 'CI green'})",
+                    project=project, ref=key, data={"number": int(number), "ci": d.ci})
+        self._pipeline_result(*self.pipeline.auto_merged(key, head, pr_ref, d.ci))
+
+    def _auto_merge_hold(self, ticket, head, reason, failed=False):
+        """Open the merge gate with the reason (once per head) and tell the owner queue."""
+        ticket, changes, events = self.pipeline.hold_merge(ticket["key"], head, reason, failed)
+        if events:
+            self._event("security", "merge.auto", f"ccd {'could not merge' if failed else 'held'} {ticket['key']}: {reason}"[:300],
+                        project=ticket["project"], ref=ticket["key"], data={"reason": reason[:200]})
+        self._pipeline_result(ticket, changes, events)
 
     # ---------- read API ----------
 
