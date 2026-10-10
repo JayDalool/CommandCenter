@@ -736,6 +736,31 @@ class ControlRoomApi(PipelineApi):
         self.assertNotIn("deploy samvision to production now", text)
         self.assertTrue(self.get("/api/night-shift").json()["projects"]["samvision"]["goLiveAt"])
 
+    def test_ticket_deploy_gate_approval_asks_claude_to_prepare_and_wait_for_jay_in_the_pane(self):
+        self.ticket("VERIFYING")
+        self.step("deploy-request", {"env": "live", "what": "valuation v2", "verification": "verifier pass"})
+        self.task_agent()
+        self.assertEqual(self.get("/api/tasks/SV-056/work").json()["gate"], "deploy")
+        r = self.client.post("/api/tasks/SV-056/work/confirm", content=json.dumps({"gate": "deploy"}),
+                             headers=dict(JSON, **self.dev()))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.json()["nudge"]["delivered"], r.json()["nudge"])
+        sent = self.prompts()
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["target"], "w7:p1")                                   # the existing task session
+        text = sent[0]["text"]
+        self.assertTrue(text.startswith("Jay approved the live-deploy gate of SV-056 in Command Center: PREPARE its deploy."))
+        for needle in ("PREPARE", "Do not deploy yet", "confirm the deploy in this pane", "rollback"):
+            self.assertIn(needle, text)
+        self.assertNotIn("Deploy it now", text)
+        full = self.daemon.pipeline.work("SV-056")
+        self.assertEqual(full["deploy"]["approvedBy"], "jay:gate")
+        events = [str(e) for e in self.daemon.tasks.get("SV-056")["timeline"]]
+        self.assertTrue(any("approved for a prepared deploy (Jay confirms in the pane)" in e for e in events), events)
+        # The approval is still a real one: the agent may record the live deploy afterwards.
+        r = self.step("deployed", {"env": "live", "result": "pass", "evidence": "health ok"})
+        self.assertEqual(r.status_code, 200, r.text)
+
     def test_go_live_approves_nothing_when_the_coordinator_cannot_be_reached(self):
         self.ticket("VERIFYING")
         self.step("deploy-request", {"env": "live", "what": "valuation v2", "verification": "verifier pass"})

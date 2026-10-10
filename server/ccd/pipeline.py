@@ -690,16 +690,18 @@ class Pipeline:
         return {"status": "DONE"}, {"gate": None, "gate_reason": None}, [("pipeline.done", "done", {})]
 
     def confirm(self, key, gate, actor, via=None):
-        """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock). `via="go-live"` marks a
-        live-deploy approval given by Go Live: approvedBy "jay:go-live", and the event says the deploy was approved
-        for a PREPARED deploy that Jay confirms in the coordinator's pane. The record still permits `deployed`
-        (the pane confirmation is Jay's, and nothing here can check it)."""
+        """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock). `via` marks a
+        live-deploy approval whose message only asks Claude to PREPARE: "go-live" (Go Live) gives approvedBy
+        "jay:go-live", "gate" (the ticket's deploy gate) gives "jay:gate". Either way the event says the deploy was
+        approved for a PREPARED deploy that Jay confirms in the pane. The record is still a full live-deploy approval
+        and permits `deployed` (it checks only approvedAt; the pane confirmation is Jay's, and nothing here can
+        check it)."""
         if actor != "jay":
             raise TaskError(403, "only Jay closes an owner gate")
         if gate not in GATES:
             raise TaskError(400, f"gate must be one of {', '.join(GATES)}")
         by = f"{actor}:{via}" if via else actor
-        said = ("approved for a prepared deploy (Jay confirms in the pane)" if via == "go-live"
+        said = ("approved for a prepared deploy (Jay confirms in the pane)" if via in ("go-live", "gate")
                 else "Jay approved the live deployment")
 
         def fn(tid, t, w, at):

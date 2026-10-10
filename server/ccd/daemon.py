@@ -104,6 +104,20 @@ GO_LIVE_TEMPLATE = (
     "<rollback target>."
 )
 
+# The per-ticket deploy gate (GateCard "Approve live deploy", WorkPanel "Approve deploy"): the same rule as Go Live.
+# The approval is a real live-deploy approval, but the message only asks Claude to PREPARE; Jay confirms the deploy
+# in the task pane. Nothing in ccd enforces that wait: it rests on this text.
+GATE_DEPLOY_TEMPLATE = (
+    "Jay approved the live-deploy gate of {key} in Command Center: PREPARE its deploy. Do not deploy yet.\n"
+    "Use this repository's deploy runbook (docs/deployment.md, or the runbook AGENTS.md / CLAUDE.md names). If there "
+    "is none, stop and tell Jay. Write, in 10 lines or fewer: the steps, the migrations (or none), the pre-deploy "
+    "checks that touch nothing in production, the post-deploy checks, and the rollback plan (the version live now "
+    "and what failure triggers a rollback).\n"
+    "Then stop and wait for Jay to confirm the deploy in this pane. Only after he confirms: deploy, verify it live, "
+    "roll back if a check fails, and record it: python -m ccd.pipeline_cli deployed {key} --role coordinator "
+    "--env live --result pass|fail --evidence \"…\""
+)
+
 # Night shift: the same instructions as Claude's /night-shift skill (scripts/install-claude-commands.sh links
 # ~/.claude/skills/night-shift to this folder). Only the project key is filled in.
 NIGHT_SHIFT_FILE = Path(__file__).parent / "skills" / "night-shift" / "SKILL.md"
@@ -1305,7 +1319,10 @@ class Daemon:
         elif op == "confirm":
             if not developer:
                 raise ActionError(403, "Developer Unlock required")
-            r = self._wrap(pl.confirm, key, body.get("gate"), actor)
+            # A live-deploy approval from the ticket's gate is marked "jay:gate": the message asks Claude to
+            # PREPARE and wait for Jay in the pane (GATE_DEPLOY_TEMPLATE), like Go Live.
+            r = self._wrap(pl.confirm, key, body.get("gate"), actor,
+                           "gate" if body.get("gate") == "deploy" else None)
         elif op == "handoff":
             r = self._wrap(pl.handoff, key, body, actor)
         elif op == "block":
@@ -1346,8 +1363,7 @@ class Daemon:
             return (f"Jay moved {key} back to planning: {body.get('reason')}. Re-plan with Opus, record the revised plan "
                     f"and acceptance criteria (python -m ccd.pipeline_cli plan {key} …), and continue only after it is accepted.")
         if op == "confirm" and body.get("gate") == "deploy" and (work.get("deploy") or {}).get("approvedAt"):
-            return (f"Jay approved the live deployment of {key}. Deploy it now, verify it live, then record it: "
-                    f"python -m ccd.pipeline_cli deployed {key} --role coordinator --env live --result pass|fail --evidence \"…\"")
+            return GATE_DEPLOY_TEMPLATE.format(key=key)
         if op == "confirm" and body.get("gate") == "failure":
             return f"Jay cleared the blocker on {key}. Continue from {work.get('stage') or 'the blocked stage'}."
         if op == "confirm" and body.get("gate") == "plan":

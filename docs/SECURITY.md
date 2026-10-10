@@ -233,8 +233,10 @@ make this check.)
 afterwards any agent may record `deployed --env live` for that ticket. That the deploy waits for Jay's
 confirmation in the coordinator's pane is enforced only by the message text, not by ccd. The record is marked
 (`approvedBy: "jay:go-live"`, event "approved for a prepared deploy (Jay confirms in the pane)") and Go Live
-approves only the tickets listed in the confirm box that are still open. The per-ticket Deploy Live button
-still types "Deploy it now" into the task session after Jay's approval.
+approves only the tickets listed in the confirm box that are still open. The per-ticket **Approve live deploy**
+button (and WorkPanel's) is the same: a real live-deploy approval, marked `approvedBy: "jay:gate"` with the same event
+text, and the message typed into the task session (`daemon.GATE_DEPLOY_TEMPLATE`) asks Claude to PREPARE the deploy and
+wait for Jay to confirm in the pane. That wait rests on the message text only; `deployed` checks just `approvedAt`.
 
 **Roots.** The explorer, editor and uploads reach only a registered project's
 `root` in `ccd/registry.py`. The browser sends a project key and a relative

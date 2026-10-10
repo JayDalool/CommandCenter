@@ -47,7 +47,7 @@ export function WorkPanel({ t }: { t: TicketDetail }) {
       case "ui": return <>
         <a className="btn is-jay is-sm" href={href("workspace", null, { project: t.project, ticket: t.key })}>Open Workspace</a>
         <button type="button" className="btn is-sm" onClick={() => void confirm("ui")}>UI is right</button></>;
-      case "deploy": return <button type="button" className="btn is-jay is-sm" onClick={() => void confirm("deploy")}>Approve deploy</button>;
+      case "deploy": return <button type="button" className="btn is-jay is-sm" onClick={() => void confirm("deploy")}>Approve live deploy</button>;
       case "failure": return <button type="button" className="btn is-jay is-sm" onClick={() => void confirm("failure")}>Resume</button>;
       default: return null;
     }

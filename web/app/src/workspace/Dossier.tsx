@@ -30,7 +30,7 @@ function statusLine(stage: string, t: TicketDetail, open: number): string {
   if (stage === "UI Testing") return "Merged; the UI is being tested.";
   if (stage === "Verifying") return "Merged; being verified.";
   if (stage === "Ready to Merge") return "Reviewed and green; ready to merge.";
-  if (stage === "Deploying") return "Approved for live; deploying and verifying.";
+  if (stage === "Deploying") return "Approved for live; Claude prepares, you confirm in its pane.";
   return `${STATUS_WORD[t.status] ?? t.status}.`;
 }
 
