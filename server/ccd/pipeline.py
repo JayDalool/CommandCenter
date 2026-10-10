@@ -35,6 +35,8 @@ RESUME_STATUS = {"PLAN": "RESEARCHING", "BUILD": "IN_PROGRESS", "REVIEW": "IN_RE
                  "VERIFY": "VERIFYING"}
 PLAN_GATE_LABELS = {"security", "migration", "destructive", "architecture", "product-decision", "ambiguous",
                     "financial", "legal", "gate:plan"}
+MERGE_POLICIES = ("owner", "low-risk")   # registry pipeline "merge"; "owner" is the default
+AUTO_MERGE_KINDS = ("pipeline.auto_merge_held", "pipeline.auto_merged", "pipeline.auto_merge_failed")
 GATES = ("plan", "merge", "ui", "deploy", "failure")
 OWNER_GATES = ("plan", "ui", "deploy", "failure", "merge")
 ROLE_NAMES = ("coordinator", "planner", "implementer", "reviewer", "verifier")
@@ -67,6 +69,8 @@ def policy(ticket, project_key=None):
     if ticket.get("type") in ("SECURITY", "LEGAL"):
         reasons.append(ticket["type"].lower())
     merge = registry.pipeline_of(project_key or ticket.get("project")).get("merge", "owner")
+    if merge not in MERGE_POLICIES:     # the retired "auto", or a typo: Jay accepts
+        merge = "owner"
     return {
         "plan": "owner" if reasons else "auto",
         "planReasons": reasons,
@@ -117,8 +121,10 @@ def visible_stage(t, w=None):
 
 
 def needs_acceptance(t, w):
-    """Gate 3 — Jay accepts before a merge when the project says so, the change is user-facing or UI,
-    the ticket is flagged needs:jay, or its plan changed after it was approved (a re-plan)."""
+    """Gate 3 — Jay accepts before a merge when the project says so ("owner"), the change is user-facing or UI,
+    the ticket is flagged needs:jay, or its plan changed after it was approved (a re-plan). A "low-risk"
+    project needs no acceptance up front: ccd's classifier decides at merge time and opens the merge gate
+    itself (Pipeline.hold_merge) when the PR does not qualify."""
     pol = policy(t)
     flags = {f.replace(":", "_").replace("-", "_") for f in t.get("flags") or []}
     return pol["merge"] == "owner" or pol["ui"] or "needs_jay" in flags or "owner:accept" in (w.get("confirmed") or [])
@@ -177,6 +183,9 @@ class Pipeline:
         self.ts = store
         self.db = store.db
         self.max_lanes = max_lanes
+        # Whether ccd's auto-merge is switched on (config.json `auto_merge`, set by the daemon). While it is off,
+        # a "low-risk" project behaves like "owner": a ready PR opens a merge gate for Jay.
+        self.auto_merge = False
 
     # ---------- reading ----------
 
@@ -346,6 +355,12 @@ class Pipeline:
         r = self.db.execute("SELECT review_head FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id "
                             "WHERE t.key=?", (str(key).upper(),)).fetchone()
         return r[0] if r else None
+
+    def merged_pr(self, key):
+        """The PR ref whose merge was recorded for the ticket (ticket_work.merge.pr), or None."""
+        r = self.db.execute("SELECT w.merge FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id WHERE t.key=?",
+                            (str(key).upper(),)).fetchone()
+        return (json.loads(r[0]) or {}).get("pr") if r and r[0] else None
 
     def rework_prs(self, key):
         """The open PRs {(ref, head)} recorded by the ticket's latest rework, or None if it never had one."""
@@ -528,6 +543,12 @@ class Pipeline:
             return status, work, events + ev
         return self._tx(key, actor, fn)
 
+    def _gate_due(self, t, w, head):
+        """Jay must accept this merge and has not: the project is `owner`, or the ticket needs acceptance, or the
+        project is `low-risk` while ccd's auto-merge is switched off; and no `merge:<head>` approval is recorded."""
+        low_risk_off = policy(t)["merge"] == "low-risk" and not self.auto_merge
+        return (needs_acceptance(t, w) or low_risk_off) and not _merge_ok(w["confirmed"], head)
+
     def _ready(self, t, w, pr):
         """IN_REVIEW → READY_TO_MERGE when the recorded approval covers the PR's current head and CI is green."""
         rv = w["review"]
@@ -537,9 +558,14 @@ class Pipeline:
             return {}, {}, []   # another PR on this ticket says nothing about the reviewed one
         if pr.get("head") != rv["head"] or not pr.get("ciGreen") or pr.get("draft"):
             return {}, {}, []
-        work, events = {}, [("pipeline.ready_to_merge", f"approved head {rv['head'][:7]} with green checks", {})]
-        if needs_acceptance(t, w) and not _merge_ok(w["confirmed"], rv["head"]):
-            work = {"gate": "merge", "gate_reason": f"PR {pr.get('ref') or ''} approved and green".strip()}
+        # "–" (no checks configured) counts as ready, but the record must not call it green.
+        none = bool(pr.get("ciNone"))
+        work, events = {}, [("pipeline.ready_to_merge",
+                             f"approved head {rv['head'][:7]} with {'no CI checks' if none else 'green checks'}",
+                             {"ci": "none" if none else "green"})]
+        if self._gate_due(t, w, rv["head"]):
+            work = {"gate": "merge",
+                    "gate_reason": f"PR {pr.get('ref') or ''} approved and {'has no CI checks' if none else 'green'}".strip()}
             events.append(("pipeline.gate_opened", "merge gate", {"gate": "merge"}))
         return {"status": "READY_TO_MERGE"}, work, events
 
@@ -563,11 +589,67 @@ class Pipeline:
                 why = "checks are not green" if not pr.get("ciGreen") else "the PR is a draft again"
                 work = {"gate": None, "gate_reason": None} if w["gate"] == "merge" else {}
                 return {"status": "IN_REVIEW"}, work, [("pipeline.not_ready", f"back to review: {why}", {})]
+            if t["status"] == "READY_TO_MERGE" and rv["verdict"] == "APPROVE" and pr.get("head") == rv["head"] \
+                    and not w["gate"] and self._gate_due(t, w, rv["head"]):
+                # Ready before the rules changed (or before auto-merge was switched off): the merge gate that
+                # `_ready` opens only on the IN_REVIEW → READY_TO_MERGE move is opened now, so it is in Needs Jay.
+                none = bool(pr.get("ciNone"))
+                return {}, {"gate": "merge", "gate_reason": f"PR {pr.get('ref') or ''} approved and "
+                                                            f"{'has no CI checks' if none else 'green'}".strip()}, \
+                    [("pipeline.gate_opened", "merge gate", {"gate": "merge"})]
             return self._ready(t, w, pr)
         t = self.ts.get(key)
         if t["status"] not in ("IN_REVIEW", "READY_TO_MERGE"):
             return t, [], []
         return self._tx(key, "system:automation", fn)
+
+    def merge_candidates(self, project):
+        """Keys of the project's tickets ccd's auto-merge should look at: READY_TO_MERGE, no gate open, an
+        approving review recorded, Jay's `merge:<head>` decision not given, and nothing recorded yet for that
+        reviewed head (a hold, a merge or a failure is final for a head: only a new head, which needs a new review,
+        makes it a candidate again)."""
+        out = []
+        for key, tid, head, confirmed in self.db.execute(
+                "SELECT t.key, t.id, w.review_head, w.confirmed FROM tickets t JOIN ticket_work w ON w.ticket_id=t.id "
+                "WHERE t.project=? AND t.status='READY_TO_MERGE' AND t.archived=0 AND w.gate IS NULL "
+                "AND w.review_verdict='APPROVE' AND w.review_head IS NOT NULL ORDER BY t.id", (project,)).fetchall():
+            if _merge_ok(json.loads(confirmed) if confirmed else [], head):
+                continue    # Jay already decided about this head (he closed a merge gate): ccd does not second-guess
+            if not self.auto_merge_marked(tid, head):
+                out.append(key)
+        return out
+
+    def auto_merge_marked(self, tid, head):
+        """True when the latest auto-merge event on this ticket (held, merged or failed) is for this head."""
+        marks = ",".join("?" * len(AUTO_MERGE_KINDS))
+        r = self.db.execute(f"SELECT data FROM ticket_events WHERE ticket_id=? AND kind IN ({marks}) "
+                            "ORDER BY id DESC LIMIT 1", (tid, *AUTO_MERGE_KINDS)).fetchone()
+        return bool(r) and json.loads(r[0] or "{}").get("head") == head
+
+    def hold_merge(self, key, head, reason, failed=False):
+        """ccd's auto-merge would not (or could not) merge this ticket's PR at `head`: open a merge gate in Needs
+        Jay with the reason and record why. Never reopens a gate that is already open, and does nothing when
+        `head` is not the reviewed head any more or the ticket has left READY_TO_MERGE."""
+        reason = _text(re.sub(r"[\x00-\x1f\x7f]+", " ", str(reason or "")).strip()[:280], 280, "reason",
+                       multiline=False) or "no reason given"
+        kind = "pipeline.auto_merge_failed" if failed else "pipeline.auto_merge_held"
+        said = "auto-merge failed" if failed else "auto-merge held"
+
+        def fn(tid, t, w, at):
+            if t["status"] != "READY_TO_MERGE" or w["gate"] or w["review"]["head"] != head:
+                return {}, {}, []
+            return {}, {"gate": "merge", "gate_reason": f"{said}: {reason}"[:300]}, \
+                [(kind, f"{said} at {str(head)[:7]}: {reason}", {"head": head, "reason": reason}),
+                 ("pipeline.gate_opened", "merge gate", {"gate": "merge"})]
+        return self._tx(key, "system:auto-merge", fn)
+
+    def auto_merged(self, key, head, pr_ref, ci):
+        """ccd merged the PR (gh succeeded). Records it; the ticket moves to VERIFYING when the GitHub poll sees the
+        merge, through `merged()` as for any merge. `ci` is "none" or "green": the text never says green for none."""
+        checks = "no CI checks" if ci == "none" else "CI green"
+        return self._tx(key, "system:auto-merge", lambda tid, t, w, at: (
+            {}, {}, [("pipeline.auto_merged", f"{pr_ref} merged by ccd at {str(head)[:7]} ({checks})",
+                      {"head": head, "pr": pr_ref, "ci": ci})]))
 
     def merged(self, key, pr_ref, sha=None):
         """A linked PR merged (the GitHub poll moved the ticket to VERIFYING): record it, close the merge gate."""
@@ -620,16 +702,18 @@ class Pipeline:
         return {"status": "DONE"}, {"gate": None, "gate_reason": None}, [("pipeline.done", "done", {})]
 
     def confirm(self, key, gate, actor, via=None):
-        """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock). `via="go-live"` marks a
-        live-deploy approval given by Go Live: approvedBy "jay:go-live", and the event says the deploy was approved
-        for a PREPARED deploy that Jay confirms in the coordinator's pane. The record still permits `deployed`
-        (the pane confirmation is Jay's, and nothing here can check it)."""
+        """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock). `via` marks a
+        live-deploy approval whose message only asks Claude to PREPARE: "go-live" (Go Live) gives approvedBy
+        "jay:go-live", "gate" (the ticket's deploy gate) gives "jay:gate". Either way the event says the deploy was
+        approved for a PREPARED deploy that Jay confirms in the pane. The record is still a full live-deploy approval
+        and permits `deployed` (it checks only approvedAt; the pane confirmation is Jay's, and nothing here can
+        check it)."""
         if actor != "jay":
             raise TaskError(403, "only Jay closes an owner gate")
         if gate not in GATES:
             raise TaskError(400, f"gate must be one of {', '.join(GATES)}")
         by = f"{actor}:{via}" if via else actor
-        said = ("approved for a prepared deploy (Jay confirms in the pane)" if via == "go-live"
+        said = ("approved for a prepared deploy (Jay confirms in the pane)" if via in ("go-live", "gate")
                 else "Jay approved the live deployment")
 
         def fn(tid, t, w, at):

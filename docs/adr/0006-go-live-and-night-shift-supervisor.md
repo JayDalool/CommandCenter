@@ -57,8 +57,7 @@ starts the morning deploy) were added with two features that type into a Claude 
 
 - The message itself orders no deploy and asks Claude to wait for Jay in the pane. That wait is a convention
   carried by the message text: the approval Go Live records would let an agent record a live deploy, and ccd
-  cannot check what Jay said in the pane. The per-ticket **Deploy Live** button (`GateCard.tsx`) still types
-  "Deploy it now" after Jay approves; it is not changed here (follow-up ticket).
+  cannot check what Jay said in the pane. The per-ticket deploy button had the same gap; see the CC-034 update below.
 - Go Live can be refused for up to 12 hours after a press if the coordinator never records the deploy. Jay can
   still deploy by hand; a later Go Live needs that record (or the 12 hours) first.
 - A long, quiet night can end at the cutoff with work left. The morning report says what is left.
@@ -69,3 +68,12 @@ starts the morning deploy) were added with two features that type into a Claude 
 - A per-project cutoff or reminder limit in the registry, if one global value stops fitting.
 - Recording the plan file path on the ticket so the Dashboard can link to it.
 - `Pipeline.held` follows direct `blocks` relations only; making it transitive is a separate decision.
+
+## Update 2026-10-09 (CC-034)
+
+The per-ticket deploy gate now follows the same rule. The button is **Approve live deploy** (`GateCard.tsx`; WorkPanel
+uses the same path). It is still a real live-deploy approval, but it is marked `approvedBy: "jay:gate"` with the event
+"approved for a prepared deploy (Jay confirms in the pane)", and the message typed into the task session
+(`daemon.GATE_DEPLOY_TEMPLATE`) asks Claude to PREPARE (steps, migrations, checks, rollback) and wait for Jay to confirm in
+the pane. "Deploy it now" is gone. As with Go Live, the wait rests on the message text only: `deployed` checks just
+`approvedAt`. The plan stays in the pane; it is not saved to a file.

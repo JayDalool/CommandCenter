@@ -27,9 +27,10 @@ For every open task decide:
 2. Review (IN_REVIEW): a FRESH reviewer that did not write it, on the exact PR head; record it with
    pipeline_cli review <KEY> --role reviewer --session <fresh reviewer session> --verdict … --head <sha>.
    Fix what it finds (rework) and review again.
-3. Merge (READY_TO_MERGE) only when `work <KEY>` shows gate null, CI is green on that exact head and the review
-   approved that head. An open merge gate is Jay's: leave it. SamVision and GauzeMate: Jay merges every PR —
-   take them to Ready to Merge and stop there.
+3. Ready to merge (READY_TO_MERGE): never merge; ccd (low-risk) or Jay merges. Never run `gh pr merge`, in any
+   project. Take the ticket to Ready to Merge on an approved head with CI green (or no CI checks) and stop there.
+   ccd merges only the low-risk PRs its policy allows (Command Center tests and docs, when Jay has switched it
+   on); every other PR, and any ticket with an open merge gate, waits for Jay.
 4. Verify merged work (VERIFYING) on main and record it: pipeline_cli verify <KEY> --role verifier …
 5. Plan (INBOX, PROPOSED, RESEARCHING): investigate the code, record a plan with acceptance criteria
    (pipeline_cli plan <KEY> …). A plan that needs Jay waits for him; move on.
@@ -55,9 +56,9 @@ an Inbox task: pipeline_cli add <project> --role coordinator --label night-findi
 
 ## Never, tonight or any night
 
-- deploy or go live, anywhere; no `deployed`, no `deploy-request --env live`. Jay's Go Live only asks for a prepared deploy, and he confirms it himself.
+- deploy or go live, anywhere; no `deployed`, no `deploy-request --env live`. Jay's Go Live and Approve live deploy only ask for a prepared deploy, and he confirms it himself.
 - touch production data, run migrations against production, use --apply, read or print secrets.
-- merge where a gate is open, merge red CI, force-push, rewrite history, delete branches or files you did not create.
+- merge any PR (`gh pr merge`, the GitHub merge button or API), force-push, rewrite history, delete branches or files you did not create.
 - change rules, CI, branch protection, permissions or this workflow.
 - work in another repository, or start, duplicate or close another Claude session.
 - copy licensed data, records, addresses or secrets into tasks, PRs, notes or reports.

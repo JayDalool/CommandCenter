@@ -47,7 +47,10 @@ own; when ccd is down, it builds locally exactly as before.
   prepare the deploy (runbook steps, checks, rollback plan) and wait. Jay confirms
   the deploy himself in the coordinator's pane. The message orders no deploy, but
   the approval it records is a full live-deploy approval, so that wait rests on
-  the message text, not on ccd (ADR 0006). ccd runs no deploy. Terminals, Claude
+  the message text, not on ccd (ADR 0006). The per-ticket **Approve live deploy**
+  button works the same way: a real live-deploy approval, marked `jay:gate`, and
+  a message that asks Claude to prepare and wait for Jay in the pane (the wait
+  rests on the message text only). ccd runs no deploy. Terminals, Claude
   input, answers and file writes need a second credential, Developer Unlock
   (once per app session, [docs/SECURITY.md](docs/SECURITY.md)). A test asserts
   the route table exactly. See [docs/API.md](docs/API.md).
@@ -80,6 +83,8 @@ cd server && .venv/bin/pip install -r requirements-dev.txt
 ../scripts/ccd-canary.py check|stop-start|degrade|replay <seq>|ws-listen <s>|measure <s>
 ```
 
+CI (`.github/workflows/ci.yml`) runs the backend unittest suite and the web typecheck and tests on every pull request to `main` and on every push to `main`.
+
 ## Web UI
 
 ```
@@ -94,15 +99,17 @@ http://127.0.0.1:7777, paste the token (`ssh jay-server cat
 .config/command-center/ccd.token | clip`). Tickets live in
 `~/command-center/data/tasks.db` — back it up as data.
 
-## Go live with a branch (one step)
+## Go live (main)
 
 ```
-scripts/go-live.sh                 # backs up tasks.db, switches the live checkout, builds the UI, restarts ccd
+scripts/go-live.sh --dry-run       # prints the origin/main sha, the new commits and the rollback; changes nothing
+scripts/go-live.sh                 # deploys origin/main: backs up tasks.db, switches the live checkout, builds the UI, restarts ccd
+scripts/go-live.sh --branch <name> --i-know   # emergency hotfix only: another branch, not reviewed
 scripts/reconcile-cc-ui.py         # dry run: what the control room does to the old CC UI tickets
 scripts/reconcile-cc-ui.py --apply
 ```
 
-`go-live.sh` prints the exact rollback (previous branch + the tasks.db backup) when it finishes.
+main is the reviewed release line. `go-live.sh` prints the exact rollback (previous commit + the tasks.db backup) when it finishes.
 
 ## Roll back
 

@@ -10,6 +10,7 @@ fields it needs into its state (see `public_project`).
   CCD_DATA_DIR   tasks.db        (default: ~/command-center/data)  — product data, never pruned
   CCD_HANDOFF    handoff notes   (default: ~/command-center/handoff)
   CCD_PORT       loopback port   (default: 7777; the host is never configurable)
+  CCD_AUTO_MERGE_STOP  kill-switch file (default: <CCD_STATE_DIR>/auto-merge.stop): while it exists ccd merges nothing
 """
 import json
 import os
@@ -29,6 +30,9 @@ SHARE_DIR = Path(os.environ.get("CCD_SHARE_DIR", Path.home() / ".local" / "share
 ATTACH_DIR = SHARE_DIR / "attachments"
 LAUNCHER_DIR = Path(os.environ.get("CCD_LAUNCHER_DIR", SHARE_DIR / "launcher"))
 HERDR_SOCKET = Path(os.environ.get("CCD_HERDR_SOCKET", Path.home() / ".config" / "herdr" / "herdr.sock"))
+
+# While this file exists ccd's auto-merge does nothing (CC-025). Checked right before every merge.
+AUTO_MERGE_STOP = Path(os.environ.get("CCD_AUTO_MERGE_STOP", STATE_DIR / "auto-merge.stop"))
 
 HOST = "127.0.0.1"  # owner decision 6: loopback only. Deliberately not configurable.
 PORT = int(os.environ.get("CCD_PORT", "7777"))
@@ -55,6 +59,9 @@ DEFAULTS = {
     # Remove a DONE ticket's clean, fully pushed worktree after ccd's git poll (ccd/worktree_cleanup.py).
     # false = never remove anything.
     "worktree_cleanup": True,
+    # ccd may merge low-risk reviewed PRs itself (CC-025). Off until Jay sets it true; read at start.
+    # A project must also say pipeline merge "low-risk" in ccd/registry.py.
+    "auto_merge": False,
 }
 
 # The only project fields that may leave the server.

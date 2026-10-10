@@ -46,26 +46,30 @@ PROJECTS = {
                       "root": "/srv/server/repos/GauzeMate",        "github": "JayDalool/GauzeMate",
                       "pipeline": {"merge": "owner"}},   # Jay accepts every GauzeMate merge (2026-10-09)
     "mfe":           {"name": "MyFamilyExpenses", "prefix": "MFE",  "legacy": (),
-                      "root": "/srv/server/repos/MyFamilyExpenses", "github": "JayDalool/MyFamilyExpenses"},
+                      "root": "/srv/server/repos/MyFamilyExpenses", "github": "JayDalool/MyFamilyExpenses",
+                      "pipeline": {"merge": "owner"}},   # Jay accepts every MFE merge (2026-10-09)
     "commandcenter": {"name": "Command Center",   "prefix": "CC",   "legacy": (),
-                      "root": "/srv/server/repos/CommandCenter",    "github": "JayDalool/CommandCenter"},
+                      "root": "/srv/server/repos/CommandCenter",    "github": "JayDalool/CommandCenter",
+                      # The only project that may auto-merge, and only its tests and docs (merge_policy.ALLOW).
+                      "pipeline": {"merge": "low-risk"}},
     "gyst":          {"name": "GYST / LifeOps",   "prefix": "GYST", "legacy": (),
-                      "root": "/srv/server/repos/gyst-lifeops",     "github": "JayDalool/gyst-lifeops"},
+                      "root": "/srv/server/repos/gyst-lifeops",     "github": "JayDalool/gyst-lifeops",
+                      "pipeline": {"merge": "owner"}},   # Jay accepts every GYST merge (2026-10-09)
 }
 
 # Ticket pipeline defaults (plans/TICKET-PIPELINE-V1.md), the one place they live.
-# merge: "auto" — Claude may merge clean work once every applicable gate passed
-# (plans/COMMAND-CENTER-CONTROL-ROOM.md §22): tests/CI, a fresh review of the exact head,
-# and Jay's acceptance when the change is user-facing/UI, flagged needs:jay or re-planned
-# after approval (pipeline.needs_acceptance). "owner" — Jay accepts every merge.
-# A live deployment always waits for Jay, whatever the merge policy.
+# merge: "owner" (the default) — Jay accepts and merges every PR. "low-risk" — ccd itself merges a PR that
+# merge_policy.classify calls low-risk (tests and docs only, small, reviewed at its exact head), and only while
+# config.json `auto_merge` is true and ~/command-center/state/auto-merge.stop does not exist; anything else
+# opens a merge gate for Jay (CC-025, docs/adr/0007-auto-merge-policy.md). Agents never merge. Any other value
+# (including the retired "auto") is read as "owner" (pipeline.policy). A live deployment always waits for Jay.
 # jay_first: a ticket does not start (pipeline `start`) while it — or an open ticket it is blocked by — has an
 # open question for Jay, a plan waiting on his approval or a blocker only he can clear (Pipeline.held). Every
 # other ticket goes ahead. Lawyer tasks (needs:legal, type LEGAL) and sign-offs on finished work do not hold.
 # Implementation lanes: at most 2 tickets IN_PROGRESS with a worktree per project (pipeline.MAX_LANES); a
 # project may set "max_lanes" in its pipeline dict.
 # A project overrides with a "pipeline" dict in PROJECTS above.
-PIPELINE_DEFAULTS = {"merge": "auto", "ui_review": False, "jay_first": True}
+PIPELINE_DEFAULTS = {"merge": "owner", "ui_review": False, "jay_first": True}
 
 
 def pipeline_of(key):

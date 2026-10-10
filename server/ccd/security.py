@@ -95,7 +95,9 @@ class DeveloperGate:
     tab's memory. The secret itself is never stored by the UI, never returned,
     never logged. Sessions end on lock, after IDLE seconds unused, after TTL
     seconds regardless, and on any ccd restart. Five wrong secrets in five
-    minutes lock unlocking for the rest of those five minutes.
+    minutes lock unlocking for the rest of those five minutes. Wrong sign-in
+    codes are refused, never counted: anyone local can call redeem, and a
+    256-bit, one-time, 120 s code needs no rate limit.
     """
     TTL = 8 * 3600
     IDLE = 2 * 3600
@@ -144,10 +146,10 @@ class DeveloperGate:
         return code, None
 
     def redeem(self, code):
-        """A one-time code → its session id, once, within CODE_TTL. Wrong codes count as failures."""
+        """A one-time code → its session id, once, within CODE_TTL. A wrong code is refused with the same
+        message every time and is never counted: redeem takes no ccd token, so counting guesses would let
+        any local user lock Jay out of unlock and handoff."""
         now = self.clock()
-        if self._failed(now):
-            return None, "too many wrong attempts; wait five minutes"
         hit = None
         if isinstance(code, str) and code:
             for c in list(self.codes):
@@ -155,7 +157,6 @@ class DeveloperGate:
                     hit = self.codes.pop(c)
                     break
         if not hit or now - hit[1] > self.CODE_TTL or hit[0] not in self.sessions:
-            self.fails.append(now)
             return None, "that sign-in link has expired or was already used; start Command Center again"
         return hit[0], None
 

@@ -215,6 +215,22 @@ class Developer(unittest.TestCase):
         g.lock(sid)
         self.assertFalse(g.check(sid))
 
+    def test_unlock_still_locks_its_own_wrong_secrets_but_redeem_never_does(self):
+        now = [1000.0]
+        g = security.DeveloperGate(DEV_SECRET, clock=lambda: now[0])
+        for _ in range(20):
+            self.assertIsNone(g.redeem("x")[0])
+        self.assertIsNotNone(g.unlock(DEV_SECRET)[0])
+        code, _ = g.handoff(DEV_SECRET)
+        self.assertTrue(code)
+        for _ in range(5):
+            g.unlock("wrong")
+        self.assertIn("too many", g.unlock(DEV_SECRET)[1])
+        self.assertIn("too many", g.handoff(DEV_SECRET)[1])
+        self.assertIsNotNone(g.redeem(code)[0])           # the earlier code still redeems
+        now[0] += g.FAIL_WINDOW + 1
+        self.assertIsNotNone(g.unlock(DEV_SECRET)[0])
+
 
 class WorkspaceApi(ApiBase):
     def equip(self, daemon):

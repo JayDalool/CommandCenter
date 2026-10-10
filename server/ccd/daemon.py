@@ -22,7 +22,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import __version__, coordid, coordinators, github, model, registry, sources
+from . import __version__, coordid, coordinators, github, merge_policy, model, registry, sources
 from . import pipeline as pipeline_mod
 from . import herdr as herdr_mod
 from . import importer
@@ -30,7 +30,7 @@ from . import nightshift as nightshift_mod
 from . import records as records_mod
 from . import tasks as tasks_mod
 from . import worktree_cleanup
-from .config import STATE_DIR, public_project
+from .config import AUTO_MERGE_STOP, STATE_DIR, public_project
 
 log = logging.getLogger("ccd")
 
@@ -103,6 +103,20 @@ GO_LIVE_TEMPLATE = (
     "--env live --result pass|fail --evidence \"…\" (it is refused if the approval did not go through: tell Jay).\n"
     "Report in one line when the preparation is ready: {project} go-live plan ready — <commit> — <checks> — "
     "<rollback target>."
+)
+
+# The per-ticket deploy gate (GateCard "Approve live deploy", WorkPanel "Approve deploy"): the same rule as Go Live.
+# The approval is a real live-deploy approval, but the message only asks Claude to PREPARE; Jay confirms the deploy
+# in the task pane. Nothing in ccd enforces that wait: it rests on this text.
+GATE_DEPLOY_TEMPLATE = (
+    "Jay approved the live-deploy gate of {key} in Command Center: PREPARE its deploy. Do not deploy yet.\n"
+    "Use this repository's deploy runbook (docs/deployment.md, or the runbook AGENTS.md / CLAUDE.md names). If there "
+    "is none, stop and tell Jay. Write, in 10 lines or fewer: the steps, the migrations (or none), the pre-deploy "
+    "checks that touch nothing in production, the post-deploy checks, and the rollback plan (the version live now "
+    "and what failure triggers a rollback).\n"
+    "Then stop and wait for Jay to confirm the deploy in this pane. Only after he confirms: deploy, verify it live, "
+    "roll back if a check fails, and record it: python -m ccd.pipeline_cli deployed {key} --role coordinator "
+    "--env live --result pass|fail --evidence \"…\""
 )
 
 # Night shift: the same instructions as Claude's /night-shift skill (scripts/install-claude-commands.sh links
@@ -211,12 +225,26 @@ def oom_kills_24h():
 
 
 class Daemon:
-    def __init__(self, cfg, store, herdr, *, github_fn=None, host_fn=None, git_fn=None, oom_fn=None, tasks=None):
+    def __init__(self, cfg, store, herdr, *, github_fn=None, host_fn=None, git_fn=None, oom_fn=None, tasks=None,
+                 gh_cli=None):
         self.cfg = cfg
         self.store = store
         self.herdr = herdr
         self.tasks = tasks  # TaskStore, durable product data (tasks.db); None = task system off
         self.pipeline = pipeline_mod.Pipeline(tasks) if tasks is not None else None
+        # Auto-merge (CC-025): the config switch is read once, here. `gh_cli(args) -> (code, stdout, stderr)` is the
+        # only way ccd writes to GitHub; tests give it a fake. The stop file is checked before every merge.
+        self.auto_merge_on = cfg.get("auto_merge") is True
+        if self.pipeline is not None:
+            self.pipeline.auto_merge = self.auto_merge_on
+        self.gh_cli = gh_cli or sources._run
+        self.auto_merge_stop = AUTO_MERGE_STOP
+        self._am_busy = False
+        self._am_next = {}    # ticket key → time.monotonic() before which it is not looked at again
+        # ticket key → (review stamp, time.monotonic() when it first had to wait): the 30-minute pending clock.
+        # Memory only, on purpose: a restart merely delays the gate by up to 30 minutes, it never merges earlier.
+        # An entry is dropped when its ticket leaves the candidates (e.g. back to review) or its stamp changes.
+        self._am_waiting = {}
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
@@ -272,6 +300,7 @@ class Daemon:
                  self.housekeeping_loop, self.night_loop]
         self._loops = [asyncio.create_task(fn(), name=fn.__name__) for fn in loops]
         self._event("daemon", "daemon.started", f"ccd {__version__} started", data={"pid": os.getpid()})
+        self._log_merge_policy()
         self._dirty.set()
 
     async def stop(self):
@@ -662,6 +691,7 @@ class Daemon:
         self._decorate(snap)
         self._diff_and_alert(snap)    # synchronous: what it logs IS this snapshot
         self._ticket_automation()
+        await self._auto_merge()
         snap["seq"] = self.seq if quiet else snap_seq
         self.snap = snap
 
@@ -1300,14 +1330,15 @@ class Daemon:
         """The ticket's linked PRs that the last GitHub poll saw open, as pipeline PR states."""
         g = (self.gh.get(ticket["project"]) or {}).get("data") or {}
         refs = {link["ref"] for link in ticket.get("links") or [] if link.get("provider") == "github" and link.get("kind") == "pr"}
-        repo = next((p.get("repo") for p in self.cfg["projects"] if p["key"] == ticket["project"]), None)
+        repo = next((p.get("repo") for p in self.cfg["projects"] if p["key"] == ticket["project"]), None) \
+            or registry.github_of(ticket["project"])
         out = []
         for pr in g.get("prs") if isinstance(g.get("prs"), list) else []:
             ref = f"{repo}#{pr.get('number')}"
             if ref in refs:
                 ci = model.ci_mark(pr.get("statusCheckRollup"))
                 out.append({"ref": ref, "head": pr.get("headRefOid") or "", "ciGreen": ci in ("✓", "–"),
-                            "draft": bool(pr.get("isDraft"))})
+                            "ciNone": ci == "–", "draft": bool(pr.get("isDraft"))})
         return out
 
     def _pr_state(self, ticket):
@@ -1339,7 +1370,10 @@ class Daemon:
         elif op == "confirm":
             if not developer:
                 raise ActionError(403, "Developer Unlock required")
-            r = self._wrap(pl.confirm, key, body.get("gate"), actor)
+            # A live-deploy approval from the ticket's gate is marked "jay:gate": the message asks Claude to
+            # PREPARE and wait for Jay in the pane (GATE_DEPLOY_TEMPLATE), like Go Live.
+            r = self._wrap(pl.confirm, key, body.get("gate"), actor,
+                           "gate" if body.get("gate") == "deploy" else None)
         elif op == "handoff":
             r = self._wrap(pl.handoff, key, body, actor)
         elif op == "block":
@@ -1380,8 +1414,7 @@ class Daemon:
             return (f"Jay moved {key} back to planning: {body.get('reason')}. Re-plan with Opus, record the revised plan "
                     f"and acceptance criteria (python -m ccd.pipeline_cli plan {key} …), and continue only after it is accepted.")
         if op == "confirm" and body.get("gate") == "deploy" and (work.get("deploy") or {}).get("approvedAt"):
-            return (f"Jay approved the live deployment of {key}. Deploy it now, verify it live, then record it: "
-                    f"python -m ccd.pipeline_cli deployed {key} --role coordinator --env live --result pass|fail --evidence \"…\"")
+            return GATE_DEPLOY_TEMPLATE.format(key=key)
         if op == "confirm" and body.get("gate") == "failure":
             return f"Jay cleared the blocker on {key}. Continue from {work.get('stage') or 'the blocked stage'}."
         if op == "confirm" and body.get("gate") == "plan":
@@ -1611,7 +1644,9 @@ class Daemon:
                         ref=ticket["key"], data={"kind": kind},
                         severity="action" if kind in ("pipeline.gate_opened", "pipeline.blocked",
                                                       "pipeline.unreviewed_merge", "pipeline.questions",
-                                                      "pipeline.deploy_requested", "pipeline.replan") else "info")
+                                                      "pipeline.deploy_requested", "pipeline.replan",
+                                                      "pipeline.auto_merge_held", "pipeline.auto_merged",
+                                                      "pipeline.auto_merge_failed") else "info")
         if events:
             self._record_soon(ticket["key"])
 
@@ -1669,9 +1704,15 @@ class Daemon:
 
           open PR whose title or branch LEADS with a key (same project) → link it, set branch
           ...ticket READY_TO_IMPLEMENT or IN_PROGRESS                      → IN_REVIEW
-          linked PR approved, checks green, not draft, ticket IN_REVIEW    → READY_TO_MERGE
+          linked PR approved, no failing or pending check ("–": no checks at all, said as such), not draft,
+          ticket IN_REVIEW                                                 → READY_TO_MERGE
           linked PR no longer ready, ticket READY_TO_MERGE                 → IN_REVIEW
           linked PR merged (found by link, not title), IN_REVIEW/READY_TO_MERGE → VERIFYING
+
+        A merge moves a ticket once; a reopened ticket waits for a new merge. GitHub keeps listing a merged PR,
+        so the move is skipped when automation already made it for that PR (a status event with trigger
+        "PR #n merged"), or when the pipeline already recorded that merge. Known gap: a by-hand move to
+        VERIFYING leaves no automation event, so an old merge can still fire after a later reopen.
 
         Once per fresh GitHub poll per project. Never closes a ticket
         (VERIFYING → DONE is a verifier's or Jay's call) and never undoes a
@@ -1699,9 +1740,10 @@ class Daemon:
                     ci = model.ci_mark(pr.get("statusCheckRollup"))
                     ready = pr.get("reviewDecision") == "APPROVED" and ci in ("✓", "–") and not pr.get("isDraft")
                     # What the pipeline needs to tie a recorded review to this PR's current head.
-                    # "–" (no checks configured) counts as green, as for GitHub approvals above.
+                    # "–" (no checks configured) counts as ready, as for GitHub approvals above, but the
+                    # pipeline says "no CI checks" for it, never "green" (ciNone).
                     pr_state = {"ref": ref, "head": pr.get("headRefOid") or "", "ciGreen": ci in ("✓", "–"),
-                                "draft": bool(pr.get("isDraft"))}
+                                "ciNone": ci == "–", "draft": bool(pr.get("isDraft"))}
                     for k in keys:
                         if not self.tasks.has_link(k, "github", "pr", ref):
                             t, _ = self.tasks.link(k, "github", "pr", ref, github.pr_ref_url(ref), pr.get("title"),
@@ -1729,7 +1771,8 @@ class Daemon:
                             # A pipeline ticket: only its recorded review, tied to this PR's head, decides.
                             self._pipeline_result(*self.pipeline.sync_pr(k, pr_state))
                         elif ready:
-                            self._auto(k, ("IN_REVIEW",), "READY_TO_MERGE", f"PR #{n} approved, checks green, not draft")
+                            self._auto(k, ("IN_REVIEW",), "READY_TO_MERGE",
+                                       f"PR #{n} approved, {'no CI checks' if ci == '–' else 'checks green'}, not draft")
                         else:
                             self._auto(k, ("READY_TO_MERGE",), "IN_REVIEW",
                                        f"PR #{n} no longer approved with green checks")
@@ -1738,12 +1781,168 @@ class Daemon:
             for m in data.get("merged") if isinstance(data.get("merged"), list) else []:
                 try:
                     ref = f"{p['repo']}#{m['number']}"
+                    why = f"PR #{m['number']} merged"
                     for k in self.tasks.keys_linked("github", "pr", ref):
-                        self._auto(k, ("IN_REVIEW", "READY_TO_MERGE"), "VERIFYING", f"PR #{m['number']} merged")
+                        # A merge moves a ticket once. GitHub keeps listing a merged PR for a while, so after a
+                        # reopen or rework the old merge must not send the ticket on to VERIFYING again.
+                        if self.tasks.moved_by(k, "VERIFYING", why) or (
+                                self.pipeline.participating(k) and self.pipeline.merged_pr(k) == ref):
+                            continue
+                        self._auto(k, ("IN_REVIEW", "READY_TO_MERGE"), "VERIFYING", why)
                         if self.pipeline.participating(k):
                             self._pipeline_result(*self.pipeline.merged(k, ref, ((m.get("mergeCommit") or {}).get("oid"))))
                 except Exception as e:  # noqa: BLE001
                     log.warning(json.dumps({"msg": "ticket automation skipped a merge", "error": repr(e)[:200]}))
+
+    # ---------- auto-merge (CC-025, docs/adr/0007-auto-merge-policy.md) ----------
+
+    AUTO_MERGE_WAIT_LIMIT = 30 * 60   # seconds a PR may stay pending (CI running, mergeability unknown) before a gate
+
+    AUTO_MERGE_FIELDS = ("state,isDraft,mergeable,baseRefName,headRefOid,isCrossRepository,files,additions,deletions,"
+                         "statusCheckRollup")
+
+    def _auto_merge_projects(self):
+        """Registry projects whose merge policy is low-risk AND that have an allowlist: the only ones ccd merges for."""
+        return [k for k in registry.PROJECTS
+                if pipeline_mod.policy({"project": k}, k)["merge"] == "low-risk" and merge_policy.ALLOW.get(k)]
+
+    def _log_merge_policy(self):
+        """Startup: whether ccd may merge anything, as a security event (the audit trail of the first GitHub write)."""
+        self._event("security", "merge.policy", self._merge_policy_text(), data={"status": self._merge_policy_state()})
+
+    def _merge_policy_state(self):
+        return "enabled" if self.auto_merge_on and self._auto_merge_projects() else "disabled"
+
+    def _merge_policy_text(self):
+        projects = ", ".join(self._auto_merge_projects()) or "none"
+        stopped = " (stop file present)" if self._auto_merge_stopped() else ""
+        return (f"auto-merge {'ON' if self.auto_merge_on else 'OFF'} (config auto_merge); "
+                f"low-risk projects in the registry: {projects}{stopped}")
+
+    def _auto_merge_stopped(self):
+        """The kill switch: the stop file exists. Anything but "does not exist" counts as stopped."""
+        try:
+            return Path(self.auto_merge_stop).exists()
+        except OSError:
+            return True
+
+    def _gh_json(self, args):
+        code, out, err = self.gh_cli(args)
+        if code != 0:
+            raise OSError((err.strip().splitlines() or ["gh failed"])[-1][:160])
+        return json.loads(out)
+
+    async def _auto_merge(self):
+        """Merge the reviewed PRs of low-risk projects that the classifier accepts. Runs after _ticket_automation.
+
+        Needs BOTH switches (config `auto_merge` true, registry merge "low-risk") and no stop file. For each
+        READY_TO_MERGE ticket with no gate: a fresh `gh pr view`, merge_policy.classify, then either the merge
+        (`gh pr merge N --repo R --merge --match-head-commit <reviewed head>`: GitHub refuses it if the head moved) or
+        a merge gate in Needs Jay with the reason. gh runs in a worker thread, so the event loop never waits on it.
+        A hold or a failure is final for that head (Pipeline.merge_candidates): never retried, never --admin.
+        """
+        if self.tasks is None or not self.auto_merge_on or self._am_busy:
+            return
+        self._am_busy = True
+        try:
+            todo = [(p, self.pipeline.merge_candidates(p)) for p in self._auto_merge_projects()]
+            live = {k for _, keys in todo for k in keys}
+            for key in [k for k in self._am_waiting if k not in live]:
+                del self._am_waiting[key]    # left READY_TO_MERGE (or was decided): a return starts a new clock
+            for project, keys in todo:
+                for key in keys:
+                    if self._auto_merge_stopped() or self._stopping:
+                        return
+                    try:
+                        await self._auto_merge_one(project, key)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:  # noqa: BLE001 — one ticket must not stop the others or the derive
+                        log.warning(json.dumps({"msg": "auto-merge skipped a ticket", "key": key, "error": repr(e)[:200]}))
+        finally:
+            self._am_busy = False
+
+    async def _auto_merge_one(self, project, key):
+        if self._am_next.get(key, 0) > time.monotonic():
+            return
+        repo = registry.github_of(project)
+        t = self.tasks.get(key)
+        w = self.pipeline.work(key)
+        rv = w["review"]
+        head = rv["head"]
+        open_prs = [p["ref"] for p in self._open_prs(t)]
+        pr_ref = rv["pr"] if rv.get("pr") and rv["pr"].rpartition("#")[0] == repo else (open_prs[0] if len(open_prs) == 1 else None)
+        number = (pr_ref or "").rpartition("#")[2]
+        if not number.isdigit():
+            self._auto_merge_hold(t, head, "no single open PR to merge was found for this ticket")
+            return
+        try:
+            pr = await asyncio.to_thread(self._gh_json, ["gh", "pr", "view", number, "--repo", repo,
+                                                         "--json", self.AUTO_MERGE_FIELDS])
+        except (OSError, ValueError) as e:   # gh or GitHub is down: look again in a few minutes, change nothing
+            self._am_next[key] = time.monotonic() + 300
+            self._event("tasks", "task.pipeline", f"{key} auto-merge could not read PR #{number}: {e}"[:300], severity="warn",
+                        project=project, ref=key, data={"kind": "pipeline.auto_merge_unreadable"})
+            return
+        if not isinstance(pr, dict) or pr.get("state") == "MERGED":
+            return    # merged already (by Jay, or by us a moment ago): the GitHub poll moves the ticket
+        if pr.get("headRefOid") != head:   # a newer head: the GitHub poll sends the ticket back to review; nothing to hold
+            self._am_next[key] = time.monotonic() + 60
+            return
+        d = merge_policy.classify(project, t, w, pr, pr_ref, open_prs, pipeline_mod.policy(t, project)["merge"])
+        if d.wait:
+            stamp = self._review_stamp(w)
+            since = self._am_waiting.setdefault(key, (stamp, time.monotonic()))
+            if since[0] != stamp:
+                since = self._am_waiting[key] = (stamp, time.monotonic())
+            if time.monotonic() - since[1] > self.AUTO_MERGE_WAIT_LIMIT:
+                self._am_waiting.pop(key, None)
+                self._auto_merge_hold(t, head, f"{'; '.join(d.reasons[:2])} for over "
+                                               f"{self.AUTO_MERGE_WAIT_LIMIT // 60} minutes")
+                return
+            self._am_next[key] = time.monotonic() + 60
+            return
+        self._am_waiting.pop(key, None)
+        if not d.ok:
+            self._auto_merge_hold(t, head, "; ".join(d.reasons[:3]))
+            return
+        # Everything above awaited: re-read the ticket, re-check it, then the kill switch, then merge, with no await
+        # between. A label or flag added while `gh pr view` ran (a `ui` label, needs:jay) holds the merge here.
+        t2 = self.tasks.get(key)
+        w2 = self.pipeline.work(key)
+        if t2["status"] != "READY_TO_MERGE" or w2["gate"] or w2["review"]["head"] != head \
+                or w2["review"]["verdict"] != "APPROVE":
+            return
+        late = merge_policy.ticket_reasons(t2, w2)
+        if late:
+            self._auto_merge_hold(t2, head, "; ".join(late[:3]))
+            return
+        if self._auto_merge_stopped():
+            return
+        code, out, err = await asyncio.to_thread(self.gh_cli, ["gh", "pr", "merge", number, "--repo", repo, "--merge",
+                                                              "--match-head-commit", head])
+        if code != 0:
+            why = (err.strip().splitlines() or ["gh pr merge failed"])[-1][:200]
+            self._auto_merge_hold(t, head, f"gh could not merge it: {why}", failed=True)
+            return
+        self._event("security", "merge.auto", f"ccd merged {pr_ref} for {key} at {head[:7]} ({'no CI checks' if d.ci == 'none' else 'CI green'})",
+                    project=project, ref=key, data={"number": int(number), "ci": d.ci})
+        self._pipeline_result(*self.pipeline.auto_merged(key, head, pr_ref, d.ci))
+
+    @staticmethod
+    def _review_stamp(w):
+        """What the pending clock is for: the reviewed head, its PR and when the reviewer was recorded. A new
+        review (even at the same head) or a new head starts a new clock."""
+        rv = w["review"]
+        return (rv.get("head"), rv.get("pr"), ((w.get("roles") or {}).get("reviewer") or {}).get("at"))
+
+    def _auto_merge_hold(self, ticket, head, reason, failed=False):
+        """Open the merge gate with the reason (once per head) and tell the owner queue."""
+        ticket, changes, events = self.pipeline.hold_merge(ticket["key"], head, reason, failed)
+        if events:
+            self._event("security", "merge.auto", f"ccd {'could not merge' if failed else 'held'} {ticket['key']}: {reason}"[:300],
+                        project=ticket["project"], ref=ticket["key"], data={"reason": reason[:200]})
+        self._pipeline_result(ticket, changes, events)
 
     # ---------- read API ----------
 

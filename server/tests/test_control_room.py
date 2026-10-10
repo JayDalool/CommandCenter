@@ -97,35 +97,58 @@ class Blockers(Base):
 
 
 class MergeAcceptance(Base):
-    """Clean work merges without Jay; Jay accepts UI, needs:jay, owner-policy and re-planned work."""
-    def gz(self, **fields):
-        t, _ = self.ts.create("gyst", "Inbox rules", **fields)
+    """Jay accepts every merge (owner, the default) unless the project is low-risk and ccd's auto-merge is on;
+    UI, needs:jay and re-planned work always need him."""
+    def cc(self, project="commandcenter", **fields):
+        t, _ = self.ts.create(project, "Inbox rules", **fields)
         k = t["key"]
         self.pl.plan(k, PLAN, "agent:planner")
         self.pl.start(k, f"{k}-rules", f"/srv/w/{k}", "agent:coordinator")
         self.ts.update(k, {"status": "IN_REVIEW"}, "system:automation")
         return k
 
-    def test_clean_work_needs_no_merge_gate(self):
-        k = self.gz()
-        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=dict(self.pr(), ref="JayDalool/gyst#1"))
-        w = self.pl.work(k)
+    def approve(self, k, pr=None):
+        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1",
+                       pr=dict(pr or self.pr(), ref="JayDalool/CommandCenter#1"))
+        return self.pl.work(k)
+
+    def test_low_risk_work_needs_no_merge_gate_while_auto_merge_is_on(self):
+        self.pl.auto_merge = True
+        k = self.cc()
+        w = self.approve(k)
         self.assertEqual((self.ts.get(k)["status"], w["gate"], w["visibleStage"]), ("READY_TO_MERGE", None, "Ready to Merge"))
 
-    def test_ui_and_owner_projects_and_replans_need_jay(self):
-        k = self.gz(labels=["ui"])
-        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=dict(self.pr(), ref="JayDalool/gyst#1"))
-        self.assertEqual(self.pl.work(k)["gate"], "merge")
+    def test_low_risk_work_is_gated_for_jay_while_auto_merge_is_off(self):
+        self.assertFalse(self.pl.auto_merge)          # the default
+        k = self.cc()
+        w = self.approve(k)
+        self.assertEqual((self.ts.get(k)["status"], w["gate"]), ("READY_TO_MERGE", "merge"))
+
+    def test_owner_projects_and_ui_and_replans_need_jay(self):
+        self.pl.auto_merge = True
+        k = self.cc(labels=["ui"])
+        self.assertEqual(self.approve(k)["gate"], "merge")
+        g = self.cc("gyst")                      # no merge policy of its own: the default is owner
+        self.pl.review(g, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=dict(self.pr(), ref="JayDalool/gyst#1"))
+        self.assertEqual(self.pl.work(g)["gate"], "merge")
         sv = self.ticket()                       # SamVision keeps its owner merge rule
         self.to_review(sv)
         self.pl.review(sv, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr())
         self.assertEqual(self.pl.work(sv)["gate"], "merge")
-        t = self.ts.get(self.gz())
+        t = self.ts.get(self.cc())
         self.assertFalse(needs_acceptance(t, {"confirmed": []}))
         self.assertTrue(needs_acceptance(t, {"confirmed": ["owner:accept"]}))
-        self.assertEqual(registry.pipeline_of("samvision")["merge"], "owner")
-        self.assertEqual(registry.pipeline_of("gauzemate")["merge"], "owner")      # Jay accepts every GauzeMate merge
-        self.assertEqual(registry.pipeline_of("gyst")["merge"], "auto")
+        for proj in ("samvision", "gauzemate", "mfe", "gyst"):
+            self.assertEqual(registry.pipeline_of(proj)["merge"], "owner", proj)
+        self.assertEqual(registry.pipeline_of("commandcenter")["merge"], "low-risk")
+        self.assertEqual(registry.PIPELINE_DEFAULTS["merge"], "owner")
+
+    def test_the_retired_auto_value_reads_as_owner(self):
+        from unittest import mock
+        t = self.ts.get(self.cc("gyst"))
+        with mock.patch.dict(registry.PROJECTS["gyst"], {"pipeline": {"merge": "auto"}}):
+            self.assertEqual(self.pl.work(t["key"])["policy"]["merge"], "owner")
+            self.assertTrue(needs_acceptance(t, {"confirmed": []}))
 
 
 class LiveDeploy(Base):
@@ -623,8 +646,8 @@ class ControlRoomApi(PipelineApi):
         self.assertTrue(text.startswith("Night shift from Jay via command-center."))
         self.assertIn("pipeline_cli tasks samvision", text)
         self.assertIn("deploy or go live, anywhere", text)
-        self.assertIn("gate null", text)
-        self.assertIn("SamVision and GauzeMate: Jay merges every PR", text)
+        self.assertIn("Never run `gh pr merge`", text)
+        self.assertIn("never merge; ccd (low-risk) or Jay merges", text)
         self.assertIn("Status: complete", text)
         self.assertNotIn("<project>", text)
         self.assertNotIn("description:", text)                                       # the command's frontmatter
@@ -712,6 +735,31 @@ class ControlRoomApi(PipelineApi):
         self.assertNotIn("Authorized by this message", text)
         self.assertNotIn("deploy samvision to production now", text)
         self.assertTrue(self.get("/api/night-shift").json()["projects"]["samvision"]["goLiveAt"])
+
+    def test_ticket_deploy_gate_approval_asks_claude_to_prepare_and_wait_for_jay_in_the_pane(self):
+        self.ticket("VERIFYING")
+        self.step("deploy-request", {"env": "live", "what": "valuation v2", "verification": "verifier pass"})
+        self.task_agent()
+        self.assertEqual(self.get("/api/tasks/SV-056/work").json()["gate"], "deploy")
+        r = self.client.post("/api/tasks/SV-056/work/confirm", content=json.dumps({"gate": "deploy"}),
+                             headers=dict(JSON, **self.dev()))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.json()["nudge"]["delivered"], r.json()["nudge"])
+        sent = self.prompts()
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["target"], "w7:p1")                                   # the existing task session
+        text = sent[0]["text"]
+        self.assertTrue(text.startswith("Jay approved the live-deploy gate of SV-056 in Command Center: PREPARE its deploy."))
+        for needle in ("PREPARE", "Do not deploy yet", "confirm the deploy in this pane", "rollback"):
+            self.assertIn(needle, text)
+        self.assertNotIn("Deploy it now", text)
+        full = self.daemon.pipeline.work("SV-056")
+        self.assertEqual(full["deploy"]["approvedBy"], "jay:gate")
+        events = [str(e) for e in self.daemon.tasks.get("SV-056")["timeline"]]
+        self.assertTrue(any("approved for a prepared deploy (Jay confirms in the pane)" in e for e in events), events)
+        # The approval is still a real one: the agent may record the live deploy afterwards.
+        r = self.step("deployed", {"env": "live", "result": "pass", "evidence": "health ok"})
+        self.assertEqual(r.status_code, 200, r.text)
 
     def test_go_live_approves_nothing_when_the_coordinator_cannot_be_reached(self):
         self.ticket("VERIFYING")

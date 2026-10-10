@@ -77,6 +77,26 @@ audited before it runs. herdr methods outside an explicit allowlist
 (`herdr.ALLOWED_METHODS`) are refused before they reach the socket — ccd cannot
 close, split, start or move anything even by mistake.
 
+**One GitHub write, off by default (CC-025, ADR 0007).** ccd can run `gh pr merge` for a reviewed, low-risk
+Command Center PR. It needs all of: `auto_merge: true` in `config.json` (default `false`), registry merge policy
+`low-risk` (only `commandcenter`), and no file `~/command-center/state/auto-merge.stop` (the kill switch, checked
+immediately before every merge; `touch` it to stop at once, delete it to resume). `ccd/merge_policy.py` decides:
+only added or modified `server/tests/**/*.py`, `web/app/tests/**/*.ts(x)`, `docs/**/*.md` and `README.md` files, at most
+10 files and 300 lines, never `server/ccd/**`, `scripts/**`, `launcher/**`, `.github/**`, `web/app/src/**`,
+lockfiles, manifests, `plans/**`, `docs/SECURITY.md`, `docs/adr/**`, any dot-folder or dot-file at any depth (`.claude/`, `.mcp.json`, `.codex/`), `__pycache__`, or `AGENTS.md`, `AGENTS.override.md`, `AGENT.md`, `CLAUDE.md`, `CLAUDE.local.md`, `GEMINI.md`, `SKILL.md` anywhere.
+The command is `gh pr merge N --repo <registry repo> --merge --match-head-commit <reviewed head>`: never `--admin`,
+`--auto`, `--squash` or `--delete-branch`, and GitHub refuses it if the head changed. ccd uses the `gh` login of the
+user it runs as; no token is read, stored or logged by ccd. Everything else (and any failure) opens a merge gate for
+Jay. Audit: security events `merge.policy` (state at startup) and `merge.auto` (each merge, hold or failure), ticket
+events `pipeline.auto_merged / auto_merge_held / auto_merge_failed` (actor `system:auto-merge`). Agents never merge.
+
+How strong that is, plainly: agents run as the same user as Jay, so they can write `config.json` and the state
+folder, and their `gh` is logged in as Jay. "Agents never merge" and "Jay switches it on" are written rules plus
+review, not technical blocks; ccd reads `auto_merge` only at start, so a config edit does nothing until ccd is
+restarted. The reviewer's "fresh review" is self-reported: ccd checks the recorded APPROVE, its session name and
+the exact head, not who really read the diff. Details and the missing separation (a second GitHub identity or
+branch protection): ADR 0007.
+
 
 ## P4B additions
 
@@ -158,7 +178,7 @@ Command Center's own other windows — pop-out terminals and rooms, a second
 Workspace window — over a same-origin `BroadcastChannel`; never localStorage, a
 URL or the page. Sessions end on LOCK (in any window: every window locks), when
 the browser session ends, 2 h idle, 8 h total, or a ccd restart. Five wrong
-tokens in five minutes lock unlocking for five minutes. Write routes answer 403
+developer tokens at unlock and handoff in five minutes lock both for five minutes; both need the ccd token. Write routes answer 403
 to the ccd token alone. The ccd token reaches a pop-out window the same way when
 the browser does not copy `sessionStorage` into it.
 
@@ -169,8 +189,8 @@ proof and CommandCenter.exe already makes one for its tunnel. Over it the launch
 working day (12 h, no shorter idle limit) and a **one-time code, valid 120 s**. The launcher opens
 `#/?signin=<code>` (a URL fragment: never sent to any server); the page strips it at once and trades it at
 `POST /api/developer/redeem` — the one `/api` route that takes no ccd token, still behind the Host and
-Origin checks, JSON-only — for the ccd token and the session. Wrong or reused codes count toward the same
-five-in-five-minutes lockout as wrong developer tokens; ccd logs that a code was issued, never the code.
+Origin checks, JSON-only — for the ccd token and the session. Wrong or reused codes are refused and not counted: a code is 256 random
+bits, good once for 120 s, and counting tokenless guesses would let any local user lock Jay out. ccd logs that a code was issued, never the code.
 A page cannot mint a code: minting needs both tokens, which only a process running as jay can read.
 `commandcenter://unlock` (any web page can open it) can only make the launcher open Command Center's own
 address with a fresh code, which only Command Center's own origin can read.
@@ -250,8 +270,10 @@ make this check.)
 afterwards any agent may record `deployed --env live` for that ticket. That the deploy waits for Jay's
 confirmation in the coordinator's pane is enforced only by the message text, not by ccd. The record is marked
 (`approvedBy: "jay:go-live"`, event "approved for a prepared deploy (Jay confirms in the pane)") and Go Live
-approves only the tickets listed in the confirm box that are still open. The per-ticket Deploy Live button
-still types "Deploy it now" into the task session after Jay's approval.
+approves only the tickets listed in the confirm box that are still open. The per-ticket **Approve live deploy**
+button (and WorkPanel's) is the same: a real live-deploy approval, marked `approvedBy: "jay:gate"` with the same event
+text, and the message typed into the task session (`daemon.GATE_DEPLOY_TEMPLATE`) asks Claude to PREPARE the deploy and
+wait for Jay to confirm in the pane. That wait rests on the message text only; `deployed` checks just `approvedAt`.
 
 **Roots.** The explorer, editor and uploads reach only a registered project's
 `root` in `ccd/registry.py`. The browser sends a project key and a relative
