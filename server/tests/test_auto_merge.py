@@ -191,6 +191,25 @@ class Skips(Base):
         await self.daemon._auto_merge()
         self.assertEqual(len(self.gh.of("merge")), 1)
 
+    async def test_a_ui_label_added_while_gh_view_runs_holds_the_merge(self):
+        k = self.ready()
+        self.gh.on_view = lambda: self.tickets.update(k, {"labels": ["ui"]}, "jay")
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        w = self.daemon.pipeline.work(k)
+        self.assertEqual((w["gate"], self.tickets.get(k)["status"]), ("merge", "READY_TO_MERGE"))
+        self.assertIn("ui label", w["gateReason"])
+        self.assertIn("pipeline.auto_merge_held", self.kinds(k))
+
+    async def test_a_needs_jay_flag_set_while_gh_view_runs_holds_the_merge(self):
+        k = self.ready()
+        self.gh.on_view = lambda: self.tickets.update(k, {"needs_jay": True}, "jay")
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        w = self.daemon.pipeline.work(k)
+        self.assertEqual(w["gate"], "merge")
+        self.assertIn("needs Jay", w["gateReason"])
+
     async def test_the_stop_file_is_checked_right_before_the_merge(self):
         k = self.ready()
         self.gh.on_view = lambda: open(self.daemon.auto_merge_stop, "w").close()   # appears while gh view runs
@@ -481,7 +500,8 @@ class Pending(Base):
         await self.daemon._auto_merge()
         self.assertEqual(self.daemon.pipeline.work(k)["gate"], None)
         self.daemon._am_next.clear()
-        self.daemon._am_waiting[k] = (HEAD, time.monotonic() - self.daemon.AUTO_MERGE_WAIT_LIMIT - 5)
+        self.daemon._am_waiting[k] = (self.daemon._review_stamp(self.daemon.pipeline.work(k)),
+                                      time.monotonic() - self.daemon.AUTO_MERGE_WAIT_LIMIT - 5)
         await self.daemon._auto_merge()
         w = self.daemon.pipeline.work(k)
         self.assertEqual(w["gate"], "merge")
@@ -499,3 +519,36 @@ class Pending(Base):
         await self.daemon._auto_merge()
         self.assertNotIn(k, self.daemon._am_waiting)
         self.assertEqual(len(self.gh.of("merge")), 1)
+
+    async def test_the_clock_resets_when_the_ticket_goes_back_to_review_and_returns_with_the_same_head(self):
+        k = self.ready()
+        d = self.daemon
+        self.gh.pr = view(mergeable="UNKNOWN")
+        await d._auto_merge()
+        old = d._am_waiting[k]
+        d._am_waiting[k] = (old[0], old[1] - d.AUTO_MERGE_WAIT_LIMIT + 60)   # nearly at the limit
+        self.tickets.update(k, {"status": "IN_REVIEW"}, "system:automation", trigger="back to review")
+        d._am_next.clear()
+        await d._auto_merge()                                              # not a candidate: the entry is dropped
+        self.assertNotIn(k, d._am_waiting)
+        self.tickets.update(k, {"status": "READY_TO_MERGE"}, "system:automation", trigger="ready again")
+        d._am_next.clear()
+        await d._auto_merge()
+        self.assertGreater(d._am_waiting[k][1], old[1])                    # a fresh clock, not the old one
+        self.assertEqual(d.pipeline.work(k)["gate"], None)
+        self.assertEqual(self.gh.of("merge"), [])
+
+    async def test_a_new_review_at_the_same_head_restarts_the_clock(self):
+        k = self.ready()
+        d = self.daemon
+        self.gh.pr = view(mergeable="UNKNOWN")
+        await d._auto_merge()
+        first = d._am_waiting[k]
+        d._am_waiting[k] = (first[0], first[1] - d.AUTO_MERGE_WAIT_LIMIT - 5)
+        stamp = d._review_stamp(d.pipeline.work(k))
+        d.pipeline.db.execute("UPDATE ticket_work SET roles=? WHERE ticket_id=(SELECT id FROM tickets WHERE key=?)",
+                              (json.dumps({"reviewer": {"model": None, "session": "review-2", "at": "2099-01-01T00:00:00Z"}}), k))
+        self.assertNotEqual(stamp, d._review_stamp(d.pipeline.work(k)))
+        d._am_next.clear()
+        await d._auto_merge()
+        self.assertEqual(d.pipeline.work(k)["gate"], None)                 # the old clock would have opened a gate

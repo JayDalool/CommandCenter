@@ -83,7 +83,7 @@ Command Center PR. It needs all of: `auto_merge: true` in `config.json` (default
 immediately before every merge; `touch` it to stop at once, delete it to resume). `ccd/merge_policy.py` decides:
 only added or modified `server/tests/**/*.py`, `web/app/tests/**/*.ts(x)`, `docs/**/*.md` and `README.md` files, at most
 10 files and 300 lines, never `server/ccd/**`, `scripts/**`, `launcher/**`, `.github/**`, `web/app/src/**`,
-lockfiles, manifests, `plans/**`, `docs/SECURITY.md`, `docs/adr/**`, any dot-folder or dot-file at any depth (`.claude/`, `.mcp.json`, `.codex/`), `__pycache__`, or `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `SKILL.md` anywhere.
+lockfiles, manifests, `plans/**`, `docs/SECURITY.md`, `docs/adr/**`, any dot-folder or dot-file at any depth (`.claude/`, `.mcp.json`, `.codex/`), `__pycache__`, or `AGENTS.md`, `AGENTS.override.md`, `AGENT.md`, `CLAUDE.md`, `CLAUDE.local.md`, `GEMINI.md`, `SKILL.md` anywhere.
 The command is `gh pr merge N --repo <registry repo> --merge --match-head-commit <reviewed head>`: never `--admin`,
 `--auto`, `--squash` or `--delete-branch`, and GitHub refuses it if the head changed. ccd uses the `gh` login of the
 user it runs as; no token is read, stored or logged by ccd. Everything else (and any failure) opens a merge gate for

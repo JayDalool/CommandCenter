@@ -8,8 +8,8 @@ Low-risk means ALL of:
 
   1. every file is ADDED or MODIFIED and matches the project's allowlist, which names file types as well as
      folders (a project with no allowlist never qualifies); the denylist wins over the allowlist, always, and
-     covers any dot-folder or dot-file at any depth, `__pycache__`, and agent files (CLAUDE.md, AGENTS.md,
-     GEMINI.md, SKILL.md) anywhere
+     covers any dot-folder or dot-file at any depth, `__pycache__`, and agent files (CLAUDE.md, CLAUDE.local.md,
+     AGENTS.md, AGENTS.override.md, AGENT.md, GEMINI.md, SKILL.md) anywhere
   2. at most MAX_FILES files and MAX_LINES changed lines
   3. no needs:jay, needs:legal, UI or deploy flag, no SECURITY / LEGAL / DESIGN type, no plan-gate label, and
      Jay has not asked to accept it (owner:accept)
@@ -36,7 +36,7 @@ ALLOW = {
 DENY = (
     "server/ccd/**", "scripts/**", "launcher/**", ".github/**", "web/app/src/**", "plans/**", ".claude/**",
     "docs/SECURITY.md", "docs/adr/**",
-    "AGENTS.md", "CLAUDE.md", "GEMINI.md", "SKILL.md",
+    "AGENTS.md", "AGENTS.override.md", "AGENT.md", "CLAUDE.md", "CLAUDE.local.md", "GEMINI.md", "SKILL.md",
     # lockfiles and manifests
     "package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "*.lock",
     "requirements*.txt", "pyproject.toml", "setup.py", "setup.cfg", "Pipfile", "go.mod", "go.sum",

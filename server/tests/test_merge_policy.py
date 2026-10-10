@@ -77,6 +77,15 @@ class Paths(unittest.TestCase):
             self.assertTrue(mp.denied(path) or not mp.allowed("commandcenter", path), path)
             self.assertTrue(fr("commandcenter", [f(path, "ADDED")]), path)
 
+    def test_more_agent_files_are_denied_in_any_case_at_any_depth(self):
+        for name in ("CLAUDE.local.md", "claude.LOCAL.md", "AGENTS.override.md", "Agents.Override.MD", "AGENT.md", "agent.md",
+                     "Agent.MD"):
+            for folder in ("", "docs/", "docs/sub/deep/", "server/tests/", "server/tests/a/b/"):
+                path = folder + name
+                self.assertTrue(mp.denied(path), path)
+                if folder:
+                    self.assertTrue(fr("commandcenter", [f(path, "ADDED")]), path)
+
     def test_hidden_and_pycache_parts_are_denied_even_where_the_type_would_fit(self):
         for path in ("server/tests/.claude/x.py", "docs/.claude/x.md", "web/app/tests/.codex/x.tsx",
                      "server/tests/__pycache__/x.py", "docs/a/.b/c.md"):
