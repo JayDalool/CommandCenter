@@ -2,6 +2,7 @@
 
 Steps only Jay can do. Newest first. Delete a line when it's done.
 
+- [ ] CC-030 · Run scripts/go-live.sh --dry-run; check sha and log · scripts/go-live.sh
 - [ ] CC-025 · Auto-merge: auto_merge true in ~/command-center/board/config.json, restart ccd, watch one docs PR · docs/adr/0007-auto-merge-policy.md
 - [ ] CC-023 · Install launcher 0.5.0; new gate shows a tray notice · http://127.0.0.1:7777/#/settings?tab=desktop
 - [ ] SV-064 · Review and merge SamVision PR #114 (approved, CI green) · https://github.com/JayDalool/SamVisionAI/pull/114
