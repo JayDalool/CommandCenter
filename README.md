@@ -80,6 +80,8 @@ cd server && .venv/bin/pip install -r requirements-dev.txt
 ../scripts/ccd-canary.py check|stop-start|degrade|replay <seq>|ws-listen <s>|measure <s>
 ```
 
+CI (`.github/workflows/ci.yml`) runs the backend unittest suite and the web typecheck and tests on every pull request to `main` and on every push to `main`.
+
 ## Web UI
 
 ```
