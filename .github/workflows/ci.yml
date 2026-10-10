@@ -17,6 +17,12 @@ jobs:
   backend:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # The runner has no git identity; a ccd commit test needs one. Env vars, not git config.
+    env:
+      GIT_AUTHOR_NAME: ci
+      GIT_AUTHOR_EMAIL: ci@example.invalid
+      GIT_COMMITTER_NAME: ci
+      GIT_COMMITTER_EMAIL: ci@example.invalid
     defaults:
       run:
         working-directory: server
