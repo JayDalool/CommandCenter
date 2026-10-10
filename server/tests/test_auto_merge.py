@@ -408,3 +408,94 @@ class Texts(Base):
         self.assertEqual(len(ev), 1)
         self.assertIn("no CI checks", ev[0])
         self.assertNotIn("green", ev[0])
+
+
+class Gates(Base):
+    """Tickets that were READY_TO_MERGE with no gate (approved under the old rules) get their merge gate on the poll."""
+    def prstate(self, head=HEAD):
+        return {"ref": f"{REPO}#7", "head": head, "ciGreen": True, "ciNone": True, "draft": False}
+
+    def ungate(self, k):
+        self.tickets.db.execute("UPDATE ticket_work SET gate=NULL, gate_reason=NULL WHERE ticket_id="
+                                "(SELECT id FROM tickets WHERE key=?)", (k,))
+
+    async def test_a_ready_ticket_without_a_gate_gets_one_when_auto_merge_is_off(self):
+        d = self.make(auto_merge=False)
+        self.daemon = d
+        k = self.ready()
+        self.assertEqual(d.pipeline.work(k)["gate"], "merge")        # a fresh transition: gate at once
+        self.ungate(k)
+        t, ch, ev = d.pipeline.sync_pr(k, self.prstate())
+        w = d.pipeline.work(k)
+        self.assertEqual((t["status"], w["gate"]), ("READY_TO_MERGE", "merge"))
+        self.assertEqual([e[0] for e in ev], ["pipeline.gate_opened"])
+        self.assertEqual([n["gate"] for n in d.pipeline.needs()], ["merge"])
+        n = len(self.tickets.get(k)["timeline"])
+        d.pipeline.sync_pr(k, self.prstate())                          # idempotent: one gate
+        self.assertEqual(len(self.tickets.get(k)["timeline"]), n)
+        await d._auto_merge()
+        self.assertEqual(self.gh.calls, [])
+
+    async def test_a_ready_owner_project_ticket_without_a_gate_gets_one(self):
+        k = self.ready("gyst")
+        self.ungate(k)
+        pr = dict(self.prstate(), ref="JayDalool/gyst-lifeops#7")
+        self.daemon.pipeline.sync_pr(k, pr)
+        self.assertEqual(self.daemon.pipeline.work(k)["gate"], "merge")
+
+    async def test_no_gate_is_added_while_auto_merge_is_on_or_after_jay_decided_or_for_another_head(self):
+        k = self.ready()
+        self.assertEqual(self.daemon.pipeline.work(k)["gate"], None)
+        self.daemon.pipeline.sync_pr(k, self.prstate())
+        self.assertEqual(self.daemon.pipeline.work(k)["gate"], None)        # low-risk with auto-merge on: ccd decides
+        d = self.make(auto_merge=False)
+        self.daemon = d
+        k2 = self.ready(number=8, head="cd" * 20)
+        d.pipeline.confirm(k2, "merge", "jay")
+        d.pipeline.sync_pr(k2, dict(self.prstate("cd" * 20), ref=f"{REPO}#8"))
+        self.assertEqual(d.pipeline.work(k2)["gate"], None)                 # Jay's merge:<head> stands
+        self.assertEqual(self.daemon.pipeline.work(k2)["review"]["head"], "cd" * 20)
+
+    async def test_jays_decision_stops_ccd_from_opening_a_second_gate(self):
+        k = self.ready(labels=["ui"])          # ui: the classifier would hold it
+        self.ungate(k)
+        self.daemon.pipeline.hold_merge(k, HEAD, "first hold")
+        self.daemon.pipeline.confirm(k, "merge", "jay")
+        self.assertEqual(self.daemon.pipeline.merge_candidates("commandcenter"), [])
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.calls, [])
+        self.assertEqual(self.daemon.pipeline.work(k)["gate"], None)
+
+    async def test_jay_confirming_a_gate_before_any_hold_also_blocks_the_candidate(self):
+        k = self.ready(labels=["ui"])
+        self.daemon.pipeline.confirm(k, "merge", "jay") if self.daemon.pipeline.work(k)["gate"] else None
+        self.assertIn(f"merge:{HEAD}", self.daemon.pipeline.work(k)["confirmed"])
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.calls, [])
+
+
+class Pending(Base):
+    async def test_a_pr_pending_too_long_opens_a_gate(self):
+        k = self.ready()
+        self.gh.pr = view(statusCheckRollup=[{"status": "QUEUED", "conclusion": ""}])
+        await self.daemon._auto_merge()
+        self.assertEqual(self.daemon.pipeline.work(k)["gate"], None)
+        self.daemon._am_next.clear()
+        self.daemon._am_waiting[k] = (HEAD, time.monotonic() - self.daemon.AUTO_MERGE_WAIT_LIMIT - 5)
+        await self.daemon._auto_merge()
+        w = self.daemon.pipeline.work(k)
+        self.assertEqual(w["gate"], "merge")
+        self.assertIn("CI is still running for over 30 minutes", w["gateReason"])
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertIn("pipeline.auto_merge_held", self.kinds(k))
+
+    async def test_a_pr_that_stops_waiting_forgets_the_clock(self):
+        k = self.ready()
+        self.gh.pr = view(mergeable="UNKNOWN")
+        await self.daemon._auto_merge()
+        self.assertIn(k, self.daemon._am_waiting)
+        self.daemon._am_next.clear()
+        self.gh.pr = view()
+        await self.daemon._auto_merge()
+        self.assertNotIn(k, self.daemon._am_waiting)
+        self.assertEqual(len(self.gh.of("merge")), 1)

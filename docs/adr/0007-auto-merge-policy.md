@@ -19,11 +19,12 @@ review) and everything else to keep waiting for him.
 2. **Agents never merge.** Not `gh pr merge`, not the button. Only ccd (a PR the classifier accepts) or Jay merges.
    The night-shift skill says so.
 3. **`ccd/merge_policy.py` is a pure classifier** (plain dicts in, a decision out, no I/O). A PR is low-risk only if
-   every file is added or modified and matches the project's allowlist (Command Center: `server/tests/**`,
-   `web/app/tests/**`, `docs/**/*.md`, `README.md`), at most 10 files and 300 lines, and none of the denylist
-   (`server/ccd/**`, `scripts/**`, `launcher/**`, `.github/**`, `web/app/src/**`, lockfiles and manifests,
-   `AGENTS.md`, `CLAUDE.md`, `.claude/**`, `plans/**`, `docs/SECURITY.md`, `docs/adr/**`). The denylist always
-   wins. A project with no allowlist never qualifies. A PR that changes this policy can therefore never
+   every file is added or modified and matches the project's allowlist, which names file types as well as folders
+   (Command Center: `server/tests/**/*.py`, `web/app/tests/**/*.ts` and `*.tsx`, `docs/**/*.md`, `README.md`), at
+   most 10 files and 300 lines, and none of the denylist (`server/ccd/**`, `scripts/**`, `launcher/**`,
+   `.github/**`, `web/app/src/**`, lockfiles and manifests, `plans/**`, `docs/SECURITY.md`, `docs/adr/**`; any
+   dot-folder or dot-file at any depth such as `.claude/`, `.mcp.json` and `.codex/`; any `__pycache__`; and
+   `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `SKILL.md` anywhere). The denylist always wins. A project with no allowlist never qualifies. A PR that changes this policy can therefore never
    auto-merge. The ticket must carry no needs:jay, needs:legal, UI or deploy flag, no SECURITY / LEGAL / DESIGN
    type, no plan-gate label and no `owner:accept`.
 4. **The review must still hold at merge time**: verdict APPROVE, `review_head` equal to the PR's head in a fresh
@@ -74,11 +75,26 @@ or "stopped". It is switched on by Jay, per machine, and one file stops it at on
   any repository it has access to; ccd's code only ever calls `gh pr merge` for a project whose registry policy is
   `low-risk` and whose github identity is in the registry. A change to ccd's code is how that boundary could break,
   which is why `server/ccd/**` is on the denylist and Jay merges every such PR.
+- **How strong the switches are, plainly.** Agents run as the same Linux user as Jay. They can write
+  `~/command-center/board/config.json` and the state folder (`auto-merge.stop`), and their `gh` is logged in as Jay.
+  So "agents never merge" and "Jay switches auto-merge on" are written rules and review-time checks, not technical
+  blocks: an agent could run `gh pr merge` itself or edit the config, and ccd would not stop it. What does hold
+  technically is narrower: ccd reads `auto_merge` once at start (a config edit takes effect only when Jay restarts
+  ccd), ccd never merges outside the allowlist, and every ccd merge is bound to the reviewed head and logged. Real
+  separation would need a second GitHub identity for agents without merge rights (or branch protection), which is
+  not built.
+- **The reviewer's freshness is self-reported.** ccd checks that the recorded review is an APPROVE at the PR's
+  exact head, from a session other than the implementer's. It cannot check that the reviewer really was a fresh
+  agent that read the diff; that is what the reviewer says about itself.
 - With no CI on PRs, a docs/tests PR can merge with only the reviewer's approval behind it. Wrong tests can merge.
   CC-033 (PR checks) should land before the allowlist grows.
 - With `auto_merge` off (the default) nothing changes for Jay except that agents no longer merge and the other
-  four projects now open a merge gate where "auto" used to leave none.
+  four projects now open a merge gate where "auto" used to leave none. Tickets that were already READY_TO_MERGE
+  with no gate (approved under the old rules) get their merge gate on the next GitHub poll after ccd restarts
+  (`Pipeline.sync_pr`), so they appear in Needs Jay instead of sitting outside it.
 - A ticket that is READY_TO_MERGE with no gate while the stop file exists simply waits; Jay can merge it by hand.
+- If Jay closes a merge gate (`merge:<head>`), ccd treats that head as decided and never opens another gate or
+  merges it. A PR that stays pending (CI running, mergeability unknown) for over 30 minutes opens a gate.
 
 ## Future considerations
 

@@ -46,12 +46,14 @@ def decide(pr=None, t=None, w=None, open_prs=(REF,), policy="low-risk", ref=REF)
 
 class Paths(unittest.TestCase):
     def test_allowed_paths_qualify(self):
-        for path in ("server/tests/test_x.py", "server/tests/fixtures/a/b.json", "web/app/tests/work.test.tsx",
+        for path in ("server/tests/test_x.py", "server/tests/sub/deeper/test_y.py", "web/app/tests/work.test.tsx", "web/app/tests/a/b.test.ts",
                      "docs/API.md", "docs/jay/MY_ACTIONS.md", "docs/design/deep/er/notes.md", "README.md"):
             self.assertEqual(fr("commandcenter", [f(path, "ADDED")]), [], path)
 
     def test_everything_else_is_outside_the_allowlist(self):
-        for path in ("server/ccd/x.py", "web/app/src/App.tsx", "server/other.py", "docs/notes.txt", "docs/img/a.png",
+        for path in ("server/ccd/x.py", "web/app/src/App.tsx", "server/other.py", "docs/notes.txt", "docs/img/a.png", "server/tests/fixtures/a/b.json", "server/tests/data.txt",
+                     "server/tests/blob.so", "server/tests/mod.pyc", "server/tests/run.sh", "web/app/tests/a.json",
+                     "web/app/tests/a.js", "web/app/tests/snap.snap",
                      "web/README.md", "server/tests", "tests/x.py", "scripts/a.sh"):
             self.assertTrue(fr("commandcenter", [f(path)]), path)
 
@@ -64,6 +66,30 @@ class Paths(unittest.TestCase):
                      "docs/security.md", "Docs/ADR/0007-x.md", "agents.md"):
             self.assertTrue(mp.denied(path), path)
             self.assertTrue(fr("commandcenter", [f(path, "ADDED")]), path)
+
+    def test_agent_config_and_build_output_never_qualify_at_any_depth(self):
+        for path in ("server/tests/.claude/settings.json", "docs/.claude/commands/go.md", "server/tests/.mcp.json",
+                     "server/tests/.codex/config.toml", "server/tests/GEMINI.md", "docs/GEMINI.md",
+                     "server/tests/.claude/skills/x/SKILL.md", "docs/skills/SKILL.md", "docs/sub/AGENTS.md",
+                     "web/app/tests/.claude/x.ts", "server/tests/.hidden.py", "docs/.hidden.md", "docs/.github/x.md",
+                     "server/tests/__pycache__/test_x.cpython-314.pyc", "server/tests/__pycache__/test_x.py",
+                     "server/tests/blob.so", "docs/.env.md", "server/tests/.codex/x.py", "docs/CLAUDE.MD"):
+            self.assertTrue(mp.denied(path) or not mp.allowed("commandcenter", path), path)
+            self.assertTrue(fr("commandcenter", [f(path, "ADDED")]), path)
+
+    def test_hidden_and_pycache_parts_are_denied_even_where_the_type_would_fit(self):
+        for path in ("server/tests/.claude/x.py", "docs/.claude/x.md", "web/app/tests/.codex/x.tsx",
+                     "server/tests/__pycache__/x.py", "docs/a/.b/c.md"):
+            self.assertTrue(mp.allowed("commandcenter", path), path)    # the allowlist alone would take it
+            self.assertTrue(mp.denied(path), path)
+            self.assertTrue(fr("commandcenter", [f(path, "ADDED")]), path)
+
+    def test_binaries_do_not_count_as_zero_lines_and_qualify(self):
+        r = mp.file_reasons("commandcenter", [{"path": "server/tests/x.bin", "changeType": "ADDED", "additions": 0,
+                                               "deletions": 0}], 0, 0)
+        self.assertTrue(r)
+        self.assertTrue(mp.file_reasons("commandcenter", [{"path": "server/tests/x.so", "changeType": "ADDED",
+                                                           "additions": 0, "deletions": 0}], 0, 0))
 
     def test_a_denied_file_in_an_allowed_folder_blocks_the_whole_pr(self):
         r = fr("commandcenter", [f("server/tests/test_a.py"), f("docs/SECURITY.md")])

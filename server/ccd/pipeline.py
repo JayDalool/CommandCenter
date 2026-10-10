@@ -531,6 +531,12 @@ class Pipeline:
             return status, work, events + ev
         return self._tx(key, actor, fn)
 
+    def _gate_due(self, t, w, head):
+        """Jay must accept this merge and has not: the project is `owner`, or the ticket needs acceptance, or the
+        project is `low-risk` while ccd's auto-merge is switched off; and no `merge:<head>` approval is recorded."""
+        low_risk_off = policy(t)["merge"] == "low-risk" and not self.auto_merge
+        return (needs_acceptance(t, w) or low_risk_off) and not _merge_ok(w["confirmed"], head)
+
     def _ready(self, t, w, pr):
         """IN_REVIEW → READY_TO_MERGE when the recorded approval covers the PR's current head and CI is green."""
         rv = w["review"]
@@ -545,9 +551,7 @@ class Pipeline:
         work, events = {}, [("pipeline.ready_to_merge",
                              f"approved head {rv['head'][:7]} with {'no CI checks' if none else 'green checks'}",
                              {"ci": "none" if none else "green"})]
-        # A low-risk project hands the decision to ccd's auto-merge, but only while that is switched on.
-        low_risk_off = policy(t)["merge"] == "low-risk" and not self.auto_merge
-        if (needs_acceptance(t, w) or low_risk_off) and not _merge_ok(w["confirmed"], rv["head"]):
+        if self._gate_due(t, w, rv["head"]):
             work = {"gate": "merge",
                     "gate_reason": f"PR {pr.get('ref') or ''} approved and {'has no CI checks' if none else 'green'}".strip()}
             events.append(("pipeline.gate_opened", "merge gate", {"gate": "merge"}))
@@ -573,6 +577,14 @@ class Pipeline:
                 why = "checks are not green" if not pr.get("ciGreen") else "the PR is a draft again"
                 work = {"gate": None, "gate_reason": None} if w["gate"] == "merge" else {}
                 return {"status": "IN_REVIEW"}, work, [("pipeline.not_ready", f"back to review: {why}", {})]
+            if t["status"] == "READY_TO_MERGE" and rv["verdict"] == "APPROVE" and pr.get("head") == rv["head"] \
+                    and not w["gate"] and self._gate_due(t, w, rv["head"]):
+                # Ready before the rules changed (or before auto-merge was switched off): the merge gate that
+                # `_ready` opens only on the IN_REVIEW → READY_TO_MERGE move is opened now, so it is in Needs Jay.
+                none = bool(pr.get("ciNone"))
+                return {}, {"gate": "merge", "gate_reason": f"PR {pr.get('ref') or ''} approved and "
+                                                            f"{'has no CI checks' if none else 'green'}".strip()}, \
+                    [("pipeline.gate_opened", "merge gate", {"gate": "merge"})]
             return self._ready(t, w, pr)
         t = self.ts.get(key)
         if t["status"] not in ("IN_REVIEW", "READY_TO_MERGE"):
@@ -581,13 +593,16 @@ class Pipeline:
 
     def merge_candidates(self, project):
         """Keys of the project's tickets ccd's auto-merge should look at: READY_TO_MERGE, no gate open, an
-        approving review recorded, and nothing recorded yet for that reviewed head (a hold, a merge or a failure
-        is final for a head: only a new head, which needs a new review, makes it a candidate again)."""
+        approving review recorded, Jay's `merge:<head>` decision not given, and nothing recorded yet for that
+        reviewed head (a hold, a merge or a failure is final for a head: only a new head, which needs a new review,
+        makes it a candidate again)."""
         out = []
-        for key, tid, head in self.db.execute(
-                "SELECT t.key, t.id, w.review_head FROM tickets t JOIN ticket_work w ON w.ticket_id=t.id "
+        for key, tid, head, confirmed in self.db.execute(
+                "SELECT t.key, t.id, w.review_head, w.confirmed FROM tickets t JOIN ticket_work w ON w.ticket_id=t.id "
                 "WHERE t.project=? AND t.status='READY_TO_MERGE' AND t.archived=0 AND w.gate IS NULL "
                 "AND w.review_verdict='APPROVE' AND w.review_head IS NOT NULL ORDER BY t.id", (project,)).fetchall():
+            if _merge_ok(json.loads(confirmed) if confirmed else [], head):
+                continue    # Jay already decided about this head (he closed a merge gate): ccd does not second-guess
             if not self.auto_merge_marked(tid, head):
                 out.append(key)
         return out

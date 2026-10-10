@@ -226,6 +226,7 @@ class Daemon:
         self.auto_merge_stop = AUTO_MERGE_STOP
         self._am_busy = False
         self._am_next = {}    # ticket key → time.monotonic() before which it is not looked at again
+        self._am_waiting = {}  # ticket key → (reviewed head, time.monotonic() when it first had to wait)
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
@@ -1717,6 +1718,8 @@ class Daemon:
 
     # ---------- auto-merge (CC-025, docs/adr/0007-auto-merge-policy.md) ----------
 
+    AUTO_MERGE_WAIT_LIMIT = 30 * 60   # seconds a PR may stay pending (CI running, mergeability unknown) before a gate
+
     AUTO_MERGE_FIELDS = ("state,isDraft,mergeable,baseRefName,headRefOid,isCrossRepository,files,additions,deletions,"
                          "statusCheckRollup")
 
@@ -1806,8 +1809,17 @@ class Daemon:
             return
         d = merge_policy.classify(project, t, w, pr, pr_ref, open_prs, pipeline_mod.policy(t, project)["merge"])
         if d.wait:
+            since = self._am_waiting.setdefault(key, (head, time.monotonic()))
+            if since[0] != head:
+                since = self._am_waiting[key] = (head, time.monotonic())
+            if time.monotonic() - since[1] > self.AUTO_MERGE_WAIT_LIMIT:
+                self._am_waiting.pop(key, None)
+                self._auto_merge_hold(t, head, f"{'; '.join(d.reasons[:2])} for over "
+                                               f"{self.AUTO_MERGE_WAIT_LIMIT // 60} minutes")
+                return
             self._am_next[key] = time.monotonic() + 60
             return
+        self._am_waiting.pop(key, None)
         if not d.ok:
             self._auto_merge_hold(t, head, "; ".join(d.reasons[:3]))
             return

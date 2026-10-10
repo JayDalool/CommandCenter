@@ -6,8 +6,10 @@ command, reads no file and holds no state, so every rule here can be tested with
 
 Low-risk means ALL of:
 
-  1. every file is ADDED or MODIFIED and matches the project's allowlist (a project with no allowlist never
-     qualifies); the denylist wins over the allowlist, always
+  1. every file is ADDED or MODIFIED and matches the project's allowlist, which names file types as well as
+     folders (a project with no allowlist never qualifies); the denylist wins over the allowlist, always, and
+     covers any dot-folder or dot-file at any depth, `__pycache__`, and agent files (CLAUDE.md, AGENTS.md,
+     GEMINI.md, SKILL.md) anywhere
   2. at most MAX_FILES files and MAX_LINES changed lines
   3. no needs:jay, needs:legal, UI or deploy flag, no SECURITY / LEGAL / DESIGN type, no plan-gate label, and
      Jay has not asked to accept it (owner:accept)
@@ -26,14 +28,15 @@ from . import pipeline
 
 # project key → glob patterns a changed file must match. No entry, no auto-merge.
 ALLOW = {
-    "commandcenter": ("server/tests/**", "web/app/tests/**", "docs/**/*.md", "README.md"),
+    "commandcenter": ("server/tests/**/*.py", "web/app/tests/**/*.ts", "web/app/tests/**/*.tsx", "docs/**/*.md",
+                      "README.md"),
 }
 # Never auto-merged, whatever else is true. A pattern without "/" matches the file name anywhere in the tree.
 # Matching is case-insensitive here (the allowlist is case-sensitive), so Agents.md cannot sneak past.
 DENY = (
     "server/ccd/**", "scripts/**", "launcher/**", ".github/**", "web/app/src/**", "plans/**", ".claude/**",
     "docs/SECURITY.md", "docs/adr/**",
-    "AGENTS.md", "CLAUDE.md",
+    "AGENTS.md", "CLAUDE.md", "GEMINI.md", "SKILL.md",
     # lockfiles and manifests
     "package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "*.lock",
     "requirements*.txt", "pyproject.toml", "setup.py", "setup.cfg", "Pipfile", "go.mod", "go.sum",
@@ -97,8 +100,14 @@ def safe_path(path):
     return all(part not in ("", ".", "..") for part in path.split("/"))
 
 
+def hidden_part(path):
+    """A dot-folder or dot-file anywhere in the path (.claude, .mcp.json, .codex, .env …) or a __pycache__ folder:
+    agent configuration and build output, never auto-merged, whatever folder it sits in."""
+    return any(part.startswith(".") or part == "__pycache__" for part in path.split("/"))
+
+
 def denied(path):
-    return any(p.match(path) for p in _DENY)
+    return hidden_part(path) or any(p.match(path) for p in _DENY)
 
 
 def allowed(project, path):
