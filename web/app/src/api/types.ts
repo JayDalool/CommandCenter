@@ -458,3 +458,16 @@ export interface ScmStatus {
 }
 export interface ScmDiff { project: string; path: string; staged: boolean; diff: string; truncated: boolean; binary: boolean }
 export interface PtySession { name: string; cwd: string; clients: number; createdAt: number; alive: boolean }
+
+/** The night shift (ccd nightshift.py): the newest morning report and the supervisor's state per project. */
+export interface NightReport { name: string; mtime: number; status: "working" | "complete" | null; text: string }
+/** One ticket in the Go Live confirm box: `reason` is set only for merged tickets Jay should look at first. */
+export interface GoLiveTicket { key: string; title: string; reason?: string }
+export interface NightProject {
+  active: boolean; startedAt: number | null; endedAt: number | null; endReason: string | null; nudges: number | null;
+  cutoffAt?: number | null; goLiveAt: number | null; goLive?: { approves: GoLiveTicket[]; warnings: GoLiveTicket[] }; coordinator: { name: string; state: string; status: string | null }; report: NightReport | null;
+}
+export interface NightShiftState { projects: Record<string, NightProject> }
+export interface GoLiveResult {
+  ok: boolean; project: string; coordinator: string; approved: string[]; skipped?: { key: string; reason: string }[]; errors?: { key: string; error: string }[];
+}

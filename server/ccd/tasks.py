@@ -736,10 +736,12 @@ class TaskStore:
             "AND l.ref=? AND t.archived=0", (provider, kind, ref))]
 
     def last_status_event(self, key):
-        r = self.db.execute("SELECT e.actor, e.from_value, e.to_value FROM ticket_events e JOIN tickets t "
+        """The newest status change: {actor, from, to, trigger}. A manual edit has no trigger; every
+        automatic or pipeline step records one."""
+        r = self.db.execute("SELECT e.actor, e.from_value, e.to_value, e.trigger FROM ticket_events e JOIN tickets t "
                             "ON t.id=e.ticket_id WHERE t.key=? AND e.field='status' ORDER BY e.id DESC LIMIT 1",
                             (key,)).fetchone()
-        return {"actor": r[0], "from": r[1], "to": r[2]} if r else None
+        return {"actor": r[0], "from": r[1], "to": r[2], "trigger": r[3]} if r else None
 
     # ---------- writing ----------
 

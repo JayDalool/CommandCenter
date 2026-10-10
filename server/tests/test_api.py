@@ -33,6 +33,7 @@ ALLOWED = {
     ("GET", "/api/development"),
     ("GET", "/api/tasks"), ("POST", "/api/tasks"), ("GET", "/api/tasks/import-preview"),
     ("POST", "/api/tasks/check"), ("POST", "/api/tasks/night-shift"),
+    ("GET", "/api/night-shift"), ("POST", "/api/night-shift/end"), ("POST", "/api/go-live"),
     ("GET", "/api/tasks/{key}"), ("PATCH", "/api/tasks/{key}"), ("GET", "/api/tasks/{key}/context"),
     ("POST", "/api/tasks/{key}/comments"), ("POST", "/api/tasks/{key}/relations"),
     ("POST", "/api/tasks/{key}/links"),
@@ -186,6 +187,20 @@ class Reads(ApiBase):
         self.assertTrue(h["herdr"]["connected"])
         self.assertIn("calls", h)
         self.assertNotIn("token", json.dumps(h).lower())
+
+    def test_health_gates_are_two_integers_and_nothing_else(self):
+        self.assertEqual(self.client.get("/api/health", headers=HOST).json()["gates"], {"open": 0, "last": 0})
+        k = self.tickets.create("gyst", "Risky change", labels=["migration"])[0]["key"]
+        self.daemon.pipeline.plan(k, {"summary": "s", "requirements": ["r"], "approach": "a", "affected": ["x"],
+                                      "risk": "high", "tests": ["t"], "questions": []}, "agent:planner")
+        raw = self.client.get("/api/health", headers=HOST)        # no token: it is open
+        g = raw.json()["gates"]
+        self.assertEqual(sorted(g), ["last", "open"])
+        self.assertEqual(g["open"], 1)
+        self.assertIsInstance(g["last"], int)
+        self.assertGreater(g["last"], 0)
+        self.assertNotIn(k, raw.text)
+        self.assertNotIn("Risky change", raw.text)
 
     def test_activity_lists_events_newest_first(self):
         ev = self.get("/api/activity?limit=5").json()["events"]

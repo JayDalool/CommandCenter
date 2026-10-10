@@ -180,12 +180,14 @@ deterministic triggers, each recorded as `system:automation` with its trigger:
 | dispatch `plan` accepted by an idle coordinator | INBOX/PROPOSED → RESEARCHING |
 | dispatch `implement` accepted | READY_TO_IMPLEMENT → IN_PROGRESS |
 | open PR whose title or a branch segment **leads** with the key (same project) | link PR, set branch; READY_TO_IMPLEMENT/IN_PROGRESS → IN_REVIEW |
+| pipeline ticket after `rework`: a PR or head that is neither the reviewed head nor an open PR recorded by the rework | IN_PROGRESS → IN_REVIEW (polls at known heads leave it IN_PROGRESS) |
 | linked PR approved, checks green, not draft | IN_REVIEW → READY_TO_MERGE |
 | linked PR stops being ready | READY_TO_MERGE → IN_REVIEW |
 | linked PR merged (found through `ticket_links`) | IN_REVIEW/READY_TO_MERGE → VERIFYING |
 
 Never automatic: DONE (a verifier's or Jay's call), anything from a key merely
-mentioned in a title, and re-applying a move Jay reversed by hand.
+mentioned in a title, and re-applying a move Jay reversed by hand (a manual status edit; pipeline steps such as
+`rework` always record a trigger and do not count as an override).
 
 **Needs Jay.** `state.needs` = derived needs (merge-ready PRs, red main, My
 actions, `needs:*` issue labels) + blocked agents (`state.blocked`) + every open
@@ -353,6 +355,42 @@ Dashboard ─▶ Workspace ─▶ Task Room
 | readable records | `ccd/records.py` → `~/command-center/task-records/<project>/<KEY>/` |
 | wall / rooms / panes / pop-out layout | `web/app/src/workspace/rooms.ts` (localStorage, shared by every window) |
 | screens | `screens/Dashboard.tsx`, `screens/Workspace.tsx`, `screens/Popout.tsx`, `workspace/Room.tsx`, `workspace/Dossier.tsx`, `tickets/{Questions,GateCard}.tsx`, `components/Notifications.tsx`; the old IDE is `screens/Files.tsx` |
+
+### Night shift, the supervisor and Go Live (CC-029, ADR 0006)
+
+```text
+Dashboard ☾ Night shift ─▶ POST /api/tasks/night-shift ─▶ coordinator pane gets skills/night-shift/SKILL.md
+                                                       └▶ NightShift.start()  (.state.json, cutoffAt = next 07:00)
+Daemon.night_loop (60 s) ─▶ night_tick ─▶ NightShift.decide(project, coordinator status, ticket activity)
+      complete report / cutoff / 6 reminders / 3 quiet ─▶ shift ends (nothing typed)
+      due ─▶ fresh read of the pane; idle ─▶ herdr prompt (fixed text) ─▶ NightShift.nudged()  (counted only now)
+Dashboard Report ─▶ Go Live… ─▶ confirm box lists goLive.approves / warnings (GET /api/night-shift)
+      ─▶ POST /api/go-live ─▶ 409 guards ─▶ GO_LIVE_TEMPLATE to the idle coordinator (PREPARE, then wait)
+                           ─▶ pipeline.confirm(deploy) per ticket (errors per ticket) ─▶ NightShift.went_live()
+Jay confirms the deploy himself in the coordinator's pane. ccd never deploys.
+```
+
+`night_loop` is the seventh background loop of `Daemon.start` (beside herdr, github, git, host, derive,
+housekeeping). Its state is `~/command-center/night-shift/.state.json` (atomic write; a restart resumes it) and the
+morning reports are `~/command-center/night-shift/<project>/*.md`, which `GET /api/night-shift` serves (64 KB each).
+Only facts decide a tick: report status, the coordinator's herdr status, ticket changes in the project
+(`Daemon._activity`) and the clock. With herdr down only "complete" and the cutoff can act. `pipeline.Pipeline.held`
+(Jay-first rule) follows direct `blocks` relations only.
+
+### Desktop notice for new Needs Jay gates (CC-023)
+
+```text
+pipeline.gate_opened / pipeline.blocked ─▶ ticket_events (append-only)
+ccd  Pipeline.gate_counts()  ─▶  GET /api/health  gates {open, last}   (no token, two integers)
+launcher  gates.go  poll every 30 s (only while it holds the tunnel)
+   first reading = silent baseline; `last` grew and open > 0 ─▶ notice
+launcher  tray_windows.go  Shell_NotifyIconW NIF_INFO balloon ─▶ click = tray "Open Command Center"
+```
+
+The launcher holds no token (binary_test enforces it), so health is the only thing it can read. `gates.go` is
+pure and tested on Linux (`ParseGates`, `gateWatch.Observe`, `app.watchGates`); `run.go` `waitForUser` now shows
+the tray in Edge-window mode too, and Quit stops the tunnel. A second launcher or a reused tunnel polls nothing
+and shows no icon. Items are named nowhere: names and click-to-ticket would need an in-page Notification.
 
 Navigation is six items: Dashboard, Workspace, Task Manager, Activity / Logs, Files, Settings. Projects,
 Development, Agents, Server, Alerts and Pull requests keep their routes and are under Settings → Diagnostics,

@@ -26,12 +26,21 @@ const (
 	wmRButtonUp     = 0x0205
 	wmApp           = 0x8000
 	wmTrayCallback  = wmApp + 1
+	wmTrayNotice    = wmApp + 2 // posted by the Notices reader; the text waits in trayWin.pending
 
 	nimAdd     = 0
+	nimModify  = 1
 	nimDelete  = 2
 	nifMessage = 0x1
 	nifIcon    = 0x2
 	nifTip     = 0x4
+	nifInfo    = 0x10
+
+	niifInfo = 0x1 // balloon with the information icon
+
+	// Sent in the low word of lParam of the tray callback (legacy behaviour:
+	// no NOTIFYICON_VERSION_4). NIN_BALLOONUSERCLICK = WM_USER + 5.
+	ninBalloonUserClick = 0x405
 
 	mfString       = 0x0
 	mfSeparator    = 0x800
@@ -139,6 +148,51 @@ type trayWin struct {
 	nid      notifyIconData
 	alive    bool // false once WM_DESTROY ran: hwnd may not be posted to
 	menuOpen bool
+	pending  string // latest balloon text not yet shown; guarded by trayMu
+}
+
+// fillBalloon puts text into nid as an information balloon titled with the
+// app name. Strings longer than the fixed buffers are cut (one slot is kept
+// for the terminating zero).
+func fillBalloon(nid *notifyIconData, text string) {
+	nid.SzInfo = [256]uint16{}
+	nid.SzInfoTitle = [64]uint16{}
+	info, _ := syscall.UTF16FromString(text)
+	copy(nid.SzInfo[:len(nid.SzInfo)-1], info)
+	head, _ := syscall.UTF16FromString(title)
+	copy(nid.SzInfoTitle[:len(nid.SzInfoTitle)-1], head)
+	nid.DwInfoFlags = niifInfo
+	nid.UFlags |= nifInfo
+}
+
+// showNotice raises the pending balloon on the tray's own thread. NIF_INFO is
+// cleared again afterwards so that re-adding the icon (Explorer restart) does
+// not pop the same balloon a second time.
+func (w *trayWin) showNotice() {
+	trayMu.Lock()
+	text := w.pending
+	w.pending = ""
+	trayMu.Unlock()
+	if text == "" {
+		return
+	}
+	fillBalloon(&w.nid, text)
+	procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&w.nid)))
+	w.nid.UFlags &^= nifInfo
+	w.nid.SzInfo = [256]uint16{}
+	w.nid.SzInfoTitle = [64]uint16{}
+	w.nid.DwInfoFlags = 0
+}
+
+// postNotice hands text to the tray thread. Like postClose, it holds trayMu
+// so WM_DESTROY cannot have run when the handle is used.
+func postNotice(w *trayWin, text string) {
+	trayMu.Lock()
+	defer trayMu.Unlock()
+	if w.alive {
+		w.pending = text
+		procPostMessageW.Call(w.hwnd, wmTrayNotice, 0, 0)
+	}
 }
 
 func registerTrayClass() error {
@@ -221,6 +275,18 @@ func (p *osPlatform) Tray(m TrayMenu, stop <-chan struct{}) error {
 		case <-exited:
 		}
 	}()
+	if m.Notices != nil {
+		go func() {
+			for {
+				select {
+				case text := <-m.Notices:
+					postNotice(w, text)
+				case <-exited:
+					return
+				}
+			}
+		}()
+	}
 
 	var msg winMsg
 	for {
@@ -272,11 +338,14 @@ func trayWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	switch {
 	case msg == wmTrayCallback:
 		switch lparam & 0xffff {
-		case wmLButtonDblClk:
+		case wmLButtonDblClk, ninBalloonUserClick: // the balloon opens what Open opens
 			go w.menu.Open()
 		case wmLButtonUp, wmRButtonUp:
 			w.showMenu()
 		}
+		return 0
+	case msg == wmTrayNotice:
+		w.showNotice()
 		return 0
 	case taskbarMsg != 0 && uint32(msg) == taskbarMsg: // Explorer restarted
 		procShellNotifyIconW.Call(nimAdd, uintptr(unsafe.Pointer(&w.nid)))

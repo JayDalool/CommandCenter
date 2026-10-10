@@ -58,9 +58,21 @@
     POST  /api/tasks/check           Jay AND Developer Unlock. the task check: a fixed message asks the project's
                                      idle coordinator Claude to propose stale tasks and add missing ones
                                      ({copy: true}: send nothing, return the message to paste by hand)
-    POST  /api/tasks/night-shift     Jay AND Developer Unlock. night shift: ccd/night_shift.md (the same text as
+    POST  /api/tasks/night-shift     Jay AND Developer Unlock. night shift: ccd/skills/night-shift/SKILL.md (the same text as
                                      Claude's /night-shift) to the project's idle coordinator; it works the open
-                                     tasks under the pipeline and never deploys ({copy: true} as above)
+                                     tasks under the pipeline and never deploys ({copy: true} as above);
+                                     Command Center then reminds an idle coordinator until its report says complete
+    GET   /api/night-shift           every project's night shift: running?, coordinator, newest morning report
+                                     (agent-written text, at most 64 KB), cutoff time, and `goLive`: the tickets a
+                                     Go Live would approve and merged tickets that are unverified or wait on a UI review
+    POST  /api/night-shift/end       Jay AND Developer Unlock. stop reminders; tell the coordinator to stop safely
+    POST  /api/go-live               Jay AND Developer Unlock. {project, keys}: GO LIVE PREPARES ONLY: approves the
+                                     listed tickets' live-deploy gates that are still open (the rest: `skipped`)
+                                     and asks its idle coordinator to PREPARE the deploy by the repo's runbook
+                                     (steps, checks, rollback plan) and wait: Jay confirms the deploy himself in
+                                     the coordinator's pane. ccd runs no deploy. 409 while the night shift runs, within
+                                     30 min of a Go Live, or while the last one is unfinished. A ticket that cannot
+                                     be approved comes back in `errors`; the others still go through.
     POST  /api/tasks/{key}/answers   Jay AND Developer Unlock. answer Claude's questions; the last answer
                                      resumes the SAME task Claude session (never starts one)
     GET   /api/tasks/{key}/record    the ticket's task.md / workflow.md (Command Center storage, never a repo)
@@ -379,6 +391,18 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
         return await daemon.act_night_shift(str(body.get("project") or ""), request.state.actor, developer=dev,
                                             copy=bool(body.get("copy")))
+
+    async def night_state(request, _):
+        return daemon.night_state()
+
+    async def night_end(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return await daemon.act_night_end(str(body.get("project") or ""), request.state.actor, developer=dev)
+
+    async def go_live(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return await daemon.act_go_live(str(body.get("project") or ""), request.state.actor, developer=dev,
+                                        keys=body.get("keys"))
 
     async def task_record(request, _):
         return daemon.task_record(request.path_params["key"])
@@ -885,6 +909,9 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/tasks/import-preview", guarded(import_preview), methods=["GET"]),
         Route("/api/tasks/check", guarded(task_check), methods=["POST"]),
         Route("/api/tasks/night-shift", guarded(night_shift), methods=["POST"]),
+        Route("/api/night-shift", guarded(night_state), methods=["GET"]),
+        Route("/api/night-shift/end", guarded(night_end), methods=["POST"]),
+        Route("/api/go-live", guarded(go_live), methods=["POST"]),
         Route("/api/tasks/{key}", guarded(get_task), methods=["GET"]),
         Route("/api/tasks/{key}", guarded(patch_task), methods=["PATCH"]),
         Route("/api/tasks/{key}/context", guarded(task_context), methods=["GET"]),

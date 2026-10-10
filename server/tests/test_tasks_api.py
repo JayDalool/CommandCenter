@@ -424,6 +424,7 @@ class PipelineApi(Automation):
     """The pipeline over HTTP: agent-attributed steps, head-bound approval that survives GitHub polls,
     owner gates only with Developer Unlock, gates in the one Needs Jay queue."""
     DEV = "d" * 43
+    key = "SV-056"
 
     def equip(self, daemon):
         from ccd import security
@@ -431,7 +432,7 @@ class PipelineApi(Automation):
 
     def step(self, op, body, actor="agent:coordinator", headers=None):
         h = dict(JSON, **{"x-ccd-actor": actor}, **(headers or {}))
-        return self.client.post(f"/api/tasks/SV-056/work/{op}", content=json.dumps(body), headers=h)
+        return self.client.post(f"/api/tasks/{self.key}/work/{op}", content=json.dumps(body), headers=h)
 
     def test_a_ticket_travels_plan_to_done_and_every_step_is_attributed(self):
         self.ticket("INBOX")
@@ -477,6 +478,114 @@ class PipelineApi(Automation):
         actors = {e["actor"] for e in self.get("/api/tasks/SV-056").json()["timeline"] if (e.get("kind") or "").startswith("pipeline.")}
         self.assertEqual(actors, {"agent:planner", "agent:coordinator", "agent:reviewer", "agent:verifier",
                                   "system:automation"})
+
+    def to_review_at(self, head, number=56):
+        """Plan, start, a PR at `head`, one poll: SV-0<number> is IN_REVIEW. Later steps act on that key."""
+        self.key = f"SV-{number:03d}"
+        self.tickets.create("samvision", "feature", number=number, status="INBOX")
+        self.step("plan", {"plan": {"summary": "the feature", "tests": ["unit"]}}, "agent:planner")
+        self.step("start", {"branch": f"{self.key}-feature", "worktree": f"/srv/server/worktrees/sv/{self.key}"})
+        self.at_head(head)
+        self.poll()
+        self.assertEqual(self.status(), "IN_REVIEW")
+
+    def at_head(self, head):
+        n = 100 + int(self.key[-3:])
+        self.gh.data["samvision"]["prs"] = [dict(pr(n, f"{self.key}: the feature"), headRefName=f"{self.key}-feature",
+                                                 headRefOid=head)]
+
+    def status(self):
+        return self.tickets.get(self.key)["status"]
+
+    def test_rework_returns_to_review_only_on_a_new_head(self):
+        a, b = "94" * 20, "95" * 20
+        for number, actor in ((56, "agent:coordinator"), (57, "jay")):
+            with self.subTest(actor=actor):
+                self.to_review_at(a, number)
+                r = self.step("review", {"verdict": "REQUEST_CHANGES", "head": a, "session": "review-1"}, "agent:reviewer")
+                self.assertEqual(r.status_code, 200, r.text)
+                r = self.step("rework", {"reason": "fix the findings"}, actor)
+                self.assertEqual((r.status_code, r.json()["status"]), (200, "IN_PROGRESS"), r.text)
+                for _ in range(2):                                  # the same head: no new work to review
+                    self.poll()
+                    self.assertEqual(self.status(), "IN_PROGRESS")
+                self.at_head(b)
+                self.poll()
+                self.assertEqual(self.status(), "IN_REVIEW")
+                last = self.tickets.last_status_event(self.key)
+                self.assertEqual((last["actor"], last["from"], last["to"]), ("system:automation", "IN_PROGRESS", "IN_REVIEW"))
+                self.assertIn(b[:7], last["trigger"])
+                r = self.step("review", {"verdict": "APPROVE", "head": b, "session": "review-2"}, "agent:reviewer")
+                self.assertEqual((r.status_code, r.json()["status"]), (200, "READY_TO_MERGE"), r.text)
+
+    def test_rework_from_blocked_is_not_undone_by_the_next_poll(self):
+        a = "94" * 20
+        self.to_review_at(a)
+        self.step("review", {"verdict": "REQUEST_CHANGES", "head": a, "session": "review-1"}, "agent:reviewer")
+        r = self.step("block", {"reason": "waiting on a decision"})
+        self.assertEqual(r.json()["status"], "BLOCKED", r.text)
+        r = self.step("rework", {"reason": "fix it"})
+        self.assertEqual(r.json()["status"], "IN_PROGRESS", r.text)
+        self.poll()                                                 # from BLOCKED, so from != IN_REVIEW
+        self.assertEqual(self.status(), "IN_PROGRESS")
+        self.at_head("95" * 20)
+        self.poll()
+        self.assertEqual(self.status(), "IN_REVIEW")
+
+    def test_a_second_rework_at_an_unreviewed_head_is_not_reversed(self):
+        a, b, c = "94" * 20, "95" * 20, "96" * 20
+        self.to_review_at(a)
+        self.step("review", {"verdict": "REQUEST_CHANGES", "head": a, "session": "review-1"}, "agent:reviewer")
+        self.step("rework", {"reason": "first"})
+        self.at_head(b)
+        self.poll()
+        self.assertEqual(self.status(), "IN_REVIEW")                 # b was never reviewed
+        r = self.step("rework", {"reason": "second, before any review of b"})
+        self.assertEqual(r.json()["status"], "IN_PROGRESS", r.text)
+        for _ in range(2):                                           # b != the reviewed head a, but b is known
+            self.poll()
+            self.assertEqual(self.status(), "IN_PROGRESS")
+        self.at_head(c)
+        self.poll()
+        self.assertEqual(self.status(), "IN_REVIEW")
+        self.assertIn(c[:7], self.tickets.last_status_event("SV-056")["trigger"])
+
+    def test_an_unrelated_open_pr_does_not_undo_a_rework(self):
+        a = "94" * 20
+        self.to_review_at(a)
+        self.step("review", {"verdict": "REQUEST_CHANGES", "head": a, "session": "review-1"}, "agent:reviewer")
+        self.tickets.link("SV-056", "github", "pr", "JayDalool/SamVisionAI#300",
+                          "https://github.com/JayDalool/SamVisionAI/pull/300", "notes", "jay")
+        self.gh.data["samvision"]["prs"].append(
+            dict(pr(300, "unrelated notes"), headRefName="notes", headRefOid="c3" * 20))
+        self.poll()                                                  # ccd sees both PRs open
+        self.assertEqual(self.status(), "IN_REVIEW")
+        self.step("rework", {"reason": "fix it"})                    # both open PRs are recorded with the rework
+        for _ in range(2):
+            self.poll()
+            self.assertEqual(self.status(), "IN_PROGRESS")
+
+    def test_a_replacement_pr_returns_a_reworked_ticket_to_review(self):
+        a = "94" * 20
+        self.to_review_at(a)
+        self.step("review", {"verdict": "REQUEST_CHANGES", "head": a, "session": "review-1"}, "agent:reviewer")
+        self.step("rework", {"reason": "start over"})
+        self.poll()
+        self.assertEqual(self.status(), "IN_PROGRESS")
+        replacement = dict(pr(301, "SV-056: the feature again"), headRefName="SV-056-again", headRefOid="d4" * 20)
+        self.gh.data["samvision"]["prs"] = [replacement]             # the old PR closed, a new one opened
+        self.poll()
+        self.assertEqual(self.status(), "IN_REVIEW")
+        self.assertIn("after rework", self.tickets.last_status_event("SV-056")["trigger"])
+
+    def test_jay_status_edit_still_wins_on_a_pipeline_ticket(self):
+        self.to_review_at("94" * 20)
+        r = self.patch({"status": "IN_PROGRESS"}, "jay", self.unlock())      # Jay's manual edit: no trigger
+        self.assertEqual((r.status_code, r.json()["status"]), (200, "IN_PROGRESS"), r.text)
+        self.assertIsNone(self.tickets.last_status_event("SV-056")["trigger"])
+        self.at_head("95" * 20)                                              # even a new head does not undo it
+        self.poll()
+        self.assertEqual(self.status(), "IN_PROGRESS")
 
     def test_a_new_pr_head_invalidates_the_approval(self):
         self.ticket("IN_REVIEW")

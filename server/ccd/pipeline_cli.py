@@ -18,7 +18,7 @@
     python -m ccd.pipeline_cli deployed SV-056 --role coordinator --env live --result pass --evidence "…"
     python -m ccd.pipeline_cli stale    SV-056 --role coordinator --reason "superseded by SV-071 (plans/x.md)"
     python -m ccd.pipeline_cli tasks    samvision                  the project's open tasks (the task check)
-    python -m ccd.pipeline_cli add      samvision --role coordinator --title "…" --note "plans/x.md:12"
+    python -m ccd.pipeline_cli add      samvision --role coordinator --title "…" --note "plans/x.md:12" [--label night-finding]
 
 The task check: `stale` asks Jay "Cancel it / Keep it" (only his answer cancels anything); `add` puts a
 missing task in the project's Inbox.
@@ -101,6 +101,7 @@ def build(argv):
     for f in ("why", "action", "impact", "technical"):
         p.add_argument(f"--{f}")
     p.add_argument("--title")
+    p.add_argument("--label", choices=("task-check", "night-finding"), default="task-check")
     p.add_argument("--scope", choices=("in", "out"), default="in")
     p.add_argument("--source", choices=("review", "owner", "verifier"), default="review")
     a = p.parse_args(argv)
@@ -136,9 +137,10 @@ def build(argv):
     if a.op == "add":
         if not a.title:
             p.error("--title is required")
-        desc = f"Added by the task check. Source: {a.note}" if a.note else "Added by the task check."
+        by = "the night shift" if a.label == "night-finding" else "the task check"
+        desc = f"Added by {by}. Evidence / source: {a.note}" if a.note else f"Added by {by}."
         return "POST", "/api/tasks", {"project": a.key, "title": a.title, "description": desc,
-                                      "labels": ["task-check"]}, f"agent:{a.role}"
+                                      "labels": [a.label]}, f"agent:{a.role}"
     return "POST", f"/api/tasks/{key}/work/{a.op}", body[a.op](), f"agent:{a.role}"
 
 

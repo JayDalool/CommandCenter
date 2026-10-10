@@ -77,7 +77,7 @@ def policy(ticket, project_key=None):
 
 
 CLOSED_STATUSES = ("DONE", "DENIED", "CANCELLED")
-HOLDING_GATES = ("plan", "failure")       # jay_first: Jay's decisions that hold new work (questions too)
+HOLDING_GATES = ("plan", "failure")       # jay_first: Jay's decisions that hold a ticket (questions too)
 STALE_OPTIONS = ("Cancel it", "Keep it")   # the task check's question; "Cancel it" cancels the ticket
 # The ten stages Jay sees (spec §24). The canonical statuses stay as they are underneath.
 VISIBLE_STAGES = ("Planning", "Implementing", "Reviewing", "UI Testing", "Verifying", "Ready to Merge", "Deploying",
@@ -306,16 +306,32 @@ class Pipeline:
             out.append(item)
         return out
 
-    def held_by(self, project, key=None):
-        """What holds new work in `project` under the jay_first rule: on tickets other than `key`, every open
-        question for Jay and every decision only Jay can make before work goes on (a plan to approve, a blocker
-        to clear). Sign-offs on finished work (merge acceptance, UI review, live deploy) do not hold it. A
-        ticket that needs a lawyer (needs:legal, type LEGAL) waits on the lawyer, not on Jay: it never holds."""
-        if not registry.pipeline_of(project).get("jay_first", True):
+    def gate_counts(self):
+        """Two integers for the unauthenticated /api/health (the desktop launcher reads them): how many owner
+        gates are open, and the id of the newest pipeline.gate_opened / pipeline.blocked event (ticket_events
+        is append-only, so the id only grows). Counts only: no keys, titles or reasons."""
+        (n,) = self.db.execute(
+            "SELECT COUNT(*) FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id WHERE w.gate IS NOT NULL "
+            "AND t.archived=0 AND t.status NOT IN ('DONE','DENIED','CANCELLED')").fetchone()
+        # no index on kind: SQLite reads ticket_events backwards from the newest id and stops at the first match
+        r = self.db.execute("SELECT id FROM ticket_events WHERE kind IN ('pipeline.gate_opened','pipeline.blocked') "
+                            "ORDER BY id DESC LIMIT 1").fetchone()
+        return {"open": int(n), "last": int(r[0]) if r else 0}
+
+    def held(self, key):
+        """What makes this ticket wait for Jay (registry `jay_first`, default on): an open question for Jay, a
+        plan to approve or a blocker only he can clear — on this ticket, or on an open ticket it is blocked by.
+        Every other ticket goes ahead. Sign-offs on finished work (merge acceptance, UI review, live deploy) do
+        not hold; a blocking ticket that needs a lawyer (needs:legal, type LEGAL) waits on the lawyer, not Jay."""
+        t = self.db.execute("SELECT id, key, project FROM tickets WHERE key=?", (str(key).upper(),)).fetchone()
+        if not t or not registry.pipeline_of(t[2]).get("jay_first", True):
             return []
-        legal = {k for (k,) in self.db.execute(
-            "SELECT key FROM tickets WHERE project=? AND (needs_legal=1 OR type='LEGAL')", (project,))}
-        return [n for n in self.needs() if n["project"] == project and n["ref"] != key and n["ref"] not in legal
+        blockers = {k for (k,) in self.db.execute(
+            "SELECT b.key FROM ticket_relations r JOIN tickets b ON b.id=r.src_id WHERE r.dst_id=? AND r.kind='blocks' "
+            "AND b.status NOT IN ('DONE','DENIED','CANCELLED') AND b.needs_legal=0 AND COALESCE(b.type,'')!='LEGAL'",
+            (t[0],))}
+        refs = blockers | {t[1]}
+        return [n for n in self.needs() if n["ref"] in refs
                 and (n["kind"] == "questions" or n.get("gate") in HOLDING_GATES)]
 
     def participating(self, key):
@@ -325,10 +341,48 @@ class Pipeline:
                             "WHERE t.key=?", (str(key).upper(),)).fetchone()
         return bool(r) and (r[0] in ("proposed", "accepted") or r[1] is not None)
 
-    def lanes(self):
+    def review_head(self, key):
+        """The PR head a review was last recorded at, or None before any review."""
+        r = self.db.execute("SELECT review_head FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id "
+                            "WHERE t.key=?", (str(key).upper(),)).fetchone()
+        return r[0] if r else None
+
+    def rework_prs(self, key):
+        """The open PRs {(ref, head)} recorded by the ticket's latest rework, or None if it never had one."""
+        r = self.db.execute("SELECT e.data FROM ticket_events e JOIN tickets t ON t.id=e.ticket_id "
+                            "WHERE t.key=? AND e.kind='pipeline.rework' ORDER BY e.id DESC LIMIT 1",
+                            (str(key).upper(),)).fetchone()
+        if not r:
+            return None
+        prs = json.loads(r[0] or "{}").get("prs") or []
+        return {(p.get("ref"), p.get("head")) for p in prs if isinstance(p, dict)}
+
+    def new_head(self, key, pr):
+        """True when this (PR, head) is one the pipeline has not already dealt with: not the reviewed head, and
+        not an open PR recorded when the ticket was last sent back to implementation. Only such a head or
+        PR sends a reworked ticket back to IN_REVIEW. (As in sync_pr, an unrecorded review PR matches any PR.)"""
+        if (pr.get("ref"), pr.get("head")) in (self.rework_prs(key) or ()):
+            return False
+        r = self.db.execute("SELECT review_head, review_pr FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id "
+                            "WHERE t.key=?", (str(key).upper(),)).fetchone()
+        if not r or not r[0]:
+            return True
+        return not (pr.get("head") == r[0] and (not r[1] or pr.get("ref") == r[1]))
+
+    def lanes(self, project):
+        """Implementation lanes running in one project: its tickets IN_PROGRESS with a worktree."""
         return self.db.execute(
             "SELECT COUNT(*) FROM tickets t JOIN ticket_work w ON w.ticket_id=t.id "
-            "WHERE t.status='IN_PROGRESS' AND w.worktree IS NOT NULL").fetchone()[0]
+            "WHERE t.status='IN_PROGRESS' AND w.worktree IS NOT NULL AND t.project=?", (project,)).fetchone()[0]
+
+    def lane_limit(self, project):
+        """At most this many implementation lanes per project (registry pipeline `max_lanes`, else the default)."""
+        return int(registry.pipeline_of(project).get("max_lanes") or self.max_lanes)
+
+    def _lane_free(self, t, what="wait for one to finish"):
+        limit = self.lane_limit(t["project"])
+        if self.lanes(t["project"]) >= limit:
+            raise TaskError(409, f"{limit} implementation lanes are already running in {t['project']}; {what}")
 
     def done_worktrees(self):
         """[(key, project, branch, worktree)] of every DONE ticket that still has a recorded worktree."""
@@ -409,14 +463,12 @@ class Pipeline:
             if not isinstance(worktree, str) or not worktree.startswith("/") or len(worktree) > 300 \
                     or not re.match(r"^/[A-Za-z0-9._/-]+$", worktree) or "/../" in worktree + "/":
                 raise TaskError(400, "worktree must be an absolute path")
-            if self.lanes() >= self.max_lanes:
-                raise TaskError(409, f"{self.max_lanes} implementation lanes are already running; wait for one to finish")
-            held = self.held_by(t["project"], t["key"])
+            self._lane_free(t)
+            held = self.held(t["key"])
             if held:
                 refs = ", ".join(sorted({h["ref"] for h in held}))
-                raise TaskError(409, f"Jay first: {t['project']} has {len(held)} open question(s) or decision(s) for Jay "
-                                     f"({refs[:200]}). New work starts after he answers them; tasks that need a lawyer "
-                                     f"do not count.")
+                raise TaskError(409, f"{t['key']} waits for Jay: open question(s) or decision(s) on {refs[:200]}. "
+                                     f"Leave it for him and take another task.")
             # The implementation runs in the ticket's task session (spec §8) unless another is named, so the
             # implementer always has a recorded session a reviewer must differ from.
             work = {"worktree": worktree, "roles": self._role(w, "implementer", model, session or t["key"].lower(), at)}
@@ -567,12 +619,18 @@ class Pipeline:
             return {}, {}, []
         return {"status": "DONE"}, {"gate": None, "gate_reason": None}, [("pipeline.done", "done", {})]
 
-    def confirm(self, key, gate, actor):
-        """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock)."""
+    def confirm(self, key, gate, actor, via=None):
+        """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock). `via="go-live"` marks a
+        live-deploy approval given by Go Live: approvedBy "jay:go-live", and the event says the deploy was approved
+        for a PREPARED deploy that Jay confirms in the coordinator's pane. The record still permits `deployed`
+        (the pane confirmation is Jay's, and nothing here can check it)."""
         if actor != "jay":
             raise TaskError(403, "only Jay closes an owner gate")
         if gate not in GATES:
             raise TaskError(400, f"gate must be one of {', '.join(GATES)}")
+        by = f"{actor}:{via}" if via else actor
+        said = ("approved for a prepared deploy (Jay confirms in the pane)" if via == "go-live"
+                else "Jay approved the live deployment")
 
         def fn(tid, t, w, at):
             if w["gate"] != gate:
@@ -586,8 +644,8 @@ class Pipeline:
                 return {"status": "READY_TO_IMPLEMENT"}, work, events
             if gate == "failure":
                 stage = (w["blocked"] or {}).get("stage") or "PLAN"
-                if stage == "BUILD" and self.lanes() >= self.max_lanes:
-                    raise TaskError(409, f"{self.max_lanes} implementation lanes are running; resume this one later")
+                if stage == "BUILD":
+                    self._lane_free(t, "resume this one later")
                 work.update(blocked=None, review_cycles=0 if stage == "REVIEW" else w["review"]["cycles"])
                 return {"status": RESUME_STATUS.get(stage, "RESEARCHING")}, work, events
             if gate == "deploy" and not (w["deploy"] or {}).get("requestedAt"):
@@ -596,14 +654,14 @@ class Pipeline:
                 # it with `deployed --env live`, and only then does the ticket close.
                 work["deploy"] = {"env": "live", "what": t["title"], "verification": (w["verification"] or {}).get("evidence") or "",
                                   "requestedAt": at, "requestedBy": "policy:needs_deploy", "approvedAt": at,
-                                  "approvedBy": actor, "result": None}
-                events.append(("pipeline.deploy_approved", "Jay approved the live deployment", {}))
+                                  "approvedBy": by, "result": None}
+                events.append(("pipeline.deploy_approved", said, {}))
                 return {}, work, events
             if gate == "deploy" and (w["deploy"] or {}).get("requestedAt") and not (w["deploy"] or {}).get("result"):
                 # Jay approved a live deployment that has not happened yet: the agent deploys next and
                 # records it with `deployed`; the ticket closes only after that, verified live.
-                work["deploy"] = dict(w["deploy"], approvedAt=at, approvedBy=actor)
-                events.append(("pipeline.deploy_approved", "Jay approved the live deployment", {}))
+                work["deploy"] = dict(w["deploy"], approvedAt=at, approvedBy=by)
+                events.append(("pipeline.deploy_approved", said, {}))
                 return {}, work, events
             if gate in ("ui", "deploy") and t["status"] == "VERIFYING" and (w["verification"] or {}).get("result") == "pass":
                 status, more, ev = self._after_verify(t, dict(w, confirmed=confirmed))
@@ -789,8 +847,13 @@ class Pipeline:
             return status, work, [("pipeline.replan", f"back to planning: {reason}", {"from": t["status"]})]
         return self._tx(key, actor, fn)
 
-    def rework(self, key, reason, actor):
-        """Back to Implementation: an ordinary defect found in review, UI testing or verification."""
+    def rework(self, key, reason, actor, open_prs=()):
+        """Back to Implementation: an ordinary defect found in review, UI testing or verification.
+
+        `open_prs` ({ref, head} of the ticket's open PRs, from ccd's last GitHub poll) goes into the rework
+        event: those PRs are what the rework was about, so only a different head or PR returns the ticket to review."""
+        prs = [{"ref": str(p.get("ref")), "head": str(p.get("head") or "")} for p in open_prs or ()
+               if isinstance(p, dict) and p.get("ref")]
         reason = _text(reason, 300, "reason", multiline=False)
         if not reason:
             raise TaskError(400, "say what needs fixing")
@@ -799,8 +862,7 @@ class Pipeline:
             self._need(t, ("IN_REVIEW", "READY_TO_MERGE", "VERIFYING", "BLOCKED"), "rework")
             if w["planState"] != "accepted":
                 raise TaskError(409, f"{t['key']} has no accepted plan; re-plan instead")
-            if self.lanes() >= self.max_lanes:
-                raise TaskError(409, f"{self.max_lanes} implementation lanes are already running; wait for one to finish")
+            self._lane_free(t)
             # The change is being rewritten: an approval, a verification, a UI acceptance or a live-deploy
             # approval was for the old one, and an open UI / deploy / merge / failure gate no longer applies.
             work = {"review_verdict": None, "confirmed": [g for g in _no_merge(w["confirmed"]) if g not in ("ui", "deploy")],
@@ -808,7 +870,7 @@ class Pipeline:
             if w["gate"] in ("merge", "failure", "ui", "deploy"):
                 work.update(gate=None, gate_reason=None)
             return {"status": "IN_PROGRESS"}, work, [("pipeline.rework", f"back to implementation: {reason}",
-                                                      {"from": t["status"]})]
+                                                      {"from": t["status"], "prs": prs})]
         return self._tx(key, actor, fn)
 
     def evidence(self, key, kind, ref, note, actor, stage=None):
