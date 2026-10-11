@@ -346,7 +346,7 @@ export function Files() {
       return { ...d, tabs: rest, active: d.active && live.includes(d.active) ? d.active : live.pop() ?? null }; });
   };
   const close = (t: Tab) => {
-    if (t.dirty) { setSure({ title: "Close with unsaved changes?", body: `${t.file.path} has unsaved changes. Close it anyway?`, label: "Close", danger: true, run: () => dropTabs((x) => x.path === t.path) }); return; }
+    if (t.dirty) { setSure({ title: "Close with unsaved changes?", body: `${t.file.path} has unsaved changes. Close it anyway?`, label: "Close anyway", danger: true, run: () => dropTabs((x) => x.path === t.path) }); return; }
     dropTabs((x) => x.path === t.path);
   };
 

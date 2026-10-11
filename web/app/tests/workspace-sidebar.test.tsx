@@ -335,8 +335,40 @@ describe("explorer operations (CC-040)", () => {
     await user.click(within(await screen.findByRole("dialog", { name: "Close with unsaved changes?" })).getByRole("button", { name: "Cancel" }));
     expect(workspaceTabs.get().tabs).toHaveLength(1);
     await user.click(closeBtn());
-    await user.click(within(await screen.findByRole("dialog", { name: "Close with unsaved changes?" })).getByText("Close", { selector: "button.is-danger" }));
+    await user.click(within(await screen.findByRole("dialog", { name: "Close with unsaved changes?" })).getByRole("button", { name: "Close anyway" }));
     expect(workspaceTabs.get().tabs).toEqual([]);
     expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("reloading a dirty tab asks in the dialog: Cancel keeps the edits, Discard reloads", async () => {
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, "confirm");
+    workspaceTabs.set(() => ({ tabs: [tab("a.py", true)], views: [], active: "samvision:a.py" }));
+    await ready();
+    const reads = () => (app.api.readFile as unknown as { mock: { calls: unknown[][] } }).mock.calls.length;
+    const before = reads();
+    await user.click(within(mainArea()).getByRole("button", { name: "Reload" }));
+    await user.click(within(await screen.findByRole("dialog", { name: "Discard unsaved changes?" })).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(reads()).toBe(before);
+    expect(workspaceTabs.get().tabs[0].dirty).toBe(true);
+    await user.click(within(mainArea()).getByRole("button", { name: "Reload" }));
+    await user.click(within(await screen.findByRole("dialog", { name: "Discard unsaved changes?" })).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(reads()).toBe(before + 1));
+    await waitFor(() => expect(workspaceTabs.get().tabs[0].dirty).toBe(false));
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("deleting a file only closes this project's tabs, not another project's at the same path", async () => {
+    const user = userEvent.setup();
+    const off = await dev();
+    vi.spyOn(app.api, "removePath").mockResolvedValue({ path: "a.py", deleted: "a.py" });
+    const other = { path: "other:a.py", file: { ...file("a.py"), project: "other" }, text: "x=1", version: 1, dirty: false, conflict: null };
+    workspaceTabs.set(() => ({ tabs: [tab("a.py"), other], views: [], active: "samvision:a.py" }));
+    await ready();
+    await menuOn(user, /a\.py/, "Delete…");
+    await user.click(within(await screen.findByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(workspaceTabs.get().tabs.map((t) => t.path)).toEqual(["other:a.py"]));
+    off();
   });
 });
