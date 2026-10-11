@@ -1,6 +1,7 @@
 // Pure ticket logic: vocabulary, filtering, grouping, the Needs-Jay queue. No React here.
 import type { Agent, Blocked, Need, State, Ticket, TicketStatus, Priority } from "../api/types";
 import { STATUSES, OFF_PIPELINE, PRIORITIES } from "../api/types";
+import { TICKET_KEY } from "../lib/control";
 
 export type Tone = "working" | "blocked" | "failed" | "review" | "verifying" | "waiting" | "idle" | "done" | "unknown"
   | "jay";
@@ -155,6 +156,8 @@ export interface JayItem {
   since: number | null;  // epoch s
   url: string | null;
   agentId?: string;
+  ticket?: string;       // a blocked agent's ticket key, when one resolves
+  label?: string;        // else a readable name (a project's coordinator)
   gate?: string;
   questions?: number;
 }
@@ -162,14 +165,29 @@ export interface JayItem {
 const VERB_BY_FLAG: Record<string, string> = { needs_legal: "Legal", needs_ui_review: "Review UI", needs_deploy: "Deploy",
   needs_jay: "Decide" };
 
+/** A blocked pane's readable name: its ticket (assigned pane, or a pane named for one), else "<Project> coordinator". */
+function blockedLabel(st: State, b: Blocked, agent: Agent | undefined, tickets?: Ticket[]): { ticket?: string; label?: string } {
+  if (tickets) {
+    const t = ticketForAgent(tickets, agent ?? { id: b.pane_id } as Agent);
+    if (t) return { ticket: t.key };
+    const key = b.name.toUpperCase();
+    if (TICKET_KEY.test(key) && tickets.some((x) => x.key === key)) return { ticket: key };
+  }
+  const c = st.coordinators?.[b.project];
+  if (c?.paneId && c.paneId === b.pane_id) return { label: `${st.projects.find((p) => p.key === b.project)?.name ?? b.project} coordinator` };
+  return {};
+}
+
 /** Blocked agents first (someone is waiting right now), then merges, then flagged tickets, then the rest. */
-export function jayQueue(st: State | null, agents?: Agent[]): JayItem[] {
+export function jayQueue(st: State | null, agents?: Agent[], tickets?: Ticket[]): JayItem[] {
   if (!st) return [];
   const out: JayItem[] = [];
-  const blockedSince = new Map((agents ?? st.agents).map((a) => [a.id, a.blockedSinceMs]));
+  const all = agents ?? st.agents;
+  const blockedSince = new Map(all.map((a) => [a.id, a.blockedSinceMs]));
   for (const b of st.blocked as Blocked[]) {
     const ms = blockedSince.get(b.pane_id);
-    out.push({ id: `answer:${b.pane_id}`, kind: "answer", verb: "Answer", project: b.project, ref: b.name,
+    const { ticket, label } = blockedLabel(st, b, all.find((a) => a.id === b.pane_id), tickets);
+    out.push({ id: `answer:${b.pane_id}`, kind: "answer", verb: "Answer", project: b.project, ref: b.name, ticket, label,
       text: b.question, flags: [], since: ms ? ms / 1000 : null, url: null, agentId: b.pane_id });
   }
   const order: Record<string, number> = { questions: 0, gate: 1, merge: 2, ticket: 3, task: 4, ci: 5, actions: 6 };

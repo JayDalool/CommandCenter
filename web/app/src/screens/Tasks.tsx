@@ -157,7 +157,7 @@ export function Tasks({ embedded }: { embedded?: EmbeddedTasks } = {}) {
     <div className={`tasks-body${openKey ? " has-detail" : ""}`}>
       <div className="tasks-list">
         {!loaded ? <EmptyState title="Loading tickets…" />
-          : view === "jay" ? <div style={{ padding: 16 }}><NeedsTable items={jayQueue(st)} /></div>
+          : view === "jay" ? <div style={{ padding: 16 }}><NeedsTable items={jayQueue(st, undefined, tickets)} /></div>
           : view === "board" ? <Board rows={base} selected={sel} onOpen={(k) => nav({ key: k })} onMove={move} />
           : <DataTable label="Tasks" rows={rows} columns={shownCols} rowKey={(t) => t.key} selected={sel} onSelect={(k) => setSel(k)}
               onActivate={(k) => nav({ key: k })} onKeyExtra={onKeyExtra} initialSort={{ id: "status", dir: 1 }}

@@ -92,7 +92,7 @@ function Cockpit({ p }: { p: ProjectView }) {
   const tickets = useSelector(app.store, (d) => d.tickets);
   const activity = useSelector(app.store, (d) => d.activity);
   const mine = useMemo(() => sortTickets(tickets.filter((t) => t.project === p.key && !t.archived && !CLOSED.has(t.status)), "status"), [tickets, p.key]);
-  const queue = jayQueue(st).filter((j) => j.project === p.key);
+  const queue = jayQueue(st, undefined, tickets).filter((j) => j.project === p.key);
   const wts = (st.worktrees?.[p.key] ?? []).slice(1);
   const stale = st.stale.filter((s) => s.project === p.key);
   const coord = st.coordinators[p.key];

@@ -127,7 +127,7 @@ export function Dashboard() {
   const tickets = useSelector(app.store, (d) => d.tickets);
   const activity = useSelector(app.store, (d) => d.activity);
   const taskProjects = useSelector(app.store, (d) => d.taskProjects);
-  const queue = useMemo(() => jayQueue(st), [st]);
+  const queue = useMemo(() => jayQueue(st, undefined, tickets), [st, tickets]);
   const projects = useMemo(() => {
     const reg = taskProjects.length ? taskProjects : (st?.projectsConfig ?? []).map((p) => ({ key: p.key, name: p.name, prefix: p.prefix ?? "" }));
     // Only projects the server actually tracks (a registered repository), never a name with nothing behind it.
