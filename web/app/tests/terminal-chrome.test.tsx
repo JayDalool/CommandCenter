@@ -22,9 +22,9 @@ vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
 import { TerminalView } from "../src/workspace/Terminal";
 import { setToken } from "../src/api/auth";
-import { setDevSession } from "../src/api/developer";
+import { developer, setDevSession } from "../src/api/developer";
 
-type Sock = { onmessage: ((e: { data: unknown }) => void) | null; onclose: ((e: { code: number }) => void) | null; readyState: number };
+type Sock = { onmessage: ((e: { data: unknown }) => void) | null; onclose: ((e: { code: number; reason?: string }) => void) | null; readyState: number };
 const socks: Sock[] = [];
 
 beforeEach(() => {
@@ -90,4 +90,24 @@ it("locked: one Unlock and no connection attempt", () => {
   expect(screen.getAllByRole("button", { name: "Unlock" })).toHaveLength(1);
   expect(screen.queryByText(/A real shell runs commands/)).toBeNull();
   expect(socks.length).toBe(0);
+});
+
+it("a session ccd no longer knows: the tab locks and shows Unlock, not DETACHED", async () => {
+  setDevSession("s".repeat(43), 3600);
+  render(<TerminalView name="repo:CC" label="Project · Command Center" active theme="dark" />);
+  await waitFor(() => expect(socks.length).toBe(1));
+  act(() => socks[0].onclose!({ code: 4403, reason: "Developer Unlock required" }));
+  expect(developer.get().active).toBe(false);
+  expect(screen.getByText("DEVELOPER LOCKED")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Unlock" })).toBeInTheDocument();
+  expect(screen.queryByText("DETACHED")).toBeNull();
+});
+
+it("other refusals keep the developer session", async () => {
+  setDevSession("s".repeat(43), 3600);
+  render(<TerminalView name="claude:XX" label="Claude" active theme="dark" />);
+  await waitFor(() => expect(socks.length).toBe(1));
+  act(() => socks[0].onclose!({ code: 4404, reason: "unknown terminal" }));
+  expect(developer.get().active).toBe(true);
+  expect(screen.getByText("REFUSED")).toBeInTheDocument();
 });
