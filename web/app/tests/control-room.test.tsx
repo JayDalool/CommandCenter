@@ -470,6 +470,20 @@ describe("night shift on the Dashboard", () => {
       expect(head).not.toMatch(/Ended/);
     });
 
+    it("the Dashboard line takes the status of an out-of-shift report, not the old end reason", () => {
+      const out = T + 3600 * 8 + 2 * 86400;
+      const rep = (status: "working" | null) => ({ name: "2026-10-10.md", mtime: out, status, text: "x" });
+      const { unmount } = render(<NightLine project="samvision" name="SamVision" onChanged={() => {}}
+        n={shift(out, { endReason: "reminder limit (6)", report: rep("working") })} />);
+      expect(screen.getByText(/Last night: not marked complete/)).toBeInTheDocument();
+      expect(screen.queryByText(/reminder limit/)).toBeNull();
+      unmount();
+      render(<NightLine project="samvision" name="SamVision" onChanged={() => {}}
+        n={shift(out, { endReason: "reminder limit (6)", report: rep(null) })} />);
+      expect(screen.getByText(/Last night: report/)).toBeInTheDocument();
+      expect(screen.queryByText(/reminder limit/)).toBeNull();
+    });
+
     it("a report of the recorded shift keeps the Ended header", () => {
       render(<NightLine project="samvision" name="SamVision" n={shift(T + 3600)} onChanged={() => {}} />);
       fireEvent.click(screen.getByRole("button", { name: "Report" }));

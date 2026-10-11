@@ -374,7 +374,7 @@ Jay confirms the deploy himself in the coordinator's pane. ccd never deploys.
 
 `night_loop` is the seventh background loop of `Daemon.start` (beside herdr, github, git, host, derive,
 housekeeping). Its state is `~/command-center/night-shift/.state.json` (atomic write; a restart resumes it) and the
-morning reports are `~/command-center/night-shift/<project>/*.md`, which `GET /api/night-shift` serves (64 KB each).
+morning reports are `~/command-center/night-shift/<project>/<YYYY-MM-DD>.md` (other `.md` files there are ignored), which `GET /api/night-shift` serves (64 KB each).
 Only facts decide a tick: report status, the coordinator's herdr status, ticket changes in the project
 (`Daemon._activity`) and the clock. With herdr down only "complete" and the cutoff can act. `pipeline.Pipeline.held`
 (Jay-first rule) follows direct `blocks` relations only.
