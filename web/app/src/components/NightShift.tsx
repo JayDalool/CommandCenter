@@ -17,6 +17,13 @@ export function useNightShift(): [NightShiftState | null, () => void] {
   return [st, load];
 }
 
+/** Was the report written during this shift (start .. end + 1 h for the final update)? Shifts started by /night-shift
+ * in a pane never call start(), so the state can be old: then the header must not describe the report by it. */
+export function reportInShift(n: NightProject, now = nowS()): boolean {
+  const r = n.report;
+  return !!r && !!n.startedAt && r.mtime >= n.startedAt && r.mtime <= (n.endedAt ?? now) + 3600;
+}
+
 const COORD: Record<string, string> = { working: "working", idle: "idle", done: "idle", blocked: "waiting on a prompt for you" };
 
 export function NightLine({ project, name, n, onChanged }: {
@@ -25,9 +32,13 @@ export function NightLine({ project, name, n, onChanged }: {
   const [open, setOpen] = useState(false);
   if (!n || (!n.active && !n.report)) return null;
   const rep = n.report;
+  // the shift's end reason only describes a report written in that shift; otherwise the report speaks for itself
+  const last = !rep || reportInShift(n)
+    ? (rep?.status === "complete" || n.endReason === "complete" ? "complete" : n.endReason ?? "report")
+    : rep.status === "complete" ? "complete" : rep.status === "working" ? "not marked complete" : "report";
   const text = n.active
     ? `Night shift running · Claude ${COORD[n.coordinator.status ?? ""] ?? "not reachable"}${n.nudges ? ` · ${n.nudges} reminder${n.nudges === 1 ? "" : "s"}` : ""}`
-    : `Last night: ${rep?.status === "complete" || n.endReason === "complete" ? "complete" : n.endReason ?? "report"}${rep ? ` · ${ago(rep.mtime, nowS())}` : ""}`;
+    : `Last night: ${last}${rep ? ` · ${ago(rep.mtime, nowS())}` : ""}`;
   return <div className={`dash-night${n.active ? " is-on" : ""}${n.coordinator.status === "blocked" && n.active ? " is-jay" : ""}`}>
     <span aria-hidden>☾</span><span className="trunc" title={text}>{text}</span>
     <button type="button" className="btn is-quiet is-xs" onClick={() => setOpen(true)}>{rep ? "Report" : "Details"}</button>
@@ -49,11 +60,13 @@ export function NightReportDialog({ project, name, n, onClose, onChanged }: {
     finally { setBusy(false); }
   };
   const rep = n.report;
+  const inShift = reportInShift(n);
   const approves = n.goLive?.approves ?? [];
   const warnings = n.goLive?.warnings ?? [];
   return <Dialog title={`${name} · night shift`} onClose={onClose}>
     <p className="mono-xs muted">
-      {n.active ? `Running since ${n.startedAt ? new Date(n.startedAt * 1000).toLocaleTimeString() : "—"}`
+      {rep && !inShift ? `${n.active ? `Running since ${n.startedAt ? new Date(n.startedAt * 1000).toLocaleTimeString() : "—"} · ` : ""}Report ${rep.name} · written ${new Date(rep.mtime * 1000).toLocaleString()}`
+        : n.active ? `Running since ${n.startedAt ? new Date(n.startedAt * 1000).toLocaleTimeString() : "—"}`
         : n.endedAt ? `Ended ${new Date(n.endedAt * 1000).toLocaleString()}${n.endReason ? ` — ${n.endReason}` : ""}` : "Not running"}
       {n.goLiveAt ? ` · Go Live sent ${ago(n.goLiveAt, nowS())}` : ""}
     </p>

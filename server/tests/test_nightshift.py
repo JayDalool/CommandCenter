@@ -174,6 +174,19 @@ class Supervisor(unittest.TestCase):
         os.remove(os.path.join(d, "2026-10-09.md"))
         self.assertIsNone(self.ns.report("samvision"))
 
+    def test_only_dated_reports_count_not_other_notes_in_the_folder(self):
+        self.report("complete", self.t0 + 10)
+        other = os.path.join(self.dir, "samvision", "PR22-review-2f3abe4.md")
+        with open(other, "w") as f:
+            f.write("Review of PR 22\n")
+        os.utime(other, (self.t0 + 999, self.t0 + 999))              # newer than the report
+        rep = self.ns.report("samvision")
+        self.assertEqual(rep["name"], "2026-10-09.md")
+        self.assertEqual(rep["status"], "complete")
+        self.assertEqual(self.send("idle", self.t0 + 1000), "end:complete")   # decide() still sees Status: complete
+        os.remove(os.path.join(self.dir, "samvision", "2026-10-09.md"))
+        self.assertIsNone(self.ns.report("samvision"))               # a lone note is no report
+
     def test_the_reminder_is_true_to_whether_a_report_exists(self):
         none = self.ns.nudge_text("samvision")
         self.assertIn("no morning report", none)
