@@ -2,6 +2,7 @@
 
 Screens Jay must check. Newest first. Delete a line when it's done.
 
+- [ ] CC-041 · Development Review matches ticket detail; Needs Jay shows keys · http://127.0.0.1:7777/#/development
 - [ ] CC-040 · Explorer: new file shows; delete closes its tab · http://127.0.0.1:7777/#/files
 - [ ] CC-044 · After Developer expires, terminal shows Unlock, not DETACHED · http://127.0.0.1:7777/#/files
 - [ ] CC-038 · Files editor: type n, / and 3; only text appears · http://127.0.0.1:7777/#/files

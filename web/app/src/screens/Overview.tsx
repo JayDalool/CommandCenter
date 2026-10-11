@@ -37,7 +37,7 @@ export function Overview() {
   const st = useSelector(app.store, (d) => d.state);
   const tickets = useSelector(app.store, (d) => d.tickets);
   const activity = useSelector(app.store, (d) => d.activity);
-  const queue = useMemo(() => jayQueue(st), [st]);
+  const queue = useMemo(() => jayQueue(st, undefined, tickets), [st, tickets]);
   if (!st) return <EmptyState title="Loading state from ccd…" />;
 
   const problems = systemProblems(st);

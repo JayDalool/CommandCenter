@@ -4,6 +4,7 @@ import type { JayItem } from "../tickets/model";
 import { Project, EmptyState, Ago, Flags } from "../components/ui";
 import { DataTable, type Column } from "../components/DataTable";
 import { openAgent } from "../lib/openAgent";
+import { jayRef } from "../lib/control";
 
 export function NeedsTable({ items }: { items: JayItem[] }) {
   const cols: Column<JayItem>[] = [
@@ -11,7 +12,7 @@ export function NeedsTable({ items }: { items: JayItem[] }) {
       style={j.kind === "answer" ? { color: "var(--st-blocked)", borderColor: "var(--st-blocked)", background: "transparent" } : undefined}>{j.verb.toUpperCase()}</span> },
     { id: "p", header: "Project", cell: (j) => <Project k={j.project} /> },
     { id: "r", header: "Ref", cell: (j) => j.kind === "ticket" ? <a className="key" href={href("tasks", j.ref)}>{j.ref}</a>
-      : <span className="mono">{j.ref}</span> },
+      : <span className="mono">{jayRef(j)}</span> },
     { id: "t", header: "What", className: "is-title", cell: (j) => <span className="row"><span className="t trunc" title={j.text}>{j.text}</span><Flags flags={j.flags} /></span> },
     { id: "s", header: "Waiting", className: "is-num", cell: (j) => <Ago at={j.since} /> },
   ];

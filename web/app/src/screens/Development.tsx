@@ -8,7 +8,7 @@ import { href, go, useRoute } from "../lib/router";
 import type { DevRow } from "../api/types";
 import { DataTable, type Column } from "../components/DataTable";
 import { EmptyState, Panel, Project, Seg, StateText, StaleIndicator } from "../components/ui";
-import { DevTrail, Dash, ciStage, mergeStage } from "../components/DevTrail";
+import { DevTrail, Dash, ciStage, mergeStage, reviewCell } from "../components/DevTrail";
 import { PullRequests } from "./PullRequests";
 
 type View = "tickets" | "prs";
@@ -59,9 +59,7 @@ export function Development() {
         <span className="mono-xs faint">{r.pr.state}</span></span>
       : <Dash why="no PR linked" /> },
     { id: "ci", header: "CI", cell: (r) => ciStage(r.ci) },
-    { id: "rv", header: "Review", cell: (r) => r.review
-      ? <span className={r.review === "APPROVED" ? "ok-t" : r.review === "CHANGES_REQUESTED" ? "warn-t" : "muted"}>
-        {r.review === "REVIEW_REQUIRED" ? "PENDING" : r.review.replace("_", " ")}</span> : <Dash /> },
+    { id: "rv", header: "Review", cell: (r) => reviewCell(r) },
     { id: "mg", header: "Merge", cell: (r) => mergeStage(r), sort: (a, b) =>
       Number(b.merge === "WAITING FOR JAY") - Number(a.merge === "WAITING FOR JAY") },
     { id: "vf", header: "Verify", cell: (r) => r.verify ? <span className="text2">{r.verify}</span> : <Dash /> },
