@@ -16,6 +16,7 @@ import { handleChunkError } from "../lib/stale";
 import { installClipboard, makeInputSender } from "./termClipboard";
 import { unlockDialogOpen, useDevActive } from "../components/DevMode";
 import { Overflow, type OverflowItem } from "../components/Overflow";
+import { ConfirmDialog } from "../components/Dialog";
 
 type Mods = { Terminal: typeof XTerm; FitAddon: typeof FitAddon; SearchAddon: typeof SearchAddon };
 let mods: Promise<Mods> | null = null;
@@ -78,6 +79,7 @@ export function TerminalView({ name, label, active, theme, closeText, info, menu
   const [cwd, setCwd] = useState<string | null>(null);
   const [find, setFind] = useState("");
   const [finding, setFinding] = useState(false);
+  const [sure, setSure] = useState(false);
   const enc = useRef(new TextEncoder());
 
   const sendResize = useCallback(() => {
@@ -170,7 +172,6 @@ export function TerminalView({ name, label, active, theme, closeText, info, menu
 
   const detach = () => { const s = ws.current; ws.current = null; s?.close(); setConn("detached"); };
   const closeSession = async () => {
-    if (!window.confirm(closeText ?? `Close the ${label} session? Anything running in it is stopped.`)) return;
     if (await app.action(() => app.api.ptyClose(name), `${label} closed`)) { ws.current?.close(); ws.current = null; setConn("ended"); }
   };
 
@@ -201,9 +202,11 @@ export function TerminalView({ name, label, active, theme, closeText, info, menu
         { label: finding ? "Hide find" : "Find in output", onSelect: () => setFinding(!finding) },
         { label: "Detach this view", onSelect: detach, hidden: conn !== "live" },
         ...menu,
-        { label: "Close session…", onSelect: () => void closeSession(), danger: true, hidden: conn === "ended" || conn === "idle" },
+        { label: "Close session…", onSelect: () => setSure(true), danger: true, hidden: conn === "ended" || conn === "idle" },
       ]} />
     </div>
     <div className="term-host" ref={host} aria-label={`${label} terminal`} inert={!dev} />
+    {sure && <ConfirmDialog title="Close session?" confirmLabel="Close session" danger onConfirm={() => void closeSession()} onClose={() => setSure(false)}>
+      {closeText ?? `Close the ${label} session? Anything running in it is stopped.`}</ConfirmDialog>}
   </div>;
 }

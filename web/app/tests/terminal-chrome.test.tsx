@@ -23,6 +23,7 @@ vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 import { TerminalView } from "../src/workspace/Terminal";
 import { setToken } from "../src/api/auth";
 import { developer, setDevSession } from "../src/api/developer";
+import { app } from "../src/store/app";
 
 type Sock = { onmessage: ((e: { data: unknown }) => void) | null; onclose: ((e: { code: number; reason?: string }) => void) | null; readyState: number };
 const socks: Sock[] = [];
@@ -110,4 +111,26 @@ it("other refusals keep the developer session", async () => {
   act(() => socks[0].onclose!({ code: 4404, reason: "unknown terminal" }));
   expect(developer.get().active).toBe(true);
   expect(screen.getByText("REFUSED")).toBeInTheDocument();
+});
+
+it("Close session asks in the app's dialog (with the caller's wording); Cancel keeps it, confirm closes once", async () => {
+  const native = vi.spyOn(window, "confirm");
+  const close = vi.spyOn(app.api, "ptyClose").mockResolvedValue({ ok: true } as never);
+  setDevSession("s".repeat(43), 3600);
+  render(<TerminalView name="claude:SV" label="Claude" active theme="dark" closeText="Close this view of SV-071's Claude? Only the attach client closes." />);
+  await waitFor(() => expect(socks.length).toBe(1));
+  hello();
+  const open = () => { fireEvent.click(screen.getByRole("button", { name: "Claude actions" })); fireEvent.click(screen.getByRole("menuitem", { name: "Close session…" })); };
+  open();
+  expect(screen.getByRole("dialog", { name: "Close session?" })).toHaveTextContent("Close this view of SV-071's Claude? Only the attach client closes.");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(close).not.toHaveBeenCalled();
+  open();
+  fireEvent.click(screen.getByRole("dialog").querySelector<HTMLButtonElement>("button.is-danger")!);
+  await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+  expect(close).toHaveBeenCalledWith("claude:SV");
+  await waitFor(() => expect(screen.getByText("SESSION ENDED")).toBeInTheDocument());
+  expect(native).not.toHaveBeenCalled();
+  vi.restoreAllMocks();
 });
