@@ -37,6 +37,7 @@ CUTOFF_DEFAULT = "07:00"   # local time: no reminder after it, the shift ends (C
 REPORT_MAX = 64 * 1024
 STATUS_RE = re.compile(r"^\s*Status:\s*(working|complete)\b", re.IGNORECASE)
 KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+REPORT_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.md$")   # the skill's <YYYY-MM-DD>.md: other notes in the folder (PR reviews…) are not reports
 CUTOFF_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
 NUDGE_WITH_REPORT = (
@@ -157,7 +158,7 @@ class NightShift:
     # ---------- the morning report ----------
 
     def report(self, project):
-        """The newest report for the project: {name, mtime, status, text} or None."""
+        """The newest <YYYY-MM-DD>.md report for the project: {name, mtime, status, text} or None."""
         if not KEY_RE.match(project or ""):
             return None
         d = self.root / project
@@ -165,7 +166,7 @@ class NightShift:
         try:
             for f in d.iterdir():
                 try:   # a report can vanish between the listing and the stat: skip it
-                    if f.suffix == ".md" and not f.is_symlink() and f.is_file():
+                    if REPORT_NAME_RE.match(f.name) and not f.is_symlink() and f.is_file():
                         found.append((f.stat().st_mtime, f))
                 except OSError:
                     continue

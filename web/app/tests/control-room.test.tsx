@@ -8,7 +8,7 @@ import { prefs } from "../src/lib/prefs";
 import { stageOf, jayHref, jayWords, taskHref } from "../src/lib/control";
 import { NeedsTable } from "../src/screens/needs";
 import { TaskCheckDialog } from "../src/components/TaskCheck";
-import { NightLine } from "../src/components/NightShift";
+import { NightLine, reportInShift } from "../src/components/NightShift";
 import type { NightProject } from "../src/api/types";
 import { jayQueue } from "../src/tickets/model";
 import { Dashboard, newsText, projectPanels } from "../src/screens/Dashboard";
@@ -473,6 +473,55 @@ describe("night shift on the Dashboard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Yes, approve and prepare" }));
     await waitFor(() => expect(go).toHaveBeenCalledWith("samvision", ["SV-080", "SV-081"]));   // the keys the box listed
     await waitFor(() => expect(changed).toHaveBeenCalled());
+  });
+
+  // CC-042: the state of a shift started with /night-shift in a pane is old; the header must not borrow its end time
+  describe("a report outside the recorded shift", () => {
+    const T = 1_791_000_000;                                        // an arbitrary epoch second
+    const shift = (mtime: number, over: Partial<NightProject> = {}) => np({ startedAt: T, endedAt: T + 3600 * 8, endReason: "morning cutoff",
+      report: { name: "2026-10-10.md", mtime, status: "complete", text: "Status: complete" }, ...over });
+
+    it("reportInShift: inside the shift, a final update 30 min after the end, not 2 days later", () => {
+      expect(reportInShift(shift(T + 3600), T + 99999)).toBe(true);
+      expect(reportInShift(shift(T + 3600 * 8 + 1800), T + 99999)).toBe(true);
+      expect(reportInShift(shift(T + 3600 * 8 + 2 * 86400), T + 3 * 86400)).toBe(false);
+      expect(reportInShift(shift(T - 60), T + 99999)).toBe(false);                      // before the start
+      expect(reportInShift(shift(T + 100, { endedAt: null }), T + 3600)).toBe(true);    // still running
+      expect(reportInShift(shift(T + 100, { startedAt: null }), T + 3600)).toBe(false);
+      expect(reportInShift(shift(T + 100, { report: null }), T + 3600)).toBe(false);
+    });
+
+    it("the dialog header says when the report was written, not when the old shift ended", () => {
+      const mtime = T + 3600 * 8 + 2 * 86400;
+      render(<NightLine project="samvision" name="SamVision" n={shift(mtime, { endReason: "reminder limit" })} onChanged={() => {}} />);
+      expect(screen.getByText(/Last night: complete/)).toBeInTheDocument();          // the report's status, not the old end reason
+      expect(screen.queryByText(/reminder limit/)).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Report" }));
+      const head = document.querySelector("p.mono-xs")?.textContent ?? "";
+      expect(head).toContain("Report 2026-10-10.md · written ");
+      expect(head).toContain(new Date(mtime * 1000).toLocaleString());
+      expect(head).not.toMatch(/Ended/);
+    });
+
+    it("the Dashboard line takes the status of an out-of-shift report, not the old end reason", () => {
+      const out = T + 3600 * 8 + 2 * 86400;
+      const rep = (status: "working" | null) => ({ name: "2026-10-10.md", mtime: out, status, text: "x" });
+      const { unmount } = render(<NightLine project="samvision" name="SamVision" onChanged={() => {}}
+        n={shift(out, { endReason: "reminder limit (6)", report: rep("working") })} />);
+      expect(screen.getByText(/Last night: not marked complete/)).toBeInTheDocument();
+      expect(screen.queryByText(/reminder limit/)).toBeNull();
+      unmount();
+      render(<NightLine project="samvision" name="SamVision" onChanged={() => {}}
+        n={shift(out, { endReason: "reminder limit (6)", report: rep(null) })} />);
+      expect(screen.getByText(/Last night: report/)).toBeInTheDocument();
+      expect(screen.queryByText(/reminder limit/)).toBeNull();
+    });
+
+    it("a report of the recorded shift keeps the Ended header", () => {
+      render(<NightLine project="samvision" name="SamVision" n={shift(T + 3600)} onChanged={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: "Report" }));
+      expect(document.querySelector("p.mono-xs")?.textContent).toMatch(/Ended .* — morning cutoff/);
+    });
   });
 
   it("while it runs: no Go Live, and End night shift stops it", async () => {
