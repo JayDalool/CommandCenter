@@ -4,6 +4,7 @@ never involved (own_scope cannot be exercised here), so _stop_scope is checked b
 subprocess call and asserting the exact argv."""
 import asyncio
 import os
+import shutil
 import signal
 import tempfile
 import time
@@ -16,7 +17,8 @@ from ccd import pty as pty_mod
 class Lifecycle(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        self.addCleanup(lambda: os.rmdir(self.tmp))
+        # The temp dir is the fake shell's HOME; a /bin/sh that writes a history file on exit leaves it non-empty.
+        self.addCleanup(shutil.rmtree, self.tmp)
 
     def manager(self):
         return pty_mod.PtyManager(roots={"TT": self.tmp}, home=self.tmp, shell="/bin/sh",
