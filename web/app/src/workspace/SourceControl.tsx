@@ -3,7 +3,7 @@ import { app } from "../store/app";
 import { Store, useSelector } from "../lib/store";
 import type { ScmDiff, ScmFile, ScmStatus } from "../api/types";
 import { EmptyState } from "../components/ui";
-import { Dialog } from "../components/Dialog";
+import { ConfirmDialog, Dialog } from "../components/Dialog";
 import { unlockDialogOpen, useDevActive } from "../components/DevMode";
 
 /** Bumped after every status refresh, so an open diff tab re-reads its diff after a stage/unstage/commit. */
@@ -41,6 +41,7 @@ export function ScmSidebar({ project, ticket, githubUrl, prUrl, onOpenFile, onOp
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
   const [confirmCommit, setConfirmCommit] = useState(false);
+  const [ask, setAsk] = useState<{ title: string; body: string; label: string; danger?: boolean; run: () => void } | null>(null);
   const [suggest, setSuggest] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -74,10 +75,10 @@ export function ScmSidebar({ project, ticket, githubUrl, prUrl, onOpenFile, onOp
       {f.code !== "D" && <button type="button" className="btn is-quiet is-sm" onClick={() => onOpenFile(f.path)}>Open</button>}
       {staged ? <button type="button" className="btn is-quiet is-sm" onClick={() => void run("unstage", { paths: [f.path] }, `Unstaged ${f.path}`)}>Unstage</button>
         : <button type="button" className="btn is-quiet is-sm" disabled={f.protected} onClick={() => void run("stage", { paths: [f.path] }, `Staged ${f.path}`)}>Stage</button>}
-      {!staged && <button type="button" className="btn is-quiet is-sm" onClick={() => {
-        if (window.confirm(f.code === "?" ? `Delete the untracked file ${f.path}? This cannot be undone.` : `Discard your changes to ${f.path}? This cannot be undone.`))
-          void run("discard", { path: f.path, confirm: true }, `Discarded ${f.path}`);
-      }}>Discard</button>}
+      {!staged && <button type="button" className="btn is-quiet is-sm" onClick={() => setAsk({
+        title: f.code === "?" ? "Delete untracked file?" : "Discard changes?", label: f.code === "?" ? "Delete" : "Discard", danger: true,
+        body: f.code === "?" ? `Delete the untracked file ${f.path}? This cannot be undone.` : `Discard your changes to ${f.path}? This cannot be undone.`,
+        run: () => void run("discard", { path: f.path, confirm: true }, `Discarded ${f.path}`) })}>Discard</button>}
     </span>
   </li>;
   const changes = [...st.conflicts, ...st.unstaged];
@@ -98,10 +99,10 @@ export function ScmSidebar({ project, ticket, githubUrl, prUrl, onOpenFile, onOp
         : suggest && <div className="scm-ticket">
           <span className="key">{ticket.key}</span><span className="mono-xs">has no branch. Create</span><span className="mono-xs">{suggest}</span>
           {!st.clean && <span className="warn-t mono-xs" title="git switch -c keeps your changes; nothing is overwritten">working tree has changes (they come along)</span>}
-          <button type="button" className="btn is-sm is-jay" onClick={() => {
-            if (window.confirm(`Create branch ${suggest} from ${head ?? "HEAD"} and switch to it?${st.clean ? "" : "\n\nYour uncommitted changes come along; nothing is lost."}`))
-              void run("branch", { name: suggest, ticket: ticket.key }, `On ${suggest}`);
-          }}>Create branch</button></div>)}
+          <button type="button" className="btn is-sm is-jay" onClick={() => setAsk({
+            title: "Create branch?", label: "Create branch",
+            body: `Create branch ${suggest} from ${head ?? "HEAD"} and switch to it?${st.clean ? "" : " Your uncommitted changes come along; nothing is lost."}`,
+            run: () => void run("branch", { name: suggest, ticket: ticket.key }, `On ${suggest}`) })}>Create branch</button></div>)}
       <div className="scm-sec"><span className="caps muted">Staged</span><span className="mono-xs">{st.staged.length}</span></div>
       <ul>{st.staged.map((f) => row(f, true))}</ul>
       <div className="scm-sec"><span className="caps muted">Changes</span><span className="mono-xs">{changes.length + st.untracked.length}</span>
@@ -129,5 +130,6 @@ export function ScmSidebar({ project, ticket, githubUrl, prUrl, onOpenFile, onOp
         <button type="button" className="btn is-quiet" onClick={() => setConfirmCommit(false)}>Cancel</button>
       </div>
     </Dialog>}
+    {ask && <ConfirmDialog title={ask.title} confirmLabel={ask.label} danger={ask.danger} onConfirm={ask.run} onClose={() => setAsk(null)}>{ask.body}</ConfirmDialog>}
   </div>;
 }

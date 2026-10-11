@@ -2,6 +2,7 @@
 
 Screens Jay must check. Newest first. Delete a line when it's done.
 
+- [ ] CC-046 · Close session, Discard, Create branch ask in app dialog · http://127.0.0.1:7777/#/files
 - [ ] CC-045 · Popped-out terminal: End Session asks in app dialog · http://127.0.0.1:7777/#/workspace
 - [ ] CC-042 · Night-shift Report header matches the report shown · http://127.0.0.1:7777/#/dashboard
 - [ ] CC-041 · Development Review matches ticket detail; Needs Jay shows keys · http://127.0.0.1:7777/#/development
