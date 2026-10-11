@@ -11,6 +11,7 @@ import { useSelector } from "../lib/store";
 import { useRoute } from "../lib/router";
 import { pjVar, stageOf } from "../lib/control";
 import { EmptyState } from "../components/ui";
+import { ConfirmDialog } from "../components/Dialog";
 import { DevDot } from "../components/DevMode";
 import { PaneBody, RoomView, useRoom, useWsProjects } from "../workspace/Room";
 import { StagePill } from "../workspace/Dossier";
@@ -58,6 +59,7 @@ export function PaneWindow() {
   const ticket = useSelector(app.store, (d) => (room?.key ? d.tickets.find((t) => t.key === room.key) ?? null : null));
   const pname = useSelector(app.store, (d) => d.state?.projects.find((p) => p.key === room?.project)?.name ?? room?.project ?? "");
   const [ended, setEnded] = useState(false);
+  const [sure, setSure] = useState(false);
   const state = room?.out[tool];
   useEffect(() => { assertPoppedPane(rid, tool); }, [rid, tool]);
   useEffect(() => {
@@ -71,8 +73,7 @@ export function PaneWindow() {
   const proj = rows?.find((p) => p.key === room.project) ?? null;
   const name = proj ? sessionName(room, tool, proj.prefix) : null;
   const end = async () => {
-    const what = tool === "claude" ? "Close this Claude attach? The Claude session itself keeps running in herdr." : `End the ${TOOL_LABEL[tool]} session? Anything running in it stops.`;
-    if (!name || !window.confirm(what)) return;
+    if (!name) return;
     if (await app.action(() => app.api.ptyClose(name), `${TOOL_LABEL[tool]} session ended`)) setEnded(true);
   };
   return <div className="popwin" style={pjVar(room.project)}>
@@ -86,8 +87,13 @@ export function PaneWindow() {
         title="Put this terminal back into its room">Reattach to room</button>
       <button type="button" className="btn is-sm is-quiet" onClick={() => { detachPane(rid, tool); window.close(); }}
         title="Closes this window only; the session keeps running">Close Window / Detach</button>
-      <button type="button" className="btn is-sm is-danger" onClick={() => void end()} disabled={ended || !name}>End Session</button>
+      <button type="button" className="btn is-sm is-danger" onClick={() => setSure(true)} disabled={ended || !name}>End Session</button>
     </header>
+    {sure && (tool === "claude"
+      ? <ConfirmDialog title="Close this Claude attach?" confirmLabel="Close attach" danger onConfirm={() => void end()} onClose={() => setSure(false)}>
+          The Claude session itself keeps running in herdr.</ConfirmDialog>
+      : <ConfirmDialog title={`End the ${TOOL_LABEL[tool]} session?`} confirmLabel="End session" danger onConfirm={() => void end()}
+          onClose={() => setSure(false)}>Anything running in it stops.</ConfirmDialog>)}
     <div className="pane-body is-pop">{proj ? <PaneBody room={room} tool={tool} proj={proj} active /> : <EmptyState title="Loading…" />}</div>
   </div>;
 }
