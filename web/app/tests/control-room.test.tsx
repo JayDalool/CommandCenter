@@ -5,7 +5,8 @@ import { vi } from "vitest";
 import { app, initial } from "../src/store/app";
 import { developer, devSession, restoreDevSession, setDevSession } from "../src/api/developer";
 import { prefs } from "../src/lib/prefs";
-import { stageOf, jayHref, taskHref } from "../src/lib/control";
+import { stageOf, jayHref, jayWords, taskHref } from "../src/lib/control";
+import { NeedsTable } from "../src/screens/needs";
 import { TaskCheckDialog } from "../src/components/TaskCheck";
 import { NightLine, reportInShift } from "../src/components/NightShift";
 import type { NightProject } from "../src/api/types";
@@ -134,6 +135,38 @@ describe("the wall layout (spec §12, §17)", () => {
     expect(parseLayout("not json").walls).toEqual({ "1": [] });
     const l = parseLayout(JSON.stringify({ v: 1, rooms: { a: { id: "a", where: "wall" } }, walls: { "1": ["a", "ghost", "a"] } }));
     expect(l.walls["1"]).toEqual(["a"]);
+  });
+});
+
+describe("Needs Jay names the ticket, not the pane", () => {
+  const blocked = (pane_id: string, name: string, project = "samvision") => ({ project, pane_id, name, question: "ok?", stuck_min: 1 });
+  const setup = (b: ReturnType<typeof blocked>[], tickets: Ticket[]) => {
+    const st = state(); st.needs = []; st.blocked = b;
+    return jayQueue(st, undefined, tickets);
+  };
+  it("a pane named for a ticket shows that key and links to it", () => {
+    const [j] = setup([blocked("wF:p9", "sv-064")], [ticket({ key: "SV-064", status: "IN_PROGRESS", archived: false })]);
+    expect(jayWords(j)).toBe("Answer SV-064: ok?");
+    expect(jayHref(j)).toBe(taskHref("SV-064", null));
+  });
+  it("a pane assigned to a ticket shows the ticket key, whatever the pane is called", () => {
+    const [j] = setup([blocked("wF:p1", "wF:p1")], [ticket({ key: "SV-070", status: "IN_PROGRESS", archived: false, agentPaneId: "wF:p1" })]);
+    expect(jayWords(j)).toBe("Answer SV-070: ok?");
+    expect(jayHref(j)).toBe(taskHref("SV-070", null));
+  });
+  it("a project's coordinator pane reads '<Project> coordinator'; an unmatched pane keeps its name", () => {
+    const st = state(); st.needs = []; st.coordinators.samvision.paneId = "wE:p2";
+    st.blocked = [blocked("wE:p2", "wE:p2"), blocked("wZ:p3", "sv-999")];
+    const [c, u] = jayQueue(st, undefined, [ticket({ key: "SV-064", status: "IN_PROGRESS", archived: false })]);
+    expect(jayWords(c)).toBe("Answer SamVision coordinator: ok?");
+    expect(jayWords(u)).toBe("Answer sv-999: ok?");
+    render(<NeedsTable items={[c, u]} />);
+    expect(screen.getByText("SamVision coordinator")).toBeInTheDocument();
+    expect(screen.getByText("sv-999")).toBeInTheDocument();
+  });
+  it("without tickets the queue is unchanged", () => {
+    const st = state(); st.needs = []; st.blocked = [blocked("wF:p9", "sv-064")];
+    expect(jayWords(jayQueue(st)[0])).toBe("Answer sv-064: ok?");
   });
 });
 

@@ -10,7 +10,7 @@ import type { Terminal as XTerm } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { SearchAddon } from "@xterm/addon-search";
 import { getToken } from "../api/auth";
-import { devSession } from "../api/developer";
+import { devExpired, devSession } from "../api/developer";
 import { app } from "../store/app";
 import { handleChunkError } from "../lib/stale";
 import { installClipboard, makeInputSender } from "./termClipboard";
@@ -143,6 +143,8 @@ export function TerminalView({ name, label, active, theme, closeText, info, menu
     sock.onclose = (ev) => {
       if (ws.current !== sock) return;
       if (ended) return;
+      // ccd's developer session ended (idle, max age, restart): lock this tab so the Unlock overlay shows.
+      if (ev.code === 4403 && ev.reason?.startsWith("Developer Unlock")) devExpired();
       if (ev.code === 4403 || ev.code === 4401 || ev.code === 4404 || ev.code === 4400) setConn("refused");
       else setConn((c) => (c === "live" || c === "connecting" ? "detached" : c));
     };

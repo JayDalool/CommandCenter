@@ -41,3 +41,15 @@ export function Dialog({ title, onClose, children, footer, className = "dialog" 
     </div>
   </div>;
 }
+
+/** In-app replacement for window.confirm: Cancel (focused first) and Esc leave things alone. */
+export function ConfirmDialog({ title, children, confirmLabel = "OK", danger, onConfirm, onClose }: { title: ReactNode; children: ReactNode;
+  confirmLabel?: string; danger?: boolean; onConfirm: () => void; onClose: () => void }) {
+  return <Dialog title={title} onClose={onClose}>
+    <p className="text2">{children}</p>
+    <div className="row" style={{ marginTop: 10 }}>
+      <button type="button" className={`btn${danger ? " is-danger" : " is-jay"}`} onClick={() => { onClose(); onConfirm(); }}>{confirmLabel}</button>
+      <button type="button" className="btn is-quiet" data-autofocus onClick={onClose}>Cancel</button>
+    </div>
+  </Dialog>;
+}

@@ -46,7 +46,8 @@ const KIND_WORD: Record<string, string> = { questions: "Questions", gate: "Decis
 
 export function useAttention(): JayItem[] {
   const st = useSelector(app.store, (d) => d.state);
-  return useMemo(() => jayQueue(st), [st]);
+  const tickets = useSelector(app.store, (d) => d.tickets);
+  return useMemo(() => jayQueue(st, undefined, tickets), [st, tickets]);
 }
 
 export function NotificationBell() {

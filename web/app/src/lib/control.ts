@@ -69,7 +69,7 @@ export function greeting(d = new Date()): string {
   return h < 5 ? "Good Night" : h < 12 ? "Good Morning" : h < 18 ? "Good Afternoon" : "Good Evening";
 }
 
-const TICKET_KEY = /^[A-Z][A-Z0-9]{0,8}(?:-[A-Z0-9]{1,8})?-\d{1,6}$/;
+export const TICKET_KEY = /^[A-Z][A-Z0-9]{0,8}(?:-[A-Z0-9]{1,8})?-\d{1,6}$/;
 
 /** A Needs Jay queue item → the exact place to act on it. */
 export function jayHref(j: JayItem): string {
@@ -78,11 +78,16 @@ export function jayHref(j: JayItem): string {
   if (j.kind === "ticket") return taskHref(j.ref, null);
   if (j.kind === "answer") {
     // A blocked agent: its task room when it is a task session (sv-071), else the project console.
-    const key = j.ref.toUpperCase();
+    const key = j.ticket ?? j.ref.toUpperCase();
     return TICKET_KEY.test(key) ? taskHref(key, null) : href("workspace", null, { console: j.project, open: "1" });
   }
   if (j.url) return j.url;
   return href("workspace", null, { project: j.project });
+}
+
+/** What Jay sees as the item's name: the resolved ticket key or coordinator label, else the raw ref. */
+export function jayRef(j: JayItem): string {
+  return j.ticket ?? j.label ?? j.ref;
 }
 
 /** In words, what Jay is asked to do (the dashboard's "Needs Jay" bullets). */
@@ -94,7 +99,7 @@ export function jayWords(j: JayItem): string {
       : j.gate === "deploy" ? "Allow live deploy" : "Resolve blocker";
     return `${w} · ${j.ref}`;
   }
-  if (j.kind === "answer") return `Answer ${j.ref}: ${j.text}`;
+  if (j.kind === "answer") return `Answer ${jayRef(j)}: ${j.text}`;
   if (j.kind === "merge") return `Merge ${j.ref}`;
   return j.text;
 }

@@ -62,6 +62,16 @@ export function mergeStage(row: DevRow) {
   return <Dash why="not ready to merge yet" />;
 }
 
+/** The review verdict: the pipeline's (approved at <sha7>) beats GitHub's, which stays PENDING until a human reviews on GitHub. */
+export function reviewCell(row: DevRow) {
+  const pv = row.pipelineReview?.verdict ? row.pipelineReview : null;
+  if (pv) return <span className={pv.verdict === "APPROVE" ? "ok-t" : "warn-t"}>
+    {pv.verdict === "APPROVE" ? "approved" : "changes requested"}{pv.head ? ` at ${pv.head.slice(0, 7)}` : ""}</span>;
+  if (row.review) return <span className={row.review === "APPROVED" ? "ok-t" : row.review === "CHANGES_REQUESTED" ? "warn-t" : "muted"}>
+    {REVIEW_WORD[row.review] ?? row.review.replace("_", " ")}</span>;
+  return <Dash why="no PR to review" />;
+}
+
 /** The full trail as a definition list — the ticket detail's DEVELOPMENT section. */
 export function DevTrail({ row, repo }: { row: DevRow | null; repo?: string | null }) {
   if (!row) {
@@ -74,7 +84,6 @@ export function DevTrail({ row, repo }: { row: DevRow | null; repo?: string | nu
   const b = row.branch;
   const pr = row.pr;
   const roles = Object.entries(row.roles ?? {});
-  const pv = row.pipelineReview?.verdict ? row.pipelineReview : null;
   return <dl className="dev-trail">
     <DetailRow label="Branch">{b
       ? <span className="row" style={{ gap: 8, flexWrap: "wrap" }}>
@@ -98,14 +107,7 @@ export function DevTrail({ row, repo }: { row: DevRow | null; repo?: string | nu
     <DetailRow label="CI">{ciStage(row.ci)}</DetailRow>
     {roles.length > 0 && <DetailRow label="Roles"><span className="mono-xs">
       {roles.map(([r, v]) => v.model ? `${r} ${v.model}` : r).join(" · ")}</span></DetailRow>}
-    <DetailRow label="Review">{pv
-      ? <span className={pv.verdict === "APPROVE" ? "ok-t" : "warn-t"}>
-        {pv.verdict === "APPROVE" ? "approved" : "changes requested"}
-        {pv.head ? ` at ${pv.head.slice(0, 7)}` : ""}</span>
-      : row.review
-      ? <span className={row.review === "APPROVED" ? "ok-t" : row.review === "CHANGES_REQUESTED" ? "warn-t" : "muted"}>
-        {REVIEW_WORD[row.review] ?? row.review}</span>
-      : <Dash why="no PR to review" />}</DetailRow>
+    <DetailRow label="Review">{reviewCell(row)}</DetailRow>
     <DetailRow label="Merge">{mergeStage(row)}</DetailRow>
     <DetailRow label="Verify">{row.verify
       ? <Stage word={row.verify} tone={row.verify === "DONE" ? "done" : "review"} />
