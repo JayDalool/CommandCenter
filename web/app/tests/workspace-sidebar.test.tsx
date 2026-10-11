@@ -230,3 +230,113 @@ describe("prefs migration", () => {
     expect(parsePrefs(null).wsExplorerW).toBe(260);
   });
 });
+
+describe("explorer operations (CC-040)", () => {
+  const file = (path: string) => ({ project: "samvision", path, size: 3, mtime: 1, mode: "644", kind: "text" as const, text: "x=1", sha: "s" });
+  const tab = (path: string, dirty = false) => ({ path: `samvision:${path}`, file: file(path), text: "x=1", version: 1, dirty, conflict: null });
+  const root = (...names: [string, "file" | "dir"][]) => ({ project: "samvision", path: "", crumbs: [], truncated: false, git: true,
+    entries: names.map(([name, kind]) => ({ name, kind, size: 3, mtime: 1, protected: false, link: false })) });
+  async function dev() {
+    const { setDevSession } = await import("../src/api/developer");
+    setDevSession("s".repeat(43), 3600);
+    return () => setDevSession(null);
+  }
+  const menuOn = async (user: ReturnType<typeof userEvent.setup>, name: RegExp, item: string) => {
+    fireEvent.contextMenu(await screen.findByRole("treeitem", { name }));
+    await user.click(await screen.findByRole("menuitem", { name: item }));
+  };
+
+  it("a new file shows in the listing at once, without a refresh", async () => {
+    const user = userEvent.setup();
+    const off = await dev();
+    const confirm = vi.spyOn(window, "confirm");
+    const save = vi.spyOn(app.api, "saveFile").mockResolvedValue({ sha: "n", size: 0, mtime: 2 } as never);
+    await ready();
+    await screen.findByRole("treeitem", { name: /a\.py/ });
+    const listDir = app.api.listDir as unknown as { mock: { calls: unknown[][] } };
+    const before = listDir.mock.calls.length;
+    (app.api.listDir as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(root(["a.py", "file"], ["new.txt", "file"]));
+    await menuOn(user, /a\.py/, "New file…");
+    await user.type(screen.getByLabelText("Name"), "new.txt");
+    await user.click(screen.getByRole("button", { name: "OK" }));
+    expect(save).toHaveBeenCalledWith("samvision", "new.txt", "", null);
+    expect(await screen.findByRole("treeitem", { name: /new\.txt/ })).toBeInTheDocument();
+    expect(listDir.mock.calls.length).toBeGreaterThan(before);
+    expect(confirm).not.toHaveBeenCalled();
+    off();
+  });
+
+  it("deleting an open file closes its tab; Cancel and Esc do not delete", async () => {
+    const user = userEvent.setup();
+    const off = await dev();
+    const confirm = vi.spyOn(window, "confirm");
+    const rm = vi.spyOn(app.api, "removePath").mockResolvedValue({ path: "a.py", deleted: "a.py" });
+    workspaceTabs.set(() => ({ tabs: [tab("a.py")], views: [], active: "samvision:a.py" }));
+    await ready();
+    expect(within(mainArea()).getByRole("tab", { name: /a\.py/ })).toBeInTheDocument();
+    await menuOn(user, /a\.py/, "Delete…");
+    const dlg = await screen.findByRole("dialog", { name: "Delete file?" });
+    await user.click(within(dlg).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await menuOn(user, /a\.py/, "Delete…");
+    await screen.findByRole("dialog", { name: "Delete file?" });
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(rm).not.toHaveBeenCalled();
+    expect(within(mainArea()).getByRole("tab", { name: /a\.py/ })).toBeInTheDocument();
+    await menuOn(user, /a\.py/, "Delete…");
+    await user.click(within(await screen.findByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(rm).toHaveBeenCalledWith("samvision", "a.py"));
+    await waitFor(() => expect(within(mainArea()).queryByRole("tab", { name: /a\.py/ })).toBeNull());
+    expect(within(mainArea()).getByText("No file open")).toBeInTheDocument();
+    expect(workspaceTabs.get().tabs).toEqual([]);
+    expect(confirm).not.toHaveBeenCalled();
+    off();
+  });
+
+  it("deleting a folder closes tabs of files inside it and keeps the others; says when one is unsaved", async () => {
+    const user = userEvent.setup();
+    const off = await dev();
+    vi.spyOn(app.api, "listDir").mockResolvedValue(root(["a.py", "file"], ["src", "dir"]));
+    const rm = vi.spyOn(app.api, "removePath").mockResolvedValue({ path: "src", deleted: "src" });
+    workspaceTabs.set(() => ({ tabs: [tab("a.py"), tab("src/deep/x.py", true), tab("srcs/y.py")], views: [], active: "samvision:src/deep/x.py" }));
+    await ready();
+    await menuOn(user, /^src/, "Delete folder…");
+    const dlg = await screen.findByRole("dialog", { name: "Delete folder?" });
+    expect(dlg).toHaveTextContent("unsaved changes; they are lost");
+    await user.click(within(dlg).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(rm).toHaveBeenCalledWith("samvision", "src"));
+    await waitFor(() => expect(workspaceTabs.get().tabs.map((t) => t.path)).toEqual(["samvision:a.py", "samvision:srcs/y.py"]));
+    expect(workspaceTabs.get().active).toBe("samvision:srcs/y.py");
+    off();
+  });
+
+  it("a failed delete keeps the tab", async () => {
+    const user = userEvent.setup();
+    const off = await dev();
+    vi.spyOn(app.api, "removePath").mockRejectedValue(new Error("nope"));
+    workspaceTabs.set(() => ({ tabs: [tab("a.py")], views: [], active: "samvision:a.py" }));
+    await ready();
+    await menuOn(user, /a\.py/, "Delete…");
+    await user.click(within(await screen.findByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(app.api.removePath).toHaveBeenCalled());
+    await waitFor(() => expect(app.store.get().toast?.text).toBe("nope"));
+    expect(workspaceTabs.get().tabs).toHaveLength(1);
+    off();
+  });
+
+  it("closing a dirty tab asks in the dialog: Close closes, Cancel keeps", async () => {
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, "confirm");
+    workspaceTabs.set(() => ({ tabs: [tab("a.py", true)], views: [], active: "samvision:a.py" }));
+    await ready();
+    const closeBtn = () => within(mainArea()).getByRole("button", { name: /close/i });
+    await user.click(closeBtn());
+    await user.click(within(await screen.findByRole("dialog", { name: "Close with unsaved changes?" })).getByRole("button", { name: "Cancel" }));
+    expect(workspaceTabs.get().tabs).toHaveLength(1);
+    await user.click(closeBtn());
+    await user.click(within(await screen.findByRole("dialog", { name: "Close with unsaved changes?" })).getByText("Close", { selector: "button.is-danger" }));
+    expect(workspaceTabs.get().tabs).toEqual([]);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+});

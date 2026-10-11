@@ -28,7 +28,7 @@ import { ApiError, uploadBytes } from "../api/client";
 import type { FileEntry, FileRead, WorkspaceProject } from "../api/types";
 import { stamp } from "../lib/time";
 import { EmptyState } from "../components/ui";
-import { Dialog } from "../components/Dialog";
+import { ConfirmDialog, Dialog } from "../components/Dialog";
 import { DevBadge, unlockDialogOpen, useDevActive } from "../components/DevMode";
 import type { OverflowItem } from "../components/Overflow";
 import { bytes } from "../components/Attachments";
@@ -222,6 +222,7 @@ export function Files() {
   const [over, setOver] = useState(false);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [naming, setNaming] = useState<{ title: string; initial: string; done: (v: string) => void } | null>(null);
+  const [sure, setSure] = useState<{ title: string; body: string; label: string; danger?: boolean; run: () => void } | null>(null);
   const [goto, setGoto] = useState(false);
   const [searchFocus, setSearchFocus] = useState(0);
   const [seenSides, setSeenSides] = useState<Set<Side>>(new Set([side]));
@@ -329,17 +330,24 @@ export function Files() {
   }, [dev]);
 
   const reload = async (t: Tab) => {
-    if (t.dirty && !window.confirm(`Discard your unsaved changes to ${t.file.path} and load the version on disk?`)) return;
+    if (t.dirty) { setSure({ title: "Discard unsaved changes?", body: `Discard your unsaved changes to ${t.file.path} and load the version on disk?`, label: "Discard", danger: true, run: () => void doReload(t) }); return; }
+    void doReload(t);
+  };
+  const doReload = async (t: Tab) => {
     try {
       const file = await app.api.readFile(t.file.project, t.file.path);
       setTabs((ts) => ts.map((x) => x.path === t.path ? { ...x, file, text: file.text ?? "", version: nextVersion(), dirty: false, conflict: null } : x));
     } catch (e) { app.toast((e as Error).message, "bad"); }
   };
+  /** Drop every tab `gone` matches (no dirty prompt: callers asked already) and pick the next active one. */
+  const dropTabs = (gone: (t: Tab) => boolean) => {
+    tabStore.get().tabs.filter(gone).forEach((t) => disposeModel(t.path));
+    tabStore.set((d) => { const rest = d.tabs.filter((x) => !gone(x)); const live = [...rest.map((x) => x.path), ...d.views.map((v) => v.id)];
+      return { ...d, tabs: rest, active: d.active && live.includes(d.active) ? d.active : live.pop() ?? null }; });
+  };
   const close = (t: Tab) => {
-    if (t.dirty && !window.confirm(`${t.file.path} has unsaved changes. Close it anyway?`)) return;
-    disposeModel(t.path);
-    tabStore.set((d) => { const rest = d.tabs.filter((x) => x.path !== t.path);
-      return { ...d, tabs: rest, active: d.active === t.path ? [...rest.map((x) => x.path), ...d.views.map((v) => v.id)].pop() ?? null : d.active }; });
+    if (t.dirty) { setSure({ title: "Close with unsaved changes?", body: `${t.file.path} has unsaved changes. Close it anyway?`, label: "Close", danger: true, run: () => dropTabs((x) => x.path === t.path) }); return; }
+    dropTabs((x) => x.path === t.path);
   };
 
   const maximize = (m: "main" | "term") => prefs.patch({ wsMax: prefs.get().wsMax === m ? "none" : m, wsTermOpen: true });
@@ -410,8 +418,11 @@ export function Files() {
 
   // Explorer operations: every one needs Developer Mode; ccd enforces it too.
   const op = async (fn: () => Promise<unknown>, ok: string, dirs: string[]) => {
-    if (!dev) { unlockDialogOpen(); return; }
-    if (await app.action(fn, ok)) dirs.forEach(invalidate);
+    if (!dev) { unlockDialogOpen(); return false; }
+    // action() returns fn's result and most ops resolve void: wrap so success is always truthy.
+    const done = !!(await app.action(async () => { await fn(); return true; }, ok));
+    if (done) dirs.forEach(invalidate);
+    return done;
   };
   const menuItems = (m: Menu) => {
     const isDir = m.entry?.kind === "dir";
@@ -433,8 +444,12 @@ export function Files() {
       }
       items.push({ label: "Copy path", run: () => void navigator.clipboard?.writeText(m.path).then(() => app.toast("Path copied")) });
       if (!m.entry.protected) items.push({ label: isDir ? "Delete folder…" : "Delete…", danger: true, run: () => {
-        if (window.confirm(isDir ? `Delete the folder ${m.path} and everything in it? This cannot be undone.` : `Delete ${m.path}? This cannot be undone.`))
-          void op(() => app.api.removePath(key, m.path), `Deleted ${name}`, [parentOf(m.path)]);
+        const hit = (t: Tab) => t.file.project === key && (t.file.path === m.path || (isDir && t.file.path.startsWith(`${m.path}/`)));
+        const lost = tabStore.get().tabs.some((t) => hit(t) && t.dirty);
+        setSure({ title: isDir ? "Delete folder?" : "Delete file?", label: "Delete", danger: true,
+          body: (isDir ? `Delete the folder ${m.path} and everything in it? This cannot be undone.` : `Delete ${m.path}? This cannot be undone.`)
+            + (lost ? ` ${isDir ? "An open file in it has" : "It has"} unsaved changes; they are lost.` : ""),
+          run: () => void op(() => app.api.removePath(key, m.path), `Deleted ${name}`, [parentOf(m.path)]).then((ok) => { if (ok) dropTabs(hit); }) });
       } });
     }
     return items;
@@ -641,6 +656,7 @@ export function Files() {
       </ul>
     </div>}
     {naming && <NameDialog title={naming.title} initial={naming.initial} onDone={naming.done} onClose={() => setNaming(null)} />}
+    {sure && <ConfirmDialog title={sure.title} confirmLabel={sure.label} danger={sure.danger} onConfirm={sure.run} onClose={() => setSure(null)}>{sure.body}</ConfirmDialog>}
     {goto && <GoToFile project={key} onOpen={(x) => void openFile(x)} onClose={() => setGoto(false)} />}
     {ask && <Dialog title={`${ask.name} already exists`} onClose={() => setUploads((us) => us.map((x) => x.id === ask.id ? { ...x, state: "fail", msg: "skipped" } : x))}>
       <p className="text2">A file named <span className="mono">{ask.name}</span> is already in <span className="mono">{ask.project}/{ask.dir || ""}</span>. Nothing was overwritten.</p>
