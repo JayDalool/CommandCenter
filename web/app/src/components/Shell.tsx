@@ -41,7 +41,9 @@ export function typing(e: KeyboardEvent | React.KeyboardEvent): boolean {
   const t = e.target as HTMLElement | null;
   if (!t) return false;
   const tag = t.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable) return true;
+  // Monaco in Chrome types into a div with an EditContext, which is neither a field nor contentEditable.
+  return (t as HTMLElement & { editContext?: unknown }).editContext != null || !!t.closest?.(".monaco-editor");
 }
 
 export function useTick(ms = 1000) {
