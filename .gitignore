@@ -19,3 +19,6 @@ dist/
 *.tsbuildinfo
 /launcher/launcher
 /launcher/*.exe
+# Claude Code: agent worktrees and personal settings are machine-local; .claude/settings.json is the shared allowlist.
+.claude/worktrees/
+.claude/settings.local.json
