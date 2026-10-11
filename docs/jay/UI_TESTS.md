@@ -2,6 +2,7 @@
 
 Screens Jay must check. Newest first. Delete a line when it's done.
 
+- [ ] CC-038 · Files editor: type n, / and 3; only text appears · http://127.0.0.1:7777/#/files
 - [ ] CC-034 · Deploy gate: approve; Claude prepares, waits for pane · http://127.0.0.1:7777/#/dashboard
 - [ ] CC-024 · Server → Worktrees panel says finished tickets' clean worktrees are removed · http://127.0.0.1:7777/#/server
 - [ ] CC-029 · Go Live: confirm lists tickets; Claude only prepares · http://127.0.0.1:7777/#/dashboard
