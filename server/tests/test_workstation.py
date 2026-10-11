@@ -165,7 +165,7 @@ class PtyApi(_Fixture):
     def refused(self, name, protocols, headers=None):
         with self.assertRaises(WebSocketDisconnect) as e:
             with self.connect(name, protocols, headers) as ws:
-                ws.receive()
+                ws.receive_text()  # raises on close, whether ccd refused before or after accept
         return e.exception.code
 
     def test_ccd_token_alone_cannot_open_a_terminal(self):
@@ -181,6 +181,27 @@ class PtyApi(_Fixture):
         self.assertEqual(self.refused("claude:SV", p, {"host": "evil.example:7777"}), 4403)
         self.assertEqual(self.refused("claude:XX", p), 4404)
         self.assertNotIn("claude:SV", self.daemon.ptys.sessions)
+
+    def test_expired_developer_session_is_told_after_accept(self):
+        # A close before accept reaches a browser as a failed handshake (1006); past the Guard, ccd
+        # accepts first so the tab sees 4403 "Developer Unlock required" and can ask Jay to unlock.
+        with self.connect("server", ["ccd.v1", f"ccd-token.{TOKEN}", "ccd-dev.gone"]) as ws:
+            with self.assertRaises(WebSocketDisconnect) as e:
+                ws.receive_text()
+        self.assertEqual((e.exception.code, e.exception.reason), (4403, "Developer Unlock required"))
+        sid = self.dev()
+        with self.connect("claude:XX", ["ccd.v1", f"ccd-token.{TOKEN}", f"ccd-dev.{sid}"]) as ws:
+            with self.assertRaises(WebSocketDisconnect) as e:
+                ws.receive_text()
+        self.assertEqual(e.exception.code, 4404)
+        self.assertEqual(self.daemon.ptys.sessions, {})
+
+    def test_guard_failures_are_refused_before_accept(self):
+        sid = self.dev()
+        for protocols, headers in ((["ccd.v1", f"ccd-dev.{sid}"], None),
+                                   (["ccd.v1", f"ccd-token.{TOKEN}", f"ccd-dev.{sid}"], {"origin": "http://evil.example"})):
+            with self.assertRaises(WebSocketDisconnect):
+                self.connect("server", protocols, headers).__enter__()
 
     def test_developer_session_without_ccd_token_refused(self):
         sid = self.dev()

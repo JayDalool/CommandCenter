@@ -754,21 +754,29 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         if not ws.headers.get("origin"):
             await ws.close(code=4403, reason="origin required")
             return
+        sub = WS_PROTOCOL if WS_PROTOCOL in offered else None
+
+        async def refuse(code, reason):
+            # Past the Guard (Host, Origin, ccd token), so accept first: a close before accept reaches the
+            # browser as a failed handshake (1006) and the tab can't tell "unlock again" from "network".
+            await ws.accept(subprotocol=sub)
+            await ws.close(code=code, reason=reason)
+
         if not gate.check(dev):
-            await ws.close(code=4403, reason="Developer Unlock required")
+            await refuse(4403, "Developer Unlock required")
             return
         try:
             ptys.cwd_for(name)
             cols = int(ws.query_params.get("cols", "80"))
             rows = int(ws.query_params.get("rows", "24"))
         except PtyError as e:
-            await ws.close(code=4404 if e.status == 404 else 4400)
+            await refuse(4404 if e.status == 404 else 4400, e.message.encode()[:120].decode(errors="ignore"))
             return
         except ValueError:
-            await ws.close(code=4400)
+            await refuse(4400, "bad terminal size")
             return
         s, created = await ptys.open(name, cols, rows)
-        await ws.accept(subprotocol=WS_PROTOCOL if WS_PROTOCOL in offered else None)
+        await ws.accept(subprotocol=sub)
         client, replay = ptys.attach(s)
         closing = asyncio.Event()
 
