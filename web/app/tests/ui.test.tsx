@@ -86,6 +86,18 @@ describe("global keyboard", () => {
     await user.keyboard("5");
     expect(location.hash).toBe("#/files");
   });
+
+  it("keys typed in the file editor stay in the editor (Monaco's EditContext div)", async () => {
+    const user = userEvent.setup();
+    render(<AppShell><div className="monaco-editor"><div className="native-edit-context" tabIndex={0} data-testid="ed" /></div>
+      <div tabIndex={0} data-testid="ec" ref={(el) => { if (el) Object.assign(el, { editContext: {} }); }} /></AppShell>);
+    for (const id of ["ed", "ec"]) {
+      screen.getByTestId(id).focus();
+      await user.keyboard("n/3");
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(location.hash).toBe("");
+    }
+  });
 });
 
 describe("fast capture", () => {
