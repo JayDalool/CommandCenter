@@ -22,6 +22,7 @@ export function DiffView({ project, path, staged }: { project: string; path: str
     return () => { live = false; };
   }, [project, path, staged, rev]);
   const body = err ? <EmptyState title="Diff unavailable" hint={err} /> : !d ? <EmptyState title="Reading diff…" />
+    : d.tooLarge ? <EmptyState title="File too large to diff" hint={`${(d.tooLarge / 1048576).toFixed(0)} MB; open it in the editor or a terminal instead`} />
     : d.binary ? <EmptyState title="Binary file changed" /> : !d.diff ? <EmptyState title="No textual difference" />
     : <pre className="diff" aria-label={`Diff of ${d.path}`}>{d.diff.split("\n").map((l, i) =>
       <div key={i} className={l.startsWith("@@") ? "d-hunk" : l.startsWith("+") && !l.startsWith("+++") ? "d-add"

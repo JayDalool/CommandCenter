@@ -105,6 +105,17 @@ describe("source control in the sidebar", () => {
     expect(side.getByRole("button", { name: "Stage all" })).toBeInTheDocument();
     expect(side.getByLabelText("Commit message")).toBeInTheDocument();
   });
+
+  it("a file too large to diff says so instead of an empty diff (CC-049)", async () => {
+    vi.spyOn(app.api, "scmDiff").mockImplementation(async (project: string, path: string, staged: boolean) =>
+      ({ project, path, staged, diff: "", truncated: false, binary: false, tooLarge: 150 * 1048576 }));
+    const user = userEvent.setup();
+    await ready();
+    await user.click(screen.getByRole("button", { name: "Source control" }));
+    await user.click(await within(sidebar()).findByRole("button", { name: /a\.py/ }));
+    expect(await within(mainArea()).findByText("File too large to diff")).toBeInTheDocument();
+    expect(within(mainArea()).getByText(/150 MB/)).toBeInTheDocument();
+  });
 });
 
 describe("search in the sidebar", () => {
