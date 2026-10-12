@@ -481,9 +481,15 @@ class Daemon:
                             break  # new or gone agents: reopen with the right subscription list
             except asyncio.CancelledError:
                 raise
-            except (OSError, ConnectionError, herdr_mod.HerdrError, asyncio.TimeoutError,
-                    json.JSONDecodeError, ValueError) as e:
-                self._herdr_down(e)
+            except Exception as e:  # noqa: BLE001 — like every other loop: one failure must not end herdr watching
+                if not isinstance(e, (OSError, ConnectionError, herdr_mod.HerdrError, asyncio.TimeoutError,
+                                      json.JSONDecodeError, ValueError)):
+                    # ccd's own failure (e.g. ccd.db full), not herdr's: keep the traceback, show it in health
+                    log.exception("herdr loop error")
+                try:
+                    self._herdr_down(e)  # sets herdr_state first; its event write can fail the same way
+                except Exception:  # noqa: BLE001
+                    log.exception("could not record herdr down")
                 self.herdr_state["reconnects"] += 1
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)

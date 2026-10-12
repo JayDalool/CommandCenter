@@ -3,6 +3,7 @@
 Each test pins one claim the live canary also has to prove.
 """
 import asyncio
+import sqlite3
 import unittest
 
 from ccd.daemon import Daemon
@@ -172,6 +173,29 @@ class Reconnect(Base):
         await self.settle()
         self.assertEqual(self.agents()["wE:p2"]["status"], "idle")
         self.assertNotIn("daemon:herdr", {a["id"] for a in self.daemon.state()["alerts"]})
+
+    async def test_a_full_ccd_db_does_not_end_herdr_watching(self):
+        """CC-052: a sqlite error (disk full) while recording a herdr change ended herdr_loop for good,
+        silently: health still said herdr ok and agent statuses froze until ccd restarted."""
+        await self.ready()
+        real, full = self.store.append, [True]
+
+        def append(*a, **kw):
+            if full[0]:
+                raise sqlite3.OperationalError("database or disk is full")
+            return real(*a, **kw)
+
+        self.store.append = append
+        await self.fake.push_status("wE:p4", "working")
+        await wait_for(lambda: not self.daemon.herdr_state["ok"], what="the error shown in herdr health")
+        self.assertIn("disk is full", self.daemon.herdr_state["error"])
+        loop = next(t for t in self.daemon._loops if t.get_name() == "herdr_loop")
+        self.assertFalse(loop.done(), "herdr_loop must keep running")
+        full[0] = False  # space freed
+        await wait_for(lambda: self.daemon.herdr_state["ok"], timeout=8, what="herdr watching again")
+        await self.fake.push_status("wE:p4", "blocked")
+        await wait_for(lambda: self.agents()["wE:p4"]["status"] == "blocked", what="statuses flow again")
+        self.assertFalse(loop.done())
 
     async def test_protocol_mismatch_falls_back_to_snapshot_polling(self):
         self.fake.protocol = 23
