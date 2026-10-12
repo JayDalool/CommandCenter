@@ -334,6 +334,72 @@ class Workstation(_Fixture):
         self.assertEqual(self.get(f"/api/tasks/{t['key']}").json()["branch"], sug["suggested"])
         self.assertEqual(self.post("/api/scm/branch", {"project": "samvision", "name": sug["suggested"]}, h).status_code, 409)
 
+    def test_diff_of_a_file_too_large_runs_no_git_diff(self):
+        # CC-049: git diff loads the whole file inside ccd's 256M cgroup; a ~150 MB file got ccd OOM-killed
+        big = gitops.DIFF_FILE_MAX + 1
+        with open(os.path.join(self.root, "export.csv"), "wb") as f:  # untracked
+            f.truncate(big)
+        d = self.get("/api/scm/diff?project=samvision&path=export.csv").json()
+        self.assertEqual((d["tooLarge"], d["diff"]), (big, ""))
+        with open(os.path.join(self.root, "src", "a.py"), "ab") as f:  # tracked, modified on disk
+            f.truncate(big)
+        self.assertEqual(self.get("/api/scm/diff?project=samvision&path=src/a.py").json()["tooLarge"], big)
+        h = self.devh()
+        self.assertEqual(self.post("/api/scm/stage", {"project": "samvision", "paths": ["src/a.py"]}, h).status_code, 200)
+        os.truncate(os.path.join(self.root, "src", "a.py"), 3)  # small on disk, large in the index
+        self.assertEqual(self.get("/api/scm/diff?project=samvision&path=src/a.py&staged=1").json()["tooLarge"], big)
+        self.assertEqual(self.get("/api/scm/diff?project=samvision&path=src/a.py").json()["tooLarge"], big)
+        with open(os.path.join(self.root, "small.txt"), "w") as f:
+            f.write("s\n")
+        d = self.get("/api/scm/diff?project=samvision&path=small.txt").json()
+        self.assertIsNone(d["tooLarge"])
+        self.assertIn("+s", d["diff"])
+        # a submodule tracked in the index but absent from disk: its commit is not in this repo
+        subprocess.run(["git", "-C", self.root, "update-index", "--add", "--cacheinfo", "160000," + "a" * 40 + ",mod"],
+                       check=True)
+        r = self.get("/api/scm/diff?project=samvision&path=mod&staged=1")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(r.json()["tooLarge"])
+
+    def test_git_output_is_cut_at_the_limit_without_reading_it_all(self):
+        async def run():
+            with open(os.path.join(self.root, "long.txt"), "w") as f:
+                f.write("x" * 300_000)
+            out, cut = await gitops.git(self.root, "diff", "--no-color", "--no-index", "--", "/dev/null", "long.txt",
+                                        ok=(0, 1), limit=1000)
+            self.assertEqual((len(out), cut), (1000, True))  # git was stopped, not failed
+            out, cut = await gitops.git(self.root, "rev-parse", "--abbrev-ref", "HEAD")
+            self.assertEqual((out, cut), (b"main\n", False))
+            with self.assertRaises(FileError) as e:
+                await gitops.git(self.root, "rev-parse", "--verify", "no-such-ref")
+            self.assertEqual(e.exception.status, 409)
+            out, _ = await gitops.git(self.root, "hash-object", "--stdin", input_bytes=b"hi\n")
+            self.assertEqual(len(out.strip()), 40)
+        asyncio.run(run())
+
+    def test_cut_git_returns_even_when_the_event_loop_is_busy(self):
+        # PR #49 review: unread output paused the pipe after kill() and wait() never returned
+        with open(os.path.join(self.root, "big.txt"), "w") as f:
+            f.write(("y" * 99 + "\n") * 80_000)
+
+        async def spin():
+            while True:
+                time.sleep(0.005)  # PTY / WebSocket work holding the loop briefly
+                await asyncio.sleep(0)
+
+        async def run():
+            busy = [asyncio.ensure_future(spin()) for _ in range(3)]
+            try:
+                for _ in range(5):
+                    out, cut = await asyncio.wait_for(gitops.git(
+                        self.root, "diff", "--no-color", "--no-index", "--", "/dev/null", "big.txt", ok=(0, 1),
+                        limit=1000), 15)
+                    self.assertEqual((len(out), cut), (1000, True))
+            finally:
+                for t in busy:
+                    t.cancel()
+        asyncio.run(run())
+
     def test_stage_all_never_sweeps_in_secret_files(self):
         with open(os.path.join(self.root, "server.pem"), "w") as f:
             f.write("k\n")

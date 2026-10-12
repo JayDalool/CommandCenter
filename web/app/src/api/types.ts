@@ -456,7 +456,8 @@ export interface ScmStatus {
   branch: { head: string | null; upstream: string | null; ahead: number; behind: number; oid: string | null };
   staged: ScmFile[]; unstaged: ScmFile[]; untracked: ScmFile[]; conflicts: ScmFile[];
 }
-export interface ScmDiff { project: string; path: string; staged: boolean; diff: string; truncated: boolean; binary: boolean }
+export interface ScmDiff { project: string; path: string; staged: boolean; diff: string; truncated: boolean; binary: boolean;
+  tooLarge?: number | null }  // bytes: above the server's limit, no diff is run
 export interface PtySession { name: string; cwd: string; clients: number; createdAt: number; alive: boolean }
 
 /** The night shift (ccd nightshift.py): the newest morning report and the supervisor's state per project. */

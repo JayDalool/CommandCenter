@@ -10,13 +10,17 @@ another branch over local changes, force anything, history rewriting, hooks
 bypass (--no-verify), config changes. A commit is a normal `git commit`.
 """
 import asyncio
+import contextlib
 import os
 import re
 
 from .files import FileError, is_protected_name, split_rel
 
 TIMEOUT = 20.0
+CLEANUP_TIMEOUT = 5.0  # after git is killed or done: drain and reap it, then give up
 DIFF_MAX = 512 * 1024
+DIFF_FILE_MAX = 10 * 1024 * 1024  # git diff loads the whole file (both sides) into its own memory
+ERR_MAX = 64 * 1024
 BRANCH_RE = re.compile(r"^(?!-)(?!.*\.\.)(?!.*//)(?!.*@\{)(?!.*\.lock$)(?!.*/$)[A-Za-z0-9._/-]{1,120}$")
 STATUS_WORD = {"M": "modified", "A": "added", "D": "deleted", "R": "renamed", "C": "copied", "T": "typechange",
                "U": "conflict", "?": "untracked"}
@@ -30,20 +34,64 @@ def _env():
 
 
 async def git(root, *args, input_bytes=None, ok=(0,), limit=DIFF_MAX):
+    """Run git; return (stdout up to `limit` bytes, truncated). Output is read in chunks and git is
+    stopped once it passes the limit, so a huge diff or status never sits whole in ccd's memory
+    (ccd and its git children share one MemoryMax cgroup)."""
     proc = await asyncio.create_subprocess_exec(
         "git", "-C", root, "-c", "core.quotepath=off", "-c", "color.ui=false", *args, env=_env(),
         stdin=asyncio.subprocess.PIPE if input_bytes is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, err = bytearray(), bytearray()
+
+    async def feed():
+        if input_bytes is not None:
+            with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                proc.stdin.write(input_bytes)
+                await proc.stdin.drain()
+            proc.stdin.close()
+
+    async def read_out():
+        while len(out) <= limit:
+            chunk = await proc.stdout.read(65536)
+            if not chunk:
+                return False
+            out.extend(chunk)
+        return True
+
+    async def read_err():
+        while chunk := await proc.stderr.read(65536):
+            if len(err) < ERR_MAX:
+                err.extend(chunk[:ERR_MAX - len(err)])
+
+    async def run():
+        _, cut = await asyncio.gather(feed(), read_out())
+        if not cut:
+            await proc.wait()
+        return cut
+
+    errs = asyncio.ensure_future(read_err())
+    truncated = None  # None: timed out (or cancelled); True: we stopped git at the limit
     try:
-        out, err = await asyncio.wait_for(proc.communicate(input_bytes), TIMEOUT)
+        truncated = await asyncio.wait_for(run(), TIMEOUT)
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
+        pass
+    finally:
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+
+        async def drain():  # unread output keeps the pipe paused and wait() never sees its EOF
+            while await proc.stdout.read(65536):
+                pass
+
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.gather(drain(), proc.wait(), errs), CLEANUP_TIMEOUT)
+    if truncated is None:
         raise FileError(504, "git took too long")
-    if proc.returncode not in ok:
+    if not truncated and proc.returncode not in ok:
         msg = err.decode("utf-8", "replace").strip().splitlines()
         raise FileError(409, (msg[-1] if msg else f"git exited {proc.returncode}")[:300])
-    return out[:limit], len(out) > limit
+    return bytes(out[:limit]), truncated
 
 
 def _path(rel):
@@ -135,9 +183,38 @@ class SourceControl:
                 "conflicts": conflicts,
                 "clean": not (staged or unstaged or untracked or conflicts)}
 
+    async def _largest(self, key, root, path):
+        """Largest size of this path on disk, in the index and in HEAD (bytes, 0 if absent)."""
+        sizes = [0]
+        try:
+            _, full, _ = self.roots.resolve(key, path)
+            if os.path.isfile(full) and not os.path.islink(os.path.join(root, path)):
+                sizes.append(os.path.getsize(full))
+        except (FileError, OSError):
+            pass
+        out, _ = await git(root, "ls-files", "-s", "-z", "--", _spec(path))
+        # "<mode> <sha> <stage>\t<path>"; a submodule (160000) names a commit that is usually not here
+        shas = [e.split(b" ")[1] for e in out.split(b"\x00") if e and not e.startswith(b"160000 ")]
+        if shas:
+            out, _ = await git(root, "cat-file", "--batch-check", input_bytes=b"\n".join(shas) + b"\n")
+            for line in out.splitlines():  # "<sha> blob <size>", or "<sha> missing"
+                size = line.split()[-1]
+                sizes.append(int(size) if size.isdigit() else 0)
+        out, _ = await git(root, "ls-tree", "-l", "-z", "HEAD", "--", _spec(path), ok=(0, 128))
+        for entry in out.split(b"\x00"):
+            if entry:  # "<mode> blob <sha> <size>\t<path>"
+                size = entry.split(b"\t")[0].split()[-1]
+                sizes.append(int(size) if size.isdigit() else 0)
+        return max(sizes)
+
     async def diff(self, key, rel, staged=False):
         root = self.roots.root(key)
         path = await self._file(key, rel)
+        size = await self._largest(key, root, path)
+        if size > DIFF_FILE_MAX:
+            # git diff would load the whole file into memory inside ccd's cgroup; show nothing instead
+            return {"project": key, "path": path, "staged": staged, "diff": "", "truncated": False, "binary": False,
+                    "tooLarge": size}
         args = ["diff", "--no-ext-diff", "--no-color", "--find-renames"]
         if staged:
             args.append("--cached")
@@ -154,7 +231,8 @@ class SourceControl:
                                            ok=(0, 1))
                 text = out.decode("utf-8", "replace")
         binary = "Binary files" in text[:2000] and "differ" in text[:2000]
-        return {"project": key, "path": path, "staged": staged, "diff": text, "truncated": truncated, "binary": binary}
+        return {"project": key, "path": path, "staged": staged, "diff": text, "truncated": truncated, "binary": binary,
+                "tooLarge": None}
 
     async def stage(self, key, paths):
         root = self.roots.root(key)
