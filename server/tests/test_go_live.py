@@ -231,6 +231,45 @@ class GoLiveTest(unittest.TestCase):
         self.assertIn("leaving live:\n(none)\n", r.stdout)
         self.assert_untouched(before)
 
+    def release(self, sha, suffix=""):
+        """Point the UI release ccd serves at <sha>, named the way deploy-web.sh names it."""
+        web = self.home / ".local" / "share" / "command-center" / "web"
+        (web / "releases").mkdir(parents=True, exist_ok=True)
+        (web / "current").unlink(missing_ok=True)
+        (web / "current").symlink_to(f"releases/20261012T000000Z-{sha[:7]}{suffix}")
+
+    def test_m_rollback_names_what_is_live_when_the_checkout_was_pulled_ahead(self):
+        # CC-051: a git pull in the live checkout moved HEAD past what ccd serves; the rollback named HEAD
+        live = self.head()
+        self.release(live)
+        pulled = self.push_main("merged and pulled, never deployed")
+        git(self.repo, "pull", "-q", "--ff-only")
+        new = self.push_main("merged since")
+        r = self.run_script("--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"note: the checkout is at {pulled[:12]} but live is {live[:12]}", r.stdout)
+        self.assertIn(f"Rollback (back to live @ {live[:12]}):", r.stdout)
+        self.assertIn(f"git switch --detach {live} &&", r.stdout)
+        arriving = r.stdout.split("leaving live:")[0]
+        self.assertIn("merged and pulled, never deployed", arriving)  # not live yet, so it arrives
+        self.assertIn("merged since", arriving)
+        self.assertIn(f"== deploying main @ {new}", r.stdout)
+        self.assert_untouched(pulled)
+
+    def test_n_live_release_matching_head_or_unknown_falls_back_quietly(self):
+        before = self.head()
+        self.release(before, "-dirty")
+        r = self.run_script("--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("note:", r.stdout)
+        self.assertIn("Rollback (back to main @", r.stdout)
+        self.release("0" * 40)  # a rev this checkout does not have
+        r = self.run_script("--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"note: cannot tell the live version", r.stdout)
+        self.assertIn(f"git switch --detach {before} &&", r.stdout)
+        self.assert_untouched(before)
+
     def test_l_feature_branch_fetch_updates_only_its_tracking_ref(self):
         feat = self.push_feature("risky change")
         before = self.head()
