@@ -400,6 +400,29 @@ class Workstation(_Fixture):
                     t.cancel()
         asyncio.run(run())
 
+    def test_cut_search_returns_even_when_the_event_loop_is_busy(self):
+        # CC-050: search._run killed its child at the cap but never drained it, so wait() hung
+        big = os.path.join(self.root, "big.txt")
+        with open(big, "w") as f:
+            f.write(("y" * 99 + "\n") * 80_000)
+
+        async def spin():
+            while True:
+                time.sleep(0.005)  # PTY / WebSocket work holding the loop briefly
+                await asyncio.sleep(0)
+
+        async def run():
+            busy = [asyncio.ensure_future(spin()) for _ in range(3)]
+            try:
+                for _ in range(5):
+                    out, cut = await asyncio.wait_for(search._run(["cat", big], self.root, limit_bytes=1000), 15)
+                    self.assertTrue(cut)
+                    self.assertGreater(len(out), 1000)
+            finally:
+                for t in busy:
+                    t.cancel()
+        asyncio.run(run())
+
     def test_stage_all_never_sweeps_in_secret_files(self):
         with open(os.path.join(self.root, "server.pem"), "w") as f:
             f.write("k\n")
