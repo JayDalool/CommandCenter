@@ -12,7 +12,8 @@
 #
 # Run it on jay-server from the live checkout (/srv/server/repos/CommandCenter). It:
 #   1. refuses if tracked files have uncommitted changes (untracked files such as .claude/ are left alone)
-#   2. fetches, prints the target sha, the new commits and the commits leaving live, and refuses if the local branch has diverged
+#   2. fetches, prints the target sha, the new commits and the commits leaving live (live = the commit named by
+#      the UI release ccd serves, else HEAD), and refuses if the local branch has diverged
 #      (--dry-run stops here and writes nothing)
 #   3. backs up tasks.db with SQLite's backup API (~/command-center/backups/tasks.db.pre-<branch>-<stamp>)
 #   4. frees the branch if another worktree (e.g. ~/cc-preview) has it checked out (that worktree is
@@ -69,6 +70,22 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
 fi
 PREV_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 PREV_SHA="$(git rev-parse HEAD)"
+# What is live is what ccd serves: deploy-web.sh names each UI release <stamp>-<rev>[-dirty] from the commit it
+# was built at, and ccd was restarted on that same commit. The checkout's HEAD can be ahead of it (a git pull
+# after a merge), so the release name decides the rollback; HEAD is only the fallback.
+WEB="${CCD_WEB_DIR:-$HOME/.local/share/command-center/web}"
+live_rev="$(basename "$(readlink "$WEB/current" 2>/dev/null || true)" | cut -s -d- -f2)"
+LIVE_SHA=""
+if [ -n "$live_rev" ]; then
+  LIVE_SHA="$(git rev-parse -q --verify "$live_rev^{commit}" 2>/dev/null || true)"
+fi
+if [ -z "$LIVE_SHA" ]; then
+  echo "note: cannot tell the live version from $WEB/current; using the checkout's HEAD ${PREV_SHA:0:12}"
+elif [ "$LIVE_SHA" != "$PREV_SHA" ]; then
+  echo "note: the checkout is at ${PREV_SHA:0:12} but live is ${LIVE_SHA:0:12}; rollback and commit lists use live"
+  PREV_BRANCH=live
+  PREV_SHA="$LIVE_SHA"
+fi
 safe="$(echo "$BRANCH" | tr '/' '-')"
 backup="$BACKUPS/tasks.db.pre-$safe-<stamp>"
 
@@ -90,9 +107,9 @@ echo "== deploying $BRANCH @ $TARGET"
 if [ "$BRANCH" != main ]; then
   echo "!! NOT main: $BRANCH has not been reviewed for release (--i-know given)"
 fi
-log="$(git log --oneline "HEAD..origin/$BRANCH")"
+log="$(git log --oneline "$PREV_SHA..origin/$BRANCH")"
 echo "${log:-(already at target)}"
-leaving="$(git log --oneline "origin/$BRANCH..HEAD")"
+leaving="$(git log --oneline "origin/$BRANCH..$PREV_SHA")"
 echo "leaving live:"
 echo "${leaving:-(none)}"
 
