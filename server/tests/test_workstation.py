@@ -452,11 +452,26 @@ class PtyFdIsolation(unittest.TestCase):
             m = pty_mod.PtyManager(roots={"SV": tempfile.mkdtemp(), "GZ": tempfile.mkdtemp()}, shell="/bin/sh")
             a, _ = await m.open("repo:SV")
             b, _ = await m.open("repo:GZ")
-            await asyncio.sleep(0.3)
-            links = {x: os.readlink(f"/proc/{b.pid}/fd/{x}") for x in os.listdir(f"/proc/{b.pid}/fd")}
+            def fds():
+                out = {}
+                for x in os.listdir(f"/proc/{b.pid}/fd"):
+                    with contextlib.suppress(FileNotFoundError):   # closed between listdir and readlink
+                        out[x] = os.readlink(f"/proc/{b.pid}/fd/{x}")
+                return out
+
+            def extra(links):
+                return [v for k, v in links.items() if int(k) > 2 and not (v.startswith("/dev/pts/") or v == "/dev/tty")]
+
+            # The login shell holds /etc/profile open while it sources it, so poll until that is done
+            # rather than guess a delay. A leaked master never closes, so it still fails below.
+            deadline = time.monotonic() + 10
+            links = fds()
+            while extra(links) and time.monotonic() < deadline:
+                await asyncio.sleep(0.1)
+                links = fds()
             # its own tty (/dev/pts/N) may appear more than once (dash keeps a copy); a master never may
             self.assertFalse([v for v in links.values() if "ptmx" in v], links)
-            self.assertFalse([v for k, v in links.items() if int(k) > 2 and not (v.startswith("/dev/pts/") or v == "/dev/tty")], links)
+            self.assertFalse(extra(links), links)
             self.assertFalse(os.get_inheritable(a.fd))
             await m.close_all()
         asyncio.run(run())
