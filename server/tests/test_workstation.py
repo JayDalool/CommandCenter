@@ -469,6 +469,8 @@ class PtyFdIsolation(unittest.TestCase):
             while extra(links) and time.monotonic() < deadline:
                 await asyncio.sleep(0.1)
                 links = fds()
+            # an exited (zombie) shell has no fds at all, which would pass every check below
+            self.assertIn("0", links, f"shell exited before its fds were checked: {links}")
             # its own tty (/dev/pts/N) may appear more than once (dash keeps a copy); a master never may
             self.assertFalse([v for v in links.values() if "ptmx" in v], links)
             self.assertFalse(extra(links), links)
