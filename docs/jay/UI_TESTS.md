@@ -2,7 +2,7 @@
 
 Screens Jay must check. Newest first. Delete a line when it's done.
 
-- [ ] CC-049 · Source control: file over 10 MB says "too large to diff" · http://127.0.0.1:7777/#/files?view=scm
+- [ ] CC-049 · Source control: file over 10 MB shows "too large" · http://127.0.0.1:7777/#/files?view=scm
 - [ ] CC-034 · Deploy gate: approve; Claude prepares, waits for pane · http://127.0.0.1:7777/#/dashboard
 - [ ] CC-024 · Server → Worktrees panel says finished tickets' clean worktrees are removed · http://127.0.0.1:7777/#/server
 - [ ] CC-029 · Go Live: confirm lists tickets; Claude only prepares · http://127.0.0.1:7777/#/dashboard

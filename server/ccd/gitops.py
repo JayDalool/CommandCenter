@@ -17,6 +17,7 @@ import re
 from .files import FileError, is_protected_name, split_rel
 
 TIMEOUT = 20.0
+CLEANUP_TIMEOUT = 5.0  # after git is killed or done: drain and reap it, then give up
 DIFF_MAX = 512 * 1024
 DIFF_FILE_MAX = 10 * 1024 * 1024  # git diff loads the whole file (both sides) into its own memory
 ERR_MAX = 64 * 1024
@@ -78,8 +79,13 @@ async def git(root, *args, input_bytes=None, ok=(0,), limit=DIFF_MAX):
         if proc.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
-        await proc.wait()
-        await errs
+
+        async def drain():  # unread output keeps the pipe paused and wait() never sees its EOF
+            while await proc.stdout.read(65536):
+                pass
+
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.gather(drain(), proc.wait(), errs), CLEANUP_TIMEOUT)
     if truncated is None:
         raise FileError(504, "git took too long")
     if not truncated and proc.returncode not in ok:
@@ -187,11 +193,13 @@ class SourceControl:
         except (FileError, OSError):
             pass
         out, _ = await git(root, "ls-files", "-s", "-z", "--", _spec(path))
-        for entry in out.split(b"\x00"):
-            if entry:  # "<mode> <sha> <stage>\t<path>"
-                sha = entry.split(b" ")[1].decode()
-                size, _ = await git(root, "cat-file", "-s", sha)
-                sizes.append(int(size or 0))
+        # "<mode> <sha> <stage>\t<path>"; a submodule (160000) names a commit that is usually not here
+        shas = [e.split(b" ")[1] for e in out.split(b"\x00") if e and not e.startswith(b"160000 ")]
+        if shas:
+            out, _ = await git(root, "cat-file", "--batch-check", input_bytes=b"\n".join(shas) + b"\n")
+            for line in out.splitlines():  # "<sha> blob <size>", or "<sha> missing"
+                size = line.split()[-1]
+                sizes.append(int(size) if size.isdigit() else 0)
         out, _ = await git(root, "ls-tree", "-l", "-z", "HEAD", "--", _spec(path), ok=(0, 128))
         for entry in out.split(b"\x00"):
             if entry:  # "<mode> blob <sha> <size>\t<path>"

@@ -354,6 +354,12 @@ class Workstation(_Fixture):
         d = self.get("/api/scm/diff?project=samvision&path=small.txt").json()
         self.assertIsNone(d["tooLarge"])
         self.assertIn("+s", d["diff"])
+        # a submodule tracked in the index but absent from disk: its commit is not in this repo
+        subprocess.run(["git", "-C", self.root, "update-index", "--add", "--cacheinfo", "160000," + "a" * 40 + ",mod"],
+                       check=True)
+        r = self.get("/api/scm/diff?project=samvision&path=mod&staged=1")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(r.json()["tooLarge"])
 
     def test_git_output_is_cut_at_the_limit_without_reading_it_all(self):
         async def run():
@@ -369,6 +375,29 @@ class Workstation(_Fixture):
             self.assertEqual(e.exception.status, 409)
             out, _ = await gitops.git(self.root, "hash-object", "--stdin", input_bytes=b"hi\n")
             self.assertEqual(len(out.strip()), 40)
+        asyncio.run(run())
+
+    def test_cut_git_returns_even_when_the_event_loop_is_busy(self):
+        # PR #49 review: unread output paused the pipe after kill() and wait() never returned
+        with open(os.path.join(self.root, "big.txt"), "w") as f:
+            f.write(("y" * 99 + "\n") * 80_000)
+
+        async def spin():
+            while True:
+                time.sleep(0.005)  # PTY / WebSocket work holding the loop briefly
+                await asyncio.sleep(0)
+
+        async def run():
+            busy = [asyncio.ensure_future(spin()) for _ in range(3)]
+            try:
+                for _ in range(5):
+                    out, cut = await asyncio.wait_for(gitops.git(
+                        self.root, "diff", "--no-color", "--no-index", "--", "/dev/null", "big.txt", ok=(0, 1),
+                        limit=1000), 15)
+                    self.assertEqual((len(out), cut), (1000, True))
+            finally:
+                for t in busy:
+                    t.cancel()
         asyncio.run(run())
 
     def test_stage_all_never_sweeps_in_secret_files(self):
