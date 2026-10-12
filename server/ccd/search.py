@@ -7,6 +7,7 @@ secret name (files.is_protected_name). Results are bounded and each run has a
 hard timeout; the browser cancels by aborting its request.
 """
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -21,6 +22,7 @@ FILES_MAX = 50000
 MATCH_MAX = 500
 QUERY_MAX = 300
 TIMEOUT = 10.0
+CLEANUP_TIMEOUT = 5.0  # after the child is killed or done: drain and reap it, then give up
 FILE_CACHE_S = 30
 
 
@@ -69,7 +71,13 @@ async def _run(args, cwd, limit_bytes=8 * 1024 * 1024):
                 proc.kill()
             except ProcessLookupError:
                 pass
-        await proc.wait()
+
+        async def drain():  # unread output keeps the pipe paused and wait() never sees its EOF
+            while await proc.stdout.read(65536):
+                pass
+
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.gather(drain(), proc.wait()), CLEANUP_TIMEOUT)
     return bytes(out), truncated
 
 
