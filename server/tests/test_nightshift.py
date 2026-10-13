@@ -95,3 +95,21 @@ class Supervisor(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoBurn(unittest.TestCase):
+    def test_working_briefly_after_each_reminder_is_not_progress(self):
+        # The leak this guards: a reminder makes Claude read its tasks (working), then idle again. Without a
+        # report rewrite or a ticket change that is no progress, so the shift ends after MAX_QUIET reminders.
+        ns = NightShift(tempfile.mkdtemp(prefix="night-"))
+        t = 1_000_000.0
+        ns.start("gyst", now=t)
+        nudges, a = 0, None
+        for i in range(200):
+            now = t + i * 60
+            a = ns.decide("gyst", "working" if i % 11 == 1 else "idle", now=now)
+            nudges += a == "nudge"
+            if a and a.startswith("end:"):
+                break
+        self.assertEqual(a, "end:no progress")
+        self.assertEqual(nudges, MAX_QUIET)

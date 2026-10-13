@@ -11,8 +11,10 @@ to remind it to continue:
      and progress since then        → remind it (one fixed sentence)
      and no progress after MAX_QUIET reminders in a row → the shift ends (no progress)
 
-Progress is anything the coordinator did since the last reminder: seen working, its report rewritten, or a ticket
-of the project changed. State lives in <night dir>/.state.json so a ccd restart resumes it.
+Progress is a lasting result since the last reminder: its report rewritten, or a ticket of the project changed.
+Being seen "working" is NOT progress — every reminder makes Claude work briefly (it reads its tasks), so counting
+that would remind a stuck coordinator forever and burn the plan's usage. State lives in <night dir>/.state.json
+so a ccd restart resumes it.
 """
 import json
 import os
@@ -137,8 +139,6 @@ class NightShift:
         progress = max(x for x in (s.get("progressAt") or 0, activity_at or 0,
                                    rep["mtime"] if rep and rep["mtime"] >= s["startedAt"] else 0))
         changed = False
-        if status == "working":
-            progress = now
         if progress != s.get("progressAt"):
             s["progressAt"] = progress
             changed = True
