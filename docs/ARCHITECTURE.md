@@ -440,5 +440,19 @@ policy/examples/*.toml ─────┘      validate (strict schema) · SHA-2
 
 `[enforced]` restates what `ccd/registry.py` already makes ccd do (merge policy, night mode, pause, lanes, UI-test
 fix mode); the registry still drives behaviour, and any disagreement is drift, an alert, and a failing test.
-`[target]` holds Jay's decisions D-001 … D-009 as structured policy; nothing enforces it. The Autonomy Engine (next)
+`[target]` holds Jay's decisions D-001 … D-009 as structured policy; nothing enforces it. The Autonomy Engine
 reads it in shadow mode only. `policy/**` is in the auto-merge denylist (D-007).
+
+### Autonomy Engine, shadow mode (ADR 0008)
+
+```text
+Pipeline step (plan / ready / auto-merge / deploy request) ─▶ Daemon._pipeline_result
+   ├─▶ status changes + events, exactly as before (the registry and pipeline decide)
+   └─▶ _shadow_record: autonomy.observed(events)   what ccd did      (auto | jay)
+                       autonomy.evaluate(profile)   what [target] says (auto | jay | refuse) + rule, reasons, missing
+                       ─▶ tasks.db autonomy_shadow (append-only, migration 6) ─▶ GET /api/autonomy ─▶ Settings → Policies
+```
+
+`evaluate` is pure and conservative: an invalid profile, an unknown fact (risk, changed files, UI/API impact) or a
+human-only boundary is "jay", never "auto"; a paused project is "refuse"; protected paths (D-007) and personal-data
+paths (D-005) are "jay". Nothing reads the verdict to act, and a failure in it is a log line.

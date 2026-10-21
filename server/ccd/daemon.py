@@ -22,7 +22,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import __version__, coordid, coordinators, github, merge_policy, model, profiles, registry, sources
+from . import __version__, autonomy, coordid, coordinators, github, merge_policy, model, profiles, registry, sources
 from . import pipeline as pipeline_mod
 from . import herdr as herdr_mod
 from . import importer
@@ -292,6 +292,11 @@ class Daemon:
         # Memory only, on purpose: a restart merely delays the gate by up to 30 minutes, it never merges earlier.
         # An entry is dropped when its ticket leaves the candidates (e.g. back to review) or its stamp changes.
         self._am_waiting = {}
+        # Autonomy Engine, SHADOW MODE (D-008): records what the target policy would have done next to what ccd did.
+        # Nothing reads it to act. `_shadow_pr`: ticket key → (head, the `gh pr view` auto-merge just read), so the
+        # engine sees the changed files of a PR ccd merged or held; it is never used for anything else.
+        self.shadow = autonomy.Shadow(tasks.db) if getattr(tasks, "db", None) is not None else None
+        self._shadow_pr = {}
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
@@ -1717,6 +1722,45 @@ class Daemon:
                                                       "pipeline.auto_merge_failed") else "info")
         if events:
             self._record_soon(ticket["key"])
+            self._shadow_record(ticket, events)
+
+    def _shadow_record(self, ticket, events):
+        """Autonomy Engine, shadow mode: for each decision in this step (plan accepted or gated, merged by ccd or
+        gated, deploy requested), what the agreed target policy would have done. Recorded only; never raises,
+        never changes the step. A failure here is a log line."""
+        if self.shadow is None:
+            return
+        try:
+            decided = autonomy.observed(events)
+            if not decided:
+                return
+            key, project = ticket["key"], ticket["project"]
+            t = self.tasks.get(key)
+            w = self.pipeline.work(key)
+            ci = next((d.get("ci") for k, _x, d in events if k == "pipeline.ready_to_merge" and isinstance(d, dict)), None)
+            for action, outcome, extra in decided:
+                more = dict(extra)
+                if action == "merge":
+                    more["ci"] = ci
+                    head, pr = self._shadow_pr.get(key, (None, None))
+                    if pr and head == w["review"]["head"]:
+                        more.update(files=pr.get("files"), additions=pr.get("additions"),
+                                    deletions=pr.get("deletions"), ci=merge_policy.ci_state(pr.get("statusCheckRollup")))
+                facts = autonomy.facts_of(t, w, more)
+                verdict = autonomy.evaluate(action, self.policy.profile(project), facts)
+                self.shadow.record(self.tasks._id_of(key), project, action, outcome, verdict, facts,
+                                   self.policy.fingerprint)
+            self._shadow_pr.pop(key, None)
+        except Exception as e:  # noqa: BLE001 — shadow mode must never affect what ccd does
+            log.warning(json.dumps({"msg": "autonomy shadow skipped a decision", "key": ticket.get("key"),
+                                    "error": repr(e)[:200]}))
+
+    def autonomy_state(self):
+        """GET /api/autonomy: the shadow record's summary. Read-only."""
+        if self.shadow is None:
+            return {"mode": "shadow", "engine": autonomy.ENGINE_VERSION, "total": 0, "agree": 0, "disagree": 0,
+                    "counts": {}, "missing": {}, "disagreements": [], "available": False}
+        return dict(self.shadow.summary(), available=True, policy=self.policy.fingerprint)
 
     def task_comment(self, key, body, actor="jay"):
         ticket = self._wrap(self._need_tasks().comment, key, body, actor)
@@ -1962,6 +2006,7 @@ class Daemon:
             return
         if not isinstance(pr, dict) or pr.get("state") == "MERGED":
             return    # merged already (by Jay, or by us a moment ago): the GitHub poll moves the ticket
+        self._shadow_pr[key] = (head, pr)    # shadow mode only: the engine reads the changed files from it
         if pr.get("headRefOid") != head:   # a newer head: the GitHub poll sends the ticket back to review; nothing to hold
             self._am_next[key] = time.monotonic() + 60
             return

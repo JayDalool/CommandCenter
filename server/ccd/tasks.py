@@ -300,6 +300,33 @@ ALTER TABLE ticket_work ADD COLUMN released TEXT;
     (5, """
 ALTER TABLE ticket_questions ADD COLUMN purpose TEXT CHECK (purpose IS NULL OR purpose IN ('stale'));
 """),
+    # 6: the Autonomy Engine's shadow record (v2 Phase 1, D-008; ccd/autonomy.py). One row per decision ccd made:
+    # what it did, what the agreed target policy would have done, and whether they agree. Additive and
+    # append-only; nothing reads it to act.
+    (6, """
+CREATE TABLE autonomy_shadow (
+  id             INTEGER PRIMARY KEY,
+  at             REAL NOT NULL,
+  ticket_id      INTEGER REFERENCES tickets(id),
+  project        TEXT NOT NULL,
+  action         TEXT NOT NULL CHECK (action IN ('plan', 'merge', 'deploy')),
+  observed       TEXT NOT NULL CHECK (observed IN ('auto', 'jay', 'refuse')),
+  engine         TEXT NOT NULL CHECK (engine IN ('auto', 'jay', 'refuse')),
+  agree          INTEGER NOT NULL CHECK (agree = (observed = engine)),
+  rule           TEXT NOT NULL,
+  reasons        TEXT NOT NULL DEFAULT '[]',
+  missing        TEXT NOT NULL DEFAULT '[]',
+  facts          TEXT NOT NULL DEFAULT '{}',
+  policy         TEXT NOT NULL,
+  engine_version INTEGER NOT NULL
+);
+CREATE INDEX autonomy_shadow_at ON autonomy_shadow(at);
+CREATE INDEX autonomy_shadow_disagree ON autonomy_shadow(agree, id);
+CREATE TRIGGER autonomy_shadow_append_only_u BEFORE UPDATE ON autonomy_shadow
+  BEGIN SELECT RAISE(ABORT, 'the shadow record is append-only'); END;
+CREATE TRIGGER autonomy_shadow_append_only_d BEFORE DELETE ON autonomy_shadow
+  BEGIN SELECT RAISE(ABORT, 'the shadow record is append-only'); END;
+"""),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

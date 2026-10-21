@@ -8,6 +8,7 @@ import { useSelector } from "../lib/store";
 import { projectName } from "../lib/control";
 import type { PolicyState, PolicyValue } from "../api/types";
 import { Panel, DetailRow, EmptyState } from "./ui";
+import { AutonomyShadow } from "./AutonomyShadow";
 
 const MODE_LABEL: Record<string, string> = {
   experimental_autonomy: "Experimental full autonomy", autonomous_product: "Autonomous product",
@@ -38,6 +39,7 @@ export function Policies() {
         ? <ul className="pol-problems" aria-label="Policy problems">{data.problems.map((p, i) => <li key={i} className="tc-bad mono-xs">{p}</li>)}</ul>
         : <p className="tc-ok mono-xs">All policy files are valid and match what Command Center does today.</p>}
     </Panel>
+    <AutonomyShadow names={Object.fromEntries(Object.entries(data.projects).map(([k, p]) => [k, p.name || projectName(st, k)]))} />
     {Object.entries(data.projects).map(([key, p]) => <Panel key={key} title={p.name || projectName(st, key)}
       meta={<span className="mono-xs muted" title={p.sha256 ?? ""}>{p.file}</span>}>
       <dl className="pol-dl">

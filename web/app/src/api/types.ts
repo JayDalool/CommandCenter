@@ -516,3 +516,16 @@ export interface PolicyDecision {
 export interface PolicyState {
   fingerprint: string; problems: string[]; projects: Record<string, PolicyProject>; decisions: Record<string, PolicyDecision>;
 }
+
+/** The Autonomy Engine's shadow record (ccd GET /api/autonomy, decision D-008). The engine decides nothing: it records
+ *  what the agreed target policy would have done next to what Command Center did. */
+export type AutonomyOutcome = "auto" | "jay" | "refuse";
+export interface AutonomyDisagreement {
+  id: number; at: number; key: string | null; project: string; action: "plan" | "merge" | "deploy";
+  observed: AutonomyOutcome; engine: AutonomyOutcome; rule: string; reasons: string[]; missing: string[];
+}
+export interface AutonomyState {
+  mode: "shadow"; engine: number; available: boolean; policy?: string; total: number; agree: number; disagree: number;
+  counts: Record<string, Record<string, { total: number; agree: number; pairs: Record<string, number> }>>;
+  missing: Record<string, number>; disagreements: AutonomyDisagreement[];
+}

@@ -71,6 +71,9 @@
     GET   /api/profiles              Project Operating Profiles (policy/): per project mode, [enforced] (today, mirrors
                                      the registry), [target] (Jay's decisions, NOT enforced), drift, file SHA-256;
                                      Jay's decisions D-NNN. Read-only: nothing changes policy over HTTP.
+    GET   /api/autonomy              the Autonomy Engine's SHADOW record: per project and action, how often the target
+                                     policy agrees with what ccd did, facts it lacked, recent disagreements. Read-only;
+                                     the engine decides nothing (D-008).
     GET   /api/night-shift           every project's night shift: running?, coordinator, newest morning report
                                      (agent-written text, at most 64 KB), cutoff time, and `goLive`: the tickets a
                                      Go Live would approve and merged tickets that are unverified or wait on a UI review
@@ -421,6 +424,9 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
 
     async def profiles_state(request, _):
         return daemon.policy.summary()
+
+    async def autonomy_state(request, _):
+        return daemon.autonomy_state()
 
     async def night_state(request, _):
         return daemon.night_state()
@@ -961,6 +967,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/tasks/night-shift", guarded(night_shift), methods=["POST"]),
         Route("/api/night-shift", guarded(night_state), methods=["GET"]),
         Route("/api/profiles", guarded(profiles_state), methods=["GET"]),
+        Route("/api/autonomy", guarded(autonomy_state), methods=["GET"]),
         Route("/api/tasks/ui-test", guarded(ui_test), methods=["POST"]),
         Route("/api/ui-tests", guarded(ui_tests_state), methods=["GET"]),
         Route("/api/ui-tests/decide", guarded(ui_decide), methods=["POST"]),
