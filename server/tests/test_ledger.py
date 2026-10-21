@@ -233,6 +233,20 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([(a["state"], a["subjectHash"]) for a in rows.values() if a["state"] == "approved"],
                          [("approved", HEAD)])
 
+    async def test_a_needs_deploy_confirmation_approves_the_real_request_not_a_backfill(self):
+        k, ref = self.to_ready(labels=["needs:deploy"])
+        pl = self.d.pipeline
+        if pl.work(k)["gate"] == "merge":
+            self.d._pipeline_result(*pl.confirm(k, "merge", "jay"))
+        self.ts.update(k, {"status": "VERIFYING"}, "system:automation", trigger="PR merged")
+        self.ts.update(k, {"needs_deploy": True}, "jay")
+        self.d._pipeline_result(*pl.merged(k, ref, "f" * 40))
+        self.d._pipeline_result(*pl.verify(k, "pass", "ok", "agent:verifier"))
+        self.assertEqual(pl.work(k)["gate"], "deploy")
+        self.d._pipeline_result(*pl.confirm(k, "deploy", "jay", "gate"))
+        dep = [(a["state"], a["requestedBy"]) for a in self.d.ledger.approvals() if a["subject"] == "deploy"]
+        self.assertEqual(dep, [("approved", "system:pipeline")])
+
     async def test_a_replan_after_a_deploy_approval_voids_it(self):
         k, ref = self.to_ready()
         pl = self.d.pipeline

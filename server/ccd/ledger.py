@@ -178,7 +178,9 @@ class Ledger:
                 want = subject_hash(gate, key, work)
                 # bound to an older subject: Jay approved this one. (A ui / failure subject is gone once the gate
                 # closes, so there is nothing to compare it with after the step.)
-                comparable = gate not in ("ui", "failure") or work.get("gate") == gate
+                # A needs:deploy confirmation is what creates the deploy request, so its subject always changes.
+                comparable = (gate not in ("ui", "failure") or work.get("gate") == gate) and not (
+                    gate == "deploy" and (work.get("deploy") or {}).get("requestedBy") == "policy:needs_deploy")
                 if cur[1] == "pending" and comparable and cur[2] != want:
                     aid = self.request(ticket_id, project, gate, want, "recorded at approval", by="system:backfill",
                                        profile_hash=profile_hash)
