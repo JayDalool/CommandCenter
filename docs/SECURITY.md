@@ -380,3 +380,10 @@ auto-merge (merge_policy DENY), each load records every file's SHA-256 and a com
 security event `policy.loaded`, and a broken, missing or drifting file raises the `policy:problems` alert. A
 profile that fails validation is unusable (`Policy.profile()` returns None) and the engine will treat it as the
 most restrictive policy. `GET /api/profiles` is token-gated and read-only; there is no write route.
+
+## Worker node tokens (v2 Phase 1)
+
+A worker node (e.g. the laptop) enrols with ccd's bearer token and receives its own node token once; ccd stores only
+the token's SHA-256 and compares in constant time. A node is unusable until Jay approves it (Jay AND Developer
+Unlock); a revoked node's token never works again and its name is never reused. The node token proves which node is
+calling `POST /api/workers/heartbeat`; it grants nothing else yet. Jobs and per-job tokens come in Phase 2.

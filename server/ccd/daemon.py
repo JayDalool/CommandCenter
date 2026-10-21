@@ -24,6 +24,7 @@ from pathlib import Path
 
 from . import __version__, autonomy, coordid, coordinators, github, ledger, merge_policy, model, profiles, registry, sources
 from . import pipeline as pipeline_mod
+from . import workers as workers_mod
 from . import herdr as herdr_mod
 from . import importer
 from . import nightshift as nightshift_mod
@@ -299,6 +300,8 @@ class Daemon:
         self._shadow_pr = {}
         # Decision + Approval records (PR 4): a mirror of today's gates and answered questions. Gates still decide.
         self.ledger = ledger.Ledger(tasks.db) if getattr(tasks, "db", None) is not None else None
+        # Worker nodes (PR 5): the model and enrolment only. Nothing is scheduled on a node yet (Phase 2).
+        self.workers = workers_mod.Workers(tasks.db) if getattr(tasks, "db", None) is not None else None
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
@@ -358,6 +361,7 @@ class Daemon:
         self._log_merge_policy()
         self._log_policy()
         self._ledger_start()
+        self._workers_start()
         self._dirty.set()
 
     async def stop(self):
@@ -755,6 +759,7 @@ class Daemon:
         self._diff_and_alert(snap)    # synchronous: what it logs IS this snapshot
         self._ticket_automation()
         await self._auto_merge()
+        self._workers_beat()
         snap["seq"] = self.seq if quiet else snap_seq
         self.snap = snap
 
@@ -1768,6 +1773,66 @@ class Daemon:
                                      (tid,)).fetchone()[0] or 0
         return self.tasks.db.execute("SELECT 1 FROM autonomy_shadow WHERE ticket_id=? AND action='deploy' AND at > ?",
                                      (tid, last)).fetchone() is not None
+
+    def _workers_start(self):
+        """The server registers itself as a worker node (it is ccd's own host). Never stops ccd starting."""
+        if self.workers is None:
+            return
+        try:
+            caps = workers_mod.server_caps()
+            self.workers.register_server(__version__, caps)
+            self._event("security", "worker.server", f"server node registered: {', '.join(caps['tools']) or 'no tools'}",
+                        data={"tools": caps["tools"], "repos": caps["repos"]})
+        except Exception as e:  # noqa: BLE001
+            log.warning(json.dumps({"msg": "server worker registration skipped", "error": repr(e)[:200]}))
+
+    def _workers_beat(self):
+        if self.workers is None:
+            return
+        try:
+            self.workers.server_heartbeat()
+        except Exception as e:  # noqa: BLE001
+            log.warning(json.dumps({"msg": "server worker heartbeat skipped", "error": repr(e)[:200]}))
+
+    def _need_workers(self):
+        if self.workers is None:
+            raise ActionError(503, "the task system is not enabled")
+        return self.workers
+
+    def _worker_call(self, fn, *a):
+        try:
+            return fn(*a)
+        except workers_mod.WorkerError as e:
+            raise ActionError(e.status, e.message) from None
+
+    def workers_state(self):
+        if self.workers is None:
+            return {"available": False, "nodes": [], "events": []}
+        return {"available": True, "nodes": self.workers.list(), "events": self.workers.events(),
+                "onlineFor": workers_mod.ONLINE_FOR}
+
+    def worker_enrol(self, body, actor):
+        w = self._need_workers()
+        out = self._worker_call(w.enrol, body.get("id"), body.get("kind"), body.get("capabilities"),
+                                body.get("version"), actor)
+        self._event("security", "worker.enrolled", f"worker node {out['id']} asked to join; waiting for Jay",
+                    severity="action", data={"node": out["id"]})
+        return out
+
+    def worker_heartbeat(self, node, token, body):
+        return self._worker_call(self._need_workers().heartbeat, node, token, body.get("capabilities"),
+                                 body.get("version"))
+
+    def act_worker(self, op, node, actor="jay", developer=False, reason=""):
+        """Jay approves or revokes a worker node. Jay AND Developer Unlock: a node will later run agent work."""
+        if actor != "jay" or not developer:
+            raise ActionError(403, f"Developer Unlock required: {op} a worker node")
+        w = self._need_workers()
+        out = self._worker_call(w.approve, node, actor) if op == "approve" else \
+            self._worker_call(w.revoke, node, actor, reason)
+        self._event("security", f"worker.{'approved' if op == 'approve' else 'revoked'}",
+                    f"Jay {'approved' if op == 'approve' else 'revoked'} worker node {node}", data={"node": node})
+        return out
 
     def _ledger_start(self):
         """At start: Jay's policy decisions become Decision records; every open gate gets its pending Approval."""

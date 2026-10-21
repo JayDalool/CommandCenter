@@ -400,6 +400,47 @@ CREATE TRIGGER approvals_decision_fixed BEFORE UPDATE ON approvals
     OR NEW.via IS NOT OLD.via)
   BEGIN SELECT RAISE(ABORT, 'who approved and when is recorded once'); END;
 """),
+    # 8: worker nodes (v2 Phase 1, PR 5; ccd/workers.py). Additive. A node is pending until Jay approves it, can be
+    # revoked (final), keeps only its token's SHA-256, and every change is an append-only worker_events row.
+    (8, """
+CREATE TABLE worker_nodes (
+  id             TEXT PRIMARY KEY CHECK (id GLOB '[a-z]*' AND length(id) BETWEEN 2 AND 32),
+  kind           TEXT NOT NULL CHECK (kind IN ('server', 'laptop', 'gpu', 'cloud')),
+  owner          TEXT NOT NULL DEFAULT 'jay',
+  status         TEXT NOT NULL CHECK (status IN ('pending', 'active', 'revoked')),
+  capabilities   TEXT NOT NULL DEFAULT '{}',
+  version        TEXT,
+  enrolled_at    REAL NOT NULL,
+  enrolled_by    TEXT NOT NULL,
+  approved_at    REAL,
+  approved_by    TEXT CHECK (approved_by IS NULL OR approved_by = 'jay'),
+  token_sha      TEXT,
+  last_heartbeat REAL,
+  revoked_at     REAL,
+  CHECK (status != 'active' OR approved_by IS 'jay')
+);
+CREATE TRIGGER worker_nodes_never_deleted BEFORE DELETE ON worker_nodes
+  BEGIN SELECT RAISE(ABORT, 'a worker node is history; revoke it instead'); END;
+CREATE TRIGGER worker_nodes_revoked_is_final BEFORE UPDATE OF status ON worker_nodes
+  WHEN OLD.status = 'revoked' OR (OLD.status = 'active' AND NEW.status = 'pending')
+  BEGIN SELECT RAISE(ABORT, 'a node moves pending, active, revoked; revoked is final'); END;
+CREATE TRIGGER worker_nodes_identity_fixed BEFORE UPDATE ON worker_nodes
+  WHEN NEW.id IS NOT OLD.id OR NEW.kind IS NOT OLD.kind OR NEW.token_sha IS NOT OLD.token_sha
+    OR NEW.enrolled_at IS NOT OLD.enrolled_at OR NEW.enrolled_by IS NOT OLD.enrolled_by
+  BEGIN SELECT RAISE(ABORT, 'a node''s identity and token never change; enrol a new node'); END;
+CREATE TABLE worker_events (
+  id      INTEGER PRIMARY KEY,
+  node_id TEXT NOT NULL REFERENCES worker_nodes(id),
+  at      REAL NOT NULL,
+  kind    TEXT NOT NULL CHECK (kind IN ('registered', 'enrolled', 'approved', 'revoked')),
+  actor   TEXT NOT NULL,
+  data    TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TRIGGER worker_events_append_only_u BEFORE UPDATE ON worker_events
+  BEGIN SELECT RAISE(ABORT, 'worker events are append-only'); END;
+CREATE TRIGGER worker_events_append_only_d BEFORE DELETE ON worker_events
+  BEGIN SELECT RAISE(ABORT, 'worker events are append-only'); END;
+"""),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

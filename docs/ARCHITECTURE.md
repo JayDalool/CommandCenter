@@ -480,3 +480,13 @@ only moves forward (pending → approved → consumed, or → void / rejected), 
 is written once, at most one is open per ticket and gate, and none is ever deleted. `expires_at` (72 h) is recorded;
 nothing enforces it yet. The gates in `ticket_work` remain the source of truth; the ledger is their record, and a
 failure in it is a log line. GET /api/decisions, Settings → Decisions (read-only).
+
+### Worker nodes (PR 5)
+
+The model and enrolment only; jobs, leases and the reaper are Phase 2, and today's agents still run in the server's
+herdr panes. At start ccd registers its own host as the `server` node (tools on PATH, registered repos checked out)
+and heartbeats it from the derive loop every 30 s. Another machine enrols with ccd's token
+(`POST /api/workers/enrol`), receives a node token once (ccd keeps the SHA-256), stays `pending` until Jay approves it
+with Developer Unlock, then heartbeats with `X-CCD-Node: <id> <token>`. Revoking is final. tasks.db v8 enforces it:
+nodes are never deleted, `active` needs `approved_by = 'jay'`, revoked is final, a node's id, kind and token never
+change, and every change is an append-only `worker_events` row. Settings → Workers.
