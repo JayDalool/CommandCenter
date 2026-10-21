@@ -101,8 +101,8 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         self.assertIn(k, [n["ref"] for n in self.d.state()["needs"]])
 
     async def test_precedent_lookup_uses_the_question_primary_key(self):
-        sql = ("SELECT d.id, q.kind FROM decisions d LEFT JOIN ticket_questions q ON q.id = CAST(d.source_ref AS INTEGER) "
-               "AND CAST(q.id AS TEXT) = d.source_ref WHERE d.source = 'question'")
+        from ccd import inbox as inbox_mod
+        sql = inbox_mod.ANSWERED_SQL
         plan = " | ".join(r[-1] for r in self.d.tasks.db.execute("EXPLAIN QUERY PLAN " + sql))
         self.assertIn("INTEGER PRIMARY KEY", plan)
         self.assertNotIn("SCAN q", plan)

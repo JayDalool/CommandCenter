@@ -118,11 +118,12 @@ export function NeedsYou() {
   }, [items, inbox, group, st]);
 
   const c = inbox?.counts ?? {};
+  const overdue = items.filter((j) => late(inbox?.items[j.id])).length;   // same rule as the red cards
   return <div className="stack ny">
     <div className="ny-head">
       <p className="text2">{items.length ? `${items.length} thing${items.length === 1 ? "" : "s"} need${items.length === 1 ? "s" : ""} you.` : "Nothing needs you."}
         {inbox?.available && <span className="muted"> {c.approvals ?? 0} approval{c.approvals === 1 ? "" : "s"} pending
-          {c.overdue ? <>, <span className="ny-overdue">{c.overdue} overdue</span></> : null}
+          {overdue ? <>, <span className="ny-overdue">{overdue} overdue</span></> : null}
           {c.precedentHits ? `, ${c.precedentHits} asked before` : ""}.</span>}</p>
       <div className="seg" role="group" aria-label="Group by">
         <button type="button" aria-pressed={group === "project"} onClick={() => pick("project")}>By project</button>
