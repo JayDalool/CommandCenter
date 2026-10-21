@@ -43,13 +43,19 @@ function until(at: number): string {
   return s < 5400 ? `expires in ${Math.max(1, Math.round(s / 60))}m` : `expires in ${Math.round(s / 3600)}h`;
 }
 
+/** Overdue by this browser's clock, so the highlight and order match the card's own "overdue" text between reloads. */
+function late(x?: InboxExtra): boolean {
+  const a = x?.approval;
+  return !!a && (a.overdue || (!!a.expiresAt && a.expiresAt <= Date.now() / 1000));
+}
+
 function day(at: number): string {
   return new Date(at * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
 function Card({ j, x }: { j: JayItem; x?: InboxExtra }) {
   const a = x?.approval;
-  return <li className={`ny-card${a?.overdue ? " is-overdue" : ""}`}>
+  return <li className={`ny-card${late(x) ? " is-overdue" : ""}`}>
     <div className="ny-main">
       <span className="ny-type">{typeOf(j)}</span>
       <span className="mono ny-ref">{jayRef(j)}</span>
@@ -59,7 +65,7 @@ function Card({ j, x }: { j: JayItem; x?: InboxExtra }) {
     </div>
     {(a || x?.engine) && <div className="ny-meta mono-xs">
       {a && <span title={`Approval #${a.id}, bound to ${a.subjectHash}`}>approval #{a.id} · bound to {a.subjectHash.slice(0, 8) || "—"} ·{" "}
-        <span className={a.overdue ? "ny-overdue" : "muted"}>{a.expiresAt ? until(a.expiresAt) : "no expiry"}</span></span>}
+        <span className={late(x) ? "ny-overdue" : "muted"}>{a.expiresAt ? until(a.expiresAt) : "no expiry"}</span></span>}
       {x?.engine && <span className="muted" title={x.engine.rule}>engine (shadow) would: <b>{x.engine.engine === "auto" ? "go ahead" : x.engine.engine === "jay" ? "ask you" : "refuse"}</b>
         {x.engine.agree ? "" : " · differs from today"} · as of <Ago at={x.engine.at} /></span>}
     </div>}
@@ -94,7 +100,7 @@ export function NeedsYou() {
 
   const groups = useMemo(() => {
     const extra = inbox?.items ?? {};
-    const rank = (j: JayItem) => [extra[j.id]?.approval?.overdue ? 0 : 1, TYPE_ORDER.indexOf(typeOf(j)), j.since ?? Infinity];
+    const rank = (j: JayItem) => [late(extra[j.id]) ? 0 : 1, TYPE_ORDER.indexOf(typeOf(j)), j.since ?? Infinity];
     const sorted = [...items].sort((a, b) => {
       const [x, y] = [rank(a), rank(b)];
       return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
@@ -105,9 +111,9 @@ export function NeedsYou() {
       m.set(k, [...(m.get(k) ?? []), j]);
     }
     // Overdue first across groups too; then by type order, or by the project's shown name.
-    const late = (list: JayItem[]) => list.some((j) => extra[j.id]?.approval?.overdue) ? 0 : 1;
+    const lateGroup = (list: JayItem[]) => list.some((j) => late(extra[j.id])) ? 0 : 1;
     const name = (k: string) => projectName(st, k) || k;
-    return [...m.entries()].sort(([a, la], [b, lb]) => late(la) - late(lb)
+    return [...m.entries()].sort(([a, la], [b, lb]) => lateGroup(la) - lateGroup(lb)
       || (group === "type" ? TYPE_ORDER.indexOf(a) - TYPE_ORDER.indexOf(b) : name(a).localeCompare(name(b))));
   }, [items, inbox, group, st]);
 
