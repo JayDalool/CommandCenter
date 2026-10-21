@@ -21,11 +21,12 @@ import { Server } from "./screens/Server";
 import { Activity } from "./screens/Activity";
 import { Alerts } from "./screens/Alerts";
 import { Settings } from "./screens/Settings";
+import { NeedsYou } from "./screens/NeedsYou";
 import { EmptyState } from "./components/ui";
 
 const SCREENS: Record<string, () => React.JSX.Element> = { dashboard: Dashboard, overview: Dashboard, projects: Projects,
   agents: Agents, tasks: Tasks, development: Development, workspace: Workspace, files: Files, console: Files, prs: PullRequests,
-  workspaces: Workspaces, server: Server, activity: Activity, alerts: Alerts, settings: Settings };
+  workspaces: Workspaces, server: Server, activity: Activity, alerts: Alerts, settings: Settings, needs: NeedsYou };
 const FLUSH = new Set(["tasks", "workspaces", "console", "workspace", "files"]);
 /** Pop-out windows: one room or one terminal, no navigation around them. */
 const BARE: Record<string, () => React.JSX.Element> = { room: RoomWindow, pane: PaneWindow };

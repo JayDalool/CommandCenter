@@ -555,6 +555,20 @@ export interface WorkerNode {
   version: string | null; enrolledAt: number; enrolledBy: string; approvedAt: number | null; approvedBy: string | null;
   lastHeartbeat: number | null; revokedAt: number | null; fingerprint: string | null;
 }
+/** Needs You v2 (GET /api/inbox): what v2 knows about a queue item, keyed by `kind:project:ref`. Read-only. */
+export interface InboxApproval { id: number; project: string; gate: string; subjectHash: string; requestedAt: number;
+  expiresAt: number | null; overdue: boolean }
+export interface InboxPrecedent { id: number; project: string; key: string | null; question: string; decision: string;
+  decidedAt: number; decidedBy: string; reconsider: string | null }
+export interface InboxExtra {
+  approval?: InboxApproval;
+  engine?: { engine: "auto" | "jay" | "refuse"; observed: "auto" | "jay" | "refuse"; rule: string; agree: boolean; at: number };
+  precedents?: { questionId: number; question: string; precedents: InboxPrecedent[] }[];
+}
+export interface InboxState {
+  available: boolean; error?: string; items: Record<string, InboxExtra>; orphans: (InboxApproval & { key: string })[];
+  counts: { approvals?: number; overdue?: number; precedentHits?: number; orphans?: number };
+}
 export interface WorkersState {
   available: boolean; nodes: WorkerNode[]; onlineFor?: number;
   events: { node: string; at: number; kind: string; actor: string; data: Record<string, unknown> }[];

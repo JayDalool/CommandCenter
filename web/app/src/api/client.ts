@@ -2,7 +2,7 @@ import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
 import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
-  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, WorkersState, WorkerNode } from "./types";
+  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, InboxState, WorkersState, WorkerNode } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -115,6 +115,11 @@ export class Api {
 
   decisions() {
     return this.req<LedgerState>("GET", "/api/decisions");
+  }
+
+  /** Needs You v2 details per queue item (approval, engine verdict, precedents). Read-only. */
+  inbox() {
+    return this.req<InboxState>("GET", "/api/inbox");
   }
 
   workers() {

@@ -491,3 +491,14 @@ with Developer Unlock, then heartbeats with `X-CCD-Node: <id> <token>`. Revoking
 nodes are never deleted, `active` needs `approved_by = 'jay'`, revoked is final, a node's id, kind and token never
 change, and every status change is an append-only `worker_events` row (heartbeats are not). Agents cannot enrol a
 node; each node has a fingerprint Jay matches before approving. Settings → Workers.
+
+### Needs You v2 (PR 6)
+
+One inbox over everything that waits on Jay (sidebar → Needs You, key `0`). The queue is unchanged: it is still
+`state.needs` plus blocked agents, assembled by the same `jayQueue` the dashboard and the bell use, so the three
+never disagree. `ccd/inbox.py` adds, read-only, per item (GET /api/inbox, keyed `kind:project:ref`): the pending
+Approval for a gate (subject hash, expiry, overdue), the shadow engine's newest verdict for that gate, and for open
+questions earlier answered questions with the same wording in the same project (precedents; shown, never applied).
+Items are grouped by project or by type, overdue first; each card has one action, which opens the place Jay acts
+today. Pending approvals whose gate is no longer in the queue are listed as a consistency check. A failure in the
+overlay leaves the list complete. Approving several at once waits for the engine to leave shadow mode.

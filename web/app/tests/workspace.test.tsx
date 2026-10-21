@@ -53,7 +53,8 @@ describe("Developer Unlock", () => {
 describe("navigation", () => {
   it("has one Workspace entry and no Console entry; the old route still resolves", () => {
     const ids = NAV.map((n) => n.id);
-    expect(ids).toEqual(["dashboard", "workspace", "tasks", "activity", "files", "settings"]);
+    expect(ids).toEqual(["dashboard", "needs", "workspace", "tasks", "activity", "files", "settings"]);
+    expect(NAV.map((n) => n.key)).toEqual(["1", "0", "2", "3", "4", "5", "6"]);   // the digits Jay knows did not move
     expect(parse("#/console?tab=repo").screen).toBe("console");
     expect(parse("#/workspace?project=samvision&ticket=SV-056").params.get("ticket")).toBe("SV-056");
   });

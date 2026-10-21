@@ -18,19 +18,22 @@ import { hasUnsavedWork, staleBuild } from "../lib/stale";
 // click away under Settings → Diagnostics or Activity / Logs; old links keep working.
 const ICONS: Record<string, React.ReactNode> = {
   dashboard: <><rect x="3.5" y="3.5" width="7" height="7" rx="1" /><rect x="13.5" y="3.5" width="7" height="7" rx="1" /><rect x="3.5" y="13.5" width="7" height="7" rx="1" /><rect x="13.5" y="13.5" width="7" height="7" rx="1" /></>,
+  needs: <><path d="M4 13.5l2.5-8h11l2.5 8v5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5z" /><path d="M4 13.5h4.5l1 2h5l1-2H20" /></>,
   workspace: <><rect x="3.5" y="4.5" width="17" height="15" rx="1.5" /><path d="M12 4.5v15M3.5 12h17" /></>,
   tasks: <><rect x="3.5" y="4.5" width="17" height="15" rx="1.5" /><path d="M7 9h2M11 9h6M7 13h2M11 13h6M7 17h2M11 17h4" /></>,
   activity: <><path d="M6 3.5h9l3.5 3.5v13.5h-12.5z" /><path d="M9 11h6M9 14.5h6M9 18h4" /></>,
   files: <><path d="M3.5 6.5A1.5 1.5 0 0 1 5 5h4.5l2 2H19a1.5 1.5 0 0 1 1.5 1.5v9A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z" /></>,
   settings: <><circle cx="12" cy="12" r="3" /><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7" /></>,
 };
-export const NAV: { id: (typeof SCREENS)[number]; label: string; title: string }[] = [
-  { id: "dashboard", label: "Dashboard", title: "Dashboard" },
-  { id: "workspace", label: "Workspace", title: "Workspace" },
-  { id: "tasks", label: "Task Manager", title: "Task Manager" },
-  { id: "activity", label: "Activity / Logs", title: "Activity / Logs" },
-  { id: "files", label: "Files", title: "Files" },
-  { id: "settings", label: "Settings", title: "Settings" },
+// `key` is the digit that opens the screen. Needs You (v2) took 0 so the digits Jay already uses did not move.
+export const NAV: { id: (typeof SCREENS)[number]; label: string; title: string; key: string }[] = [
+  { id: "dashboard", label: "Dashboard", title: "Dashboard", key: "1" },
+  { id: "needs", label: "Needs You", title: "Needs You", key: "0" },
+  { id: "workspace", label: "Workspace", title: "Workspace", key: "2" },
+  { id: "tasks", label: "Task Manager", title: "Task Manager", key: "3" },
+  { id: "activity", label: "Activity / Logs", title: "Activity / Logs", key: "4" },
+  { id: "files", label: "Files", title: "Files", key: "5" },
+  { id: "settings", label: "Settings", title: "Settings", key: "6" },
 ];
 /** Screens reached from Settings / Activity (diagnostics) and the routes old links use. */
 const TITLES: Record<string, string> = { overview: "Dashboard", projects: "Projects", development: "Development",
@@ -61,7 +64,7 @@ function Rail() {
   }), shallowEqual);
   const current = route.screen === "overview" ? "dashboard" : route.screen === "console" ? "files" : route.screen;
   const n: Partial<Record<string, ReactNode>> = {
-    dashboard: counts.jay ? <span className="nav-n is-jay" title="needs Jay">{counts.jay}</span> : null,
+    needs: counts.jay ? <span className="nav-n is-jay" title="needs you">{counts.jay}</span> : null,
     tasks: <span className="nav-n">{counts.tasks || ""}</span>,
     activity: counts.alerts ? <span className="nav-n is-warn" title="unacknowledged alerts">{counts.alerts}</span> : null,
   };
@@ -69,8 +72,8 @@ function Rail() {
     <div className="brand"><span className="brand-mark" aria-hidden><i /><i /><i /><i /></span>
       <span className="brand-name">Command Center</span></div>
     <nav className="nav" aria-label="Screens">
-      {NAV.map((s, i) => <a key={s.id} href={href(s.id)} aria-current={current === s.id ? "page" : undefined}
-        aria-keyshortcuts={String(i + 1)} title={`${s.label} (${i + 1})`}>
+      {NAV.map((s) => <a key={s.id} href={href(s.id)} aria-current={current === s.id ? "page" : undefined}
+        aria-keyshortcuts={s.key} title={`${s.label} (${s.key})`}>
         <svg className="nav-ico" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.6"
           strokeLinecap="round" strokeLinejoin="round" aria-hidden>{ICONS[s.id]}</svg>
         <span>{s.label}</span>{n[s.id] ?? <span />}</a>)}
@@ -187,9 +190,9 @@ export function AppShell({ children, flush = false, bare = false, chrome = "full
       if (document.querySelector("[role=dialog]")) return;
       if (e.key === "n" || e.key === "N") { e.preventDefault(); setNewProject(undefined); setNewTask(true); }
       else if (e.key === "/") { e.preventDefault(); window.dispatchEvent(new Event("cc:focus-search")); }
-      else if (/^[1-9]$/.test(e.key)) {
-        const i = Number(e.key) - 1;
-        if (NAV[i]) { e.preventDefault(); go(NAV[i].id); }
+      else if (/^[0-9]$/.test(e.key)) {
+        const to = NAV.find((s) => s.key === e.key);
+        if (to) { e.preventDefault(); go(to.id); }
       }
     };
     window.addEventListener("keydown", onKey);
