@@ -1025,6 +1025,22 @@ class ControlRoomApi(PipelineApi):
         self.assertEqual(r.status_code, 409)
         self.assertIn("paused", r.json()["error"])
 
+    def test_merge_ready_is_never_a_bypass_of_another_open_gate(self):
+        # Phase 0 (Jay, 2026-10-21): bulk merge is a convenience, not a bypass. A ticket whose open gate is not the
+        # merge gate itself (UI, deploy, failure, plan) is skipped, never sent, never approved.
+        k = self.ready_pr(150, 95, "f1" * 20)
+        real = self.daemon.pipeline.work
+        for gate in ("ui", "deploy", "failure", "plan"):
+            self.daemon.pipeline.work = lambda key, g=gate: dict(real(key), gate=g)
+            try:
+                ready, skipped = self.daemon.merge_batch("samvision")
+            finally:
+                self.daemon.pipeline.work = real
+            self.assertEqual(ready, [])
+            self.assertEqual([(x["key"], x["reason"]) for x in skipped], [(k, f"an open {gate} gate")])
+        ready, _ = self.daemon.merge_batch("samvision")
+        self.assertEqual([r["key"] for r in ready], [k])                         # the merge gate itself is fine
+
     def test_a_ui_test_run_is_sent_on_request_and_jay_decides_each_finding(self):
         from ccd import uitests
         root = tempfile.mkdtemp(prefix="ui-")
