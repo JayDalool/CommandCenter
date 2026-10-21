@@ -74,8 +74,8 @@
     POST  /api/night-shift/end       Jay AND Developer Unlock. stop reminders; tell the coordinator to stop safely
     GET   /api/jay/merge             per project: the Ready-to-Merge tickets Jay can merge now, in merge order, and
                                      the ones that cannot (head changed, CI not green, …)
-    POST  /api/jay/merge             Jay AND Developer Unlock. MERGE: approves exactly those reviewed, green heads
-                                     ({project, keys?}) and asks the idle coordinator to merge them one at a time
+    POST  /api/jay/merge             Jay AND Developer Unlock. MERGE: approves exactly the reviewed, green heads the
+                                     confirm box listed ({project, items: [{key, head}]}) and asks the idle coordinator to merge them one at a time
                                      in that order, CI on main between merges. ccd itself merges nothing.
     POST  /api/jay/go-live           Jay AND Developer Unlock. {project, keys}: GO LIVE PREPARES ONLY: approves the
                                      listed tickets' live-deploy gates that are still open (the rest: `skipped`)
@@ -432,7 +432,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
 
     async def merge(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
-        return await daemon.act_merge(str(body.get("project") or ""), body.get("keys"), request.state.actor,
+        return await daemon.act_merge(str(body.get("project") or ""), body.get("items"), request.state.actor,
                                       developer=dev)
 
     async def go_live(request, body):

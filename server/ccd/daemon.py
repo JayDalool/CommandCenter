@@ -2297,7 +2297,7 @@ class Daemon:
         if actor != "jay" or not developer:
             raise ActionError(403, "Developer Unlock required: the night shift sends a message to Claude")
         self._need_tasks()
-        if not self._project(project) is not None:
+        if self._project(project) is None:
             raise ActionError(404, "unknown project")
         self._not_paused(project, "night shift")
         text = night_shift_text(project)
@@ -2314,7 +2314,7 @@ class Daemon:
         if actor != "jay" or not developer:
             raise ActionError(403, "Developer Unlock required: a UI test run sends a message to Claude")
         self._need_tasks()
-        if not self._project(project) is not None:
+        if self._project(project) is None:
             raise ActionError(404, "unknown project")
         self._not_paused(project, "UI test run")
         text = ui_test_text(project)
@@ -2342,7 +2342,7 @@ class Daemon:
             raise ActionError(403, "Developer Unlock required: deciding a UI finding")
         if self.uitests is None:
             raise ActionError(503, "UI test runs are not configured")
-        if not self._project(project) is not None:
+        if self._project(project) is None:
             raise ActionError(404, "unknown project")
         if decision not in uitests_mod.DECISIONS:
             raise ActionError(400, "decision must be fix or skip")
@@ -2431,31 +2431,52 @@ class Daemon:
             place(r)
         return [{k: v for k, v in r.items() if k != "blockedBy"} for r in ordered], skipped
 
-    async def act_merge(self, project, keys=None, actor="jay", developer=False):
-        """Merge: Jay approves exactly the project's mergeable Ready-to-Merge heads (merge_batch) and asks its idle
-        coordinator to merge them one at a time in that order (MERGE_TEMPLATE). ccd merges nothing itself."""
+    async def act_merge(self, project, items=None, actor="jay", developer=False):
+        """Merge: Jay approves exactly the (ticket, head) pairs the confirm box listed (`items`) that are still
+        mergeable at those very heads (merge_batch), and asks the project's idle coordinator to merge them one at a
+        time in that order (MERGE_TEMPLATE). ccd merges nothing itself.
+
+        Like Go Live: every check that can refuse (403/404/409/400) runs before the message; after it, a ticket that
+        cannot be approved (its head or gate moved during the send) is reported in `errors` and never undoes the
+        others. A ticket whose head or readiness changed since the box was shown is skipped, never approved."""
         if actor != "jay" or not developer:
             raise ActionError(403, "Developer Unlock required: Merge approves and merges pull requests")
         self._need_tasks()
-        if not self._project(project) is not None:
+        if self._project(project) is None:
             raise ActionError(404, "unknown project")
         self._not_paused(project, "merge")
-        if keys is not None and (not isinstance(keys, list) or len(keys) > 50
-                                 or not all(isinstance(k, str) and TICKET_KEY_RE.match(k.upper()) for k in keys)):
-            raise ActionError(400, "keys must be a list of ticket keys")
-        ready, skipped = self.merge_batch(project, keys)
+        if not isinstance(items, list) or not items or len(items) > 50 or not all(
+                isinstance(i, dict) and isinstance(i.get("key"), str) and TICKET_KEY_RE.match(i["key"].upper())
+                and isinstance(i.get("head"), str) and pipeline_mod.SHA_RE.match(i["head"]) for i in items):
+            raise ActionError(400, "items must be the [{key, head}] pairs the confirm box listed")
+        shown = {i["key"].upper(): i["head"] for i in items}
+        listed, skipped = self.merge_batch(project, list(shown))
+        ready = [r for r in listed if r["head"] == shown.get(r["key"])]
+        skipped += [{"key": r["key"], "reason": "its PR head changed since you looked; open Merge ready again"}
+                    for r in listed if r["head"] != shown.get(r["key"])]
         if not ready:
             why = "; ".join(f"{x['key']}: {x['reason']}" for x in skipped)[:300]
             raise ActionError(409, f"{project} has nothing ready to merge" + (f" ({why})" if why else ""))
-        items = "\n".join(f"{i}. {r['key']} — {r['pr']} — head {r['head'][:12]} — {r['title']}"
-                          for i, r in enumerate(ready, 1))
-        text = MERGE_TEMPLATE.format(project=project, items=items)
+        lines = "\n".join(f"{i}. {r['key']} — {r['pr']} — head {r['head'][:12]} — {r['title']}"
+                           for i, r in enumerate(ready, 1))
+        text = MERGE_TEMPLATE.format(project=project, items=lines)
         name = await self._to_coordinator(project, "merge", text, {"keys": [r["key"] for r in ready]})
+        errors = []
         for r in ready:
-            if r["gate"] == "merge":     # Jay's authorisation, recorded for this exact head (merge:<sha>)
+            if r["gate"] != "merge":
+                continue
+            # Jay's authorisation, recorded for this exact head (merge:<sha>) — only if the review still covers it.
+            if self.pipeline.review_head(r["key"]) != r["head"]:
+                errors.append({"key": r["key"], "error": "its reviewed head changed while the message was sent; "
+                                                        "not approved"})
+                continue
+            try:
                 self._pipeline_result(*self._wrap(self.pipeline.confirm, r["key"], "merge", actor))
+            except ActionError as e:
+                errors.append({"key": r["key"], "error": e.message})
         return {"ok": True, "project": project, "coordinator": name,
-                "merging": [{k: r[k] for k in ("key", "pr", "head")} for r in ready], "skipped": skipped}
+                "merging": [{k: r[k] for k in ("key", "pr", "head")} for r in ready], "skipped": skipped,
+                "errors": errors}
 
     async def act_go_live(self, project, actor="jay", developer=False, keys=None):
         """Go Live: Jay approves the live-deploy gates the confirm box showed (`keys`) that are still open, and asks

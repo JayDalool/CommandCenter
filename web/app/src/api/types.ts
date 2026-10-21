@@ -483,7 +483,7 @@ export interface MergeReady {
 }
 export interface MergeResult {
   ok: boolean; project: string; coordinator: string; merging: { key: string; pr: string; head: string }[];
-  skipped: { key: string; reason: string }[];
+  skipped: { key: string; reason: string }[]; errors?: { key: string; error: string }[];
 }
 
 /** UI test runs (ccd uitests.py): the latest run per project and Jay's decision on each finding. */

@@ -115,8 +115,8 @@ export class Api {
     return this.req<MergeReady>("GET", "/api/jay/merge");
   }
   /** Merge (Developer Unlock): approve exactly those heads; the coordinator merges them one at a time. */
-  merge(project: string, keys?: string[]) {
-    return this.req<MergeResult>("POST", "/api/jay/merge", keys ? { project, keys } : { project });
+  merge(project: string, items: { key: string; head: string }[]) {
+    return this.req<MergeResult>("POST", "/api/jay/merge", { project, items });
   }
   /** Go Live (Developer Unlock): approves the open live-deploy gates and asks the coordinator to PREPARE the deploy; Jay confirms it in its pane. */
   goLive(project: string, keys: string[]) {

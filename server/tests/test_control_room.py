@@ -954,17 +954,21 @@ class ControlRoomApi(PipelineApi):
         self.assertTrue(buf.getvalue().startswith("PAUSED: Jay paused GauzeMate"))
         self.assertNotIn("GZ-1", buf.getvalue())
 
-    def ready_pr(self, number, key_no, head, ci=True):
-        """A SamVision ticket at Ready to Merge: reviewed head, PR open and green (Jay's merge gate open)."""
+    def ready_pr(self, number, key_no, head, ci=True, existing=None):
+        """A SamVision ticket at Ready to Merge: reviewed head, PR open and green (Jay's merge gate open).
+        `existing`: push a new head to that ticket's PR and review it again instead of creating a ticket."""
         from .helpers import pr
-        t, _ = self.tickets.create("samvision", f"feature {key_no}", number=key_no, status="INBOX")
-        key = t["key"]
-        h = dict(JSON, **{"x-ccd-actor": "agent:planner"})
-        self.client.post(f"/api/tasks/{key}/work/plan", content=json.dumps({"plan": {"summary": "x"}}), headers=h)
-        h = dict(JSON, **{"x-ccd-actor": "agent:coordinator"})
-        r = self.client.post(f"/api/tasks/{key}/work/start", content=json.dumps(
-            {"branch": f"{key}-f", "worktree": f"/srv/w/{key}"}), headers=h)
-        self.assertEqual(r.status_code, 200, r.text)
+        if existing:
+            key = existing
+        else:
+            t, _ = self.tickets.create("samvision", f"feature {key_no}", number=key_no, status="INBOX")
+            key = t["key"]
+            h = dict(JSON, **{"x-ccd-actor": "agent:planner"})
+            self.client.post(f"/api/tasks/{key}/work/plan", content=json.dumps({"plan": {"summary": "x"}}), headers=h)
+            h = dict(JSON, **{"x-ccd-actor": "agent:coordinator"})
+            r = self.client.post(f"/api/tasks/{key}/work/start", content=json.dumps(
+                {"branch": f"{key}-f", "worktree": f"/srv/w/{key}"}), headers=h)
+            self.assertEqual(r.status_code, 200, r.text)
         prs = [x for x in self.gh.data["samvision"].get("prs") or [] if x["number"] != number]
         self.gh.data["samvision"]["prs"] = prs + [dict(pr(number, f"{key}: x", ci="SUCCESS" if ci else "FAILURE"),
                                                        headRefName=f"{key}-f", headRefOid=head)]
@@ -984,7 +988,8 @@ class ControlRoomApi(PipelineApi):
             self.assertEqual(self.get(f"/api/tasks/{k}/work").json()["gate"], "merge")   # SamVision: Jay merges
         listing = self.get("/api/jay/merge").json()["projects"]["samvision"]
         self.assertEqual([r["key"] for r in listing["ready"]], [c, b, a])            # oldest PR first, blockers before
-        body = json.dumps({"project": "samvision"})
+        shown = [{"key": r["key"], "head": r["head"]} for r in listing["ready"]]
+        body = json.dumps({"project": "samvision", "items": shown})
         self.assertEqual(self.client.post("/api/jay/merge", content=body, headers=JSON).status_code, 403)
         r = self.client.post("/api/jay/merge", content=body, headers=dict(JSON, **self.dev()))
         self.assertEqual(r.status_code, 200, r.text)
@@ -1014,16 +1019,56 @@ class ControlRoomApi(PipelineApi):
         self.assertIn("head changed", skipped[0]["reason"])
         before = [p for m, p in self.fake.calls if m == "agent.prompt"]
         dev = dict(JSON, **self.dev())
-        r = self.client.post("/api/jay/merge", content=json.dumps({"project": "samvision", "keys": ["SV-999"]}), headers=dev)
+        r = self.client.post("/api/jay/merge", content=json.dumps(
+            {"project": "samvision", "items": [{"key": "SV-999", "head": "a" * 40}]}), headers=dev)
         self.assertEqual(r.status_code, 409)
         self.assertIn("SV-999: not Ready to Merge", r.json()["error"])
         self.assertEqual([p for m, p in self.fake.calls if m == "agent.prompt"], before)   # nothing sent
         self.assertEqual(self.get(f"/api/tasks/{k}/work").json()["gate"], "merge")         # nothing approved
-        r = self.client.post("/api/jay/merge", content=json.dumps({"project": "samvision", "keys": "SV-1"}), headers=dev)
-        self.assertEqual(r.status_code, 400)
-        r = self.client.post("/api/jay/merge", content=json.dumps({"project": "gauzemate"}), headers=dev)
+        for bad in ({"project": "samvision"}, {"project": "samvision", "items": []},
+                    {"project": "samvision", "items": [{"key": k}]},                          # no head
+                    {"project": "samvision", "items": [{"key": k, "head": "d1"}]},            # not a full sha
+                    {"project": "samvision", "keys": [k]}):                                    # the old shape
+            r = self.client.post("/api/jay/merge", content=json.dumps(bad), headers=dev)
+            self.assertEqual(r.status_code, 400, bad)
+        r = self.client.post("/api/jay/merge", content=json.dumps(
+            {"project": "gauzemate", "items": [{"key": "GZ-1", "head": "a" * 40}]}), headers=dev)
         self.assertEqual(r.status_code, 409)
         self.assertIn("paused", r.json()["error"])
+
+    def test_merge_approves_only_the_heads_jay_saw(self):
+        # Fresh review of PR #54: Jay saw SV-096 at head A; a new push B is reviewed and becomes ready before he
+        # presses. B is skipped (he never saw it), nothing is sent for it, and its merge gate stays open.
+        k = self.ready_pr(160, 96, "a2" * 20)
+        other = self.ready_pr(161, 97, "b2" * 20)
+        shown = [{"key": k, "head": "a2" * 20}, {"key": other, "head": "b2" * 20}]
+        self.ready_pr(160, 96, "c2" * 20, existing=k)                          # new head, re-reviewed, ready again
+        dev = dict(JSON, **self.dev())
+        r = self.client.post("/api/jay/merge", content=json.dumps({"project": "samvision", "items": shown}), headers=dev)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual([m["key"] for m in r.json()["merging"]], [other])
+        self.assertIn("head changed since you looked", {x["key"]: x["reason"] for x in r.json()["skipped"]}[k])
+        self.assertEqual(self.get(f"/api/tasks/{k}/work").json()["gate"], "merge")       # not approved
+        self.assertNotIn(k, [p for m, p in self.fake.calls if m == "agent.prompt"][-1]["text"])
+        # A head that moves while the message is being sent is reported per ticket, never a 409 after the send.
+        k2 = self.ready_pr(162, 98, "d2" * 20)
+        self.daemon._last_action.clear()                                       # the per-target one-second guard
+        real = self.daemon._to_coordinator
+
+        async def send_then_move(*a, **kw):
+            name = await real(*a, **kw)
+            self.daemon.pipeline.review_head = lambda key: "e2" * 20
+            return name
+        self.daemon._to_coordinator = send_then_move
+        try:
+            r = self.client.post("/api/jay/merge", content=json.dumps(
+                {"project": "samvision", "items": [{"key": k2, "head": "d2" * 20}]}), headers=dev)
+        finally:
+            self.daemon._to_coordinator = real
+            self.daemon.pipeline.__dict__.pop("review_head", None)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual([e["key"] for e in r.json()["errors"]], [k2])
+        self.assertEqual(self.get(f"/api/tasks/{k2}/work").json()["gate"], "merge")
 
     def test_merge_ready_is_never_a_bypass_of_another_open_gate(self):
         # Phase 0 (Jay, 2026-10-21): bulk merge is a convenience, not a bypass. A ticket whose open gate is not the

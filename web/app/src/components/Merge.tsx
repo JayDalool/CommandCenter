@@ -1,5 +1,5 @@
 // MERGE — one press for everything that is ready. Per project: the tickets whose review approved the PR's exact
-// current head with green CI, in merge order (blockers first, then oldest PR). Jay approves exactly those heads;
+// current head with green CI, in merge order (blockers first, then oldest PR; order only, not a requirement). Jay approves exactly those heads;
 // each repository's coordinator merges them one at a time, waits for CI on main between merges and stops if main
 // goes red (ccd: POST /api/jay/merge). Nothing is deployed; ccd merges nothing itself.
 import { useEffect, useState } from "react";
@@ -42,9 +42,12 @@ export function MergeDialog({ onClose }: { onClose: () => void }) {
     for (const k of keys) {
       setBusy(k);
       try {
-        const r = await app.api.merge(k);
+        // Exactly the (ticket, head) pairs this box showed: anything that changed since is skipped by ccd.
+        const items = (data?.projects[k]?.ready ?? []).map((m) => ({ key: m.key, head: m.head }));
+        const r = await app.api.merge(k, items);
         setRes((m) => ({ ...m, [k]: { ok: true, text: `${r.coordinator} is merging ${r.merging.map((x) => x.key).join(" → ")}`
-          + (r.skipped.length ? ` · skipped ${r.skipped.map((x) => x.key).join(", ")}` : "") } }));
+          + (r.skipped.length ? ` · skipped ${r.skipped.map((x) => `${x.key} (${x.reason})`).join(", ")}` : "")
+          + (r.errors?.length ? ` · not approved ${r.errors.map((x) => x.key).join(", ")}` : "") } }));
       } catch (e) {
         setRes((m) => ({ ...m, [k]: { ok: false, text: (e as Error).message } }));
       }

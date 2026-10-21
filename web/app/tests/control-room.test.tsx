@@ -567,7 +567,8 @@ describe("merge ready", () => {
     fireEvent.click(screen.getByRole("button", { name: "Merge all ready (2)" }));
     expect(merge).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Yes, merge" }));
-    await waitFor(() => expect(merge).toHaveBeenCalledWith("samvision"));
+    await waitFor(() => expect(merge).toHaveBeenCalledWith("samvision",               // exactly the heads shown
+      [{ key: "SV-079", head: "c1".repeat(20) }, { key: "SV-081", head: "b1".repeat(20) }]));
     expect(merge).toHaveBeenCalledTimes(1);                                     // the paused project is never sent
     expect(await screen.findByText(/samvision is merging SV-079 → SV-081/)).toBeInTheDocument();
   });
