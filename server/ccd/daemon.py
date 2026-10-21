@@ -1760,7 +1760,7 @@ class Daemon:
 
     def _shadow_deploy_seen(self, tid):
         """A deploy decision is already recorded for this ticket since its last deployment."""
-        last = self.tasks.db.execute("SELECT MAX(at) FROM ticket_events WHERE ticket_id=? AND kind='pipeline.deployed'",
+        last = self.tasks.db.execute("SELECT MAX(at) FROM ticket_events WHERE ticket_id=? AND kind IN ('pipeline.deployed', 'pipeline.blocked')",
                                      (tid,)).fetchone()[0] or 0
         return self.tasks.db.execute("SELECT 1 FROM autonomy_shadow WHERE ticket_id=? AND action='deploy' AND at > ?",
                                      (tid, last)).fetchone() is not None

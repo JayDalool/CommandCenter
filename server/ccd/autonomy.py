@@ -85,7 +85,7 @@ def _paths(facts, patterns, what):
         return [], ["changed files"]
     if len(files) >= GH_FILE_LIMIT:   # gh lists at most 100 files: a protected one may be past the end
         return [], ["the complete list of changed files"]
-    moved = [f.get("path") for f in files if isinstance(f, dict) and f.get("changeType") not in (None, "ADDED", "MODIFIED")]
+    moved = [f.get("path") for f in files if isinstance(f, dict) and f.get("changeType") not in ("ADDED", "MODIFIED")]
     if moved:   # a rename shows only its new path; the old one may be protected
         return [f"{what}: it renames, copies or deletes files ({', '.join(map(str, moved[:3]))})"], []
     hit = [f.get("path") if isinstance(f, dict) else f for f in files]

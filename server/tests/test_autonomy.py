@@ -88,6 +88,9 @@ class Verdicts(unittest.TestCase):
         self.assertIn("the complete list of changed files", v["missing"])
         v = ev("merge", "commandcenter", files=[f("docs/old-policy.md", "RENAMED")], additions=0, deletions=0)
         self.assertEqual((v["outcome"], v["rule"]), ("jay", "D-007:self_protection"))
+        v = ev("merge", "commandcenter", files=[{"path": "docs/a.md", "additions": 1, "deletions": 0}],
+               additions=1, deletions=0)                                         # no changeType: unknown, never safe
+        self.assertEqual(v["outcome"], "jay")
 
     def test_gyst_personal_data_needs_jay(self):
         v = ev("merge", "gyst", files=[f("app/models/person.py")])
