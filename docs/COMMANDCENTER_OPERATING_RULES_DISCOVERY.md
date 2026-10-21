@@ -159,7 +159,9 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
 - **Scope:** global; per-project engine and schedule recorded in each profile (`db = { engine, location, backup }`).
 - **Type:** autonomous (backups, test restores into throwaway containers); approval (restore over production,
   destructive production operations).
-- **Open:** SamVision weekly is below the proposed daily; confirm whether to raise it once verified.
+- **Update (repo evidence, not rechecked):** SamVision `docs/backups.md` says backups run nightly at 04:00 with read-back
+  verification, 14-day retention and a restore check, but no offsite copy; MFE is backed up nightly at 03:30 by
+  `/srv/server/scripts/backup-postgres.sh`. So SamVision already meets the daily rule; the gap is offsite.
 
 ### D-019 · Operations page: backups, restores, health checks, schedule
 - **Answer (Q4):** "We also need an indicator page for our backups and restores, health check and schedule."
@@ -226,9 +228,106 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
 - **Scope:** global.
 - **Type:** autonomous (pausing and halting are always allowed); approval (resuming after a full stop).
 
-### D-024 · New project onboarding (under discussion)
-- Not final. The full design is in the Project Onboarding Design doc
-  (https://claude.ai/artifact/AR9b53F8irK2VB3d8fzAmu). This entry is written once Jay answers Q10 to Q12.
+### D-024 · New project onboarding (proposed, Jay agreed with the design)
+- **Status:** Jay agreed with the design and the pushback (2026-10-21T21:15Z): pushes and PRs are not automatically low
+  risk; discovery never runs code with the project's normal environment or secrets; evidence grades instead of AI
+  confidence numbers; boundaries enforced by missing credentials wherever possible. Stays **proposed** until Q15
+  (fact ageing) is answered.
+- **Design:** Project Onboarding Design doc (https://claude.ai/artifact/AR9b53F8irK2VB3d8fzAmu): `onboarding` mode,
+  Project Fingerprint, First Audit, draft profile, proposal PRs, graduation evidence, Admission Review.
+- **Existing projects (Q12):** baseline admission audit instead of seven days; current permissions unchanged except
+  that D-026 tightening still applies. Facts graded imported verified / newly verified / observed / inferred /
+  unknown; old facts keep their original date until rechecked. Order after Phase 1 is deployed: CommandCenter,
+  GYST, SamVision, MyFamilyExpenses; GauzeMate only when resumed. CommandCenter's own admission also gets a Codex
+  second opinion, and every finding on a D-007 path goes to Jay.
+- **Scope:** global. **Type:** hard boundary (authority actions during onboarding), approval (graduation),
+  autonomous (observe, inspect, sandbox, audit, safe draft PRs).
+
+### D-025 · Pushing and opening a PR are boundary actions
+- **Answer (Q10):** yes, with Jay's added restriction.
+- **Rule:** four separate actions: edit files locally, create a local branch (both automatic), push the branch, open a
+  PR (both boundary-crossing). On Jay's own repos during onboarding, a push or draft PR is allowed only after a
+  deterministic push safety check proves it will not deploy code, run privileged CI, expose production secrets,
+  call production webhooks, change production infrastructure or data, send external communication, create
+  meaningful cost, or reach another project. True or unknown on any line: stop and ask Jay before pushing. Client
+  and employer repos: no automatic push or PR during onboarding; patches stay local and are shown to Jay; a
+  permanent profile may grant PR rights later. CI configuration (`.github/workflows/**` and equivalents) is
+  privileged infrastructure: never pushed or opened as a PR during onboarding without Jay's approval; after
+  graduation the profile decides routine CI edits, but runner, secret, permission and security CI changes stay protected.
+- **Note:** a repo whose `pull_request` CI runs on our self-hosted runners counts as privileged CI, so every
+  onboarding push to it will stop and ask. Intended.
+- **Controls:** a push-safety checker before every push; branch-only token from the Broker; `.github/**` already in
+  CommandCenter's protected paths.
+- **Scope:** global. **Type:** approval (push/PR when the check is not clean; any CI change during onboarding);
+  autonomous (local work; clean pushes and draft PRs on Jay's repos).
+
+### D-026 · Authority only moves down automatically
+- **Answer (Q11):** yes.
+- **Rule:** CommandCenter may make a project more restrictive automatically on verified evidence, never less.
+  Autonomous Product → Controlled Production → Restricted → Paused; only Jay moves a project up.
+  Down to **Restricted** on: unknown production connection, unexpected credential exposure, new sensitive-data
+  handling, deploy mechanism changed, CI gained privileged credentials, production environment ambiguous, policy
+  drift, new external side effect, an important hosting/DB/DNS fact no longer verified. Full report immediately.
+  **Pause** on: active or suspected security incident, secrets exposed, production integrity uncertain, unexpected
+  destructive action, project identity or hosting target ambiguous before a write, policy enforcement broken,
+  worker or agent identity unverifiable, possible autonomy bypass. When paused: stop new autonomous writes, keep
+  state and worktrees, no automatic recovery across a security boundary, keep safe observation, full D-023 report.
+  LLM opinion, graph intelligence or unverified inference alone never restricts or pauses; it raises a finding that
+  triggers a deterministic check.
+- **Pushback (Q15):** "fact no longer verified" should first trigger re-verification, and tighten only if that fails
+  or finds a change; otherwise projects drop to Restricted on a calendar.
+- **Scope:** global. **Type:** autonomous (tightening); approval (any loosening).
+
+### D-027 · Task execution modes and one writer
+- **Answer:** Jay restated the model as required.
+- **Rule:** the project profile sets the maximum authority; each task is Manual, Assisted or Autonomous and may be
+  stricter than its project, never more permissive. One writer per worktree or task at a time: `jay` or
+  `agent:<job-id>`. Commands: Take over myself, Give back to CommandCenter, Pause agent, Resume, Help me with this,
+  Review what I changed, Finish this for me, I will finish this myself. Every ownership change checkpoints branch,
+  worktree, commit, uncommitted diff, tests, plan, decisions and pending work. Conflicting human and agent edits are
+  never resolved silently.
+- **Proposed detail:** in Assisted mode ("Help me with this") the agent writes only patches or a scratch branch that
+  Jay applies, so the worktree keeps one writer.
+- **Controls:** extends the existing writer/checkpoint fields in `ccd/pipeline.py`.
+- **Scope:** global. **Type:** hard boundary (one writer; task never above project).
+
+### D-028 · Derived code intelligence is evidence, not authority (proposed)
+- **Source:** Jay's Graphify brief. Full evaluation: Graphify Tool Proposal doc
+  (https://claude.ai/artifact/M881qmRtEeRxRwuDohAP5B).
+- **Rule:** Git is source-code truth; CommandCenter SQLite is operational, task, policy, approval, decision,
+  execution and audit truth; Graphify or any code graph or index is derived data. CommandCenter works fully without
+  it. Graph intelligence may raise risk, may never lower deterministic risk, never authorizes merge or deploy, never
+  bypasses approval. A missing or stale graph counts as no evidence. A raise asks for more scrutiny; it does not
+  restrict or pause on its own (D-026).
+- **Tool proposal (TP-001, Graphify-Labs/graphify):** recommendation **LOCAL SANDBOX EXPERIMENT, CLI only**: never
+  `graphify install`, `claude install`, `codex install` or `hook install` (they edit CLAUDE.md, AGENTS.md, hook
+  settings and git hooks); `GRAPHIFY_BACKEND=none`, `--code-only`, pinned version, no model keys, output never
+  committed. Explicit refresh only (onboarding, entering review, handoff, a refresh button); no watch mode or hooks.
+  Multi-repo option D. Restricted repos laptop-only, never in a shared or cloud graph. Not installed; awaits Q14.
+- **Scope:** global. **Type:** hard boundary (graph never lowers risk or authorizes).
+
+### D-029 · Local CI runner operations (proposed)
+- **Source:** Jay's local CI brief. Full design: Local CI Runner Operations doc
+  (https://claude.ai/artifact/BVqfMHUwKTDYSwaxe12rgE).
+- **Current setup (from the repos, 2026-10-21):** CommandCenter, GYST and SamVision run `pull_request` CI on
+  `[self-hosted, linux, x64]` (identical labels); MyFamilyExpenses (public) uses GitHub-hosted `ubuntu-latest`;
+  GauzeMate has no CI. No workflow uses `secrets.*` or `pull_request_target`. SamVision's CI runs `sudo apt-get`
+  (runner user has sudo) and sets no `permissions`; SamVision and GYST keep the checkout token in the workspace.
+  Which machine the runners are on is not in any repo.
+- **Rule:** status and diagnostics automatic. Our own runners: restart when idle and unhealthy (max 2 per 24 h, then
+  quarantine), drain busy runners and restart after the job, never kill a legitimate job for maintenance. Stale
+  processes and ports cleaned only after a seven-step ownership proof (protected class, PID facts, CI tracking ID,
+  runner work dir, GitHub says job finished, timing, allowed class); ambiguous means never kill. Port classes
+  `protected` / `managed_dev` / `ephemeral_ci`, defined in `policy/`; unlisted = protected. Re-run a failed job once
+  per infrastructure failure signature; repeated identical failures stop and get diagnosed. Not automatic: unknown
+  listeners, Docker restart, databases, reboot, active worktrees, broad cache clears during jobs, runner
+  registration/tokens, Actions secrets, new network ports. `CIRunner` is a separate authority from `WorkerNode`.
+  Self-hosted runners serve private repos only, with no sudo and no production reach.
+- **Phases:** 0 harden runners (Jay's approval) before Phase 2 widens agent authority; 1 read-only visibility in
+  Phase 2; 2 guarded actions after a clean week; 3 job hooks and ephemeral runners if needed.
+- **Scope:** global; client/employer runners observe-only by default. **Type:** autonomous (status, bounded
+  recovery, verified cleanup); approval (all "no" actions, workflow and runner changes); hard boundary (protected
+  ports and services).
 
 ---
 
@@ -239,17 +338,21 @@ Batch 2 (Q4 databases, Q5 production ops, Q6 subdomains) answered 2026-10-21T19:
 Batch 3 (Q7 remote hosts, Q8 onboarding, Q9 incidents) answered 2026-10-21T20:36Z → D-022, D-023; Q8 grew into
 the onboarding design (D-024, under discussion).
 
-### Batch 4 (asked 2026-10-21, to finalize D-024)
+Batch 4 (Q10 push/PR, Q11 tightening, Q12 existing projects) answered 2026-10-21T21:15Z → D-025, D-026, D-024
+updated; task modes → D-027; Graphify → D-028 + TP-001; local CI → D-029.
 
-**Q10 · Proposal PR safety.** On Jay's own repos, draft PRs only after the pre-push check (no deploy-on-push, no
-workflow/deploy/auth/migration files, max 5 open). On client and employer repos, no PRs during onboarding, patches
-only. May a CI workflow ever be opened as a PR without asking?
+### Batch 5 (asked 2026-10-21)
 
-**Q11 · Ratchet.** After graduation, may CommandCenter automatically tighten a project (down to Restricted or
-Paused) when the weekly re-fingerprint finds new production risk, with a full report (D-023 style)?
+**Q13 · Where do the self-hosted runners run, and what can their user do?** Machine(s), Unix user, sudo, Docker
+group, and whether that user can read `/srv/server/private/`, backups or production `.env` files. Proposed:
+before Phase 2, runners leave the production host or run as a locked-down user with none of those.
 
-**Q12 · Existing projects.** Run baseline audits with current permissions unchanged, in the order GYST, SamVision,
-MFE, CommandCenter, and skip GauzeMate until it is resumed?
+**Q14 · Approve the Graphify sandbox experiment?** CLI only, code-only, `GRAPHIFY_BACKEND=none`, pinned
+`graphifyy==0.9.93`, throwaway clone of CommandCenter, no `install`/hooks/CLAUDE.md/AGENTS.md changes, run after
+Phase 1 deploys, uninstall verified at the end.
+
+**Q15 · Fact ageing.** When a verified hosting/DB/DNS fact passes 30 days, re-verify first and tighten (D-026) only
+if re-verification fails or finds a change?
 
 ---
 
@@ -315,13 +418,13 @@ Not asked yet. Each will be asked in a batch of exactly 3.
 
 | Profile | Decisions that touch it | Pending |
 |---|---|---|
-| commandcenter | D-010 (loopback-only, not on the tunnel), D-011 … D-021 | Q8, Q9 |
-| samvision | D-010 (public via tunnel), D-011 … D-021; backups weekly (D-018) | Q9 |
-| mfe | D-010, D-011 … D-021; backups daily (D-018) | Q9 |
-| gyst | D-010, D-011 … D-021; backups unknown | Q9 |
-| gauzemate | D-010 (inventory only; stays paused per D-009) | none |
-| restricted (employer) | D-011, D-014, D-015 (laptop-only per D-002) | none |
-| any remote project | D-017, D-022 (directed style for client servers), every global rule | Q10, Q12 |
+| commandcenter | D-010 (loopback-only), D-011 … D-029; self-hosted CI (D-029); first baseline audit (D-024) | Q13, Q14, Q15 |
+| gyst | D-010, D-011 … D-029; self-hosted CI; backups unknown | Q13, Q15 |
+| samvision | D-010 (public via tunnel), D-011 … D-029; self-hosted CI with sudo; no offsite backup | Q13, Q15 |
+| mfe | D-010, D-011 … D-028; GitHub-hosted CI (public repo) | Q15 |
+| gauzemate | D-010; stays paused (D-009); no CI | none |
+| restricted (employer) | D-002, D-011, D-014, D-015, D-022, D-025 (no push/PR in onboarding), D-028 (laptop-only graphs) | none |
+| any remote project | D-017, D-022, every global rule | Q15 |
 
 ---
 
@@ -330,7 +433,10 @@ Not asked yet. Each will be asked in a batch of exactly 3.
 Read-only checks, no changes:
 
 - [ ] Database engine and location per project (Postgres / MySQL / SQLite).
-- [ ] Backup jobs per project: what runs, schedule, destination, last success. MFE expected daily, SamVision about weekly.
+- [ ] Backup jobs per project: what runs, schedule, destination, last success. Repo docs (imported, not rechecked):
+  SamVision nightly 04:00 via `scripts/backup_tenants.py`, 14 days + at least 3 dumps, no offsite copy;
+  MFE nightly 03:30 via `/srv/server/scripts/backup-postgres.sh`. GYST unknown.
+- [ ] Runners: machine(s), count, service names, Unix user, sudo, Docker group, work dirs, registration scope (D-029).
 - [ ] Whether any restore has ever been tested.
 - [ ] The deploy command per project.
 - [ ] nginx sites and Cloudflare Tunnel routes in use (confirm only SamVision is public, CommandCenter is not exposed).
