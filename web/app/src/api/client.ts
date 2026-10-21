@@ -121,8 +121,8 @@ export class Api {
     return this.req<WorkersState>("GET", "/api/workers");
   }
   /** Jay + Developer Unlock: approve a pending worker node, or revoke one for good. */
-  workerAct(op: "approve" | "revoke", id: string) {
-    return this.req<WorkerNode>("POST", `/api/workers/${op}`, { id });
+  workerAct(op: "approve" | "revoke", id: string, reason = "") {
+    return this.req<WorkerNode>("POST", `/api/workers/${op}`, op === "revoke" ? { id, reason } : { id });
   }
   /** Jay decides one finding: fix (a ui-finding task enters the pipeline) or skip. */
   uiDecide(project: string, run: string, finding: string, decision: "fix" | "skip") {

@@ -9,8 +9,14 @@ and the reaper come in Phase 2. Today's execution (herdr panes on the server) is
                   only its SHA-256; the node is unusable until Jay approves it (Jay + Developer Unlock); it
                   heartbeats with its token; Jay can revoke it, which is final for that token
 
-Every change is a `worker_events` row (append-only). A node can never approve itself: `approved_by` can only be
-`jay` (schema CHECK). Status shown: pending | online | offline | revoked (online = heartbeat within ONLINE_FOR).
+Every status change (registered, enrolled, approved, revoked) is a `worker_events` row (append-only); heartbeats
+and capability refreshes are not events. A node can never approve itself: `approved_by` can only be `jay` (schema
+CHECK), and an agent cannot enrol one. Each node has a short fingerprint (the start of its token's SHA-256): the node
+prints it when it enrols, and Settings → Workers shows it, so Jay can match the machine before approving.
+
+Both enrol and heartbeat go through ccd's API token as well as (for heartbeat) the node token, so a node keeps
+ccd's token too. Until per-actor tokens exist (PR 7), that token is the real credential; see docs/SECURITY.md.
+Status shown: pending | online | offline | revoked (online = heartbeat within ONLINE_FOR).
 """
 import hashlib
 import hmac
@@ -31,6 +37,7 @@ HEARTBEAT_EVERY = 30      # the server node's own heartbeat interval
 TOOLS = ("git", "gh", "claude", "codex", "node", "python3", "docker")
 CAP_KEYS = {"os": 40, "arch": 20, "tools": None, "repos": None, "labels": None}
 SERVER_ID = "server"
+MAX_PENDING = 10          # enrolments waiting for Jay at once; more is refused until he approves or revokes some
 
 
 class WorkerError(Exception):
@@ -42,6 +49,16 @@ class WorkerError(Exception):
 
 def _sha(token):
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def fingerprint(token_sha):
+    """What Jay compares on the machine and in the UI before approving: the start of the token's hash."""
+    return f"{token_sha[:4]}-{token_sha[4:8]}" if token_sha else None
+
+
+def _summary(caps):
+    """An event's copy of capabilities: small, so the stored JSON is never cut."""
+    return {k: (len(v) if isinstance(v, list) else v) for k, v in (caps or {}).items()}
 
 
 def clean_caps(raw):
@@ -78,8 +95,11 @@ class Workers:
         self._last_beat = 0.0
 
     def _event(self, node, kind, actor, data=None):
+        text = json.dumps(data or {})
+        if len(text) > 2000:          # never store cut JSON: keep that it was too big instead
+            text = json.dumps({"truncated": True, "bytes": len(text)})
         self.db.execute("INSERT INTO worker_events (node_id, at, kind, actor, data) VALUES (?,?,?,?,?)",
-                        (node, self.clock(), kind, actor, json.dumps(data or {})[:2000]))
+                        (node, self.clock(), kind, actor, text))
 
     def _row(self, node):
         return self.db.execute("SELECT id, status, token_sha FROM worker_nodes WHERE id=?", (node,)).fetchone()
@@ -97,11 +117,12 @@ class Workers:
                     "approved_at, approved_by, last_heartbeat) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (SERVER_ID, "server", "jay", "active", json.dumps(caps), str(version)[:40], now, "system:ccd",
                      now, "jay", now))
-                self._event(SERVER_ID, "registered", "system:ccd", {"caps": caps, "version": str(version)[:40]})
+                self._event(SERVER_ID, "registered", "system:ccd", {"caps": _summary(caps), "version": str(version)[:40]})
             else:
                 self.db.execute("UPDATE worker_nodes SET capabilities=?, version=?, last_heartbeat=? WHERE id=? "
                                 "AND status='active'", (json.dumps(caps), str(version)[:40], now, SERVER_ID))
         self._last_beat = now
+        self._version = version
 
     def server_heartbeat(self):
         """From ccd's loop; at most every HEARTBEAT_EVERY seconds."""
@@ -109,7 +130,10 @@ class Workers:
         if now - self._last_beat < HEARTBEAT_EVERY:
             return False
         with self.db:
-            self.db.execute("UPDATE worker_nodes SET last_heartbeat=? WHERE id=? AND status='active'", (now, SERVER_ID))
+            n = self.db.execute("UPDATE worker_nodes SET last_heartbeat=? WHERE id=? AND status='active'",
+                                (now, SERVER_ID)).rowcount
+        if n == 0:                    # registration failed at start: try again rather than beat nothing
+            self.register_server(getattr(self, "_version", "unknown"))
         self._last_beat = now
         return True
 
@@ -117,7 +141,9 @@ class Workers:
 
     def enrol(self, node, kind, caps, version, actor):
         """A new node asks to join. Returns its token ONCE (only the hash is kept). Pending until Jay approves."""
-        if not isinstance(node, str) or not NODE_RE.match(node) or node == SERVER_ID:
+        if not isinstance(actor, str) or actor.startswith("agent:"):
+            raise WorkerError(403, "an agent cannot enrol a worker node")
+        if not isinstance(node, str) or not NODE_RE.fullmatch(node) or node == SERVER_ID:
             raise WorkerError(400, "id must be a short lower-case name (letters, digits, hyphens), not 'server'")
         if kind not in KINDS or kind == "server":
             raise WorkerError(400, "kind must be laptop, gpu or cloud")
@@ -125,14 +151,16 @@ class Workers:
         version = str(version or "")[:40]
         if self._row(node) is not None:
             raise WorkerError(409, f"a node called {node} already exists (revoked names are not reused)")
+        if self.db.execute("SELECT COUNT(*) FROM worker_nodes WHERE status='pending'").fetchone()[0] >= MAX_PENDING:
+            raise WorkerError(429, f"{MAX_PENDING} nodes are already waiting for Jay; approve or revoke some first")
         token = secrets.token_urlsafe(32)
         with self.db:
             self.db.execute(
                 "INSERT INTO worker_nodes (id, kind, owner, status, capabilities, version, enrolled_at, enrolled_by, "
                 "token_sha) VALUES (?,?,?,?,?,?,?,?,?)",
                 (node, kind, "jay", "pending", json.dumps(caps), version, self.clock(), actor, _sha(token)))
-            self._event(node, "enrolled", actor, {"kind": kind, "caps": caps, "version": version})
-        return {"id": node, "status": "pending", "token": token}
+            self._event(node, "enrolled", actor, {"kind": kind, "caps": _summary(caps), "version": version})
+        return {"id": node, "status": "pending", "token": token, "fingerprint": fingerprint(_sha(token))}
 
     def _authenticate(self, node, token):
         row = self._row(node) if isinstance(node, str) else None
@@ -195,7 +223,7 @@ class Workers:
         now = self.clock()
         out = []
         for r in self.db.execute("SELECT id, kind, owner, status, capabilities, version, enrolled_at, enrolled_by, "
-                                 "approved_at, approved_by, last_heartbeat, revoked_at FROM worker_nodes "
+                                 "approved_at, approved_by, last_heartbeat, revoked_at, token_sha FROM worker_nodes "
                                  "ORDER BY (id = 'server') DESC, id").fetchall():
             beat = r[10]
             shown = r[3] if r[3] in ("pending", "revoked") else \
@@ -203,10 +231,18 @@ class Workers:
             out.append({"id": r[0], "kind": r[1], "owner": r[2], "status": shown, "state": r[3],
                         "capabilities": json.loads(r[4] or "{}"), "version": r[5], "enrolledAt": r[6],
                         "enrolledBy": r[7], "approvedAt": r[8], "approvedBy": r[9], "lastHeartbeat": beat,
-                        "revokedAt": r[11]})
+                        "revokedAt": r[11], "fingerprint": fingerprint(r[12])})
         return out
 
     def events(self, limit=50):
-        return [{"node": r[0], "at": r[1], "kind": r[2], "actor": r[3], "data": json.loads(r[4] or "{}")}
+        return [{"node": r[0], "at": r[1], "kind": r[2], "actor": r[3], "data": _loads(r[4])}
                 for r in self.db.execute("SELECT node_id, at, kind, actor, data FROM worker_events ORDER BY id DESC "
                                          "LIMIT ?", (max(1, min(int(limit), 500)),))]
+
+
+def _loads(text):
+    try:
+        v = json.loads(text or "{}")
+        return v if isinstance(v, dict) else {}
+    except ValueError:
+        return {"unreadable": True}

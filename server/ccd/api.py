@@ -79,10 +79,11 @@
                                      ?limit=. Read-only: a mirror of the gates, which still decide.
     GET   /api/workers               worker nodes (server, laptop, …): status pending|online|offline|revoked,
                                      capabilities, last heartbeat; recent worker events. Nothing runs on a node yet.
-    POST  /api/workers/enrol         {id, kind: laptop|gpu|cloud, capabilities, version} → {id, status: pending, token}.
-                                     The node token is shown ONCE (ccd keeps its SHA-256). Pending until Jay approves.
-    POST  /api/workers/heartbeat     header X-CCD-Node: "<id> <token>"; {capabilities?, version?}. 401 wrong token,
-                                     403 revoked.
+    POST  /api/workers/enrol         {id, kind: laptop|gpu|cloud, capabilities, version} → {id, status: pending, token,
+                                     fingerprint}. The node token is shown ONCE (ccd keeps its SHA-256). Pending until
+                                     Jay approves. Not for agent:* actors; at most 10 pending (429).
+    POST  /api/workers/heartbeat     ccd's token AND header X-CCD-Node: "<id> <token>"; {capabilities?, version?}.
+                                     401 wrong node token, 403 revoked.
     POST  /api/workers/approve       Jay AND Developer Unlock. {id}: pending → active
     POST  /api/workers/revoke        Jay AND Developer Unlock. {id, reason?}: final for that node and token
     GET   /api/night-shift           every project's night shift: running?, coordinator, newest morning report
@@ -446,7 +447,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         return daemon.worker_enrol(body, request.state.actor)
 
     async def worker_heartbeat(request, body):
-        node, _, token = (request.headers.get("x-ccd-node") or "").strip().partition(" ")
+        parts = (request.headers.get("x-ccd-node") or "").split(None, 1)     # "<id> <token>", any whitespace
+        node, token = (parts + ["", ""])[:2]
         return daemon.worker_heartbeat(node, token.strip(), body)
 
     async def worker_approve(request, body):

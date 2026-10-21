@@ -387,3 +387,12 @@ A worker node (e.g. the laptop) enrols with ccd's bearer token and receives its 
 the token's SHA-256 and compares in constant time. A node is unusable until Jay approves it (Jay AND Developer
 Unlock); a revoked node's token never works again and its name is never reused. The node token proves which node is
 calling `POST /api/workers/heartbeat`; it grants nothing else yet. Jobs and per-job tokens come in Phase 2.
+
+**What a node really holds today.** Enrol and heartbeat both also need ccd's bearer token (every `/api` route
+does), so an enrolled machine keeps ccd's token as well as its node token. ccd's token reads and steers everything
+short of Developer Unlock and can claim any `X-CCD-Actor`, so only enrol machines that already hold it (Jay's own
+laptop). Per-actor tokens (PR 7) and a heartbeat that needs only the node token are the fix.
+
+**Approving the right machine.** Each node has a fingerprint (`abcd-ef01`, the start of its token's SHA-256). The
+enrol response returns it for the node to print; Settings → Workers shows it with who enrolled the node and when.
+Approve only when the two match. An `agent:*` actor cannot enrol, and at most 10 nodes can wait for approval.

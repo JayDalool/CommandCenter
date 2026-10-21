@@ -553,7 +553,7 @@ export interface WorkerNode {
   id: string; kind: "server" | "laptop" | "gpu" | "cloud"; owner: string; status: "pending" | "online" | "offline" | "revoked";
   state: "pending" | "active" | "revoked"; capabilities: { os?: string; arch?: string; tools?: string[]; repos?: string[]; labels?: string[] };
   version: string | null; enrolledAt: number; enrolledBy: string; approvedAt: number | null; approvedBy: string | null;
-  lastHeartbeat: number | null; revokedAt: number | null;
+  lastHeartbeat: number | null; revokedAt: number | null; fingerprint: string | null;
 }
 export interface WorkersState {
   available: boolean; nodes: WorkerNode[]; onlineFor?: number;

@@ -489,4 +489,5 @@ and heartbeats it from the derive loop every 30 s. Another machine enrols with c
 (`POST /api/workers/enrol`), receives a node token once (ccd keeps the SHA-256), stays `pending` until Jay approves it
 with Developer Unlock, then heartbeats with `X-CCD-Node: <id> <token>`. Revoking is final. tasks.db v8 enforces it:
 nodes are never deleted, `active` needs `approved_by = 'jay'`, revoked is final, a node's id, kind and token never
-change, and every change is an append-only `worker_events` row. Settings → Workers.
+change, and every status change is an append-only `worker_events` row (heartbeats are not). Agents cannot enrol a
+node; each node has a fingerprint Jay matches before approving. Settings → Workers.

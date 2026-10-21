@@ -401,10 +401,10 @@ CREATE TRIGGER approvals_decision_fixed BEFORE UPDATE ON approvals
   BEGIN SELECT RAISE(ABORT, 'who approved and when is recorded once'); END;
 """),
     # 8: worker nodes (v2 Phase 1, PR 5; ccd/workers.py). Additive. A node is pending until Jay approves it, can be
-    # revoked (final), keeps only its token's SHA-256, and every change is an append-only worker_events row.
+    # revoked (final), keeps only its token's SHA-256, and every status change is an append-only worker_events row.
     (8, """
 CREATE TABLE worker_nodes (
-  id             TEXT PRIMARY KEY CHECK (id GLOB '[a-z]*' AND length(id) BETWEEN 2 AND 32),
+  id             TEXT PRIMARY KEY CHECK (id GLOB '[a-z]*' AND id NOT GLOB '*[^a-z0-9-]*' AND length(id) BETWEEN 2 AND 32),
   kind           TEXT NOT NULL CHECK (kind IN ('server', 'laptop', 'gpu', 'cloud')),
   owner          TEXT NOT NULL DEFAULT 'jay',
   status         TEXT NOT NULL CHECK (status IN ('pending', 'active', 'revoked')),
@@ -417,24 +417,33 @@ CREATE TABLE worker_nodes (
   token_sha      TEXT,
   last_heartbeat REAL,
   revoked_at     REAL,
-  CHECK (status != 'active' OR approved_by IS 'jay')
+  CHECK (status != 'active' OR (approved_by IS 'jay' AND approved_at IS NOT NULL)),
+  CHECK (status != 'revoked' OR revoked_at IS NOT NULL),
+  CHECK (id != 'server' OR (kind = 'server' AND token_sha IS NULL)),
+  CHECK (kind != 'server' OR id = 'server')
 );
 CREATE TRIGGER worker_nodes_never_deleted BEFORE DELETE ON worker_nodes
   BEGIN SELECT RAISE(ABORT, 'a worker node is history; revoke it instead'); END;
 CREATE TRIGGER worker_nodes_revoked_is_final BEFORE UPDATE OF status ON worker_nodes
   WHEN OLD.status = 'revoked' OR (OLD.status = 'active' AND NEW.status = 'pending')
   BEGIN SELECT RAISE(ABORT, 'a node moves pending, active, revoked; revoked is final'); END;
+CREATE TRIGGER worker_nodes_server_not_revoked BEFORE UPDATE OF status ON worker_nodes
+  WHEN OLD.id = 'server' AND NEW.status != 'active'
+  BEGIN SELECT RAISE(ABORT, 'the server node is ccd''s own host; it cannot be revoked'); END;
 CREATE TRIGGER worker_nodes_identity_fixed BEFORE UPDATE ON worker_nodes
   WHEN NEW.id IS NOT OLD.id OR NEW.kind IS NOT OLD.kind OR NEW.token_sha IS NOT OLD.token_sha
-    OR NEW.enrolled_at IS NOT OLD.enrolled_at OR NEW.enrolled_by IS NOT OLD.enrolled_by
-  BEGIN SELECT RAISE(ABORT, 'a node''s identity and token never change; enrol a new node'); END;
+    OR NEW.enrolled_at IS NOT OLD.enrolled_at OR NEW.enrolled_by IS NOT OLD.enrolled_by OR NEW.owner IS NOT OLD.owner
+    OR (OLD.approved_at IS NOT NULL AND NEW.approved_at IS NOT OLD.approved_at)
+    OR (OLD.approved_by IS NOT NULL AND NEW.approved_by IS NOT OLD.approved_by)
+    OR (OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS NOT OLD.revoked_at)
+  BEGIN SELECT RAISE(ABORT, 'a node''s identity, token, approval and revocation are written once'); END;
 CREATE TABLE worker_events (
   id      INTEGER PRIMARY KEY,
   node_id TEXT NOT NULL REFERENCES worker_nodes(id),
   at      REAL NOT NULL,
   kind    TEXT NOT NULL CHECK (kind IN ('registered', 'enrolled', 'approved', 'revoked')),
-  actor   TEXT NOT NULL,
-  data    TEXT NOT NULL DEFAULT '{}'
+  actor   TEXT NOT NULL CHECK (kind NOT IN ('approved', 'revoked') OR actor = 'jay'),
+  data    TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(data))
 );
 CREATE TRIGGER worker_events_append_only_u BEFORE UPDATE ON worker_events
   BEGIN SELECT RAISE(ABORT, 'worker events are append-only'); END;
