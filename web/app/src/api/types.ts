@@ -571,5 +571,28 @@ export interface InboxState {
 }
 export interface WorkersState {
   available: boolean; nodes: WorkerNode[]; onlineFor?: number;
-  events: { node: string; at: number; kind: string; actor: string; data: Record<string, unknown> }[];
+  events: { id?: number; node: string; at: number; kind: string; actor: string; data: Record<string, unknown> }[];
+}
+
+export interface AuditEvent {
+  id: number; at: number; actor: string; verified: boolean; via: "developer" | "token" | "none" | "system";
+  tokenActor: string | null; method: string; path: string; status: number; project: string | null; ref: string | null;
+  bodyKeys: string[]; summary: string; profileHash: string | null;
+}
+export interface AuditState {
+  available: boolean; events: AuditEvent[];
+  summary: { since?: number; total?: number; byVia?: Record<string, number>; unverifiedJay?: number; agentUnverified?: number;
+    mismatch?: number; wouldRefuse?: number };
+  chain: { ok?: boolean; checked?: number; brokenAt?: number | null; full?: boolean };
+}
+export interface ActorToken { id: number; actor: string; fingerprint: string; issuedAt: number; expiresAt: number;
+  revokedAt: number | null; note: string; status: "active" | "expired" | "revoked" }
+export interface ActorsState { available: boolean; tokens: ActorToken[]; header?: string }
+export interface UsageRow { key: string; replies: number; input: number; output: number; cacheRead: number; cacheWrite: number;
+  costUsd: number; unpriced: number }
+export interface UsageState {
+  available: boolean; days?: number; pricesAsOf?: string; note?: string;
+  total?: Omit<UsageRow, "key">; byProject?: UsageRow[]; byModel?: UsageRow[]; byDay?: UsageRow[]; byTicket?: UsageRow[];
+  bySource?: UsageRow[];
+  budgets?: { project: string; monthlyUsd: number | null; monthlyTokens: number | null; spentUsd: number; spentTokens: number }[];
 }

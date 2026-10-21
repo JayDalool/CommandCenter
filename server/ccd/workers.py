@@ -11,8 +11,8 @@ and the reaper come in Phase 2. Today's execution (herdr panes on the server) is
 
 Every status change (registered, enrolled, approved, revoked) is a `worker_events` row (append-only); heartbeats
 and capability refreshes are not events. A node can never approve itself: `approved_by` can only be `jay` (schema
-CHECK), and an agent cannot enrol one. Each node has a short fingerprint (the start of its token's SHA-256): the node
-prints it when it enrols, and Settings → Workers shows it, so Jay can match the machine before approving.
+CHECK), and an agent cannot enrol one. Each node has a short fingerprint (the start of its token's SHA-256): enrol returns
+it (whoever enrols the node shows it there), Settings → Workers shows it, so Jay can match the machine before approving.
 
 Both enrol and heartbeat go through ccd's API token as well as (for heartbeat) the node token, so a node keeps
 ccd's token too. Until per-actor tokens exist (PR 7), that token is the real credential; see docs/SECURITY.md.
@@ -105,8 +105,9 @@ class Workers:
             try:
                 yield
             except BaseException:
-                self.db.execute("ROLLBACK TO workers_tx")
-                self.db.execute("RELEASE workers_tx")
+                if self.db.in_transaction:     # SQLite may already have rolled everything back (disk full, I/O)
+                    self.db.execute("ROLLBACK TO workers_tx")
+                    self.db.execute("RELEASE workers_tx")
                 raise
             self.db.execute("RELEASE workers_tx")
             return
@@ -114,7 +115,8 @@ class Workers:
         try:
             yield
         except BaseException:
-            self.db.execute("ROLLBACK")
+            if self.db.in_transaction:
+                self.db.execute("ROLLBACK")
             raise
         self.db.execute("COMMIT")
 
@@ -217,8 +219,10 @@ class Workers:
         if row[1] != "pending":
             raise WorkerError(409, f"{node} is {row[1]}, not pending")
         with self._tx():
-            self.db.execute("UPDATE worker_nodes SET status='active', approved_at=?, approved_by='jay' WHERE id=?",
-                            (self.clock(), node))
+            # max(): a wall clock stepped back since enrolment must not make approving impossible (the schema
+            # wants approved_at >= enrolled_at).
+            self.db.execute("UPDATE worker_nodes SET status='active', approved_by='jay', "
+                            "approved_at=MAX(?, enrolled_at) WHERE id=?", (self.clock(), node))
             self._event(node, "approved", "jay")
         return self.node(node)
 
@@ -259,8 +263,8 @@ class Workers:
         return out
 
     def events(self, limit=50):
-        return [{"node": r[0], "at": r[1], "kind": r[2], "actor": r[3], "data": _loads(r[4])}
-                for r in self.db.execute("SELECT node_id, at, kind, actor, data FROM worker_events ORDER BY id DESC "
+        return [{"id": r[5], "node": r[0], "at": r[1], "kind": r[2], "actor": r[3], "data": _loads(r[4])}
+                for r in self.db.execute("SELECT node_id, at, kind, actor, data, id FROM worker_events ORDER BY id DESC "
                                          "LIMIT ?", (max(1, min(int(limit), 500)),))]
 
 

@@ -703,3 +703,11 @@ a.ctx-item { text-decoration: none; }
   .ny-type { min-width: 0; }
   .ny-meta, .ny-prec { margin-left: 0; }
 }
+
+/* Settings → Audit / Usage (v2 Phase 1, PR 7) */
+.au-sum { display: flex; flex-wrap: wrap; gap: 4px 18px; list-style: none; padding: 0 var(--pad-x); margin: 0 0 10px; }
+.au-pad { padding: 0 var(--pad-x) 10px; }
+
+.au-issued { margin: 6px var(--pad-x) !important; border: 1px solid var(--line, #ccc); border-radius: 6px; padding: 8px 10px; margin: 6px 0; }
+.au-token { display: inline-block; max-width: 100%; overflow-wrap: anywhere; user-select: all; padding: 2px 4px; }
+.us-total { margin: 0; padding: 8px var(--pad-x) 10px; }

@@ -456,6 +456,80 @@ CREATE TRIGGER worker_events_append_only_u BEFORE UPDATE ON worker_events
 CREATE TRIGGER worker_events_append_only_d BEFORE DELETE ON worker_events
   BEGIN SELECT RAISE(ABORT, 'worker events are append-only'); END;
 """),
+    # 9: verified actor identity, the global audit trail and usage metering (v2 Phase 1, PR 7; ccd/identity.py,
+    # ccd/audit.py, ccd/meter.py). Additive. Recorded, not enforced: nothing here refuses a request yet.
+    (9, """
+CREATE TABLE actor_tokens (
+  id         INTEGER PRIMARY KEY,
+  actor      TEXT NOT NULL CHECK (actor GLOB 'agent:?*' AND actor NOT GLOB '*[^a-z0-9_:-]*' AND length(actor) <= 70),
+  token_sha  TEXT NOT NULL UNIQUE CHECK (length(token_sha) = 64),
+  issued_at  REAL NOT NULL,
+  issued_by  TEXT NOT NULL CHECK (issued_by IS 'jay'),
+  expires_at REAL NOT NULL,
+  revoked_at REAL,
+  note       TEXT NOT NULL DEFAULT ''
+);
+CREATE TRIGGER actor_tokens_never_deleted BEFORE DELETE ON actor_tokens
+  BEGIN SELECT RAISE(ABORT, 'an actor token is history; revoke it instead'); END;
+CREATE TRIGGER actor_tokens_fixed BEFORE UPDATE ON actor_tokens
+  WHEN NEW.id IS NOT OLD.id OR NEW.actor IS NOT OLD.actor OR NEW.token_sha IS NOT OLD.token_sha
+    OR NEW.issued_at IS NOT OLD.issued_at OR NEW.issued_by IS NOT OLD.issued_by OR NEW.expires_at IS NOT OLD.expires_at
+    OR NEW.note IS NOT OLD.note OR OLD.revoked_at IS NOT NULL
+  BEGIN SELECT RAISE(ABORT, 'an actor token can only be revoked, once'); END;
+CREATE TABLE audit_events (
+  id           INTEGER PRIMARY KEY,
+  at           REAL NOT NULL,
+  actor        TEXT NOT NULL,
+  verified     INTEGER NOT NULL CHECK (verified IN (0, 1)),
+  via          TEXT NOT NULL CHECK (via IN ('developer', 'token', 'none', 'system')),
+  token_actor  TEXT,
+  method       TEXT NOT NULL,
+  path         TEXT NOT NULL,
+  status       INTEGER NOT NULL,
+  project      TEXT,
+  ref          TEXT,
+  body_sha     TEXT,
+  body_keys    TEXT NOT NULL DEFAULT '[]',
+  summary      TEXT NOT NULL DEFAULT '',
+  profile_hash TEXT,
+  prev_sha     TEXT NOT NULL,
+  sha          TEXT NOT NULL UNIQUE,
+  CHECK (verified = 0 OR via != 'none')
+);
+CREATE INDEX audit_events_actor ON audit_events(actor, id);
+CREATE TRIGGER audit_events_append_only_u BEFORE UPDATE ON audit_events
+  BEGIN SELECT RAISE(ABORT, 'the audit trail is append-only'); END;
+CREATE TRIGGER audit_events_append_only_d BEFORE DELETE ON audit_events
+  BEGIN SELECT RAISE(ABORT, 'the audit trail is append-only'); END;
+CREATE TABLE usage_records (
+  id           INTEGER PRIMARY KEY,
+  at           REAL NOT NULL,
+  source       TEXT NOT NULL CHECK (source IN ('claude', 'codex', 'reported')),
+  ref          TEXT NOT NULL,
+  session      TEXT,
+  project      TEXT,
+  ticket_key   TEXT,
+  actor        TEXT,
+  model        TEXT,
+  input        INTEGER NOT NULL DEFAULT 0 CHECK (input >= 0),
+  output       INTEGER NOT NULL DEFAULT 0 CHECK (output >= 0),
+  cache_read   INTEGER NOT NULL DEFAULT 0 CHECK (cache_read >= 0),
+  cache_write  INTEGER NOT NULL DEFAULT 0 CHECK (cache_write >= 0),
+  cost_usd     REAL,
+  UNIQUE (source, ref)
+);
+CREATE INDEX usage_records_at ON usage_records(at);
+CREATE TRIGGER usage_records_append_only_u BEFORE UPDATE ON usage_records
+  BEGIN SELECT RAISE(ABORT, 'usage records are append-only'); END;
+CREATE TRIGGER usage_records_append_only_d BEFORE DELETE ON usage_records
+  BEGIN SELECT RAISE(ABORT, 'usage records are append-only'); END;
+CREATE TABLE usage_cursor (
+  path    TEXT PRIMARY KEY,
+  inode   INTEGER NOT NULL,
+  offset  INTEGER NOT NULL,
+  context TEXT NOT NULL DEFAULT '{}'
+);
+"""),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

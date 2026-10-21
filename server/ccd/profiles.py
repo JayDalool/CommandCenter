@@ -91,6 +91,11 @@ def _int(lo, hi):
         f"must be a whole number from {lo} to {hi}"
 
 
+def _money(lo, hi):
+    return lambda v: None if isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi else \
+        f"must be a number from {lo} to {hi}"
+
+
 ENFORCED = {
     "merge": _enum("owner", "low-risk"),
     "night": _enum("normal", "careful"),
@@ -99,6 +104,8 @@ ENFORCED = {
     "ui_fix": _enum("ask", "auto"),
 }
 TARGET = {
+    # Metering only (PR 7): ccd shows month-to-date usage against these; nothing is stopped when they are passed.
+    "budget": {"monthly_usd": _money(0, 100000), "monthly_tokens": _int(0, 10 ** 12)},
     "plan_approval": {"required_for": _list_of(*PLAN_TRIGGERS), "package": _enum("none", "standard", "full"),
                       "reviewers": _list_of("claude", "codex")},
     "review": {"claude": _enum("always", "never"),

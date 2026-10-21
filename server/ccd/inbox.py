@@ -43,6 +43,13 @@ def _reconsider_ok(value, now):
     return ts is None or ts > now
 
 
+# The question is found by its primary key (the text comparison keeps the match exact); test_inbox checks the plan.
+ANSWERED_SQL = ("SELECT d.id, d.project, t.key, d.question, d.decision, d.decided_at, d.decided_by, d.reconsider, "
+                "q.kind, q.options, q.purpose FROM decisions d LEFT JOIN tickets t ON t.id = d.ticket_id "
+                "LEFT JOIN ticket_questions q ON q.id = CAST(d.source_ref AS INTEGER) "
+                "AND CAST(q.id AS TEXT) = d.source_ref WHERE d.source = 'question' ORDER BY d.id DESC LIMIT 2000")
+
+
 class Inbox:
     def __init__(self, db, clock=time.time):
         self.db = db
@@ -86,10 +93,7 @@ class Inbox:
         superseded = {r[0] for r in self.db.execute("SELECT supersedes FROM decisions WHERE supersedes IS NOT NULL")}
         by_sig = {}
         for did, project, key, question, decision, at, by, reconsider, kind, options, purpose in self.db.execute(
-                "SELECT d.id, d.project, t.key, d.question, d.decision, d.decided_at, d.decided_by, d.reconsider, "
-                "q.kind, q.options, q.purpose FROM decisions d LEFT JOIN tickets t ON t.id = d.ticket_id "
-                "LEFT JOIN ticket_questions q ON q.id = CAST(d.source_ref AS INTEGER) AND CAST(q.id AS TEXT) = d.source_ref "
-                "WHERE d.source = 'question' ORDER BY d.id DESC LIMIT 2000"):
+                ANSWERED_SQL):
             if did in superseded or purpose == "stale":
                 continue
             sig = signature(question)

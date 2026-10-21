@@ -490,8 +490,8 @@ and heartbeats it from the derive loop every 30 s. Another machine enrols with c
 with Developer Unlock, then heartbeats with `X-CCD-Node: <id> <token>`. Revoking is final. tasks.db v8 enforces it:
 nodes are never deleted, `active` needs `approved_by = 'jay'`, revoked is final, a node's id, kind and token never
 change, and the event log is append-only; ccd writes each status change and its `worker_events` row in one
-transaction (heartbeats are not events). Agents cannot enrol a
-node; each node has a fingerprint Jay matches before approving. Settings → Workers.
+transaction (heartbeats are not events). An agent cannot enrol a node (by its stated actor; since PR 7 an actor token can
+verify that statement, but it is recorded, not yet required); each node has a fingerprint Jay matches before approving. Settings → Workers.
 
 ### Needs You v2 (PR 6)
 
@@ -505,3 +505,17 @@ overdue first (groups too); each card has one action, which opens the place Jay 
 ticket's open questions carries its approval on the questions card. Pending approvals with no item in the queue are
 listed as a consistency check. The page re-reads the details every minute. A failure in the
 overlay leaves the list complete. Approving several at once waits for the engine to leave shadow mode.
+
+### Audit trail, actor identity, metering (PR 7)
+
+tasks.db v9 adds `audit_events`, `actor_tokens`, `usage_records` and `usage_cursor`, all append-only except the
+cursor and a token's one revoke. `api.AuditTrail` sits between `Guard` and the routes: after every write it calls
+`Daemon.audit_write`, which works out how far the claimed actor is proven (`identity.identify`: Developer Unlock for
+Jay, an actor token for an agent, otherwise unverified) and appends a hash-chained row (`audit.Audit`). Handlers
+hand it the parsed body and claimed actor through a context variable; only the body's hash and key names are kept.
+`_pipeline_result` appends each pipeline event as `system:ccd`. Nothing reads the trail to decide anything.
+`Daemon.meter_loop` runs `meter.Meter` every 5 minutes in three steps so the shared tasks.db connection is only
+used on the event loop: `plan()` (cursors) → `read()` in a thread (log files only) → `store()`. Attribution: a
+ticket's recorded worktree, else a ticket key in the branch or directory name, else the project by path.
+Settings → Audit (trail, chain check, what enforcing identity would refuse, actor tokens) and Settings → Usage
+(tokens and estimated cost by project, model, day and ticket; budgets shown, not enforced).
