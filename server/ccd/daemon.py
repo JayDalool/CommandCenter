@@ -301,7 +301,7 @@ class Daemon:
         # Decision + Approval records (PR 4): a mirror of today's gates and answered questions. Gates still decide.
         self.ledger = ledger.Ledger(tasks.db) if getattr(tasks, "db", None) is not None else None
         # Worker nodes (PR 5): the model and enrolment only. Nothing is scheduled on a node yet (Phase 2).
-        self.workers = workers_mod.Workers(tasks.db) if getattr(tasks, "db", None) is not None else None
+        self.workers = workers_mod.Workers(tasks.db, version=__version__) if getattr(tasks, "db", None) is not None else None
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot

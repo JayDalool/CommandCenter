@@ -401,7 +401,8 @@ CREATE TRIGGER approvals_decision_fixed BEFORE UPDATE ON approvals
   BEGIN SELECT RAISE(ABORT, 'who approved and when is recorded once'); END;
 """),
     # 8: worker nodes (v2 Phase 1, PR 5; ccd/workers.py). Additive. A node is pending until Jay approves it, can be
-    # revoked (final), keeps only its token's SHA-256, and every status change is an append-only worker_events row.
+    # revoked (final) and keeps only its token's SHA-256. ccd writes each status change and its append-only
+    # worker_events row in one transaction (workers.Workers._tx).
     (8, """
 CREATE TABLE worker_nodes (
   id             TEXT PRIMARY KEY CHECK (id GLOB '[a-z]*' AND id NOT GLOB '*[^a-z0-9-]*' AND length(id) BETWEEN 2 AND 32),
@@ -419,6 +420,11 @@ CREATE TABLE worker_nodes (
   revoked_at     REAL,
   CHECK (status != 'active' OR (approved_by IS 'jay' AND approved_at IS NOT NULL)),
   CHECK (status != 'revoked' OR revoked_at IS NOT NULL),
+  CHECK (revoked_at IS NULL OR status = 'revoked'),
+  CHECK (approved_at IS NULL OR approved_at >= enrolled_at),
+  CHECK (status != 'active' OR id = 'server' OR enrolled_by NOT GLOB 'agent:*'),
+  CHECK (json_valid(capabilities)),
+  CHECK (owner = 'jay'),
   CHECK (id != 'server' OR (kind = 'server' AND token_sha IS NULL)),
   CHECK (kind != 'server' OR id = 'server')
 );

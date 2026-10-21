@@ -24,6 +24,10 @@ export function Workers() {
   useEffect(() => { void load(); const t = setInterval(() => void load(), 30_000); return () => clearInterval(t); }, []);
   const act = async (op: "approve" | "revoke", id: string) => {
     if (!dev) { unlockDialogOpen(); return; }
+    if (op === "approve") {
+      const n = data?.nodes.find((x) => x.id === id);
+      if (!window.confirm(`Approve ${id}?\n\nFingerprint ${n?.fingerprint ?? "unknown"} — does it match what the machine printed when it enrolled? Approve only if it does.`)) return;
+    }
     let reason = "";
     if (op === "revoke") {
       const r = window.prompt(`Revoke ${id}? Its token stops working for good; it would have to enrol again under a new name.\n\nWhy (optional):`, "");
@@ -64,8 +68,9 @@ export function Workers() {
         {!dev && " Approving or revoking a node needs Developer Mode."}</p>
     </Panel>
     {data.events.length > 0 && <Panel title="Recent" count={data.events.length}>
-      <ul className="pol-shadow">{data.events.slice(0, 20).map((e, i) => <li key={i}>
-        <span className="mono-xs muted">{new Date(e.at * 1000).toLocaleString()}</span> <b>{e.node}</b> {e.kind} by {e.actor}</li>)}</ul>
+      <ul className="pol-shadow">{data.events.slice(0, 20).map((e) => <li key={`${e.node}-${e.at}-${e.kind}`}>
+        <span className="mono-xs muted">{new Date(e.at * 1000).toLocaleString()}</span> <b>{e.node}</b> {e.kind} by {e.actor}
+        {typeof e.data.reason === "string" && e.data.reason ? <span className="muted"> — {e.data.reason}</span> : null}</li>)}</ul>
     </Panel>}
   </div>;
 }

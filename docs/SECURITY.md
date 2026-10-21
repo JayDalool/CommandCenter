@@ -397,4 +397,5 @@ laptop). Per-actor tokens (PR 7) and a heartbeat that needs only the node token 
 enrol response returns it for the node to print; Settings → Workers shows it with who enrolled the node and when.
 Approve only when the two match: that check is the real guard. Enrol refuses an `agent:*` actor, but
 `X-CCD-Actor` is self-asserted until PR 7, so that only stops an agent that names itself honestly. At most 10 nodes
-can wait for approval.
+can wait for approval. Anyone holding ccd's token can enrol a name first and so use it up for good (revoking is
+final); that is within the boundary above, where ccd's token is already full power.
