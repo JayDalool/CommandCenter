@@ -1,7 +1,7 @@
 # CommandCenter v2 — Discovery and Architecture Plan
 
-Date: 2026-10-21 · Status: **Phase 0 merged; Phase 1 built in shadow / record-only mode, nothing deployed — see the
-Phase 1 implementation record in §21.** · Audited: `main` @ `a0e90e5`
+Date: 2026-10-21 · Status: **Phase 0 merged; Phase 1 merged (PRs #54–#60) and deployed live on 2026-10-21 at
+`4fa7b8b` in shadow / record-only mode — see the Phase 1 implementation record in §21.** · Audited: `main` @ `a0e90e5`
 (CC-052), plus every remote branch, with `claude/amazing-keller-fpy0qw` @ `e236ffa` and `p4b` read in detail.
 
 Revision 2 (2026-10-21): Jay answered the blocking questions. His answers are recorded as policy decisions
@@ -1025,8 +1025,9 @@ read each project's policy on one page.
 #### Phase 1 implementation record (2026-10-21)
 
 Jay's constraints for this phase: no autonomous merge or deploy, the engine in **shadow mode only**, no agent can
-widen its own authority, nothing deployed (the live instance changes only through `scripts/go-live.sh`). Every PR
-had a fresh independent review on its final head before merging.
+widen its own authority, and the live instance changes only through `scripts/go-live.sh`. Every PR had a fresh
+independent review on its final head before merging. All seven PRs (#54–#60) are merged (last: `4fa7b8b`) and were deployed
+live on 2026-10-21 with `scripts/go-live.sh`, applying migrations v6–v9; the engine runs in shadow mode only.
 
 | # | Item | PR | What was built | Departure from the plan above |
 |---|---|---|---|---|
@@ -1036,11 +1037,11 @@ had a fresh independent review on its final head before merging.
 | 3 | Decision + Approval | #57 | `decisions` / `approvals` tables mirroring gates and answered questions; hash-bound, single-use, expiring; Settings → Decisions | A mirror: gates still decide; old API unchanged |
 | 4 | WorkerNode | #58 | `worker_nodes` / `worker_events`; server self-registers; enrol → Jay approves (fingerprint match, Developer Unlock) → heartbeat; revoke final; Settings → Workers | Nothing scheduled on nodes (Phase 2). UI lives in Settings, not Fleet |
 | 5 | Needs You v2 | #59 | `#/needs` over the existing Needs Jay queue + read-only `/api/inbox` (approval, shadow verdict, precedents) | Precedents shown, never applied; no bulk approve while the engine is in shadow |
-| 6 | Audit trail | PR 7 | `audit_events` (append-only, hash-chained) for every write + pipeline events; per-agent actor tokens issued by Jay; Settings → Audit | **Recorded, not enforced**: `X-CCD-Actor` is not yet required to match its token. The trail measures what enforcing would refuse; turning it on needs Jay (Phase 2) |
-| 7 | Cost metering | PR 7 | `usage_records` from Claude Code / Codex session logs (usage fields only) + optional reported usage; list-price estimates; profile `target.budget` shown; Settings → Usage | Budgets displayed, not enforced. Codex counted in tokens only (no price) |
+| 6 | Audit trail | #60 | `audit_events` (append-only, hash-chained) for every write + pipeline events; per-agent actor tokens issued by Jay; Settings → Audit | **Recorded, not enforced**: `X-CCD-Actor` is not yet required to match its token. The trail measures what enforcing would refuse; turning it on needs Jay (Phase 2) |
+| 7 | Cost metering | #60 | `usage_records` from Claude Code / Codex session logs (usage fields only) + optional reported usage; list-price estimates; profile `target.budget` shown; Settings → Usage | Budgets displayed, not enforced. Codex counted in tokens only (no price) |
 
 tasks.db migrations in this phase: v6 (autonomy_shadow, #56), v7 (decisions/approvals, #57), v8 (worker nodes, #58), v9 (audit,
-actor tokens, usage; PR 7) — all additive, forward-only. Rollback for each PR is a revert; the new tables stay unused.
+actor tokens, usage; #60) — all additive, forward-only. Rollback for each PR is a revert; the new tables stay unused.
 
 ### Phase 2 — Execution fabric and enforced boundaries
 
