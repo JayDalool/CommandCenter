@@ -194,31 +194,62 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
 - **Scope:** global.
 - **Type:** autonomous with report (previews); approval (public hostnames, existing records).
 
+### D-022 · Remote hosts and the directed working style
+- **Answer (Q7, 2026-10-21T20:36Z):** A rented server would be **DigitalOcean or AWS**; app hosting probably
+  **Vercel**; or a **client's own server**. Permissions are set per project. For a client's server or a
+  production site, Jay would "set it to get back to me on changes and I will dictate tasks", working like the
+  employer Java repos today: the agent explains every step and decision, asks what to work on next, and asks
+  the questions a developer would ask.
+- **Rule:** remote providers expected: DigitalOcean, AWS, Vercel, client-owned servers. CommandCenter connects to
+  a remote host only with a credential made for that one project (a provider token scoped to the project, or SSH as
+  a deploy-only user with its own key), never Jay's personal login or root. A client-owned server gets no write
+  access without Jay's approval. Profiles gain an `interaction_style` field: `directed` (explain each step and
+  decision, propose next tasks, ask before acting, Jay dictates the work) or `autonomous`. Client servers and
+  production-facing remote sites default to `directed`.
+- **Controls:** `hosting.provider` in `{jay-server, digitalocean, aws, vercel, client}`; `interaction_style` in the
+  profile; the engine treats `directed` as "propose and wait" for anything beyond observe/inspect.
+- **Scope:** global schema; set per project.
+- **Type:** approval (client-server write access, every task in `directed` style); hard boundary (no personal or
+  root credentials on remote hosts).
+
+### D-023 · Incident pause, full stop, and a full incident report
+- **Answer (Q9):** "Yes, and when that happens I need a full incident report sent to me."
+- **Rule:** two failed deploys or two rollbacks in 24 hours pause that project's autonomy and raise an Immediate
+  Attention alert. Everything stops (all agents, all projects) when an agent acts outside its policy, production
+  data is deleted unexpectedly, a secret leaks somewhere it cannot be rotated, or a web page or file instruction
+  leads an agent to take an action. Only Jay restarts after a full stop. Every pause and every full stop produces a
+  **full incident report** sent to Jay: timeline, what triggered it, what CommandCenter did automatically, current
+  state, impact (projects, data, users), what is still at risk, the evidence (logs, events, commits; never secret
+  values), the proposed fix, and what Jay must decide to resume.
+- **Controls:** a `pause` and a global `halt` switch in the engine; an incident record type; the report goes to
+  Slack (D-006) and the Needs You page with the red Immediate Attention banner (as D-015).
+- **Scope:** global.
+- **Type:** autonomous (pausing and halting are always allowed); approval (resuming after a full stop).
+
+### D-024 · New project onboarding (under discussion)
+- Not final. The full design is in the Project Onboarding Design doc
+  (https://claude.ai/artifact/AR9b53F8irK2VB3d8fzAmu). This entry is written once Jay answers Q10 to Q12.
+
 ---
 
 ## 3. Questions asked, awaiting Jay
 
 Batch 1 (Q1 hosting, Q2 browser, Q3 secrets) answered 2026-10-21T17:37Z → D-010 … D-016.
 Batch 2 (Q4 databases, Q5 production ops, Q6 subdomains) answered 2026-10-21T19:53Z → D-017 … D-021.
+Batch 3 (Q7 remote hosts, Q8 onboarding, Q9 incidents) answered 2026-10-21T20:36Z → D-022, D-023; Q8 grew into
+the onboarding design (D-024, under discussion).
 
-### Batch 3 (asked 2026-10-21)
+### Batch 4 (asked 2026-10-21, to finalize D-024)
 
-**Q7 · Remote hosts.** Where would a remote project most likely live (a VPS like Hetzner or DigitalOcean, a
-platform like Vercel, Render or Fly, or a client's own server)? Proposed rule: CommandCenter connects to a remote
-host only with a credential made for that one project: a provider API token limited to that project, or SSH as a
-deploy-only user with its own key. Never Jay's personal login or root. A client-owned server needs Jay's approval
-before CommandCenter gets any write access.
+**Q10 · Proposal PR safety.** On Jay's own repos, draft PRs only after the pre-push check (no deploy-on-push, no
+workflow/deploy/auth/migration files, max 5 open). On client and employer repos, no PRs during onboarding, patches
+only. May a CI workflow ever be opened as a PR without asking?
 
-**Q8 · "Add this repo to CommandCenter."** Proposed default: the project starts in a read-only **observe** mode
-for 7 days. CommandCenter detects the stack, host, database, CI and deploy method; writes a draft profile; runs a
-first audit; and sends Jay a report. It may open PRs that add missing pieces (CI, health check endpoint,
-Dockerfile, backup job), but merges nothing until Jay picks the project's mode.
+**Q11 · Ratchet.** After graduation, may CommandCenter automatically tighten a project (down to Restricted or
+Paused) when the weekly re-fingerprint finds new production risk, with a full report (D-023 style)?
 
-**Q9 · Incidents: when to pause and when to stop everything.** Proposed: two failed deploys or two rollbacks in 24
-hours pause that project's autonomy and raise an Immediate Attention alert. Everything stops (all agents, all
-projects) when an agent acts outside its policy, production data is deleted unexpectedly, a secret leaks somewhere
-it cannot be rotated, or a web page or file instruction leads an agent to take an action. Only Jay restarts after a
-full stop.
+**Q12 · Existing projects.** Run baseline audits with current permissions unchanged, in the order GYST, SamVision,
+MFE, CommandCenter, and skip GauzeMate until it is resumed?
 
 ---
 
@@ -290,7 +321,7 @@ Not asked yet. Each will be asked in a batch of exactly 3.
 | gyst | D-010, D-011 … D-021; backups unknown | Q9 |
 | gauzemate | D-010 (inventory only; stays paused per D-009) | none |
 | restricted (employer) | D-011, D-014, D-015 (laptop-only per D-002) | none |
-| any remote project | D-017, plus every global rule | Q7, Q8 |
+| any remote project | D-017, D-022 (directed style for client servers), every global rule | Q10, Q12 |
 
 ---
 
