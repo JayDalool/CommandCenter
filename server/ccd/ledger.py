@@ -38,7 +38,9 @@ def subject_hash(gate, key, work):
     if gate == "deploy":
         d = work.get("deploy") or {}
         return _sha({"key": key, "deploy": {k: d.get(k) for k in ("env", "what", "verification", "requestedAt")}})
-    return _sha({"key": key, "gate": gate, "reason": work.get("gateReason"), "at": work.get("updatedAt")})
+    # ui / failure: what stays fixed while this gate is open (not updatedAt, which every step bumps)
+    return _sha({"key": key, "gate": gate, "reason": work.get("gateReason"),
+                 "blocked": (work.get("blocked") or {}).get("at")})
 
 
 class Ledger:
@@ -106,8 +108,13 @@ class Ledger:
                                (ticket_id, gate)).fetchone()
 
     def _begin(self):
-        """One transaction for a multi-statement change (the connection is in autocommit mode)."""
+        """One transaction for a multi-statement change (the connection is in autocommit mode). Inside a caller's
+        transaction, a savepoint instead, so it never raises 'cannot start a transaction within a transaction'."""
+        if self.db.in_transaction:
+            self.db.execute("SAVEPOINT ledger_request")
+            return ("RELEASE ledger_request", "ROLLBACK TO ledger_request")
         self.db.execute("BEGIN IMMEDIATE")
+        return ("COMMIT", "ROLLBACK")
 
     def request(self, ticket_id, project, gate, subject, reason, by="system:pipeline", profile_hash=None):
         """A pending Approval for an open gate (one per ticket and gate at a time). Voiding a stale open one and
@@ -116,7 +123,7 @@ class Ledger:
         if cur and cur[1] == "pending" and cur[2] == subject:
             return cur[0]
         now = self.clock()
-        self._begin()
+        commit, rollback = self._begin()
         try:
             if cur:
                 self._set(cur[0], "void", reason="a new request replaced it")
@@ -125,9 +132,11 @@ class Ledger:
                 "requested_at, requested_by, expires_at, profile_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (project, ticket_id, gate, subject, f"close the {gate} gate", "jay", "pending", str(reason or "")[:300],
                  now, by, now + APPROVAL_TTL, profile_hash))
-            self.db.execute("COMMIT")
+            self.db.execute(commit)
         except BaseException:
-            self.db.execute("ROLLBACK")
+            self.db.execute(rollback)
+            if commit.startswith("RELEASE"):
+                self.db.execute(commit)
             raise
         return c.lastrowid
 
@@ -166,6 +175,14 @@ class Ledger:
                         aid = self.request(ticket_id, project, gate, subject_hash(gate, key, work),
                                            "recorded at approval", by="system:backfill", profile_hash=profile_hash)
                         cur = (aid, "pending", None, None)
+                want = subject_hash(gate, key, work)
+                # bound to an older subject: Jay approved this one. (A ui / failure subject is gone once the gate
+                # closes, so there is nothing to compare it with after the step.)
+                comparable = gate not in ("ui", "failure") or work.get("gate") == gate
+                if cur[1] == "pending" and comparable and cur[2] != want:
+                    aid = self.request(ticket_id, project, gate, want, "recorded at approval", by="system:backfill",
+                                       profile_hash=profile_hash)
+                    cur = (aid, "pending", want, None)
                 if cur[1] == "pending":
                     self._set(cur[0], "approved", by="jay", via=str(data.get("via") or "ui")[:20])
                     if gate not in CONSUMED_BY:   # plan / ui / failure: Jay's confirmation IS the action
@@ -183,19 +200,21 @@ class Ledger:
         for aid, typ, state, subj, decided_at in self.db.execute(
                 "SELECT id, subject_type, state, subject_hash, decided_at FROM approvals WHERE ticket_id=? "
                 "AND state IN ('pending', 'approved')", (ticket_id,)).fetchall():
-            if closed:
-                self._set(aid, "void", reason="the ticket closed")
-            elif state == "pending":
-                if gate != typ:
+            if state == "pending":
+                if closed:
+                    self._set(aid, "void", reason="the ticket closed")
+                elif gate != typ:
                     self._set(aid, "void", reason="the gate closed without an approval")
                 elif subj != subject_hash(typ, key, work):
                     self._set(aid, "void", reason="what it asked about changed")
-            elif typ == "merge":
+            elif typ == "merge":      # approved: was it used (even if that closed the ticket)?
                 used = merge.get("at") is not None and merge["at"] >= (decided_at or 0)
                 covered = f"merge:{subj}" in confirmed and head == subj
                 if used:
                     self._set(aid, "consumed" if covered else "void",
                               **({} if covered else {"reason": "merged at a head this approval did not cover"}))
+                elif closed:
+                    self._set(aid, "void", reason="the ticket closed")
                 elif not covered:
                     self._set(aid, "void", reason="the PR head or its review changed after the approval")
             elif typ == "deploy":
@@ -203,8 +222,12 @@ class Ledger:
                     and deploy["deployedAt"] >= (decided_at or 0)
                 if used:
                     self._set(aid, "consumed")          # a failed live deploy used the approval too
+                elif closed:
+                    self._set(aid, "void", reason="the ticket closed")
                 elif not deploy.get("approvedAt") or deploy.get("env") != "live":
                     self._set(aid, "void", reason="the live deployment request was withdrawn")
+            elif closed:
+                self._set(aid, "void", reason="the ticket closed")
         if gate in GATE_TYPES and not closed:
             cur = self._open_approval(ticket_id, project, gate)
             want = subject_hash(gate, key, work)
@@ -261,8 +284,11 @@ class Ledger:
                  "voidReason": r[16]}
                 for r in self.db.execute(q, args).fetchall()]
 
-    def counts(self):
-        return {s: n for s, n in self.db.execute("SELECT state, COUNT(*) FROM approvals GROUP BY state")}
+    def counts(self, project=None):
+        q, args = "SELECT state, COUNT(*) FROM approvals", []
+        if project:
+            q, args = q + " WHERE project = ?", [project]
+        return {s: n for s, n in self.db.execute(q + " GROUP BY state", args)}
 
 
 def _date_ts(s):

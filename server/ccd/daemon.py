@@ -1808,7 +1808,7 @@ class Daemon:
         if self.ledger is None:
             return {"available": False, "decisions": [], "approvals": [], "counts": {}}
         return {"available": True, "decisions": self.ledger.decisions(project, limit),
-                "approvals": self.ledger.approvals(state, limit, project), "counts": self.ledger.counts()}
+                "approvals": self.ledger.approvals(state, limit, project), "counts": self.ledger.counts(project)}
 
     def autonomy_state(self):
         """GET /api/autonomy: the shadow record's summary. Read-only."""

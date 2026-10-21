@@ -60,6 +60,16 @@ class Schema(unittest.TestCase):
         with self.assertRaises(sqlite3.DatabaseError):
             self.lg._set(aid, "void", reason="x")                                # consumed is final
 
+    def test_a_request_inside_a_callers_transaction_uses_a_savepoint(self):
+        db = self.ts.db
+        db.execute("BEGIN")
+        aid = self.lg.request(self.tid, "gyst", "merge", HEAD, "inside")
+        db.execute("ROLLBACK")                       # the caller's rollback takes the request with it
+        self.assertIsNotNone(aid)
+        self.assertEqual(self.lg.approvals(), [])
+        self.lg.request(self.tid, "gyst", "merge", HEAD, "outside")
+        self.assertEqual(len(self.lg.approvals()), 1)
+
     def test_subject_hashes(self):
         w = {"review": {"head": HEAD}, "plan": {"summary": "a"}, "deploy": {"env": "live", "what": "x"}}
         self.assertEqual(ledger.subject_hash("merge", "GYST-1", w), HEAD)
@@ -190,6 +200,38 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         dep = [x for x in self.d.ledger.approvals() if x["subject"] == "deploy"][0]
         self.assertEqual(dep["state"], "consumed")                              # a failed live deploy used it
         self.assertEqual(self.appr(k)[-1][:2], ("failure", "pending"))
+
+    async def test_a_successful_live_deploy_consumes_its_approval_even_though_it_closes_the_ticket(self):
+        k, ref = self.to_ready()
+        pl = self.d.pipeline
+        self.d._pipeline_result(*pl.confirm(k, "merge", "jay"))
+        self.ts.update(k, {"status": "VERIFYING"}, "system:automation", trigger="PR merged")
+        self.d._pipeline_result(*pl.merged(k, ref, "f" * 40))
+        self.d._pipeline_result(*pl.deploy_request(k, "live", "x", "smoke", "agent:coordinator"))
+        self.d._pipeline_result(*pl.confirm(k, "deploy", "jay", "gate"))
+        self.d._pipeline_result(*pl.verify(k, "pass", "ok", "agent:verifier"))
+        self.d._pipeline_result(*pl.deployed(k, "live", "pass", "healthy", "agent:coordinator"))
+        states = {a["subject"]: a["state"] for a in self.d.ledger.approvals()}
+        self.assertEqual((states["merge"], states["deploy"]), ("consumed", "consumed"))
+
+    async def test_an_open_failure_gate_keeps_one_approval_while_unrelated_steps_happen(self):
+        t, _ = self.ts.create("gyst", "Stuck")
+        k = t["key"]
+        self.d._pipeline_result(*self.d.pipeline.block(k, "the API key is missing", "agent:coordinator"))
+        for i in range(3):
+            self.d._pipeline_result(*self.d.pipeline.handoff(k, {"done": f"x{i}"}, "agent:coordinator"))
+        self.assertEqual([a[:2] for a in self.appr(k)], [("failure", "pending")])
+
+    async def test_a_confirmation_never_approves_an_approval_for_an_older_subject(self):
+        k, _ = self.to_ready()
+        tid = self.ts.get(k)["id"]
+        # a step the ledger missed: the pending merge approval is bound to an older head
+        old = self.d.ledger.request(tid, "gyst", "merge", HEAD2, "older head", by="system:test")
+        self.d._pipeline_result(*self.d.pipeline.confirm(k, "merge", "jay"))
+        rows = {a["id"]: a for a in self.d.ledger.approvals()}
+        self.assertEqual(rows[old]["state"], "void")
+        self.assertEqual([(a["state"], a["subjectHash"]) for a in rows.values() if a["state"] == "approved"],
+                         [("approved", HEAD)])
 
     async def test_a_replan_after_a_deploy_approval_voids_it(self):
         k, ref = self.to_ready()
