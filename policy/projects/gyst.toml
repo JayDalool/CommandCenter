@@ -1,0 +1,27 @@
+# GYST / LifeOps: AUTONOMOUS PRODUCT (target), with personal-data approval triggers (D-005).
+schema = 1
+project = "gyst"
+mode = "autonomous_product"
+decisions = ["D-001", "D-005", "D-006", "D-008"]
+learning = "contextual"
+
+[enforced]
+merge = "owner"
+night = "normal"
+paused = ""
+max_lanes = 2
+ui_fix = "ask"
+
+[target]
+plan_approval = { required_for = ["risk_high"], package = "standard" }
+review = { claude = "always", codex = "on_risk_high", security = "on_trigger" }
+merge = { policy = "auto", requires = ["ci_green", "review_approved_at_head", "security_pass_if_required", "risk_at_most_medium", "no_personal_data_trigger"] }
+deploy = { policy = "auto", env = "live", requires = ["verify_pass", "health_ok", "auto_rollback"] }
+personal_data = { require_approval_for = ["data_model_change", "retention", "privacy", "encryption", "deletion", "health_or_personal_data_handling", "authentication", "irreversible_migration"], auto_allowed = "reversible_tested_fix_on_existing_personal_data", trigger_paths = ["**/migrations/**", "**/models/**", "**/schema*", "**/auth/**", "**/crypto/**"] }
+notify = { release = "summary", needs_you = "slack_immediate" }
+execution = { allowed_nodes = ["server"], preferred_node = "server", repo_storage = "server", server_clone = "allowed", secrets = "server_scoped", model_providers = ["anthropic", "openai"] }
+artifacts = { store = "server", drive_mirror = "never" }
+
+[capabilities]
+health_checks = false
+auto_rollback = false

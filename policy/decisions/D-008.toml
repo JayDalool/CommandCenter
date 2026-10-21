@@ -1,0 +1,15 @@
+id = "D-008"
+schema = 1
+date = "2026-10-21"
+decided_by = "jay"
+source = "Jay, CommandCenter project thread, thread 2026-10-21T02:16Z"
+projects = ["all"]
+question = "How does the new Autonomy Engine start?"
+decision = "In shadow mode. For every decision it computes its own result, observes the existing behaviour, and records any disagreement; it does not change existing merge or deploy behaviour. No autonomous merge or deployment is enabled during Phase 0 or Phase 1. Command Center's full experimental autonomy is earned only after the engine and broker boundaries are verified."
+rationale = "Earn autonomy with evidence: a week of agreement data before any switch."
+rules = [
+  "engine runs in shadow mode only",
+  "no autonomous merge or deploy in Phase 0 or Phase 1",
+  "switching any project from enforced to target needs Jay's approval",
+]
+reconsider = "after the engine and broker are verified"

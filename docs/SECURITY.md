@@ -369,3 +369,14 @@ the check cannot redirect it (closes the L1 finding). New names are placed with
 `link()`, which cannot clobber. Rename and folder delete check-then-act under
 ccd's write lock: atomic against other ccd requests, not against an agent
 editing the same tree at that instant.
+
+
+## v2 Phase 1: policy files (D-007, D-008)
+
+`policy/` holds the Project Operating Profiles and Jay's decisions. They grant nothing yet: `[target]` is read by
+the shadow-mode engine only, and `[enforced]` must equal the registry. Who may change them: Jay. Controls today are
+review plus visibility, not a technical block (agents still run as the same user): `policy/**` can never
+auto-merge (merge_policy DENY), each load records every file's SHA-256 and a combined fingerprint as the
+security event `policy.loaded`, and a broken, missing or drifting file raises the `policy:problems` alert. A
+profile that fails validation is unusable (`Policy.profile()` returns None) and the engine will treat it as the
+most restrictive policy. `GET /api/profiles` is token-gated and read-only; there is no write route.

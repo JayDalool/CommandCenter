@@ -1,0 +1,14 @@
+id = "D-006"
+schema = 1
+date = "2026-10-21"
+decided_by = "jay"
+source = "Jay, CommandCenter project thread, thread 2026-10-21T02:10Z"
+projects = ["all"]
+question = "Does Jay want to approve from his phone, and how?"
+decision = "Yes. Slack is the first interface for approvals, questions, choose A/B, retry/pause and release notifications. Do not weaken Command Center's local-access rule to make mobile work. Later, design a secure mobile/remote access option (an authenticated secure tunnel or equivalent) without exposing Command Center publicly."
+rationale = "Approvals must not wait for Jay to be at his desk, and the loopback rule is a core safety property."
+rules = [
+  "Slack (Socket Mode, outbound only) is the first phone interface",
+  "ccd stays loopback-only",
+  "remote access is a later, separately approved design",
+]

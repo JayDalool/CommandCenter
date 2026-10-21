@@ -499,3 +499,20 @@ export interface UiRun {
 export interface UiTestsState {
   projects: Record<string, { paused: string | null; fixMode: "ask" | "auto"; runs: string[]; latest: UiRun | null }>;
 }
+
+/** Project Operating Profiles (ccd GET /api/profiles). `enforced` is what Command Center does today; `target` is
+ *  Jay's agreed policy, NOT enforced (the Autonomy Engine reads it in shadow mode only). */
+export type PolicyValue = string | number | boolean | string[] | { [k: string]: PolicyValue };
+export interface PolicyProject {
+  name: string; file: string; sha256: string | null; valid: boolean; errors: string[];
+  drift: { field: string; profile: PolicyValue; registry: PolicyValue }[];
+  mode: string | null; decisions: string[]; learning: string | null;
+  enforced: Record<string, PolicyValue>; target: Record<string, Record<string, PolicyValue>>; capabilities: Record<string, boolean>;
+}
+export interface PolicyDecision {
+  id: string; date: string; decided_by: string; projects: string[]; question: string; decision: string; rationale: string;
+  rules: string[]; reconsider: string | null; supersedes: string | null; valid: boolean;
+}
+export interface PolicyState {
+  fingerprint: string; problems: string[]; projects: Record<string, PolicyProject>; decisions: Record<string, PolicyDecision>;
+}

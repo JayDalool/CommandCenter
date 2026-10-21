@@ -1,0 +1,14 @@
+id = "D-002"
+schema = 1
+date = "2026-10-21"
+decided_by = "jay"
+source = "Jay, CommandCenter project thread, thread 2026-10-21T02:10Z"
+projects = ["restricted"]
+question = "May AI jobs run on employer Java repositories?"
+decision = "Yes. Jay is permitted to use Anthropic and OpenAI with those repositories. Repository storage and secrets stay laptop-only; the server gets no clone unless Jay explicitly allows it. AI jobs on these repositories are not refused."
+rationale = "Employer permission confirmed by Jay; the data-location constraint remains."
+rules = [
+  "restricted projects: allowed_nodes = laptop, repo_storage = laptop_only, secrets = laptop_only",
+  "server clone requires Jay's explicit approval, per repository",
+  "model providers anthropic and openai are allowed",
+]

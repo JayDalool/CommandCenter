@@ -35,6 +35,7 @@ ALLOW = {
 # Matching is case-insensitive here (the allowlist is case-sensitive), so Agents.md cannot sneak past.
 DENY = (
     "server/ccd/**", "scripts/**", "launcher/**", ".github/**", "web/app/src/**", "plans/**", ".claude/**",
+    "policy/**",   # Project Operating Profiles and Jay's decisions (D-007: no agent expands its own authority)
     "docs/SECURITY.md", "docs/adr/**",
     "AGENTS.md", "AGENTS.override.md", "AGENT.md", "CLAUDE.md", "CLAUDE.local.md", "GEMINI.md", "SKILL.md",
     # lockfiles and manifests

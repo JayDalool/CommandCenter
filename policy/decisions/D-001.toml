@@ -1,0 +1,14 @@
+id = "D-001"
+schema = 1
+date = "2026-10-21"
+decided_by = "jay"
+source = "Jay, CommandCenter project thread, thread 2026-10-21T02:10Z"
+projects = ["commandcenter", "gyst", "samvision", "mfe"]
+question = "Adopt the control-room branch's 'agents may merge' approach, or keep ADR 0007's global 'agents never merge'?"
+decision = "Neither wholesale. Keep the branch's useful pieces (GauzeMate pause, SamVision careful mode, UI test runs, bulk Merge ready). Replace the global 'agents never merge' rule with per-project autonomy policies: Command Center merges and deploys automatically; GYST merges and deploys automatically within safety boundaries; SamVision and MyFamilyExpenses get stricter release rules and need approval for major client-impacting work."
+rationale = "Different repositories carry different risk; one global rule either blocks Command Center or endangers client projects."
+rules = [
+  "merge and deploy rights come from each project's profile, never from a global default",
+  "the gatekeeper (capability broker) performs merges and deploys; an agent's own credentials never carry those rights",
+  "supersedes ADR 0007 rule 2 once the broker and engine are verified (not before)",
+]

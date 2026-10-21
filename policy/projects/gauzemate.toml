@@ -1,0 +1,19 @@
+# GauzeMate: PAUSED placeholder (D-009). Its autonomy mode is decided later; no target policy until then.
+schema = 1
+project = "gauzemate"
+mode = "paused"
+decisions = ["D-009"]
+learning = "off"
+
+[enforced]
+merge = "owner"
+night = "normal"
+paused = "Jay paused GauzeMate until he adds designs and files"
+max_lanes = 2
+ui_fix = "ask"
+
+[target]
+
+[capabilities]
+health_checks = false
+auto_rollback = false

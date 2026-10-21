@@ -1,0 +1,29 @@
+# Command Center: EXPERIMENTAL FULL AUTONOMY (target). Earned, not switched on: see D-008.
+schema = 1
+project = "commandcenter"
+mode = "experimental_autonomy"
+decisions = ["D-001", "D-003", "D-006", "D-007", "D-008"]
+learning = "contextual"
+
+# What Command Center does TODAY. Must equal ccd/registry.py (a test and a runtime drift check keep them equal).
+[enforced]
+merge = "low-risk"          # ccd merges reviewed tests/docs PRs only, and only while auto_merge is on (ADR 0007)
+night = "normal"
+paused = ""
+max_lanes = 2
+ui_fix = "ask"
+
+# The agreed policy. NOT enforced: the Autonomy Engine evaluates it in shadow mode only (D-008).
+[target]
+plan_approval = { required_for = [], package = "none" }
+review = { claude = "always", codex = "on_risk_high", security = "on_trigger" }
+merge = { policy = "auto", requires = ["ci_green", "review_approved_at_head", "risk_at_most_medium"] }
+deploy = { policy = "auto", env = "live", requires = ["merged", "verify_pass", "health_ok", "auto_rollback"] }
+notify = { release = "concise", needs_you = "slack_immediate" }
+self_protection = { require_jay_for_paths = ["server/ccd/autonomy.py", "server/ccd/broker.py", "server/ccd/security.py", "server/ccd/profiles.py", "server/ccd/merge_policy.py", "policy/**"], require_jay_for_actions = ["change_policy", "change_agent_permissions"] }
+execution = { allowed_nodes = ["server"], preferred_node = "server", repo_storage = "server", server_clone = "allowed", secrets = "server_scoped", model_providers = ["anthropic", "openai"] }
+artifacts = { store = "server", drive_mirror = "releases_only" }
+
+[capabilities]
+health_checks = false
+auto_rollback = false

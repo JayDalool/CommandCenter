@@ -1,0 +1,28 @@
+# Example: a RESTRICTED employer repository that lives only on Jay's laptop (D-002).
+# Validated by the tests but not loaded as a project: copy it to policy/projects/<key>.toml (with a registry row)
+# when the laptop worker exists. AI jobs are allowed; code, secrets and artifacts never leave the laptop.
+schema = 1
+project = "example-restricted"
+mode = "restricted"
+decisions = ["D-002", "D-008"]
+learning = "contextual"
+
+[enforced]
+merge = "owner"
+night = "normal"
+paused = ""
+max_lanes = 2
+ui_fix = "ask"
+
+[target]
+plan_approval = { required_for = ["always"], package = "standard" }
+review = { claude = "always", codex = "on_risk_high", security = "on_trigger" }
+merge = { policy = "owner", requires = [] }
+deploy = { policy = "never", env = "none", requires = [] }
+notify = { release = "none", needs_you = "slack_titles_redacted" }
+execution = { allowed_nodes = ["laptop"], preferred_node = "laptop", repo_storage = "laptop_only", server_clone = "requires_jay", secrets = "laptop_only", model_providers = ["anthropic", "openai"] }
+artifacts = { store = "laptop_only", drive_mirror = "never", control_plane_metadata = ["title", "status", "hash", "size"] }
+
+[capabilities]
+health_checks = false
+auto_rollback = false
