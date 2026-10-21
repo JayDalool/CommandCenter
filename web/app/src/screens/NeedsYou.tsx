@@ -19,6 +19,7 @@ const GROUP_KEY = "cc.needsGroup";
 export function typeOf(j: JayItem): string {
   if (j.kind === "gate") return ({ plan: "Plan approval", merge: "Merge acceptance", ui: "UI review", deploy: "Live deploy",
     failure: "Blocker" } as Record<string, string>)[j.gate ?? ""] ?? "Decision";
+  if (j.kind === "questions" && j.flags.includes("stale") && j.questions === 1) return "Task check";
   return ({ questions: "Question", answer: "Blocked agent", ticket: "Flagged task", merge: "Pull request", ci: "Failure",
     task: "Action", actions: "Action" } as Record<string, string>)[j.kind] ?? "Action";
 }
@@ -33,7 +34,7 @@ export function actionOf(j: JayItem): string {
   return "Open";
 }
 
-const TYPE_ORDER = ["Blocker", "Failure", "Blocked agent", "Question", "Plan approval", "Merge acceptance", "UI review",
+const TYPE_ORDER = ["Blocked agent", "Blocker", "Failure", "Question", "Task check", "Plan approval", "Merge acceptance", "UI review",
   "Live deploy", "Decision", "Flagged task", "Pull request", "Action"];
 
 function until(at: number): string {
@@ -60,11 +61,11 @@ function Card({ j, x }: { j: JayItem; x?: InboxExtra }) {
       {a && <span title={`Approval #${a.id}, bound to ${a.subjectHash}`}>approval #{a.id} · bound to {a.subjectHash.slice(0, 8) || "—"} ·{" "}
         <span className={a.overdue ? "ny-overdue" : "muted"}>{a.expiresAt ? until(a.expiresAt) : "no expiry"}</span></span>}
       {x?.engine && <span className="muted" title={x.engine.rule}>engine (shadow) would: <b>{x.engine.engine === "auto" ? "go ahead" : x.engine.engine === "jay" ? "ask you" : "refuse"}</b>
-        {x.engine.agree ? "" : " · differs from today"}</span>}
+        {x.engine.agree ? "" : " · differs from today"} · as of <Ago at={x.engine.at} /></span>}
     </div>}
     {x?.precedents?.map((p) => <div key={p.questionId} className="ny-prec">
       <span className="muted">Asked before:</span> “{p.precedents[0].question}” → <b>{p.precedents[0].decision}</b>
-      <span className="muted"> ({p.precedents[0].key ?? "policy"}, {day(p.precedents[0].decidedAt)}{p.precedents.length > 1 ? `, +${p.precedents.length - 1} more` : ""})</span>
+      <span className="muted"> ({p.precedents[0].key ?? "an archived task"}, {day(p.precedents[0].decidedAt)}{p.precedents.length > 1 ? `, +${p.precedents.length - 1} more` : ""})</span>
     </div>)}
   </li>;
 }
@@ -75,8 +76,20 @@ export function NeedsYou() {
   const items = useMemo(() => jayQueue(st, undefined, tickets), [st, tickets]);
   const ids = items.map((i) => i.id).join("|");
   const [inbox, setInbox] = useState<InboxState | null>(null);
+  const [failed, setFailed] = useState(false);
   const [group, setGroup] = useState<Group>(() => { try { return localStorage.getItem(GROUP_KEY) === "type" ? "type" : "project"; } catch { return "project"; } });
-  useEffect(() => { app.api.inbox().then(setInbox).catch(() => setInbox(null)); }, [ids]);
+  // Re-read when the queue changes and every minute (overdue, engine verdicts); only the newest answer counts.
+  useEffect(() => {
+    let live = true, n = 0;
+    const load = () => {
+      const mine = ++n;
+      app.api.inbox().then((d) => { if (live && mine === n) { setInbox(d); setFailed(false); } })
+        .catch(() => { if (live && mine === n) setFailed(true); });
+    };
+    load();
+    const t = setInterval(load, 60_000);
+    return () => { live = false; clearInterval(t); };
+  }, [ids]);
   const pick = (g: Group) => { setGroup(g); try { localStorage.setItem(GROUP_KEY, g); } catch { /* convenience only */ } };
 
   const groups = useMemo(() => {
@@ -91,8 +104,12 @@ export function NeedsYou() {
       const k = group === "project" ? j.project : typeOf(j);
       m.set(k, [...(m.get(k) ?? []), j]);
     }
-    return [...m.entries()].sort(([a], [b]) => group === "type" ? TYPE_ORDER.indexOf(a) - TYPE_ORDER.indexOf(b) : a.localeCompare(b));
-  }, [items, inbox, group]);
+    // Overdue first across groups too; then by type order, or by the project's shown name.
+    const late = (list: JayItem[]) => list.some((j) => extra[j.id]?.approval?.overdue) ? 0 : 1;
+    const name = (k: string) => projectName(st, k) || k;
+    return [...m.entries()].sort(([a, la], [b, lb]) => late(la) - late(lb)
+      || (group === "type" ? TYPE_ORDER.indexOf(a) - TYPE_ORDER.indexOf(b) : name(a).localeCompare(name(b))));
+  }, [items, inbox, group, st]);
 
   const c = inbox?.counts ?? {};
   return <div className="stack ny">
@@ -106,7 +123,8 @@ export function NeedsYou() {
         <button type="button" aria-pressed={group === "type"} onClick={() => pick("type")}>By type</button>
       </div>
     </div>
-    {inbox && !inbox.available && inbox.error && <p className="muted mono-xs">{inbox.error}; the list below is still complete.</p>}
+    {((inbox && !inbox.available && inbox.error) || failed) && <p className="muted mono-xs">
+      {failed ? "Could not read the approval and engine details" : inbox?.error}; the list below is still complete.</p>}
     {!items.length && <EmptyState title="Nothing waits on you." hint="plan approvals, questions, blockers and merges land here" />}
     {groups.map(([k, list]) => <Panel key={k} title={group === "project" ? projectName(st, k) || k : k} count={list.length}>
       <ul className="ny-list">{list.map((j) => <Card key={j.id} j={j} x={inbox?.items[j.id]} />)}</ul>

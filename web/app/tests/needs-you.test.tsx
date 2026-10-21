@@ -11,6 +11,7 @@ import { state } from "./helpers";
 const now = Date.now() / 1000;
 
 function setup() {
+  try { localStorage.clear(); } catch { /* none */ }
   const st = state();
   st.blocked = [];
   st.needs = [
@@ -60,6 +61,25 @@ describe("Needs You", () => {
     const titles = screen.getAllByRole("heading").map((h) => h.textContent ?? "");
     expect(titles.findIndex((t) => t.startsWith("Blocker"))).toBeLessThan(titles.findIndex((t) => t.startsWith("Question")));
     expect(screen.getAllByRole("link")).toHaveLength(3);
+  });
+
+  it("says so when the details cannot be read, and keeps the list", async () => {
+    setup();
+    vi.spyOn(app.api, "inbox").mockRejectedValue(new Error("down"));
+    render(<NeedsYou />);
+    expect(await screen.findByText(/Could not read the approval and engine details/)).toBeInTheDocument();
+    expect(screen.getAllByRole("link")).toHaveLength(3);
+  });
+
+  it("puts a project with an overdue approval first, even when its name sorts later", async () => {
+    setup();
+    vi.spyOn(app.api, "inbox").mockResolvedValue({ available: true, orphans: [], counts: { approvals: 1, overdue: 1 },
+      items: { "gate:samvision:SV-3": { approval: { id: 9, project: "samvision", gate: "failure", subjectHash: "cd".repeat(32),
+        requestedAt: now - 9000, expiresAt: now - 1, overdue: true } } } });
+    render(<NeedsYou />);
+    await screen.findByText(/1 overdue/);
+    const titles = screen.getAllByRole("heading").map((h) => h.textContent ?? "");
+    expect(titles[0]).toMatch(/samvision/i);
   });
 
   it("names each kind of ask", () => {

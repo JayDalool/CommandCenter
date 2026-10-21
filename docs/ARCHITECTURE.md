@@ -498,7 +498,9 @@ One inbox over everything that waits on Jay (sidebar → Needs You, key `0`). Th
 `state.needs` plus blocked agents, assembled by the same `jayQueue` the dashboard and the bell use, so the three
 never disagree. `ccd/inbox.py` adds, read-only, per item (GET /api/inbox, keyed `kind:project:ref`): the pending
 Approval for a gate (subject hash, expiry, overdue), the shadow engine's newest verdict for that gate, and for open
-questions earlier answered questions with the same wording in the same project (precedents; shown, never applied).
-Items are grouped by project or by type, overdue first; each card has one action, which opens the place Jay acts
-today. Pending approvals whose gate is no longer in the queue are listed as a consistency check. A failure in the
+questions earlier answered questions with the same wording, kind and options in the same project (at least three
+meaningful words; task-check proposals never count; shown, never applied). Items are grouped by project or by type,
+overdue first (groups too); each card has one action, which opens the place Jay acts today. A gate hidden behind its
+ticket's open questions carries its approval on the questions card. Pending approvals with no item in the queue are
+listed as a consistency check. The page re-reads the details every minute. A failure in the
 overlay leaves the list complete. Approving several at once waits for the engine to leave shadow mode.

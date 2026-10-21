@@ -12,10 +12,17 @@ from . import test_ledger
 
 class Signature(unittest.TestCase):
     def test_wording_not_noise_decides_a_match(self):
-        self.assertEqual(inbox.signature("Should we keep the old export for GYST-12?"),
-                         inbox.signature("keep old export"))
+        self.assertEqual(inbox.signature("Should we keep the old export?"), inbox.signature("keep old export"))
         self.assertNotEqual(inbox.signature("Keep the old export?"), inbox.signature("Drop the old export?"))
         self.assertEqual(inbox.signature(None), "")
+
+    def test_keys_and_versions_tell_questions_apart_and_short_ones_never_match(self):
+        for a, b in (("Use UTF-8 or UTF-16 here?", "Use UTF-16 or UTF-8 here?"),
+                     ("Use SHA-256 for the hashes?", "Use SHA-1 for the hashes?"),
+                     ("Close GYST-12 as a duplicate of GYST-10?", "Close GYST-99 as a duplicate of GYST-3?")):
+            self.assertNotEqual(inbox.signature(a), inbox.signature(b), (a, b))
+        for short in ("Proceed?", "OK?", "Merge it?"):
+            self.assertEqual(inbox.signature(short), "", short)
 
 
 class InTheDaemon(unittest.IsolatedAsyncioTestCase):
@@ -69,6 +76,22 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         self.d._pipeline_result(*self.d.pipeline.answer(k, [{"id": qid, "answer": "no"}], "jay"))
         second = self.ask("Export", "Keep the old export?")
         self.assertNotIn(f"questions:gyst:{second}", self.d.inbox_state()["items"])
+
+    async def test_a_gate_behind_open_questions_carries_its_approval_and_is_no_orphan(self):
+        k, _ = self.to_ready()
+        self.d._pipeline_result(*self.d.pipeline.ask(k, [{"text": "Which date format do we use?"}], "agent:c"))
+        self.assertEqual([n["kind"] for n in self.d.state()["needs"] if n["ref"] == k], ["questions"])
+        out = self.d.inbox_state()
+        self.assertEqual(out["orphans"], [])
+        self.assertEqual(out["items"][f"questions:gyst:{k}"]["approval"]["gate"], "merge")
+
+    async def test_a_different_kind_of_ask_or_a_task_check_is_never_a_precedent(self):
+        first = self.ask("Export", "Keep the old export?")
+        self.answer(first, "no")
+        t, _ = self.ts.create("gyst", "Export text")
+        k = t["key"]
+        self.d._pipeline_result(*self.d.pipeline.ask(k, [{"text": "Keep the old export?"}], "agent:c"))   # text, not yes/no
+        self.assertNotIn(f"questions:gyst:{k}", self.d.inbox_state()["items"])
 
     async def test_a_broken_overlay_never_breaks_the_queue(self):
         k, _ = self.to_ready()
