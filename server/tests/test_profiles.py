@@ -4,6 +4,7 @@ import copy
 import tempfile
 import tomllib
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from ccd import merge_policy, profiles, registry
@@ -87,6 +88,8 @@ class Validator(unittest.TestCase):
             (lambda p: p.update(decisions=["D-004"]), "D-004 does not apply to gyst"),
             (lambda p: p["target"]["execution"].update(preferred_node="laptop"), "preferred_node is not in allowed_nodes"),
             (lambda p: p.update(project="samvision"), "does not match its file name"),
+            (lambda p: p.update(decisions=["D-001", "D-001"]), "decisions has duplicates"),
+            (lambda p: p["target"]["merge"].pop("policy"), "target.merge.policy is missing"),
         ]
         for change, expected in cases:
             p = copy.deepcopy(self.good)
@@ -126,6 +129,10 @@ class Validator(unittest.TestCase):
         self.assertTrue(any("decided_by" in e for e in profiles.validate_decision(d, "D-001")))
         self.assertTrue(any("does not match its file name" in e
                             for e in profiles.validate_decision(self.decisions["D-001"], "D-002")))
+        for change, expected in ((dict(date="2026-13-45"), "must be a date"),
+                                 (dict(projects=["gyst", "nope"]), "unknown project(s) nope")):
+            d = dict(self.decisions["D-001"], **change)
+            self.assertTrue(any(expected in e for e in profiles.validate_decision(d, "D-001")), expected)
 
 
 class Loading(unittest.TestCase):
@@ -163,6 +170,61 @@ class Loading(unittest.TestCase):
         f = tmp / "decisions" / "D-003.toml"
         f.write_text(f.read_text() + "\n")
         self.assertNotEqual(profiles.load(tmp).fingerprint, before)
+
+    def test_a_type_broken_decision_that_a_profile_cites_never_raises(self):
+        tmp = self.copy_policy()
+        f = tmp / "decisions" / "D-009.toml"
+        f.write_text(f.read_text().replace('projects = ["gauzemate"]', "projects = 5"))
+        pol = profiles.load(tmp)                                               # must not raise
+        self.assertFalse(pol.decisions["D-009"]["valid"])
+        self.assertIsNone(pol.profile("gauzemate"))
+        self.assertTrue(any("D-009 is itself invalid" in e for e in pol.problems()))
+
+    def test_an_invalid_decision_makes_the_citing_profile_invalid(self):
+        tmp = self.copy_policy()
+        f = tmp / "decisions" / "D-005.toml"
+        f.write_text(f.read_text().replace('decided_by = "jay"', 'decided_by = "agent:x"'))
+        self.assertIsNone(profiles.load(tmp).profile("gyst"))
+
+    def test_summary_stays_json_even_when_a_file_holds_toml_dates(self):
+        import json
+        tmp = self.copy_policy()
+        f = tmp / "decisions" / "D-003.toml"
+        f.write_text(f.read_text().replace('date = "2026-10-21"', "date = 2026-10-21"))
+        g = tmp / "projects" / "mfe.toml"
+        g.write_text(g.read_text().replace("[target]", "[target]\nwhen = 2026-10-21T01:00:00"))
+        pol = profiles.load(tmp)
+        self.assertTrue(any("D-003" in e for e in pol.problems()))
+        s = json.loads(json.dumps(pol.summary()))
+        self.assertEqual(s["decisions"]["D-003"]["date"], "2026-10-21")
+        self.assertFalse(s["projects"]["mfe"]["valid"])
+
+    def test_supersedes_must_exist(self):
+        tmp = self.copy_policy()
+        f = tmp / "decisions" / "D-003.toml"
+        f.write_text(f.read_text() + '\nsupersedes = "D-777"\n')
+        pol = profiles.load(tmp)
+        self.assertFalse(pol.decisions["D-003"]["valid"])
+        self.assertTrue(any("D-777, which does not exist" in e for e in pol.problems()))
+
+    def test_drift_shows_the_registrys_raw_merge_value(self):
+        real = registry.pipeline_of
+        with unittest.mock.patch.object(registry, "pipeline_of",
+                                        lambda k: dict(real(k), merge="auto") if k == "gyst" else real(k)):
+            d = profiles.drift("gyst", profiles.load().profiles["gyst"]["profile"])
+        self.assertEqual(d, [{"field": "merge", "profile": "owner", "registry": "auto"}])
+
+    def test_a_policy_problem_is_an_alert(self):
+        from ccd.daemon import Daemon
+        from ccd.store import Store
+        from .helpers import cfg, new_db
+        tmp = self.copy_policy()
+        (tmp / "projects" / "mfe.toml").unlink()
+        store = Store(new_db())
+        d = Daemon(cfg(), store, None, policy=profiles.load(tmp))
+        alerts = d._compute_alerts({"blocked": [], "needs": []})
+        self.assertTrue(any(a["id"] == "policy:problems" and "mfe.toml is missing" in a["text"] for a in alerts))
+        store.close()
 
     def test_summary_is_plain_data(self):
         import json

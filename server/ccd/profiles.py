@@ -16,6 +16,7 @@ covers all of them, so any change to policy is visible in the audit trail.
 TOML is read with the standard library's `tomllib`: ccd gains no dependency. Pure apart from `load()` reading
 the folder; `validate_*` take plain dicts.
 """
+import datetime
 import hashlib
 import re
 import tomllib
@@ -165,6 +166,14 @@ def validate_decision(d, name=None):
         errors.append(f"decision.id {d.get('id')!r} does not match its file name {name}")
     if "supersedes" in d and not DECISION_RE.match(str(d["supersedes"])):
         errors.append("decision.supersedes must name a decision like D-001")
+    try:
+        datetime.date.fromisoformat(d["date"]) if isinstance(d.get("date"), str) else None
+    except ValueError:
+        errors.append("decision.date must be a date like 2026-10-21")
+    if isinstance(d.get("projects"), list):
+        bad = [x for x in d["projects"] if x not in registry.PROJECTS and x not in ("all", "restricted")]
+        if bad:
+            errors.append(f"decision.projects names unknown project(s) {', '.join(map(str, bad))}")
     return errors
 
 
@@ -198,13 +207,18 @@ def validate_profile(p, decisions=None, name=None, registered=True):
     why = _strings(DECISION_RE, 50)(p["decisions"])
     if why:
         errors.append(f"decisions {why}")
+    elif len(set(p["decisions"])) != len(p["decisions"]):
+        errors.append("decisions has duplicates")
     elif decisions is not None:
         for d in p["decisions"]:
             rec = decisions.get(d)
             if rec is None:
                 errors.append(f"decisions: {d} does not exist in policy/decisions")
                 continue
-            scope = rec.get("projects") or []
+            if rec.get("valid") is False:
+                errors.append(f"decisions: {d} is itself invalid")
+                continue
+            scope = rec.get("projects") if isinstance(rec.get("projects"), list) else []
             if not ("all" in scope or key in scope or (p["mode"] == "restricted" and "restricted" in scope)):
                 errors.append(f"decisions: {d} does not apply to {key}")
     _check_table("enforced", p["enforced"], ENFORCED, errors, tuple(ENFORCED))
@@ -214,6 +228,9 @@ def validate_profile(p, decisions=None, name=None, registered=True):
         return errors
     # Rules across sections.
     t, enf = p["target"], p["enforced"]
+    for section in ("merge", "deploy"):
+        if section in t and "policy" not in t[section]:
+            errors.append(f"target.{section}.policy is missing")
     if p["mode"] == "paused":
         if not enf["paused"]:
             errors.append("a paused profile needs enforced.paused (the reason)")
@@ -246,7 +263,8 @@ def enforced_now(key):
     """What the registry makes Command Center do today, in the shape of a profile's [enforced] section."""
     from . import pipeline   # import here: pipeline imports registry, profiles is imported early
     pol = registry.pipeline_of(key)
-    return {"merge": pol.get("merge") if pol.get("merge") in ("owner", "low-risk") else "owner",
+    # The registry's raw value: a value the pipeline does not know (it treats it as "owner") still shows as drift.
+    return {"merge": pol.get("merge", "owner"),
             "night": registry.night_mode(key), "paused": registry.paused(key) or "",
             "max_lanes": int(pol.get("max_lanes") or pipeline.MAX_LANES), "ui_fix": registry.ui_fix(key)}
 
@@ -277,10 +295,18 @@ class Policy:
                 self.errors.append(f"decisions/{path.name}: cannot read ({type(e).__name__}: {e})")
                 continue
             hashes.append((f"decisions/{path.name}", sha))
-            errs = validate_decision(d, path.stem)
+            try:
+                errs = validate_decision(d, path.stem)
+            except Exception as e:  # noqa: BLE001 — a validator bug must never stop ccd starting
+                errs = [f"cannot validate ({type(e).__name__})"]
             if errs:
                 self.errors += [f"decisions/{path.name}: {e}" for e in errs]
             self.decisions[path.stem] = dict(d, sha256=sha, valid=not errs, errors=errs)
+        for k, d in self.decisions.items():
+            sup = d.get("supersedes")
+            if d["valid"] and sup is not None and sup not in self.decisions:
+                d["valid"], d["errors"] = False, [f"decision.supersedes names {sup}, which does not exist"]
+                self.errors.append(f"decisions/{k}.toml: {d['errors'][0]}")
         for folder, out, registered in (("projects", self.profiles, True), ("examples", self.examples, False)):
             for path in sorted((self.root / folder).glob("*.toml")):
                 rec = {"file": f"policy/{folder}/{path.name}", "profile": None, "sha256": None}
@@ -289,6 +315,8 @@ class Policy:
                     rec["errors"] = validate_profile(rec["profile"], self.decisions, path.stem, registered)
                 except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
                     rec["errors"] = [f"cannot read ({type(e).__name__}: {e})"]
+                except Exception as e:  # noqa: BLE001 — a validator bug must never stop ccd starting
+                    rec["errors"] = [f"cannot validate ({type(e).__name__})"]
                 rec["valid"] = not rec["errors"]
                 rec["drift"] = drift(path.stem, rec["profile"]) if registered and rec["valid"] else []
                 if rec["sha256"]:
@@ -316,8 +344,9 @@ class Policy:
         return out
 
     def summary(self):
-        """For GET /api/profiles and Settings → Policies. Read-only; holds no secret."""
-        return {
+        """For GET /api/profiles and Settings → Policies. Read-only; holds no secret. Always JSON-safe, even for
+        an invalid file (a TOML date or time becomes its ISO text)."""
+        return _plain({
             "fingerprint": self.fingerprint,
             "problems": self.problems(),
             "projects": {k: {"name": registry.name_of(k), "file": r["file"], "sha256": r["sha256"], "valid": r["valid"], "errors": r["errors"],
@@ -331,7 +360,17 @@ class Policy:
             "decisions": {k: {f: d.get(f) for f in ("id", "date", "decided_by", "projects", "question", "decision",
                                                     "rationale", "rules", "reconsider", "supersedes", "valid")}
                           for k, d in sorted(self.decisions.items())},
-        }
+        })
+
+
+def _plain(v):
+    if isinstance(v, dict):
+        return {str(k): _plain(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_plain(x) for x in v]
+    if v is None or isinstance(v, (str, bool, int, float)):
+        return v
+    return v.isoformat() if hasattr(v, "isoformat") else str(v)
 
 
 def load(root=POLICY_DIR):

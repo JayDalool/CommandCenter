@@ -14,7 +14,7 @@ state/
 .env.*
 config.json
 !server/config.example.json
-node_modules/
+node_modules
 dist/
 *.tsbuildinfo
 /launcher/launcher
