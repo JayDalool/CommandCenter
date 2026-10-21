@@ -165,6 +165,13 @@ def _read_file(source, path, offset, limit, ctx):
     return list(rows.values()), offset + end + 1, ctx, end + 1
 
 
+def _ctx_json(ctx):
+    """The few fields a Codex log carries across lines, each bounded, so the stored context is always valid JSON."""
+    keep = {k: (v[:500] if isinstance(v, str) else None) for k, v in ctx.items()
+            if k in ("cwd", "session", "model", "total")}
+    return json.dumps(keep)
+
+
 class Meter:
     """Three steps so the slow part never touches the database from another thread:
     `plan()` (event loop: cursors) → `read(plan)` (any thread: files only) → `store(results)` (event loop)."""
@@ -240,7 +247,7 @@ class Meter:
                     added += cur.rowcount
                 self.db.execute("INSERT INTO usage_cursor (path, inode, offset, context) VALUES (?,?,?,?) "
                                 "ON CONFLICT(path) DO UPDATE SET inode=excluded.inode, offset=excluded.offset, "
-                                "context=excluded.context", (path, inode, offset, json.dumps(ctx)[:2000]))
+                                "context=excluded.context", (path, inode, offset, _ctx_json(ctx)))
                 self.db.execute("COMMIT" if own else "RELEASE meter_store")
             except BaseException:
                 if self.db.in_transaction:

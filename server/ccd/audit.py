@@ -40,6 +40,7 @@ class Audit:
         self.db = db
         self.clock = clock
         self._good = (0, GENESIS, 0)   # (last id, its sha, rows) already walked and found intact
+        self._broken = None            # the first broken row a walk found; reported until a full walk passes
 
     def record(self, *, actor, verified, via, method, path, status, token_actor=None, project=None, ref=None,
                body=None, summary="", profile_hash=None):
@@ -74,16 +75,22 @@ class Audit:
     def verify(self, full=False):
         """Walk the chain. By default only rows added since the last intact walk (cheap enough to run on every look);
         `full` walks from the first row, which also catches an edit to rows already checked. {ok, checked, brokenAt,
-        full}. A broken chain is never remembered as good, so it keeps being reported."""
+        full}. Once any walk finds a break it is reported on every look until a full walk passes again."""
+        if not full and self._broken is not None:
+            return {"ok": False, "checked": self._good[2], "brokenAt": self._broken, "full": False}
         start_id, prev, n = (0, GENESIS, 0) if full else self._good
+        if start_id and self.db.execute("SELECT 1 FROM audit_events WHERE id=? AND sha=?", (start_id, prev)).fetchone() \
+                is None:
+            start_id, prev, n = 0, GENESIS, 0       # the row we stopped at is gone or changed: walk it all
         for r in self.db.execute(f"SELECT id, {', '.join(COLUMNS)}, prev_sha, sha FROM audit_events WHERE id > ? "
                                  f"ORDER BY id", (start_id,)):
             row = dict(zip(COLUMNS, r[1:1 + len(COLUMNS)]))
             prev_sha, sha = r[-2], r[-1]
             if prev_sha != prev or hashlib.sha256((prev + _canon(row)).encode()).hexdigest() != sha:
+                self._broken = r[0]
                 return {"ok": False, "checked": n, "brokenAt": r[0], "full": full}
             prev, n, start_id = sha, n + 1, r[0]
-        self._good = (start_id, prev, n)
+        self._good, self._broken = (start_id, prev, n), None
         return {"ok": True, "checked": n, "brokenAt": None, "full": full}
 
     def list(self, actor=None, verified=None, limit=100):

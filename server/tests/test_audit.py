@@ -63,6 +63,9 @@ class AuditChain(unittest.TestCase):
         self.assertTrue(self.a.verify()["ok"])                              # already-checked rows: only a full walk
         self.assertEqual(self.a.verify(full=True), {"ok": False, "checked": 0, "brokenAt": 1, "full": True})
         self.assertFalse(self.a.verify(full=True)["ok"])
+        self.assertEqual(self.a.verify()["brokenAt"], 1)                    # a break stays reported on every look
+        self.rec(path="/api/x/4")
+        self.assertFalse(self.a.verify()["ok"])
 
     def test_actor_is_stored_without_control_characters(self):
         self.rec(actor="evil\x1b[2Jname")
