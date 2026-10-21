@@ -1,7 +1,11 @@
 # CommandCenter v2 — Discovery and Architecture Plan
 
-Date: 2026-10-21 · Status: **DISCOVERY ONLY — nothing here is implemented or approved** · Audited: `main` @ `a0e90e5`
+Date: 2026-10-21 · Status: **DISCOVERY ONLY. Nothing here is implemented yet.** · Audited: `main` @ `a0e90e5`
 (CC-052), plus every remote branch, with `claude/amazing-keller-fpy0qw` @ `e236ffa` and `p4b` read in detail.
+
+Revision 2 (2026-10-21): Jay answered the blocking questions. His answers are recorded as policy decisions
+**D-001 … D-006** in §0 and folded into the policy model (§8), threat model (§10), Slack strategy (§18), roadmap
+(§21) and open questions (§25). Where this document and §0 disagree, §0 wins.
 
 > Naming note. The repository already calls itself "Command Center V2" (README, repo description). The vision in
 > this document is a third generation. This document says **v2** because that is what Jay asked for; if the work is
@@ -11,6 +15,7 @@ Date: 2026-10-21 · Status: **DISCOVERY ONLY — nothing here is implemented or 
 
 ## Contents
 
+0. Decisions recorded (policy inputs)
 1. Executive Summary
 2. Current Architecture
 3. What Already Works
@@ -39,6 +44,24 @@ Date: 2026-10-21 · Status: **DISCOVERY ONLY — nothing here is implemented or 
 26. What should we build first, and why?
 
 Appendix A — Audit inventory · Appendix B — Branch audit
+
+---
+
+## 0. Decisions recorded (policy inputs)
+
+Jay's instruction: *these are policy inputs, not one-off answers.* Each one below is written in the shape of the
+proposed `Decision` record (§7) so that it can be loaded unchanged into the Decision table in Phase 1, and each one
+names the profile rules it produces. Agents cite these decisions instead of asking again. A decision changes only
+through a new Decision that supersedes it, approved by Jay.
+
+| ID | Question | Decision (Jay, 2026-10-21) | Becomes policy |
+|---|---|---|---|
+| **D-001** | Adopt the control-room branch's "agents may merge" approach, or keep ADR 0007's "agents never merge"? | **Neither, wholesale.** Keep the branch's useful pieces (GauzeMate pause, SamVision careful mode, UI test runs, bulk merge). Replace the global "agents never merge" rule with **per-project autonomy policies**: CommandCenter merges and deploys automatically; GYST merges and deploys automatically within safety boundaries; SamVision and MyFamilyExpenses get stricter release rules and need approval for major client-impacting work. | `merge` and `deploy` blocks in every profile (§8.3). Supersedes ADR 0007 rule 2 once implemented (new ADR). The *merger* is still the gatekeeper (Capability Broker), never an agent's own `gh` login: an agent proposes, the broker merges when the profile allows. |
+| **D-002** | May AI jobs run on employer Java repositories? | **Yes.** Jay is permitted to use Anthropic and OpenAI with those repositories. Repo storage and secrets stay **laptop-only**; the server gets no clone unless Jay explicitly allows it. AI jobs on these repos are **not** refused. | `restricted` profile: `allowed_nodes: [laptop]`, `repo_storage: laptop_only`, `secrets: laptop_only`, `server_clone: requires_approval(jay)`, `model_providers: [anthropic, openai]`. The earlier "legal precondition denies every job" rule is removed. |
+| **D-003** | Buy a paid GitHub plan for branch protection? | **No, not now.** Use the CommandCenter gatekeeper, CI, review rules and whatever repository protections the current plan offers. If a paid tier would materially improve safety or reliability later, raise a **Tool Proposal** (cost, benefits, free/self-hosted alternatives, why it is worth paying) before asking. | Broker-side enforcement is the primary control (§10 T2). Agents get tokens without merge rights where the current plan allows it. `spend_money` stays human-only; a future GitHub upgrade enters as a ToolProposal. |
+| **D-004** | May SamVision deploy unattended at 01:00? | **Only safe, low-risk releases, and only after automatic health checks and rollback exist.** Meaningful downtime, migrations, high blast radius or client-facing workflow changes are prepared and **held for approval**. Until automatic rollback is ready, 01:00 means **release-ready, not auto-deploy**. | SamVision (and MFE) `release` block: `unattended_deploy: when [risk == low, no_migration, no_downtime, no_client_workflow_change] and capability [health_checks, auto_rollback]`; otherwise `hold_for: jay`. Capability flags start `false`, so today every window is release-ready only. |
+| **D-005** | How much autonomy for GYST around personal data? | **Routine work stays autonomous.** Changes that affect the data model, retention, privacy, encryption, deletion, health/personal-data handling, authentication, or an irreversible migration **need approval**. Normal UI/API fixes around existing personal data stay automatic if reversible and tested. | GYST `require_approval_for` list plus path/keyword risk triggers (schema/migration files, auth, crypto, retention/deletion code). Reversible + tested + none of the triggers → auto merge and deploy. |
+| **D-006** | Does Jay want to approve from his phone, and how? | **Yes.** **Slack is the first interface** for approvals, questions, "choose A/B", retry/pause and release notifications. **Do not weaken CommandCenter's local-access rule** to make mobile work. Later, design a secure mobile/remote access option (an authenticated secure tunnel or equivalent) without exposing CommandCenter publicly. | Slack via Socket Mode (outbound only, no public endpoint) moves forward to Phase 2 (§21). Approval classes by channel in §11/§18. Loopback-only stays a hard rule; remote access is a later, separately approved design. |
 
 ---
 
@@ -82,7 +105,8 @@ already most of a durable workflow engine.
 
 1. *Unattended 01:00 production releases for SamVision* conflict with today's rule that a live deploy always
    waits for Jay, and nobody is awake if it fails. Either automated health-checked rollback must exist first, or
-   the window should be when Jay is awake.
+   the window should be when Jay is awake. **Resolved by D-004:** low-risk only, and only once health checks and
+   rollback exist; until then 01:00 means release-ready.
 2. *Grouping many tasks into one PR* is the right call for SamVision release trains, but the wrong default for
    CommandCenter/GYST: small auto-merged PRs are easier to review, bisect and revert. The flood Jay wants to
    avoid is a **notification** problem; solve it with release summaries, not bigger PRs.
@@ -91,8 +115,8 @@ already most of a durable workflow engine.
 4. *Specialist agents debating* is the fastest way to burn tokens and create "agent chaos". Discussions should be
    rare, bounded (one round), and triggered only by disagreement or high risk.
 5. *Employer Java repositories* on a laptop worker raise a question no architecture can answer: whether Jay's
-   employer permits sending that code to Anthropic/OpenAI at all. That is a legal/compliance decision for Jay
-   before any worker touches those repos.
+   employer permits sending that code to Anthropic/OpenAI at all. **Resolved by D-002:** permitted; repos and
+   secrets stay laptop-only.
 
 ---
 
@@ -252,7 +276,7 @@ Legend: ✅ exists and is reusable · 🟡 partial / seed exists · ❌ missing.
 | Worker fabric (server/laptop) | ❌ | WorkerNode + jobs/leases + worker agent. |
 | Decision memory | 🟡 questions/answers, findings | Decision record + retrieval into context packs. |
 | Jay Delegate | ❌ | Later; shadow mode first. |
-| Slack / email | ❌ (ntfy only) | Outbound first (Socket Mode keeps loopback-only). |
+| Slack / email | ❌ (ntfy only) | Phase 2, Slack first for phone approvals (D-006); Socket Mode keeps loopback-only. |
 | Artifacts + Drive | 🟡 attachments, task records, reports | Artifact metadata table + storage policy + Drive mirror. |
 | Academy / Pulse | ❌ | Later phases, batch-generated. |
 | Cost control | ❌ | Metering in Phase 1; budgets in Phase 2. |
@@ -406,6 +430,10 @@ decide(action, subject, context, profile) → Allow | RequireApproval(class, rea
 - **Action taxonomy** (closed enum): `read_repo, write_branch, run_tests, open_pr, merge_pr, deploy(env), run_migration(env),
   modify_prod_data, add_dependency, add_tool(free|paid), change_ci, change_policy, change_secret, spend_money,
   external_message, ui_change(minor|major), create_release, delegate_decision`.
+- **Merging is a per-project policy, not a global ban (D-001).** The old global rule "agents never merge"
+  (ADR 0007) is replaced by each profile's `merge` and `deploy` blocks. What stays global is *who presses the
+  button*: the Capability Broker merges and deploys when the engine says `Allow`; an agent's own credentials never
+  carry merge or deploy rights.
 - **Global hard denies / human-only** are compiled in code, not in profiles, so no profile edit can remove them:
   `spend_money, change_secret, modify_prod_data(destructive), legal_decision, change_policy, change_agent_permissions,
   major_live_client_redesign, irreversible_high_risk` → always `RequireApproval(jay)`; `delegate_decision` on any of
@@ -426,6 +454,7 @@ paths, UI paths, lines changed, environment. An LLM may *raise* a risk class, ne
 # policy/projects/commandcenter.yaml
 project: commandcenter
 mode: experimental_autonomy
+decisions: [D-001]
 stages: [plan, build, review, merge, verify, deploy, release_note]
 plan_approval: none                 # agents plan and proceed
 review:
@@ -453,13 +482,20 @@ models: { triage: small, build: mid, plan: top, review: mid, review_high_risk: t
 # policy/projects/gyst.yaml
 project: gyst
 mode: autonomous_product
+decisions: [D-001, D-005]
 plan_approval: on_risk [high]
-review: { claude: always, codex: on_risk [high], security: on_paths [auth/**, **/migrations/**, deps] }
+review: { claude: always, codex: on_risk [high], security: on_paths [auth/**, **/migrations/**, deps, crypto/**] }
 merge: { policy: auto, requires: [ci_green, review_approved_at_head, security_pass_if_required, risk <= medium] }
 deploy: { env: live, policy: auto, requires: [verify_pass, health_ok], rollback: required }
-data: { prod_destructive: jay, migrations: auto_if_reversible_else_jay }
+personal_data:                       # D-005
+  require_approval_for: [data_model_change, retention, privacy, encryption, deletion,
+                         health_or_personal_data_handling, authentication, irreversible_migration]
+  auto_allowed: ui_or_api_fix_on_existing_personal_data if [reversible, tests_pass, no require_approval_for trigger]
+  triggers: { paths: [**/migrations/**, **/models/**, **/schema*, auth/**, crypto/**],
+              keywords_in_diff: [retention, delete, purge, encrypt, decrypt, token, password] }   # can only raise risk
+data: { prod_destructive: jay }
 execution: { allowed_nodes: [server], repo_storage: server }
-notify: { release: summary, needs_you: immediate }
+notify: { release: summary, needs_you: slack_immediate }
 learning: contextual
 ```
 
@@ -467,6 +503,7 @@ learning: contextual
 # policy/projects/samvision.yaml   (myfamilyexpenses: same mode, own windows)
 project: samvision
 mode: controlled_production
+decisions: [D-001, D-004]
 plan_approval:
   required_for: [ui_change.major, ui_change.minor_client_visible, workflow_change, api_change, migration, risk >= medium]
   package: full                       # §11.3 Plan Approval Package
@@ -474,10 +511,13 @@ plan_approval:
   flow: plan -> claude -> codex -> jay -> build
 small_safe_changes: { batch: true, max_risk: low, examples: [copy, internal refactor with tests, bug fix no UI] }
 merge: { policy: owner_or_release_train }   # Jay accepts the release PR, not each task
-release:
+release:                              # D-004
   train: weekly_windows
   windows: ["Thu 01:00 America/Winnipeg", "Sat 01:00 America/Winnipeg"]
-  deploy: jay_confirms                # OPEN QUESTION Q2: unattended 01:00 deploy?
+  unattended_deploy:
+    allowed_when: [risk == low, no_migration, no_meaningful_downtime, low_blast_radius, no_client_workflow_change]
+    requires_capabilities: [health_checks, auto_rollback]   # both false today → every window is release-ready only
+  otherwise: prepare_and_hold_for_jay   # migrations, downtime, high blast radius, client-facing workflow change
   client_note: required
 research: careful                     # today's careful.md: evidence-backed plans
 constraints:
@@ -491,14 +531,15 @@ learning: deep
 # policy/projects/employer-java-example.yaml   (restricted)
 project: acme-java
 mode: restricted
-legal_precondition: decision:employer-ai-use-approved   # must exist and be Jay-approved, else every job Denies
+decisions: [D-002]                                      # AI use permitted by Jay's employer
 execution:
   allowed_nodes: [laptop]
   preferred_node: laptop
   repo_storage: laptop_only
   server_repo_access: prohibited
+  server_clone: requires_approval(jay)                  # only if Jay explicitly allows it, per repo
   secrets: laptop_only
-  model_providers: [as_permitted_by_employer]           # possibly none, or an employer-approved endpoint
+  model_providers: [anthropic, openai]                  # AI jobs are NOT refused
 artifacts:
   store: laptop_only
   control_plane_metadata: [title, status, hash, size]    # no code, no diffs, no screenshots leave the laptop
@@ -579,17 +620,17 @@ data, employer code, secrets (.env, API keys, Claude/Codex credentials), ccd tok
 | # | Threat | Today | v2 control |
 |---|---|---|---|
 | T1 | **Agent escalates authority** (edits policy/config, turns on auto-merge, writes stop file, reads token) | Same Unix user; mitigated only by rules and review (ADR 0007 says so) | Separate `ccagent` user; policy files root-of-trust in CC repo + denylist + hash check; ccd config not writable by agents; per-job tokens; owner ops need Developer Unlock (keep). |
-| T2 | **Agent merges/deploys** | Agent `gh` = Jay; "agents never merge" is a rule | Agents get a GitHub token with `contents:write` on branches only (fine-grained PAT or App installation token without merge rights); branch protection on `main` requiring the broker's App or Jay. Broker holds merge/deploy creds and only acts on a consumed, hash-bound Approval or an `Allow` from the engine. Requires a paid GitHub plan for private-repo branch protection, or making protection a broker-side check (see Q6). |
+| T2 | **Agent merges/deploys** | Agent `gh` = Jay; "agents never merge" is a rule | Agents get a GitHub token with `contents:write` on branches only (fine-grained PAT or App installation token without merge rights); Broker holds merge/deploy creds and only acts on a consumed, hash-bound Approval or an `Allow` from the engine. **No paid GitHub plan (D-003):** enforcement is broker-side plus CI, review rules and whatever protections the current plan offers; a paid tier comes back only as a Tool Proposal if it would materially improve safety. Residual risk: a process running as Jay with Jay's `gh` login could still merge; Phase 2 removes that login from agent jobs (`ccagent` user). |
 | T3 | **Arbitrary code execution from PRs on prod host** | Self-hosted CI runner likely on jay-server | Move CI to GitHub-hosted runners, or a dedicated VM/container user with no access to prod/compose/ccd state. |
 | T4 | **Prompt injection** (issue text, PR comments, web pages in Pulse, dependency READMEs, tool output) | Fixed-text messages to panes; free text never typed into Claude (good) | Treat all fetched content as data: context packs mark untrusted sections; agents' tool permissions are minimal per role; any action from an agent passes the engine, so an injected instruction still cannot merge/deploy/spend. Pulse runs in a no-tools, no-repo job. |
 | T5 | **Malicious dependency / skill / MCP server / plugin** | Merge denylist covers manifests, lockfiles, `.claude/`, `SKILL.md`, `.mcp.json` | Keep; add `add_dependency` and `add_tool` actions (free → lightweight review incl. maintainer/age/download/advisory checks; paid or MCP with network/secret access → ToolProposal → Jay). Pin versions; lockfile diff shown in review pack; `npm ci`/`pip install --require-hashes` where feasible. |
 | T6 | **Secret leakage** into tickets, reports, Slack, Drive, artifacts | Redactor on tails; protected file list; "no secrets in SQLite" | Same redactor on every outbound record and notification; artifact scanner (secret patterns) before Drive/Slack; restricted profiles never send content. |
-| T7 | **Employer code exfiltration** | N/A | Laptop-only execution; no server clone; metadata-only control plane; model provider limited to what employer permits (legal precondition Decision); Slack titles redacted. |
+| T7 | **Employer code exfiltration** | N/A | Laptop-only execution; no server clone; metadata-only control plane; model providers Anthropic and OpenAI (permitted, D-002); server clone only with explicit Jay approval; Slack titles redacted. |
 | T8 | **Laptop worker compromised** | N/A | Node token scoped to its node; cannot claim server jobs; Jay approves enrolment; revocation in UI; worker cannot call owner ops. |
 | T9 | **ccd token theft** (another local user, browser) | Strong controls (Host/Origin, 0600, no URL tokens, CSP) | Keep; add per-actor tokens so a leaked agent token ≠ Jay. |
 | T10 | **Jay Delegate abuse / drift** | N/A | Delegate may only act on actions the engine marks `delegable` (reversible, low risk, not on the hard list); compiled deny on money/secrets/destructive/legal/major redesign/permissions; shadow mode first with measured accuracy; every delegated decision is a Decision with `decided_by: delegate`, visible in a daily digest, one-click revert; Jay can disable instantly (kill switch file + UI). Delegate cannot change its own scope (that is `change_agent_permissions`). |
 | T11 | **Destructive automation** (worktree removal, data ops) | Exhaustive checks, no `--force`, kill switches | Keep the pattern for every new destructive action; prod data ops always Jay. |
-| T12 | **Notification channel spoofing** (approve via Slack) | N/A | Slack buttons may approve only `low` and `medium` classes, and only for the Slack user id bound to Jay; high-risk approvals require the UI with Developer Unlock. |
+| T12 | **Notification channel spoofing** (approve via Slack) | N/A | Approvals accepted only from the Slack user id bound to Jay, in a DM or the project channel, verified by Slack's signed Socket Mode payloads; each button carries the Approval id + subject hash and expires; see the channel matrix in §11.4. |
 | T13 | **Supply chain of CC itself auto-deploying** | `go-live.sh` from main only | CC auto-deploy requires the broker, CI green on GitHub-hosted runners, verify, canary health, automatic rollback; changes to `autonomy.py`, `broker.py`, `security.py`, `policy/**` never auto-merge. |
 
 ---
@@ -627,6 +668,23 @@ downtime, DB/migration, data/security, rollback, tests, before screenshots, prop
 new ideas, client impact, client-facing note, Claude verdict, Codex verdict, risk). Stored as a structured record
 plus a rendered artifact (HTML/PDF). The Approval's subject hash is the package hash, so any change after Jay
 approves re-opens it.
+
+### 11.4 Approval channels (D-006: Slack first, phone included)
+
+Slack is the first interface for approving from the phone. CommandCenter stays loopback-only; Slack reaches
+ccd through Socket Mode (an outbound connection from ccd), so nothing new is exposed. Proposed matrix (Claude's
+proposal, to be confirmed by Jay):
+
+| Approval class | Slack (phone) | CommandCenter UI (Developer Unlock) |
+|---|---|---|
+| Questions, "choose A/B", retry / pause / resume a job, acknowledge a release | one tap | ✅ |
+| Low / medium risk: plan approvals, release-ready → deploy within policy, merge of a held PR | one tap, card shows summary + risk + link | ✅ |
+| High risk: major client-impacting change, migration, downtime, GYST personal-data triggers (D-005) | tap **plus** a Slack confirmation dialog that repeats what will happen and the short subject hash | ✅ |
+| Hard human-only boundaries: money / paid service, credentials or secrets, destructive production data, legal | Slack shows the request and can **reject or defer**; approval waits for the UI until a secure remote-access option exists (Phase 6) | ✅ |
+| Policy / profile changes, agent permission changes | never from Slack | ✅ only |
+
+Every Slack approval records `via: slack`, the Slack user id, message ts and the Approval subject hash; a stale
+button (subject changed, expired, already consumed) answers "this request changed, open the new one".
 
 ---
 
@@ -869,16 +927,23 @@ by explicit link (not only title-leading key) — a small change to the existing
 
 ## 18. Slack / Email Integration Strategy
 
-- **Outbound first** (Phase 4): one bot posting to `#commandcenter`, `#samvision`, `#gyst` from the notification
-  outbox: Needs You, blockers, plan ready, release ready, deployed, major failures, weekly report. Every message
-  links to the CommandCenter record. Dedupe and quiet hours from the profile.
-- **Slack Socket Mode** for interactivity (buttons, `@architect`) keeps CommandCenter loopback-only: the bot
-  opens an outbound WebSocket to Slack; no public endpoint is needed.
-- **Buttons** may approve only low/medium approvals bound to Jay's Slack user id; high-risk links to the UI.
+- **Slack is the first phone interface (D-006), so it moves to Phase 2**, right after Approvals exist (Phase 1).
+  One bot posts to `#commandcenter`, `#samvision`, `#gyst` (plus a DM to Jay for anything that needs him) from the
+  notification outbox: Needs You, questions, choose A/B, blockers, plan ready, release ready, deployed, major
+  failures, weekly report. Every message links to the CommandCenter record. Dedupe and quiet hours from the profile.
+- **Slack Socket Mode** for interactivity (buttons, dialogs, retry/pause, later `@architect`) keeps CommandCenter
+  loopback-only: ccd opens an outbound WebSocket to Slack; no public endpoint, no change to the local-access rule.
+- **Buttons** follow the channel matrix in §11.4, bound to Jay's Slack user id.
+- **Secure remote access later (Phase 6, separate design and approval).** Options to compare then: a private
+  tailnet (Tailscale/Headscale) reaching the existing SSH tunnel, or an identity-aware tunnel (Cloudflare Access).
+  Requirements: never publicly reachable, device + identity authentication in front of ccd's own token and
+  Developer Unlock, revocable per device. AWS analogue: Verified Access / Client VPN; Azure: Entra Private Access /
+  Point-to-site VPN.
 - **@agent chat** (later): a Slack message becomes a `question` record routed to a role job; the answer is posted
   back with a link. Canonical data stays in CommandCenter.
 - **Links work only where the tunnel exists.** Today CommandCenter is reachable only through SSH from Jay's
-  Windows machine; Slack links on a phone will not open. See Q4.
+  Windows machine, so Slack cards must carry enough to decide on the phone (summary, risk, what happens, key
+  screenshot thumbnails where the profile allows); the CommandCenter link is for the desk.
 - **Email**: a daily digest + release summaries via SMTP/Gmail; no inbound email commands.
 - **Restricted projects**: titles redacted or channel disabled per profile.
 
@@ -926,17 +991,22 @@ processes that A expresses badly. Record this as an ADR with those reconsider tr
 
 Every phase ships behind kill switches, keeps the old path working, and is dogfooded on CommandCenter first.
 
-### Phase 0 — Reconcile (1–2 days, mostly Jay decisions)
+### Phase 0 — Reconcile (1–2 days)
 
-- Decide the fate of `claude/amazing-keller-fpy0qw` (Appendix B): its `merge: "auto"` default contradicts ADR 0007.
+- Port the wanted pieces of `claude/amazing-keller-fpy0qw` onto current main (D-001): GauzeMate pause, SamVision
+  careful mode, UI test runs, bulk "Merge ready", and the night-shift reminder fix. **Drop** its global
+  `merge: "auto"` default; per-project merge policy arrives with the profiles in Phase 1.
 - Confirm what is live on jay-server (sha), whether `auto_merge` is on, refresh `docs/jay/*`.
-- Prune merged branches (≈50 remote branches, almost all merged).
-- Answer the blocking open questions (§25: Q1, Q2, Q3, Q6).
+- Prune merged branches (≈50 remote branches, all merged).
+- ~~Answer the blocking open questions~~: done (D-001 … D-006).
 
 ### Phase 1 — Foundation (control-plane records; no new execution yet)
 
 1. **ProjectOperatingProfile**: YAML under `policy/projects/`, schema-validated at start, hash recorded; registry
    keeps identity; profile view in Settings (read-only). Today's `merge`, `night: careful`, `paused`, lanes move here.
+   The first versions of the five profiles (CommandCenter, GYST, SamVision, MyFamilyExpenses, the restricted
+   laptop profile) are generated from §8.3, and D-001 … D-006 are loaded as the first Decision records that those
+   profiles cite. A new ADR records that per-project policy supersedes ADR 0007's global "agents never merge".
 2. **Autonomy Engine** (`autonomy.py`): pure `decide()`, compiled hard boundaries, exhaustive table tests;
    initially wired to the existing decisions (plan gate, merge gate, auto-merge, deploy gate) so behaviour is
    unchanged but now policy-driven and logged.
@@ -958,18 +1028,23 @@ read each project's policy on one page.
 - Move CI off the production host (or isolate the runner).
 - Budgets enforced; night shift reimplemented as scheduled jobs (retire screen-reading reminders for autonomous
   work; herdr stays for Jay).
-- **Laptop worker pilot** with a *non-employer* repo first.
+- **Slack (D-006)**: outbox → Slack via Socket Mode; approvals, questions, choose A/B, retry/pause, release
+  notifications, per the §11.4 matrix.
+- **Laptop worker** (WSL): pilot on a personal repo for a few days, then the employer repos (D-002: AI permitted,
+  laptop-only storage and secrets).
 
 ### Phase 3 — Planning, review, release
 
 - Plan Approval Package + rendering; Playwright screenshots on workers; Claude + Codex risk-triggered review;
   bounded Discussions.
 - Release entity + composer; release branches/windows for SamVision; CC auto-deploy with canary + rollback.
+- SamVision/MFE health checks and automatic rollback; only when both pass a rehearsal does the profile flip
+  `health_checks`/`auto_rollback` to true and low-risk 01:00 releases deploy unattended (D-004).
 - Lightweight ToolProposal record + template (PDF/deck rendering later).
 
 ### Phase 4 — Surfaces and artifacts
 
-- Notification outbox → Slack (Socket Mode) + email digest; Artifacts table + Drive mirror policy.
+- Email digest; Slack `@agent` chat; Artifacts table + Drive mirror policy.
 
 ### Phase 5 — Memory and self-improvement
 
@@ -981,6 +1056,7 @@ read each project's policy on one page.
 
 - Academy (daily/weekly), curriculum, quizzes; Pulse weekly briefing; Delegate allowed to act on `delegable`
   classes only if shadow accuracy meets a bar Jay sets.
+- Secure mobile/remote access design (D-006), presented to Jay before anything is built.
 
 ---
 
@@ -992,7 +1068,7 @@ read each project's policy on one page.
 | tasks.db migration failure | Today's pattern: forward-only, one transaction, backup before apply, newer-schema refusal. Keep. |
 | Two policy sources during transition | Registry policy fields removed in the same PR that introduces the profile; startup error if both present. |
 | Moving agents to `ccagent` breaks repo permissions/worktrees | Group ownership on repo dirs; pilot on CC; keep herdr sessions as jay for interactive use. |
-| GitHub branch protection unavailable on free private repos | Broker-side enforcement + agent token without merge rights already closes the main hole; decide on plan (Q6). |
+| GitHub branch protection unavailable on free private repos | Broker-side enforcement + agent token without merge rights is the control (D-003); a paid tier only via a Tool Proposal. |
 | Night shift users depend on current behaviour | Keep the button; reimplement under it; same report format. |
 | Divergent branch (`amazing-keller`) merged later reintroduces `merge: auto` | Decide in Phase 0; cherry-pick wanted pieces (UI tests, bulk merge UI) onto current main deliberately. |
 | Agent chaos as autonomy rises | Lanes, budgets, one-round discussions, deterministic transitions, kill switches per project (`paused` already exists on the branch). |
@@ -1043,39 +1119,21 @@ read each project's policy on one page.
 
 ## 25. Open Questions (need Jay)
 
-**Blocking for Phase 1**
+**Answered (2026-10-21), now policy:** Q1 control-room branch → D-001 · Q2 SamVision 01:00 → D-004 · Q3 employer
+repos → D-002 · Q4 phone access → D-006 · Q5 GYST personal data → D-005 · Q6 GitHub plan → D-003. See §0.
 
-- **Q1 · Control-room branch.** `claude/amazing-keller-fpy0qw` (4 commits, never merged, 85 behind main) sets the
-  registry default to `merge: "auto"` and lets agents merge "clean work", which reverses ADR 0007 ("agents never
-  merge"). It also adds things that look wanted (bulk "Merge ready" button, UI-test runs, GauzeMate pause,
-  SamVision careful mode). Keep ADR 0007 and cherry-pick the useful parts, or adopt the branch's direction?
-- **Q3 · Employer repositories.** Does your employer permit sending its source code to Anthropic/OpenAI models
-  (and under which accounts/endpoints)? Until there is a written yes, the restricted profile should deny every job.
-- **Q6 · GitHub enforcement.** Separate bot identity for agents (GitHub App, free) is recommended either way.
-  Real branch protection on private repos needs a paid GitHub plan; is a paid plan acceptable (a Tool Proposal
-  would follow), or do we rely on broker-side enforcement plus agent tokens without merge rights?
+**Still open (none block Phase 0 or Phase 1)**
 
-**Needed before Phase 3**
-
-- **Q2 · SamVision 01:00 releases.** Should a release deploy unattended at 01:00 (requires automated health checks
-  and rollback first), or should the window mean "release is ready; Jay confirms in the morning"? Today a live
-  deploy always waits for Jay.
-- **Q5 · GYST data.** GYST/LifeOps sounds like personal life data. Fully autonomous deploy is fine for code, but
-  should destructive data migrations or anything touching personal records still need you?
-- **Q7 · GauzeMate.** Not mentioned in the vision; paused on the unmerged branch. Keep paused, or give it a profile?
-- **Q8 · CommandCenter self-deploy.** Full autonomy for CC except the autonomy/broker/security/policy files, which
-  always need you — agreed?
-
-**Needed before Phase 4**
-
-- **Q4 · Remote access.** Do you want to approve from your phone (Slack buttons are fine for low/medium; opening
-  CommandCenter itself would need Tailscale or similar, which today's "loopback only" rule forbids)?
-- **Q9 · Slack workspace and Google Drive.** Which workspace/Drive account, and is a bot install acceptable?
-
-**Calibration**
-
-- **Q10 · Budget.** What weekly token/usage budget should CommandCenter stay within, per project? (Metering lands in
-  Phase 1; numbers can wait for a week of data.)
+- **Q7 · GauzeMate.** Not in the vision; paused on the control-room branch (that pause is being kept). Keep it
+  paused with a placeholder profile, or give it a mode now?
+- **Q8 · CommandCenter self-protection.** CommandCenter merges and deploys automatically (D-001). Proposal: changes
+  to the autonomy engine, the gatekeeper, `security.py` and `policy/**` still need Jay, because "no agent may expand
+  its own authority". Agreed?
+- **Q9 · Slack approval matrix.** Confirm §11.4, especially: high-risk approvals from Slack need a confirmation
+  dialog, and money/secrets/destructive-data/legal approvals wait for the CommandCenter UI until secure remote access
+  exists. Also: which Slack workspace, and is a bot install acceptable?
+- **Q10 · MyFamilyExpenses windows.** Same 01:00 Thu/Sat windows as SamVision, or its own?
+- **Q11 · Budget.** Weekly token/usage budget per project. Can wait for a week of metering data from Phase 1.
 
 ---
 
@@ -1131,7 +1189,7 @@ exists in this repository.
 | Branch | State | Finding |
 |---|---|---|
 | `p4b` (PR #1) | **Merged** 2026-10-04 (0 commits ahead of main) | The project note said PR #1 was unmerged; GitHub shows it merged by Jay. Nothing to recover. |
-| `claude/amazing-keller-fpy0qw` @ e236ffa | 4 commits ahead, **85 behind** main; never merged; no open PR | Commits: *Pause GauzeMate; SamVision night shift in careful mode* · *Merge ready: one press merges every reviewed, green PR* · *UI test runs on request* · *Night shift: a reminder no longer counts the work it causes as progress*. Its `registry.py` sets `PIPELINE_DEFAULTS["merge"] = "auto"` and drops the per-project `owner` overrides for MFE/CC/GYST, i.e. the pre-ADR-0007 policy. Merging it as-is would undo CC-025's hardening. Recommend cherry-picking the pause/careful/UI-test/supervisor-fix pieces onto main and dropping the merge-default change (Q1). |
+| `claude/amazing-keller-fpy0qw` @ e236ffa | 4 commits ahead, **85 behind** main; never merged; no open PR | Commits: *Pause GauzeMate; SamVision night shift in careful mode* · *Merge ready: one press merges every reviewed, green PR* · *UI test runs on request* · *Night shift: a reminder no longer counts the work it causes as progress*. Its `registry.py` sets `PIPELINE_DEFAULTS["merge"] = "auto"` for every project. **Decided (D-001):** port the four useful pieces onto main in Phase 0; drop the global default; merge rights come from per-project profiles instead. |
 | `cc-control-room-v1` | merged (0 ahead) | — |
 | `workstation`, `native-terminals`, `ui-releases`, `CC-0xx-*`, `cc-0xx-*`, docs branches | all merged (0 ahead) | ≈50 stale remote branches; safe to prune after Jay confirms. |
 
