@@ -28,6 +28,7 @@ ENGINE_VERSION = 1
 ACTIONS = ("plan", "merge", "deploy")
 OUTCOMES = ("auto", "jay", "refuse")
 RISKS = ("low", "medium", "high")
+GH_FILE_LIMIT = 100    # `gh pr view --json files` lists at most this many
 HIGH_RISK_LABELS = {"security", "migration", "destructive", "architecture", "financial", "legal"}
 
 
@@ -44,12 +45,13 @@ def _matches(path, patterns):
 
 
 def risk_of(facts):
-    """The change's risk, or None when Command Center cannot tell yet (no risk classifier exists; Phase 2)."""
+    """The change's risk, or None when Command Center cannot tell yet (no risk classifier exists; Phase 2).
+
+    Only signals that RAISE risk are taken from labels (anyone who can label a ticket could otherwise claim
+    `risk:low`): a high-risk label, `risk:high`, or a SECURITY / LEGAL type. Low risk comes only from ccd's own
+    allowlist classifier (ADR 0007), never from a label."""
     labels = set(facts.get("labels") or [])
-    for r in ("high", "medium", "low"):
-        if f"risk:{r}" in labels:
-            return r
-    if labels & HIGH_RISK_LABELS or facts.get("type") in ("SECURITY", "LEGAL"):
+    if labels & HIGH_RISK_LABELS or "risk:high" in labels or facts.get("type") in ("SECURITY", "LEGAL"):
         return "high"
     files = facts.get("files")
     if facts.get("project") and isinstance(files, list) and files and not merge_policy.file_reasons(
@@ -81,6 +83,11 @@ def _paths(facts, patterns, what):
     files = facts.get("files")
     if not isinstance(files, list):
         return [], ["changed files"]
+    if len(files) >= GH_FILE_LIMIT:   # gh lists at most 100 files: a protected one may be past the end
+        return [], ["the complete list of changed files"]
+    moved = [f.get("path") for f in files if isinstance(f, dict) and f.get("changeType") not in (None, "ADDED", "MODIFIED")]
+    if moved:   # a rename shows only its new path; the old one may be protected
+        return [f"{what}: it renames, copies or deletes files ({', '.join(map(str, moved[:3]))})"], []
     hit = [f.get("path") if isinstance(f, dict) else f for f in files]
     hit = [p for p in hit if _matches(p, patterns)]
     return ([f"{what}: {', '.join(map(str, hit[:3]))}"] if hit else []), []
@@ -95,7 +102,9 @@ def _conditions(requires, facts, profile):
         if c == "ci_green":
             if facts.get("ci") is None:
                 missing.append("ci")
-            elif facts["ci"] not in ("green", "none"):
+            elif facts["ci"] == "none":
+                unmet.append("the PR has no CI checks")        # no checks is not green (ADR 0007 says so too)
+            elif facts["ci"] != "green":
                 unmet.append(f"CI is {facts['ci']}")
         elif c == "review_approved_at_head":
             if not facts.get("review_at_head"):
@@ -190,14 +199,14 @@ def _merge(t, facts, profile):
 
 
 def _deploy(t, facts, profile):
-    if facts.get("env") and facts["env"] != "live":
-        return _verdict("auto", "deploy:not_live", [f"a {facts['env']} deployment"])
     d = t.get("deploy")
     if d is None:
         return _verdict("jay", "target.deploy:none", ["the profile has no deploy rule"])
     pol = d.get("policy")
     if pol == "never":
         return _verdict("refuse", "target.deploy:never", ["this project is never deployed by an agent"])
+    if facts.get("env") and facts["env"] != "live":
+        return _verdict("auto", "deploy:not_live", [f"a {facts['env']} deployment"])
     if pol == "jay_confirms":
         return _verdict("jay", "target.deploy:jay_confirms", ["Jay confirms every live deployment"])
     unmet, missing = _conditions(d.get("requires") or [], facts, profile)
@@ -229,7 +238,7 @@ def evaluate(action, profile, facts):
     if hard:
         return _verdict("jay", "boundary", hard)
     t = profile.get("target") or {}
-    if action in ("merge", "deploy"):
+    if action == "merge" or (action == "deploy" and facts.get("env") in (None, "live")):
         sp = t.get("self_protection") or {}
         why, missing = _paths(facts, sp.get("require_jay_for_paths") or [], "it changes Command Center's own rails")
         if why:
@@ -256,16 +265,18 @@ def observed(events):
     action. A merge gate or a deploy gate means Jay; ccd's own merge, an accepted plan or a non-live deploy means
     auto. Everything else (a review, a block, a UI gate) is not a decision this engine compares."""
     out = {}
+    tried = False   # ccd decided to merge and gh refused: the merge gate that follows is not "ccd asked Jay"
     for kind, _text, data in events or ():
         data = data if isinstance(data, dict) else {}
         if kind == "pipeline.plan_accepted":
             out.setdefault("plan", ("auto", {}))
-        elif kind == "pipeline.auto_merged":
-            out.setdefault("merge", ("auto", {}))
+        elif kind in ("pipeline.auto_merged", "pipeline.auto_merge_failed"):
+            tried = True
+            out["merge"] = ("auto", {"ci": data["ci"]} if data.get("ci") else {})
         elif kind == "pipeline.deploy_requested":
             env = data.get("env")
             out.setdefault("deploy", ("jay" if env == "live" else "auto", {"env": env}))
-        elif kind == "pipeline.gate_opened" and data.get("gate") in ACTIONS:
+        elif kind == "pipeline.gate_opened" and data.get("gate") in ACTIONS and not (data["gate"] == "merge" and tried):
             out[data["gate"]] = ("jay", dict(out.get(data["gate"], (None, {}))[1]))
     return [(a, o, x) for a, (o, x) in out.items()]
 

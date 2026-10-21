@@ -90,6 +90,7 @@ class Validator(unittest.TestCase):
             (lambda p: p.update(project="samvision"), "does not match its file name"),
             (lambda p: p.update(decisions=["D-001", "D-001"]), "decisions has duplicates"),
             (lambda p: p["target"]["merge"].pop("policy"), "target.merge.policy is missing"),
+            (lambda p: p["target"]["personal_data"].update(trigger_paths=["app/models/"]), "badly formed: app/models/"),
         ]
         for change, expected in cases:
             p = copy.deepcopy(self.good)

@@ -31,6 +31,7 @@ MODES = ("experimental_autonomy", "autonomous_product", "controlled_production",
 LEARNING = ("off", "contextual", "deep")
 DECISION_RE = re.compile(r"^D-\d{3}$")
 KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+GLOB_RE = re.compile(r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[^\s\\]*[^/\s\\]$")   # repo-relative, not ending in "/"
 WINDOW_RE = re.compile(r"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) ([01]\d|2[0-3]):[0-5]\d [A-Za-z]+(?:/[A-Za-z_]+)+$")
 
 CONDITIONS = ("ci_green", "review_approved_at_head", "risk_at_most_medium", "security_pass_if_required",
@@ -111,12 +112,12 @@ TARGET = {
                 "otherwise": _enum("prepare_and_hold_for_jay"), "client_note": _enum("required", "optional", "none")},
     "personal_data": {"require_approval_for": _list_of(*PERSONAL_DATA),
                       "auto_allowed": _enum("reversible_tested_fix_on_existing_personal_data", "none"),
-                      "trigger_paths": _strings()},
+                      "trigger_paths": _strings(GLOB_RE)},
     "small_safe_changes": {"batch": _bool, "max_risk": _enum("low")},
     "constraints": {"never": _strings()},
     "notify": {"release": _enum("concise", "summary", "none"),
                "needs_you": _enum("slack_immediate", "slack_titles_redacted", "ui_only")},
-    "self_protection": {"require_jay_for_paths": _strings(), "require_jay_for_actions": _list_of(*HUMAN_ACTIONS)},
+    "self_protection": {"require_jay_for_paths": _strings(GLOB_RE), "require_jay_for_actions": _list_of(*HUMAN_ACTIONS)},
     "execution": {"allowed_nodes": _list_of(*NODES), "preferred_node": _enum(*NODES),
                   "repo_storage": _enum("server", "laptop_only"),
                   "server_clone": _enum("allowed", "requires_jay", "prohibited"),

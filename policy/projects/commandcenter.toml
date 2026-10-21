@@ -20,7 +20,7 @@ review = { claude = "always", codex = "on_risk_high", security = "on_trigger" }
 merge = { policy = "auto", requires = ["ci_green", "review_approved_at_head", "risk_at_most_medium"] }
 deploy = { policy = "auto", env = "live", requires = ["merged", "verify_pass", "health_ok", "auto_rollback"] }
 notify = { release = "concise", needs_you = "slack_immediate" }
-self_protection = { require_jay_for_paths = ["server/ccd/autonomy.py", "server/ccd/broker.py", "server/ccd/security.py", "server/ccd/profiles.py", "server/ccd/merge_policy.py", "policy/**"], require_jay_for_actions = ["change_policy", "change_agent_permissions"] }
+self_protection = { require_jay_for_paths = ["server/ccd/autonomy.py", "server/ccd/broker.py", "server/ccd/security.py", "server/ccd/profiles.py", "server/ccd/merge_policy.py", "server/ccd/ledger.py", "server/ccd/daemon.py", "server/ccd/pipeline.py", "server/ccd/registry.py", "server/ccd/tasks.py", "server/ccd/api.py", ".github/**", "policy/**"], require_jay_for_actions = ["change_policy", "change_agent_permissions"] }
 execution = { allowed_nodes = ["server"], preferred_node = "server", repo_storage = "server", server_clone = "allowed", secrets = "server_scoped", model_providers = ["anthropic", "openai"] }
 artifacts = { store = "server", drive_mirror = "releases_only" }
 

@@ -1738,22 +1738,32 @@ class Daemon:
             t = self.tasks.get(key)
             w = self.pipeline.work(key)
             ci = next((d.get("ci") for k, _x, d in events if k == "pipeline.ready_to_merge" and isinstance(d, dict)), None)
+            tid = self.tasks._id_of(key)
             for action, outcome, extra in decided:
                 more = dict(extra)
+                if action == "deploy" and self._shadow_deploy_seen(tid):
+                    continue    # one deploy decision per deployment: the needs:deploy gate, then the request
                 if action == "merge":
-                    more["ci"] = ci
-                    head, pr = self._shadow_pr.get(key, (None, None))
-                    if pr and head == w["review"]["head"]:
+                    more.setdefault("ci", ci)
+                    pr = self._shadow_pr.get(key)
+                    if pr and pr.get("headRefOid") == w["review"]["head"]:   # only the PR ccd read at the reviewed head
                         more.update(files=pr.get("files"), additions=pr.get("additions"),
                                     deletions=pr.get("deletions"), ci=merge_policy.ci_state(pr.get("statusCheckRollup")))
                 facts = autonomy.facts_of(t, w, more)
                 verdict = autonomy.evaluate(action, self.policy.profile(project), facts)
-                self.shadow.record(self.tasks._id_of(key), project, action, outcome, verdict, facts,
+                self.shadow.record(tid, project, action, outcome, verdict, facts,
                                    self.policy.fingerprint)
             self._shadow_pr.pop(key, None)
         except Exception as e:  # noqa: BLE001 — shadow mode must never affect what ccd does
             log.warning(json.dumps({"msg": "autonomy shadow skipped a decision", "key": ticket.get("key"),
                                     "error": repr(e)[:200]}))
+
+    def _shadow_deploy_seen(self, tid):
+        """A deploy decision is already recorded for this ticket since its last deployment."""
+        last = self.tasks.db.execute("SELECT MAX(at) FROM ticket_events WHERE ticket_id=? AND kind='pipeline.deployed'",
+                                     (tid,)).fetchone()[0] or 0
+        return self.tasks.db.execute("SELECT 1 FROM autonomy_shadow WHERE ticket_id=? AND action='deploy' AND at > ?",
+                                     (tid, last)).fetchone() is not None
 
     def autonomy_state(self):
         """GET /api/autonomy: the shadow record's summary. Read-only."""
@@ -1969,6 +1979,8 @@ class Daemon:
             live = {k for _, keys in todo for k in keys}
             for key in [k for k in self._am_waiting if k not in live]:
                 del self._am_waiting[key]    # left READY_TO_MERGE (or was decided): a return starts a new clock
+            for key in [k for k in self._shadow_pr if k not in live]:
+                del self._shadow_pr[key]
             for project, keys in todo:
                 for key in keys:
                     if self._auto_merge_stopped() or self._stopping:
@@ -2006,10 +2018,10 @@ class Daemon:
             return
         if not isinstance(pr, dict) or pr.get("state") == "MERGED":
             return    # merged already (by Jay, or by us a moment ago): the GitHub poll moves the ticket
-        self._shadow_pr[key] = (head, pr)    # shadow mode only: the engine reads the changed files from it
         if pr.get("headRefOid") != head:   # a newer head: the GitHub poll sends the ticket back to review; nothing to hold
             self._am_next[key] = time.monotonic() + 60
             return
+        self._shadow_pr[key] = pr    # shadow mode only: the engine reads the changed files of the reviewed head from it
         d = merge_policy.classify(project, t, w, pr, pr_ref, open_prs, pipeline_mod.policy(t, project)["merge"])
         if d.wait:
             stamp = self._review_stamp(w)

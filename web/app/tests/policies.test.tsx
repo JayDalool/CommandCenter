@@ -54,7 +54,7 @@ describe("Policies", () => {
     expect(await screen.findByText("Autonomy engine (shadow)")).toBeInTheDocument();
     expect(screen.getByText(/changes nothing/)).toBeInTheDocument();
     expect(screen.getByText("2 agree")).toBeInTheDocument();
-    expect(screen.getByText(/Command Center on its own; target policy would have asked you/)).toBeInTheDocument();
+    expect(screen.getByText(/Command Center acted on its own; target policy would have asked you/)).toBeInTheDocument();
     expect(screen.getByText("SV-101")).toBeInTheDocument();
   });
 

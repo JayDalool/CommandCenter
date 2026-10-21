@@ -54,11 +54,12 @@ class Verdicts(unittest.TestCase):
         v = ev("merge", "commandcenter", files=docs, additions=20, deletions=2)
         self.assertEqual((v["outcome"], v["rule"]), ("auto", "target.merge"))   # low risk, CI green, approved
         # D-007: Command Center's own rails always need Jay, even if everything else holds.
-        for path in ("server/ccd/autonomy.py", "policy/projects/gyst.toml", "server/ccd/security.py"):
-            v = ev("merge", "commandcenter", files=[f(path)], labels=["risk:low"])
+        for path in ("server/ccd/autonomy.py", "policy/projects/gyst.toml", "server/ccd/security.py",
+                     "server/ccd/daemon.py", "server/ccd/registry.py", ".github/workflows/ci.yml"):
+            v = ev("merge", "commandcenter", files=[f(path)])
             self.assertEqual((v["outcome"], v["rule"]), ("jay", "D-007:self_protection"), path)
         # unknown files or unknown risk is never a yes
-        v = ev("merge", "commandcenter", labels=["risk:low"])
+        v = ev("merge", "commandcenter")
         self.assertEqual(v["outcome"], "jay")
         self.assertIn("changed files", v["missing"])
         v = ev("merge", "commandcenter", files=[f("web/app/src/x.tsx")])
@@ -66,14 +67,33 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(ev("merge", "commandcenter", files=docs, additions=1, deletions=0, ci="failing")["outcome"], "jay")
         self.assertEqual(ev("merge", "commandcenter", files=docs, additions=1, deletions=0,
                             review_at_head=False)["outcome"], "jay")
-        self.assertEqual(ev("merge", "commandcenter", files=[f("web/app/src/x.tsx")], labels=["risk:medium"])["outcome"],
-                         "auto")
+
+    def test_a_label_can_raise_risk_but_never_lower_it(self):
+        src = [f("web/app/src/x.tsx")]
+        for labels in (["risk:low"], ["risk:medium"], ["security", "risk:low"], ["migration", "risk:medium"]):
+            self.assertEqual(ev("merge", "commandcenter", files=src, labels=labels)["outcome"], "jay", labels)
+        self.assertEqual(autonomy.risk_of(facts(labels=["risk:low", "security"])), "high")
+        self.assertEqual(autonomy.risk_of(facts(labels=["risk:low"])), None)
+        self.assertEqual(autonomy.risk_of(facts(labels=["risk:high"], files=[f("docs/a.md")], additions=1, deletions=0)), "high")
+
+    def test_no_ci_checks_is_not_green(self):
+        v = ev("merge", "commandcenter", files=[f("docs/a.md")], additions=1, deletions=0, ci="none")
+        self.assertEqual(v["outcome"], "jay")
+        self.assertIn("the PR has no CI checks", v["reasons"])
+
+    def test_a_truncated_file_list_or_a_rename_can_hide_a_protected_path(self):
+        many = [f(f"docs/a{i}.md") for i in range(100)]
+        v = ev("merge", "commandcenter", files=many, additions=100, deletions=0)
+        self.assertEqual(v["outcome"], "jay")
+        self.assertIn("the complete list of changed files", v["missing"])
+        v = ev("merge", "commandcenter", files=[f("docs/old-policy.md", "RENAMED")], additions=0, deletions=0)
+        self.assertEqual((v["outcome"], v["rule"]), ("jay", "D-007:self_protection"))
 
     def test_gyst_personal_data_needs_jay(self):
-        v = ev("merge", "gyst", files=[f("app/models/person.py")], labels=["risk:low"])
+        v = ev("merge", "gyst", files=[f("app/models/person.py")])
         self.assertEqual((v["outcome"], v["rule"]), ("jay", "D-005:personal_data"))
-        v = ev("merge", "gyst", files=[f("app/ui/button.tsx")], labels=["risk:low"])
-        self.assertEqual(v["outcome"], "auto")
+        v = ev("merge", "gyst", files=[f("app/ui/button.tsx")])
+        self.assertEqual((v["outcome"], v["missing"]), ("jay", ["risk"]))      # nothing assesses risk yet
 
     def test_samvision_and_mfe_merge_wait_for_the_release_train_and_never_deploy_unattended(self):
         for p in ("samvision", "mfe"):
@@ -86,18 +106,18 @@ class Verdicts(unittest.TestCase):
             v = ev("deploy", p, env="live", merged=True, verified=True, files=[f("docs/a.md")], labels=["risk:low"])
             self.assertEqual(v["outcome"], "jay", p)
             self.assertTrue(any("health checks" in r for r in v["reasons"]), v)
-        self.assertEqual(ev("deploy", "commandcenter", env="preview", files=[])["outcome"], "auto")
+        self.assertEqual(ev("deploy", "commandcenter", env="preview")["outcome"], "auto")   # no path check off live
 
     def test_plans(self):
         self.assertEqual(ev("plan", "commandcenter")["outcome"], "auto")             # required_for = []
         v = ev("plan", "gyst")
         self.assertEqual((v["outcome"], v["missing"]), ("jay", ["risk"]))           # risk_high, risk unknown
-        self.assertEqual(ev("plan", "gyst", labels=["risk:low"])["outcome"], "auto")
+        self.assertEqual(ev("plan", "gyst", labels=["risk:low"])["outcome"], "jay")   # a label never lowers risk
         self.assertEqual(ev("plan", "gyst", labels=["migration"])["outcome"], "jay")  # migration label = high risk
-        v = ev("plan", "samvision", labels=["risk:low"])
+        v = ev("plan", "samvision")
         self.assertEqual(v["outcome"], "jay")                                       # UI/workflow/API impact unknown
         self.assertIn("api change", v["missing"])
-        self.assertEqual(ev("plan", "samvision", labels=["risk:low", "ui"])["rule"], "target.plan_approval")
+        self.assertEqual(ev("plan", "samvision", labels=["ui"])["rule"], "target.plan_approval")
 
     def test_odd_input_never_raises(self):
         prof = POL.profile("gyst")
@@ -106,8 +126,7 @@ class Verdicts(unittest.TestCase):
                 self.assertIn(autonomy.evaluate(a, prof, fx)["outcome"], autonomy.OUTCOMES)
         bad = copy.deepcopy(prof)
         bad["target"]["merge"]["requires"] = ["telepathy"]
-        self.assertEqual(autonomy.evaluate("merge", bad, facts(project="gyst", files=[f("a.py")],
-                                                                labels=["risk:low"]))["outcome"], "jay")
+        self.assertEqual(autonomy.evaluate("merge", bad, facts(project="gyst", files=[f("a.py")]))["outcome"], "jay")
 
 
 class Observed(unittest.TestCase):
@@ -117,7 +136,10 @@ class Observed(unittest.TestCase):
         self.assertEqual(o([("pipeline.gate_opened", "", {"gate": "plan"})]), [("plan", "jay", {})])
         self.assertEqual(o([("pipeline.ready_to_merge", "", {"ci": "none"}),
                             ("pipeline.gate_opened", "", {"gate": "merge"})]), [("merge", "jay", {})])
-        self.assertEqual(o([("pipeline.auto_merged", "", {})]), [("merge", "auto", {})])
+        self.assertEqual(o([("pipeline.auto_merged", "", {"ci": "green"})]), [("merge", "auto", {"ci": "green"})])
+        # ccd decided to merge and gh refused: the gate that follows is not "ccd asked Jay"
+        self.assertEqual(o([("pipeline.auto_merge_failed", "", {}), ("pipeline.gate_opened", "", {"gate": "merge"})]),
+                         [("merge", "auto", {})])
         self.assertEqual(o([("pipeline.deploy_requested", "", {"env": "live"}),
                             ("pipeline.gate_opened", "", {"gate": "deploy"})]), [("deploy", "jay", {"env": "live"})])
         self.assertEqual(o([("pipeline.deploy_requested", "", {"env": "preview"})]), [("deploy", "auto", {"env": "preview"})])
@@ -146,7 +168,7 @@ class Record(unittest.TestCase):
 
     def test_summary_counts_and_lists_disagreements(self):
         self.sh.record(None, "gyst", "plan", "auto", ev("plan", "gyst"), facts(project="gyst"), "fp")
-        self.sh.record(None, "gyst", "plan", "auto", ev("plan", "gyst", labels=["risk:low"]), facts(project="gyst"), "fp")
+        self.sh.record(None, "gyst", "plan", "auto", ev("plan", "commandcenter"), facts(project="gyst"), "fp")
         s = self.sh.summary()
         self.assertEqual((s["total"], s["agree"], s["disagree"], s["mode"]), (2, 1, 1, "shadow"))
         self.assertEqual(s["counts"]["gyst"]["plan"]["pairs"], {"auto->jay": 1, "auto->auto": 1})
@@ -196,11 +218,35 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.rows(), [
             ("commandcenter", "plan", "auto", "auto", "target.plan_approval"),
             ("gyst", "plan", "auto", "jay", "target.plan_approval:unknown"),
-            ("gyst", "merge", "jay", "jay", "target.merge:unknown"),
-            ("commandcenter", "merge", "auto", "auto", "target.merge"),
+            ("gyst", "merge", "jay", "jay", "target.merge:requires"),
+            ("commandcenter", "merge", "auto", "jay", "target.merge:requires"),   # ADR 0007 allows no checks; target doesn't
         ])
         s = self.d.autonomy_state()
-        self.assertEqual((s["total"], s["disagree"], s["available"]), (4, 1, True))
+        self.assertEqual((s["total"], s["disagree"], s["available"]), (4, 2, True))
+
+    async def test_green_ci_and_allowlisted_files_agree(self):
+        self.gh.pr = view(statusCheckRollup=[{"conclusion": "SUCCESS"}])
+        self.to_ready()
+        await self.d._auto_merge()
+        self.assertEqual(self.rows()[-1], ("commandcenter", "merge", "auto", "auto", "target.merge"))
+
+    async def test_a_pr_at_a_newer_head_is_not_used_as_the_reviewed_one(self):
+        k = self.to_ready("gyst")
+        self.d._shadow_pr[k] = dict(view([f("docs/a.md")]), headRefOid="ee" * 20)
+        self.d._pipeline_result(*self.d.pipeline.hold_merge(k, HEAD, "x"))      # no event: gate already open
+        self.ts.db.execute("UPDATE ticket_work SET gate=NULL WHERE ticket_id=(SELECT id FROM tickets WHERE key=?)", (k,))
+        self.d._pipeline_result(*self.d.pipeline.hold_merge(k, HEAD, "held"))
+        facts_row = json.loads(self.ts.db.execute("SELECT facts FROM autonomy_shadow ORDER BY id DESC").fetchone()[0])
+        self.assertIsNone(facts_row.get("files"))
+
+    async def test_one_deploy_decision_per_deployment(self):
+        k = self.to_ready("gyst")
+        tid = self.ts._id_of(k)
+        self.d.shadow.record(tid, "gyst", "deploy", "jay", autonomy._verdict("jay", "x"), {}, "fp")
+        self.assertTrue(self.d._shadow_deploy_seen(tid))
+        self.d._shadow_record(self.ts.get(k), [("pipeline.deploy_requested", "", {"env": "live"}),
+                                               ("pipeline.gate_opened", "", {"gate": "deploy"})])
+        self.assertEqual(self.ts.db.execute("SELECT COUNT(*) FROM autonomy_shadow WHERE action='deploy'").fetchone()[0], 1)
 
     async def test_a_held_merge_on_protected_paths_agrees(self):
         self.gh.pr = view([f("server/ccd/autonomy.py")])
