@@ -2,7 +2,7 @@ import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
 import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
-  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState } from "./types";
+  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, WorkersState, WorkerNode } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -115,6 +115,14 @@ export class Api {
 
   decisions() {
     return this.req<LedgerState>("GET", "/api/decisions");
+  }
+
+  workers() {
+    return this.req<WorkersState>("GET", "/api/workers");
+  }
+  /** Jay + Developer Unlock: approve a pending worker node, or revoke one for good. */
+  workerAct(op: "approve" | "revoke", id: string, reason = "") {
+    return this.req<WorkerNode>("POST", `/api/workers/${op}`, op === "revoke" ? { id, reason } : { id });
   }
   /** Jay decides one finding: fix (a ui-finding task enters the pipeline) or skip. */
   uiDecide(project: string, run: string, finding: string, decision: "fix" | "skip") {

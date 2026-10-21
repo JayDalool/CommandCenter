@@ -62,7 +62,8 @@ ALLOWED = {
     ("POST", "/api/developer/handoff"), ("POST", "/api/developer/redeem"),
     ("GET", "/api/pty"), ("POST", "/api/pty/close"), ("WS", "/api/pty/{name}"),
     # v2 Phase 1: Project Operating Profiles, read-only
-    ("GET", "/api/profiles"), ("GET", "/api/autonomy"), ("GET", "/api/decisions"),
+    ("GET", "/api/profiles"), ("GET", "/api/autonomy"), ("GET", "/api/decisions"), ("GET", "/api/workers"), ("POST", "/api/workers/enrol"),
+    ("POST", "/api/workers/heartbeat"), ("POST", "/api/workers/approve"), ("POST", "/api/workers/revoke"),
 }
 JAY_PRESSES = {"/api/jay/merge", "/api/jay/go-live"}
 FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec", "push",

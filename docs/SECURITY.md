@@ -380,3 +380,22 @@ auto-merge (merge_policy DENY), each load records every file's SHA-256 and a com
 security event `policy.loaded`, and a broken, missing or drifting file raises the `policy:problems` alert. A
 profile that fails validation is unusable (`Policy.profile()` returns None) and the engine will treat it as the
 most restrictive policy. `GET /api/profiles` is token-gated and read-only; there is no write route.
+
+## Worker node tokens (v2 Phase 1)
+
+A worker node (e.g. the laptop) enrols with ccd's bearer token and receives its own node token once; ccd stores only
+the token's SHA-256 and compares in constant time. A node is unusable until Jay approves it (Jay AND Developer
+Unlock); a revoked node's token never works again and its name is never reused. The node token proves which node is
+calling `POST /api/workers/heartbeat`; on its own it grants nothing else yet (but see below). Jobs and per-job tokens come in Phase 2.
+
+**What a node really holds today.** Enrol and heartbeat both also need ccd's bearer token (every `/api` route
+does), so an enrolled machine keeps ccd's token as well as its node token. ccd's token reads and steers everything
+short of Developer Unlock and can claim any `X-CCD-Actor`, so only enrol machines that already hold it (Jay's own
+laptop). Per-actor tokens (PR 7) and a heartbeat that needs only the node token are the fix.
+
+**Approving the right machine.** Each node has a fingerprint (`abcd-ef01`, the start of its token's SHA-256). The
+enrol response returns it for the node to print; Settings → Workers shows it with who enrolled the node and when.
+Approve only when the two match: that check is the real guard. Enrol refuses an `agent:*` actor, but
+`X-CCD-Actor` is self-asserted until PR 7, so that only stops an agent that names itself honestly. At most 10 nodes
+can wait for approval. Anyone holding ccd's token can enrol a name first and so use it up for good (revoking is
+final); that is within the boundary above, where ccd's token is already full power.

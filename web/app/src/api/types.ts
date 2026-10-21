@@ -547,3 +547,15 @@ export interface ApprovalRecord {
 export interface LedgerState {
   available: boolean; decisions: DecisionRecord[]; approvals: ApprovalRecord[]; counts: Partial<Record<ApprovalState, number>>;
 }
+
+/** Worker nodes (ccd GET /api/workers, v2 Phase 1). The model and enrolment only: nothing is scheduled on a node yet. */
+export interface WorkerNode {
+  id: string; kind: "server" | "laptop" | "gpu" | "cloud"; owner: string; status: "pending" | "online" | "offline" | "revoked";
+  state: "pending" | "active" | "revoked"; capabilities: { os?: string; arch?: string; tools?: string[]; repos?: string[]; labels?: string[] };
+  version: string | null; enrolledAt: number; enrolledBy: string; approvedAt: number | null; approvedBy: string | null;
+  lastHeartbeat: number | null; revokedAt: number | null; fingerprint: string | null;
+}
+export interface WorkersState {
+  available: boolean; nodes: WorkerNode[]; onlineFor?: number;
+  events: { node: string; at: number; kind: string; actor: string; data: Record<string, unknown> }[];
+}

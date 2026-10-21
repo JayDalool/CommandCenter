@@ -77,6 +77,15 @@
     GET   /api/decisions             Decision records (Jay's policy decisions, answered questions; append-only) and
                                      Approval records (one per gate, bound to its subject hash). ?project= ?state=
                                      ?limit=. Read-only: a mirror of the gates, which still decide.
+    GET   /api/workers               worker nodes (server, laptop, …): status pending|online|offline|revoked,
+                                     capabilities, last heartbeat; recent worker events. Nothing runs on a node yet.
+    POST  /api/workers/enrol         {id, kind: laptop|gpu|cloud, capabilities, version} → {id, status: pending, token,
+                                     fingerprint}. The node token is shown ONCE (ccd keeps its SHA-256). Pending until
+                                     Jay approves. Not for agent:* actors; at most 10 pending (429).
+    POST  /api/workers/heartbeat     ccd's token AND header X-CCD-Node: "<id> <token>"; {capabilities?, version?}.
+                                     401 wrong node token, 403 revoked.
+    POST  /api/workers/approve       Jay AND Developer Unlock. {id}: pending → active
+    POST  /api/workers/revoke        Jay AND Developer Unlock. {id, reason?}: final for that node and token
     GET   /api/night-shift           every project's night shift: running?, coordinator, newest morning report
                                      (agent-written text, at most 64 KB), cutoff time, and `goLive`: the tickets a
                                      Go Live would approve and merged tickets that are unverified or wait on a UI review
@@ -430,6 +439,26 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
 
     async def autonomy_state(request, _):
         return daemon.autonomy_state()
+
+    async def workers_state(request, _):
+        return daemon.workers_state()
+
+    async def worker_enrol(request, body):
+        return daemon.worker_enrol(body, request.state.actor)
+
+    async def worker_heartbeat(request, body):
+        parts = (request.headers.get("x-ccd-node") or "").split(None, 1)     # "<id> <token>", any whitespace
+        node, token = (parts + ["", ""])[:2]
+        return daemon.worker_heartbeat(node, token.strip(), body)
+
+    async def worker_approve(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.act_worker("approve", str(body.get("id") or ""), request.state.actor, developer=dev)
+
+    async def worker_revoke(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.act_worker("revoke", str(body.get("id") or ""), request.state.actor, developer=dev,
+                                 reason=str(body.get("reason") or ""))
 
     async def decisions_state(request, _):
         q = request.query_params
@@ -983,6 +1012,11 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/profiles", guarded(profiles_state), methods=["GET"]),
         Route("/api/autonomy", guarded(autonomy_state), methods=["GET"]),
         Route("/api/decisions", guarded(decisions_state), methods=["GET"]),
+        Route("/api/workers", guarded(workers_state), methods=["GET"]),
+        Route("/api/workers/enrol", guarded(worker_enrol), methods=["POST"]),
+        Route("/api/workers/heartbeat", guarded(worker_heartbeat), methods=["POST"]),
+        Route("/api/workers/approve", guarded(worker_approve), methods=["POST"]),
+        Route("/api/workers/revoke", guarded(worker_revoke), methods=["POST"]),
         Route("/api/tasks/ui-test", guarded(ui_test), methods=["POST"]),
         Route("/api/ui-tests", guarded(ui_tests_state), methods=["GET"]),
         Route("/api/ui-tests/decide", guarded(ui_decide), methods=["POST"]),
