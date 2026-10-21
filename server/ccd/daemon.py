@@ -25,6 +25,7 @@ from pathlib import Path
 from . import __version__, autonomy, coordid, coordinators, github, ledger, merge_policy, model, profiles, registry, sources
 from . import pipeline as pipeline_mod
 from . import workers as workers_mod
+from . import inbox as inbox_mod
 from . import herdr as herdr_mod
 from . import importer
 from . import nightshift as nightshift_mod
@@ -302,6 +303,8 @@ class Daemon:
         self.ledger = ledger.Ledger(tasks.db) if getattr(tasks, "db", None) is not None else None
         # Worker nodes (PR 5): the model and enrolment only. Nothing is scheduled on a node yet (Phase 2).
         self.workers = workers_mod.Workers(tasks.db, version=__version__) if getattr(tasks, "db", None) is not None else None
+        # Needs You v2 (PR 6): what v2 knows about each queue item. Read-only.
+        self.inbox = inbox_mod.Inbox(tasks.db) if getattr(tasks, "db", None) is not None else None
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
@@ -1804,6 +1807,18 @@ class Daemon:
             return fn(*a)
         except workers_mod.WorkerError as e:
             raise ActionError(e.status, e.message) from None
+
+    def inbox_state(self):
+        """GET /api/inbox: per Needs-You item, its pending Approval, the shadow engine's verdict and precedents for
+        open questions. The queue itself is state.needs, unchanged. Read-only; a failure here never breaks it."""
+        empty = {"available": False, "items": {}, "orphans": [], "counts": {}}
+        if self.inbox is None:
+            return empty
+        try:
+            return dict(inbox_mod.plain(self.inbox.enrich(self.state().get("needs") or [])), available=True)
+        except Exception as e:  # noqa: BLE001 — the inbox is an overlay; the queue never depends on it
+            log.warning(json.dumps({"msg": "inbox overlay failed", "error": repr(e)[:200]}))
+            return dict(empty, error="the Needs You details could not be read")
 
     def workers_state(self):
         if self.workers is None:

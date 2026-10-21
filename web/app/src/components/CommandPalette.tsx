@@ -60,7 +60,7 @@ export function buildItems(onNewTask: () => void): PalItem[] {
         .filter(([, uri]) => uri).map(([label, uri, hint], i) => ({ id: `nt:${i}`, kind: "ACTION" as const, label, hint,
           keywords: "native windows terminal ssh wt", run: () => { location.href = uri!; } }));
     })(),
-    ...NAV.map((s, i) => ({ id: `go:${s.id}`, kind: "GO" as const, label: s.label, hint: String(i + 1), run: () => go(s.id) })),
+    ...NAV.map((s) => ({ id: `go:${s.id}`, kind: "GO" as const, label: s.label, hint: s.key, run: () => go(s.id) })),
     // Diagnostics: no longer primary navigation, still one command away (and under Settings → Diagnostics).
     ...([["projects", "Projects"], ["development", "Development"], ["agents", "Agents"], ["server", "Server"], ["alerts", "Alerts"],
       ["prs", "Pull requests"], ["workspaces", "herdr layout"]] as [string, string][]).map(([id, label]) => ({ id: `go:${id}`,

@@ -77,6 +77,10 @@
     GET   /api/decisions             Decision records (Jay's policy decisions, answered questions; append-only) and
                                      Approval records (one per gate, bound to its subject hash). ?project= ?state=
                                      ?limit=. Read-only: a mirror of the gates, which still decide.
+    GET   /api/inbox                 Needs You v2 details per queue item (id = kind:project:ref): the pending Approval
+                                     (subject hash, expiry, overdue), the shadow engine's last verdict for the gate,
+                                     and earlier answers to the same question (precedents; shown, never applied).
+                                     Read-only: the queue itself is state.needs.
     GET   /api/workers               worker nodes (server, laptop, …): status pending|online|offline|revoked,
                                      capabilities, last heartbeat; recent worker events. Nothing runs on a node yet.
     POST  /api/workers/enrol         {id, kind: laptop|gpu|cloud, capabilities, version} → {id, status: pending, token,
@@ -470,6 +474,9 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         except ValueError:
             raise ActionError(400, "limit must be a number") from None
         return daemon.ledger_state(q.get("project") or None, state, limit)
+
+    async def inbox_state(request, _):
+        return daemon.inbox_state()
 
     async def night_state(request, _):
         return daemon.night_state()
@@ -1012,6 +1019,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/profiles", guarded(profiles_state), methods=["GET"]),
         Route("/api/autonomy", guarded(autonomy_state), methods=["GET"]),
         Route("/api/decisions", guarded(decisions_state), methods=["GET"]),
+        Route("/api/inbox", guarded(inbox_state), methods=["GET"]),
         Route("/api/workers", guarded(workers_state), methods=["GET"]),
         Route("/api/workers/enrol", guarded(worker_enrol), methods=["POST"]),
         Route("/api/workers/heartbeat", guarded(worker_heartbeat), methods=["POST"]),

@@ -85,6 +85,8 @@ describe("global keyboard", () => {
     expect(location.hash).toBe("#/workspace");
     await user.keyboard("5");
     expect(location.hash).toBe("#/files");
+    await user.keyboard("0");
+    expect(location.hash).toBe("#/needs");
   });
 
   it("keys typed in the file editor stay in the editor (Monaco's EditContext div)", async () => {

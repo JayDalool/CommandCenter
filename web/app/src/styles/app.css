@@ -681,3 +681,25 @@ a.ctx-item { text-decoration: none; }
 .pol-problems { margin: 8px 0 0; padding-left: 18px; }
 .pol-shadow { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
 .led-note { padding: 10px var(--pad-x); margin: 0; }
+
+/* Needs You v2 (screens/NeedsYou.tsx) */
+.ny-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ny-head p { margin: 0; }
+.ny-list { list-style: none; margin: 0; padding: 0; }
+.ny-card { padding: 8px var(--pad-x); border-top: 1px solid var(--line); }
+.ny-card:first-child { border-top: 0; }
+.ny-card.is-overdue { box-shadow: inset 2px 0 0 var(--jay); }
+.ny-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ny-type { flex: none; min-width: 118px; font-size: var(--fs-sm); color: var(--jay); font-weight: 600; }
+.ny-ref { flex: none; }
+.ny-text { flex: 1; min-width: 0; color: var(--text); }
+.ny-act { flex: none; text-decoration: none; }
+.ny-meta { display: flex; gap: 14px; flex-wrap: wrap; margin: 3px 0 0 128px; color: var(--text-2); }
+.ny-prec { margin: 4px 0 0 128px; font-size: var(--fs-sm); }
+.ny-overdue { color: var(--jay); font-weight: 600; }
+.ny-list > li.mono-xs { padding: 4px var(--pad-x); }
+@media (max-width: 720px) {
+  .ny-main { flex-wrap: wrap; }
+  .ny-type { min-width: 0; }
+  .ny-meta, .ny-prec { margin-left: 0; }
+}

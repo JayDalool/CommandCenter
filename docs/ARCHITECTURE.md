@@ -492,3 +492,16 @@ nodes are never deleted, `active` needs `approved_by = 'jay'`, revoked is final,
 change, and the event log is append-only; ccd writes each status change and its `worker_events` row in one
 transaction (heartbeats are not events). Agents cannot enrol a
 node; each node has a fingerprint Jay matches before approving. Settings → Workers.
+
+### Needs You v2 (PR 6)
+
+One inbox over everything that waits on Jay (sidebar → Needs You, key `0`). The queue is unchanged: it is still
+`state.needs` plus blocked agents, assembled by the same `jayQueue` the dashboard and the bell use, so the three
+never disagree. `ccd/inbox.py` adds, read-only, per item (GET /api/inbox, keyed `kind:project:ref`): the pending
+Approval for a gate (subject hash, expiry, overdue), the shadow engine's newest verdict for that gate, and for open
+questions earlier answered questions with the same wording, kind and options in the same project (at least three
+meaningful words; task-check proposals never count; shown, never applied). Items are grouped by project or by type,
+overdue first (groups too); each card has one action, which opens the place Jay acts today. A gate hidden behind its
+ticket's open questions carries its approval on the questions card. Pending approvals with no item in the queue are
+listed as a consistency check. The page re-reads the details every minute. A failure in the
+overlay leaves the list complete. Approving several at once waits for the engine to leave shadow mode.
