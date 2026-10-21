@@ -62,7 +62,7 @@ ALLOWED = {
     ("POST", "/api/developer/handoff"), ("POST", "/api/developer/redeem"),
     ("GET", "/api/pty"), ("POST", "/api/pty/close"), ("WS", "/api/pty/{name}"),
     # v2 Phase 1: Project Operating Profiles, read-only
-    ("GET", "/api/profiles"), ("GET", "/api/autonomy"), ("GET", "/api/decisions"), ("GET", "/api/inbox"), ("GET", "/api/workers"), ("POST", "/api/workers/enrol"),
+    ("GET", "/api/profiles"), ("GET", "/api/autonomy"), ("GET", "/api/decisions"), ("GET", "/api/inbox"), ("GET", "/api/audit"), ("GET", "/api/usage"), ("GET", "/api/actors"), ("POST", "/api/actors/issue"), ("POST", "/api/actors/revoke"), ("GET", "/api/workers"), ("POST", "/api/workers/enrol"),
     ("POST", "/api/workers/heartbeat"), ("POST", "/api/workers/approve"), ("POST", "/api/workers/revoke"),
 }
 JAY_PRESSES = {"/api/jay/merge", "/api/jay/go-live"}

@@ -134,7 +134,8 @@ class Ledger:
                  now, by, now + APPROVAL_TTL, profile_hash))
             self.db.execute(commit)
         except BaseException:
-            self.db.execute(rollback)
+            if self.db.in_transaction:     # SQLite may already have rolled it all back (disk full, I/O)
+                self.db.execute(rollback)
             if commit.startswith("RELEASE"):
                 self.db.execute(commit)
             raise

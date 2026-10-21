@@ -8,6 +8,8 @@ import type { ImportPreview, LauncherInfo } from "../api/types";
 import { DevBadge } from "../components/DevMode";
 import { Decisions } from "../components/Decisions";
 import { Workers } from "../components/Workers";
+import { Audit } from "../components/Audit";
+import { Usage } from "../components/Usage";
 import { Policies } from "../components/Policies";
 import { Panel, Seg, Command, DetailRow, EmptyState, Project } from "../components/ui";
 import { stamp } from "../lib/time";
@@ -18,7 +20,7 @@ export function Settings() {
   return <div className="stack">
     <Seg label="Settings section" value={tab} onChange={(v) => go("settings", null, { tab: v === "general" ? undefined : v })}
       options={[{ v: "general", label: "General" }, { v: "desktop", label: "Desktop app" }, { v: "developer", label: "Developer mode" },
-        { v: "connection", label: "Connection" }, { v: "policies", label: "Policies" }, { v: "decisions", label: "Decisions" }, { v: "workers", label: "Workers" }, { v: "import", label: "Task migration preview" }, { v: "diagnostics", label: "Diagnostics" }]} />
+        { v: "connection", label: "Connection" }, { v: "policies", label: "Policies" }, { v: "decisions", label: "Decisions" }, { v: "workers", label: "Workers" }, { v: "audit", label: "Audit" }, { v: "usage", label: "Usage" }, { v: "import", label: "Task migration preview" }, { v: "diagnostics", label: "Diagnostics" }]} />
     {tab === "general" && <General />}
     {tab === "desktop" && <DesktopApp />}
     {tab === "developer" && <DeveloperMode />}
@@ -26,6 +28,8 @@ export function Settings() {
     {tab === "policies" && <Policies />}
     {tab === "decisions" && <Decisions />}
     {tab === "workers" && <Workers />}
+    {tab === "audit" && <Audit />}
+    {tab === "usage" && <Usage />}
     {tab === "import" && <ImportPreviewView />}
     {tab === "diagnostics" && <Diagnostics />}
   </div>;

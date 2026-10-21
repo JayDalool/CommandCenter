@@ -53,7 +53,7 @@ export function Workers() {
           <td className={n.status === "online" ? "ok-t" : n.status === "pending" ? "warn-t" : "muted"}>{STATUS[n.status]}</td>
           <td className="mono-xs" title="compare with what the machine printed when it enrolled">{n.fingerprint ?? "—"}</td>
           <td className="mono-xs" title={new Date(n.enrolledAt * 1000).toLocaleString()}>{n.enrolledBy} · {ago(n.enrolledAt)}
-            {n.approvedBy ? ` · approved by ${n.approvedBy}` : ""}</td>
+            {n.approvedBy && n.kind !== "server" ? ` · approved by ${n.approvedBy}` : ""}</td>
           <td className="mono-xs">{ago(n.lastHeartbeat)}</td>
           <td className="mono-xs">{(n.capabilities.tools ?? []).join(", ") || "—"}</td>
           <td className="mono-xs">{(n.capabilities.repos ?? []).join(", ") || "—"}</td>
@@ -68,7 +68,7 @@ export function Workers() {
         {!dev && " Approving or revoking a node needs Developer Mode."}</p>
     </Panel>
     {data.events.length > 0 && <Panel title="Recent" count={data.events.length}>
-      <ul className="pol-shadow">{data.events.slice(0, 20).map((e) => <li key={`${e.node}-${e.at}-${e.kind}`}>
+      <ul className="pol-shadow">{data.events.slice(0, 20).map((e) => <li key={e.id ?? `${e.node}-${e.at}-${e.kind}`}>
         <span className="mono-xs muted">{new Date(e.at * 1000).toLocaleString()}</span> <b>{e.node}</b> {e.kind} by {e.actor}
         {typeof e.data.reason === "string" && e.data.reason ? <span className="muted"> — {e.data.reason}</span> : null}</li>)}</ul>
     </Panel>}

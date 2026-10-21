@@ -120,8 +120,8 @@ is no redactor on ticket text.
 
 **Attribution limit.** Agents run as the same Unix user and can read the token,
 so `X-CCD-Actor` is self-asserted: it keeps honest agents' writes from being
-filed under Jay; it is not authentication. Per-agent tokens are the fix if that
-ever matters.
+filed under Jay; it is not authentication. Since PR 7 every write is also
+recorded with how far its actor is proven (below), but nothing is refused yet.
 
 **Read-only by design.** The import preview reads files and cached GitHub data
 on its own read-only SQLite connection; there is no apply endpoint. herdr's
@@ -399,3 +399,37 @@ Approve only when the two match: that check is the real guard. Enrol refuses an 
 `X-CCD-Actor` is self-asserted until PR 7, so that only stops an agent that names itself honestly. At most 10 nodes
 can wait for approval. Anyone holding ccd's token can enrol a name first and so use it up for good (revoking is
 final); that is within the boundary above, where ccd's token is already full power.
+
+## Audit trail, actor identity and metering (v2 Phase 1, PR 7)
+
+**Audit trail** (`ccd/audit.py`, tasks.db v9 `audit_events`). One row for every write (`POST/PATCH/PUT/DELETE`)
+that got past the token check, and for each pipeline event ccd itself produced (`system:ccd`). A row keeps: time,
+claimed actor, how it is proven (`developer` = a live Developer Unlock session and the claim is `jay`; `token` = an
+actor token, verified only when it names the claimed actor; `none`; `system`), method, path, response status,
+project and ticket when the path or body names them, the policy fingerprint, the SHA-256 of the JSON body and its
+top-level key names. **Never the body itself**, and for the Developer Unlock routes not even its hash (their body
+is the developer secret). Requests without ccd's token are not recorded, so the table cannot be flooded from
+outside; a failed sign-in-code redeem is not recorded either. Triggers refuse UPDATE and DELETE; each row also
+carries `sha = sha256(prev_sha + row)`, so editing the file directly breaks the chain, which Settings → Audit checks.
+Recording happens after the response and never changes it; a failure to record is logged.
+
+The Developer Unlock check used for recording is read-only (it does not refresh the session's idle timer);
+`security.py` is unchanged.
+
+**Actor tokens** (`ccd/identity.py`, `actor_tokens`). Jay, with Developer Unlock, issues a token to one agent
+(`agent:<name>`, never `jay`: Jay is proven by Developer Unlock). It is shown once (`cca_…`); ccd keeps its SHA-256,
+an expiry (default 30 days, at most 365) and a fingerprint. Tokens are never deleted, and the only change allowed is
+one revoke. An agent sends it as `X-CCD-Actor-Token` next to `X-CCD-Actor`. **Nothing requires it yet**: a write
+without it, or with one naming a different actor, still happens and is recorded as unverified (a mismatch is flagged).
+Settings → Audit shows what requiring it would refuse; turning that on is Phase 2 and needs Jay's decision. Limits:
+an actor token lives wherever the agent keeps it, in the same Unix account as ccd's token, so it raises the bar for
+honest mistakes and makes a false claim visible, not impossible; per-job tokens on separate workers (Phase 2) are
+the stronger fix.
+
+**Metering** (`ccd/meter.py`, `usage_records`). Every 5 minutes ccd reads what is new in the agents' own session logs
+on this machine (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`), off the event loop, at most 8 MB
+a pass. From each line it keeps only the model, token counts, time, session id, working directory and branch (to tie
+the use to a project and ticket); **message text is never stored**. A work step may also report its own `usage`
+object. Costs are estimates at Anthropic list prices (a subscription is not billed per token; Codex is counted in
+tokens only). Profile budgets (`target.budget`) are displayed against month-to-date use; nothing is stopped when one
+is passed. Set `"meter": {"enabled": false}` in config to turn reading the logs off.

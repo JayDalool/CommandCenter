@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import subprocess
 import time
 from pathlib import Path
@@ -26,6 +27,9 @@ from . import __version__, autonomy, coordid, coordinators, github, ledger, merg
 from . import pipeline as pipeline_mod
 from . import workers as workers_mod
 from . import inbox as inbox_mod
+from . import audit as audit_mod
+from . import identity as identity_mod
+from . import meter as meter_mod
 from . import herdr as herdr_mod
 from . import importer
 from . import nightshift as nightshift_mod
@@ -305,6 +309,14 @@ class Daemon:
         self.workers = workers_mod.Workers(tasks.db, version=__version__) if getattr(tasks, "db", None) is not None else None
         # Needs You v2 (PR 6): what v2 knows about each queue item. Read-only.
         self.inbox = inbox_mod.Inbox(tasks.db) if getattr(tasks, "db", None) is not None else None
+        # PR 7: who did what (audit trail + per-agent actor tokens) and what it used (token metering). All three
+        # record; none refuses a request or stops work. Identity enforcement and budget limits are Phase 2.
+        has_db = getattr(tasks, "db", None) is not None
+        self.audit = audit_mod.Audit(tasks.db) if has_db else None
+        self.actor_tokens = identity_mod.ActorTokens(tasks.db) if has_db else None
+        meter_cfg = (cfg.get("meter") or {}) if isinstance(cfg, dict) else {}
+        self.meter = meter_mod.Meter(tasks.db, roots=meter_cfg.get("roots"), attribute=self._meter_attribute) \
+            if has_db and meter_cfg.get("enabled", True) else None
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
@@ -358,7 +370,7 @@ class Daemon:
 
     def start(self):
         loops = [self.herdr_loop, self.github_loop, self.git_loop, self.host_loop, self.derive_loop,
-                 self.housekeeping_loop, self.night_loop]
+                 self.housekeeping_loop, self.night_loop, self.meter_loop]
         self._loops = [asyncio.create_task(fn(), name=fn.__name__) for fn in loops]
         self._event("daemon", "daemon.started", f"ccd {__version__} started", data={"pid": os.getpid()})
         self._log_merge_policy()
@@ -1439,6 +1451,8 @@ class Daemon:
             raise ActionError(400, "body must be an object")
         pl = self.pipeline
         meta = {"model": body.get("model"), "session": body.get("session")}
+        if "usage" in body:
+            self._meter_report(key, op, actor, body)
         if op == "plan":
             r = self._wrap(pl.plan, key, body.get("plan"), actor, **meta)
         elif op == "start":
@@ -1735,6 +1749,7 @@ class Daemon:
             self._record_soon(ticket["key"])
             self._shadow_record(ticket, events)
             self._ledger_record(ticket, events)
+            self._audit_system(ticket, events)
 
     def _shadow_record(self, ticket, events):
         """Autonomy Engine, shadow mode: for each decision in this step (plan accepted or gated, merged by ccd or
@@ -1807,6 +1822,9 @@ class Daemon:
             return fn(*a)
         except workers_mod.WorkerError as e:
             raise ActionError(e.status, e.message) from None
+        except sqlite3.DatabaseError as e:         # a refused write (schema CHECK, busy database): a clear 409, not a 500
+            log.warning(json.dumps({"msg": "worker change refused by the database", "error": repr(e)[:200]}))
+            raise ActionError(409, "the worker record refused that change; reload and try again") from None
 
     def inbox_state(self):
         """GET /api/inbox: per Needs-You item, its pending Approval, the shadow engine's verdict and precedents for
@@ -1848,6 +1866,132 @@ class Daemon:
         self._event("security", f"worker.{'approved' if op == 'approve' else 'revoked'}",
                     f"Jay {'approved' if op == 'approve' else 'revoked'} worker node {node}", data={"node": node})
         return out
+
+    # ---------- audit trail, actor identity, metering (PR 7) ----------
+
+    def audit_write(self, method, path, status, claimed, body, dev_sid, actor_token):
+        """AuditTrail (api.py) after every write that passed Guard. Records; never raises, never refuses."""
+        if self.audit is None:
+            return
+        try:
+            tok_actor = self.actor_tokens.verify(actor_token) if actor_token and self.actor_tokens else None
+            who = identity_mod.identify(claimed, identity_mod.developer_session_valid(getattr(self, "dev_gate", None),
+                                                                                      dev_sid), tok_actor)
+            self.audit.record(actor=who["actor"], verified=who["verified"], via=who["via"],
+                              token_actor=who["tokenActor"], method=method, path=path, status=status, body=body,
+                              summary="actor token names a different actor" if who["mismatch"] else "",
+                              profile_hash=getattr(self.policy, "fingerprint", None))
+        except Exception as e:  # noqa: BLE001 — the audit trail is a record; it must never break a write
+            log.warning(json.dumps({"msg": "audit write skipped", "path": str(path)[:100], "error": repr(e)[:200]}))
+
+    def _audit_system(self, ticket, events):
+        """What ccd itself did to a ticket in one pipeline step (gates opened, auto-merges, blocks), as system:ccd."""
+        if self.audit is None:
+            return
+        try:
+            for kind, text, _data in events:
+                self.audit.record(actor="system:ccd", verified=True, via="system", method="EVENT", path=str(kind),
+                                  status=0, project=ticket.get("project"), ref=ticket.get("key"), summary=text,
+                                  profile_hash=getattr(self.policy, "fingerprint", None))
+        except Exception as e:  # noqa: BLE001
+            log.warning(json.dumps({"msg": "audit (system) skipped", "key": ticket.get("key"), "error": repr(e)[:200]}))
+
+    def audit_state(self, actor=None, verified=None, limit=100):
+        if self.audit is None:
+            return {"available": False, "events": [], "summary": {}, "chain": {}}
+        return {"available": True, "events": self.audit.list(actor, verified, limit), "summary": self.audit.summary(),
+                "chain": self.audit.verify()}
+
+    def actors_state(self):
+        if self.actor_tokens is None:
+            return {"available": False, "tokens": []}
+        return {"available": True, "tokens": self.actor_tokens.list(), "header": "X-CCD-Actor-Token"}
+
+    def act_actor_token(self, op, body, actor="jay", developer=False):
+        """Jay issues or revokes an agent's actor token. Jay AND Developer Unlock: a token vouches for an agent."""
+        if actor != "jay" or not developer:
+            raise ActionError(403, f"Developer Unlock required: {op} an actor token")
+        if self.actor_tokens is None:
+            raise ActionError(503, "the task system is not enabled")
+        try:
+            if op == "issue":
+                out = self.actor_tokens.issue(body.get("actor"), actor, body.get("ttlDays"), body.get("note") or "")
+                self._event("security", "actor_token.issued", f"Jay issued an actor token for {out['actor']} "
+                            f"({out['fingerprint']})", data={"actor": out["actor"], "id": out["id"]})
+                return out
+            tid = body.get("id")
+            if not isinstance(tid, int) or isinstance(tid, bool):
+                raise ActionError(400, "id must be a number")
+            out = self.actor_tokens.revoke(tid, actor)
+            self._event("security", "actor_token.revoked", f"Jay revoked actor token {tid} ({out['actor']})",
+                        data={"id": tid})
+            return out
+        except identity_mod.IdentityError as e:
+            raise ActionError(e.status, e.message) from None
+
+    def _meter_attribute(self, cwd, branch):
+        """(project, ticket key) for a transcript's working directory and branch. A ticket's own worktree wins;
+        then a ticket key in the branch or directory name that exists in that project."""
+        if not cwd and not branch:
+            return None, None
+        project = model._pane_project({"cwd": cwd or ""}, self.cfg["projects"], (self.git or {}).get("worktrees")) \
+            if cwd else None
+        db = self.tasks.db
+        if cwd:
+            real = os.path.realpath(cwd)
+            for key, proj, wt in db.execute("SELECT t.key, t.project, w.worktree FROM ticket_work w JOIN tickets t "
+                                            "ON t.id = w.ticket_id WHERE w.worktree IS NOT NULL"):
+                r = os.path.realpath(wt)
+                if real == r or real.startswith(r.rstrip("/") + "/"):
+                    return proj, key
+        for text in (branch or "", os.path.basename(cwd or "")):
+            for m in meter_mod.KEY_IN_TEXT.finditer(text):
+                row = db.execute("SELECT key, project FROM tickets WHERE key = ? COLLATE NOCASE", (m.group(1),)).fetchone()
+                if row and (project is None or row[1] == project):
+                    return row[1], row[0]
+        return project, None
+
+    def _meter_report(self, key, op, actor, body):
+        """A work step's own `usage` (optional). Recorded as reported; never fails the step."""
+        if self.meter is None:
+            return
+        try:
+            u = body.get("usage")
+            t = self.tasks.get(key) if self.tasks.exists(key) else {}
+            ref = u.get("ref") if isinstance(u, dict) and isinstance(u.get("ref"), str) else \
+                f"{key}:{op}:{body.get('session') or ''}:{time.time()}"
+            self.meter.report(ref, t.get("project"), t.get("key"), actor, u)
+        except Exception as e:  # noqa: BLE001
+            log.warning(json.dumps({"msg": "usage report skipped", "key": str(key)[:40], "error": repr(e)[:200]}))
+
+    METER_EVERY = 300
+
+    async def meter_loop(self):
+        """Read new usage from the agents' session logs every few minutes. Files are read off the event loop;
+        rows are written on it (tasks.db is one connection)."""
+        await asyncio.sleep(60)
+        while not self._stopping and self.meter is not None:
+            try:
+                plan = self.meter.plan()
+                results = await asyncio.to_thread(self.meter.read, plan)
+                n = self.meter.store(results)
+                if n:
+                    log.info(json.dumps({"msg": "usage metered", "rows": n}))
+            except Exception as e:  # noqa: BLE001 — metering is a record; it never affects anything else
+                log.warning(json.dumps({"msg": "usage scan failed", "error": repr(e)[:200]}))
+            await asyncio.sleep(self.METER_EVERY)
+
+    def usage_state(self, days=14):
+        if self.meter is None:
+            return {"available": False}
+        budgets = {}
+        for key, rec in (getattr(self.policy, "profiles", None) or {}).items():
+            b = ((rec.get("profile") or {}).get("target") or {}).get("budget") if rec.get("valid", True) else None
+            if isinstance(b, dict) and b:
+                budgets[key] = b
+        return dict(self.meter.summary(days, budgets), available=True,
+                    note="Estimate at Anthropic list prices; subscription plans are not billed per token. "
+                         "Codex usage is counted in tokens only. Budgets are shown, not enforced.")
 
     def _ledger_start(self):
         """At start: Jay's policy decisions become Decision records; every open gate gets its pending Approval."""

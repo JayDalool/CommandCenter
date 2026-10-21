@@ -2,7 +2,7 @@ import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
 import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
-  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, InboxState, WorkersState, WorkerNode } from "./types";
+  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, InboxState, WorkersState, WorkerNode, AuditState, ActorsState, ActorToken, UsageState } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -120,6 +120,22 @@ export class Api {
   /** Needs You v2 details per queue item (approval, engine verdict, precedents). Read-only. */
   inbox() {
     return this.req<InboxState>("GET", "/api/inbox");
+  }
+  audit(q = "") {
+    return this.req<AuditState>("GET", `/api/audit${q}`);
+  }
+  usage(days = 14) {
+    return this.req<UsageState>("GET", `/api/usage?days=${days}`);
+  }
+  actors() {
+    return this.req<ActorsState>("GET", "/api/actors");
+  }
+  /** Jay + Developer Unlock. The token comes back once. */
+  actorIssue(actor: string, ttlDays: number, note: string) {
+    return this.req<ActorToken & { token: string }>("POST", "/api/actors/issue", { actor, ttlDays, note });
+  }
+  actorRevoke(id: number) {
+    return this.req<ActorToken>("POST", "/api/actors/revoke", { id });
   }
 
   workers() {

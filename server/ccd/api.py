@@ -34,6 +34,15 @@
     POST  /api/attachments           DEVELOPER. octet-stream; stored outside every repository
     GET   /api/attachments/{id}/download   always application/octet-stream + attachment
     DELETE /api/attachments/{id}     DEVELOPER. remove (audited; contents never recorded)
+    GET   /api/audit                 the global audit trail (PR 7): newest writes, who made them, how far that is
+                                     verified (developer / token / none / system), the hash chain's check, and what
+                                     enforcing verified identity would refuse. ?actor= ?verified=0|1 ?limit=
+    GET   /api/usage                 token use and estimated cost from the agents' session logs (PR 7) by project,
+                                     model, day and ticket, plus month-to-date against profile budgets. ?days=
+    GET   /api/actors                per-agent actor tokens (fingerprints only; a token is shown once, on issue)
+    POST  /api/actors/issue          JAY + DEVELOPER UNLOCK. {actor: "agent:<name>", ttlDays?, note?} → the token,
+                                     once. An agent sends it as X-CCD-Actor-Token; recorded, not yet required
+    POST  /api/actors/revoke         JAY + DEVELOPER UNLOCK. {id}
     GET   /api/developer             is this tab's developer session active?
     POST  /api/developer/unlock      developer token → a short-lived in-memory session id
     POST  /api/developer/lock        end that session
@@ -129,6 +138,7 @@ There is deliberately no endpoint for merge, deploy, production commands,
 asserts this route table exactly, so adding one is a visible, reviewed change.
 """
 import asyncio
+import contextvars
 import json
 import os
 import re
@@ -179,6 +189,50 @@ def ws_token_from_protocols(header):
 
 def _json(data, status=200):
     return JSONResponse(data, status_code=status, headers=NO_STORE)
+
+
+# What a handler learned about the write it served (claimed actor, parsed JSON body), for AuditTrail. A dict the
+# middleware creates per request; the handler fills it in. Never read for any decision.
+_AUDIT = contextvars.ContextVar("ccd_audit_note", default=None)
+
+
+def _note(**kw):
+    d = _AUDIT.get()
+    if d is not None:
+        d.update(kw)
+
+
+class AuditTrail:
+    """The global audit trail (PR 7, ccd/audit.py): one row for every write that got past Guard (so a request
+    without ccd's token is never recorded), with the response status and how far its actor is verified. Recording
+    happens after the response is sent and can never change it; a failure to record is logged by the daemon."""
+
+    def __init__(self, app, daemon):
+        self.app = app
+        self.daemon = daemon
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("method") not in WRITE_METHODS \
+                or getattr(self.daemon, "audit", None) is None:
+            return await self.app(scope, receive, send)
+        note, status = {}, [0]
+        tok = _AUDIT.set(note)
+
+        async def send_status(message):
+            if message["type"] == "http.response.start":
+                status[0] = message["status"]
+            await send(message)
+        try:
+            await self.app(scope, receive, send_status)
+        finally:
+            _AUDIT.reset(tok)
+            path = scope.get("path", "")
+            # Redeem needs no token (Guard checks Host/Origin only): record a sign-in, not every failed guess.
+            if not (path == REDEEM_PATH and not 200 <= status[0] < 300):
+                headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+                claimed = note.get("claimed") or headers.get("x-ccd-actor") or "jay"
+                self.daemon.audit_write(scope["method"], path, status[0] or 500, claimed, note.get("body"),
+                                        headers.get(DEV_HEADER), headers.get("x-ccd-actor-token"))
 
 
 class Guard:
@@ -339,7 +393,9 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     def action(fn):
         async def handler(request):
             try:
-                return _json(await fn(await _body(request)))
+                body = await _body(request)
+                _note(body=body)
+                return _json(await fn(body))
             except ActionError as e:
                 return _json({"ok": False, "error": e.message}, e.status)
         return handler
@@ -376,7 +432,9 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         async def handler(request):
             try:
                 body = await _body(request) if request.method in WRITE_METHODS else None
+                _note(body=body)
                 request.state.actor = actor_of(request)
+                _note(claimed=request.state.actor)
                 return _json(await fn(request, body), 201 if request.method == "POST" and fn is create_task else 200)
             except ActionError as e:
                 return _json({"ok": False, "error": e.message}, e.status)
@@ -478,6 +536,35 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     async def inbox_state(request, _):
         return daemon.inbox_state()
 
+    async def audit_state(request, _):
+        q = request.query_params
+        try:
+            limit = int(q.get("limit", "100"))
+        except ValueError:
+            raise ActionError(400, "limit must be an integer") from None
+        v = q.get("verified")
+        if v not in (None, "0", "1"):
+            raise ActionError(400, "verified must be 0 or 1")
+        return daemon.audit_state(q.get("actor") or None, None if v is None else v == "1", limit)
+
+    async def usage_state(request, _):
+        try:
+            days = int(request.query_params.get("days", "14"))
+        except ValueError:
+            raise ActionError(400, "days must be an integer") from None
+        return daemon.usage_state(max(1, min(days, 90)))
+
+    async def actors_state(request, _):
+        return daemon.actors_state()
+
+    async def actor_issue(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.act_actor_token("issue", body, request.state.actor, developer=dev)
+
+    async def actor_revoke(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.act_actor_token("revoke", body, request.state.actor, developer=dev)
+
     async def night_state(request, _):
         return daemon.night_state()
 
@@ -542,6 +629,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
                 if dev:
                     developer(request)
                 request.state.actor = actor_of(request)
+                _note(claimed=request.state.actor)
                 result = await fn(request)
                 return result if not isinstance(result, dict) else _json(result)
             except (ActionError, FileError) as e:
@@ -1020,6 +1108,11 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/autonomy", guarded(autonomy_state), methods=["GET"]),
         Route("/api/decisions", guarded(decisions_state), methods=["GET"]),
         Route("/api/inbox", guarded(inbox_state), methods=["GET"]),
+        Route("/api/audit", guarded(audit_state), methods=["GET"]),
+        Route("/api/usage", guarded(usage_state), methods=["GET"]),
+        Route("/api/actors", guarded(actors_state), methods=["GET"]),
+        Route("/api/actors/issue", guarded(actor_issue), methods=["POST"]),
+        Route("/api/actors/revoke", guarded(actor_revoke), methods=["POST"]),
         Route("/api/workers", guarded(workers_state), methods=["GET"]),
         Route("/api/workers/enrol", guarded(worker_enrol), methods=["POST"]),
         Route("/api/workers/heartbeat", guarded(worker_heartbeat), methods=["POST"]),
@@ -1084,4 +1177,4 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         mounts.append(Mount("/", app=UiFiles(ui, port), name="ui"))
     app = Starlette(routes=routes + mounts, lifespan=lifespan)
     app.state.routes_table = routes
-    return Guard(app, token, port), app
+    return Guard(AuditTrail(app, daemon), token, port), app

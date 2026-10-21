@@ -266,3 +266,40 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FollowUps(unittest.TestCase):
+    """PR 7 follow-ups from PR 5's last review."""
+
+    def setUp(self):
+        self.ts = TaskStore(os.path.join(tempfile.mkdtemp(prefix="wkf-"), "tasks.db"), task_projects(cfg()))
+        self.clock = Clock()
+        self.w = workers.Workers(self.ts.db, self.clock)
+
+    def test_a_clock_stepped_back_does_not_block_approval(self):
+        self.w.enrol("laptop", "laptop", {}, "1", "jay")
+        self.clock.t -= 3600
+        self.assertEqual(self.w.approve("laptop", "jay")["state"], "active")
+
+    def test_a_refused_database_write_is_a_409_not_a_500(self):
+        d = Daemon(cfg(meter={"enabled": False}), Store(new_db()), None, tasks=self.ts)
+        d.workers.enrol("laptop", "laptop", {}, "1", "jay")
+        def boom(*_a):
+            raise sqlite3.IntegrityError("CHECK constraint failed")
+        d.workers.approve = boom
+        with self.assertRaises(ActionError) as e:
+            d.act_worker("approve", "laptop", "jay", developer=True)
+        self.assertEqual(e.exception.status, 409)
+
+    def test_cleanup_after_sqlite_rolled_back_by_itself_keeps_the_real_error(self):
+        class Gone(Exception):
+            pass
+        with self.assertRaises(Gone):
+            with self.w._tx():
+                self.ts.db.execute("ROLLBACK")          # what SQLite does on disk full / I/O error
+                raise Gone()
+        self.assertFalse(self.ts.db.in_transaction)
+
+    def test_events_carry_their_id(self):
+        self.w.enrol("laptop", "laptop", {}, "1", "jay")
+        self.assertIsInstance(self.w.events()[0]["id"], int)
