@@ -47,7 +47,7 @@ export function MergeDialog({ onClose }: { onClose: () => void }) {
         const r = await app.api.merge(k, items);
         setRes((m) => ({ ...m, [k]: { ok: true, text: `${r.coordinator} is merging ${r.merging.map((x) => x.key).join(" → ")}`
           + (r.skipped.length ? ` · skipped ${r.skipped.map((x) => `${x.key} (${x.reason})`).join(", ")}` : "")
-          + (r.errors?.length ? ` · not approved ${r.errors.map((x) => x.key).join(", ")}` : "") } }));
+          + (r.errors?.length ? ` · not approved: ${r.errors.map((x) => `${x.key} (${x.error})`).join(", ")}` : "") } }));
       } catch (e) {
         setRes((m) => ({ ...m, [k]: { ok: false, text: (e as Error).message } }));
       }
