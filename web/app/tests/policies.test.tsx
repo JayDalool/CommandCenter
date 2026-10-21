@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { vi } from "vitest";
 import { app } from "../src/store/app";
 import { Policies } from "../src/components/Policies";
-import type { PolicyState } from "../src/api/types";
+import type { AutonomyState, PolicyState } from "../src/api/types";
 
 const data: PolicyState = {
   fingerprint: "ab".repeat(32), problems: [],
@@ -23,6 +23,16 @@ const data: PolicyState = {
     supersedes: null, valid: true } },
 };
 
+const shadow: AutonomyState = {
+  mode: "shadow", engine: 1, available: true, total: 3, agree: 2, disagree: 1,
+  counts: { samvision: { plan: { total: 3, agree: 2, pairs: { "auto->auto": 2, "auto->jay": 1 } } } },
+  missing: { "api change": 1 },
+  disagreements: [{ id: 3, at: 1792000000, key: "SV-101", project: "samvision", action: "plan", observed: "auto", engine: "jay",
+    rule: "target.plan_approval:unknown", reasons: ["a plan trigger cannot be checked yet"], missing: ["api change"] }],
+};
+
+beforeEach(() => { vi.spyOn(app.api, "autonomy").mockResolvedValue(shadow); });
+
 describe("Policies", () => {
   it("shows today's rules, the agreed target as not enforced, and Jay's decisions", async () => {
     vi.spyOn(app.api, "profiles").mockResolvedValue(data);
@@ -36,6 +46,16 @@ describe("Policies", () => {
     expect(screen.getByText("none yet")).toBeInTheDocument();
     expect(screen.getByText("May SamVision deploy unattended at 01:00?")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /save|edit|apply/i })).toBeNull();          // read-only
+  });
+
+  it("shows the shadow engine's agreements and disagreements, and says it changes nothing", async () => {
+    vi.spyOn(app.api, "profiles").mockResolvedValue(data);
+    render(<Policies />);
+    expect(await screen.findByText("Autonomy engine (shadow)")).toBeInTheDocument();
+    expect(screen.getByText(/changes nothing/)).toBeInTheDocument();
+    expect(screen.getByText("2 agree")).toBeInTheDocument();
+    expect(screen.getByText(/Command Center acted on its own; target policy would have asked you/)).toBeInTheDocument();
+    expect(screen.getByText("SV-101")).toBeInTheDocument();
   });
 
   it("lists problems when a file is broken or drifts", async () => {

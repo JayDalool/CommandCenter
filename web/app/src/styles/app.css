@@ -679,3 +679,4 @@ a.ctx-item { text-decoration: none; }
 .pol-kv b { font: 600 10.5px var(--font-mono); text-transform: uppercase; letter-spacing: var(--track-caps); color: var(--muted); margin-right: 4px; }
 .pol-dec { display: inline-block; margin-right: 8px; }
 .pol-problems { margin: 8px 0 0; padding-left: 18px; }
+.pol-shadow { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }

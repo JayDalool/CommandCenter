@@ -62,7 +62,7 @@ ALLOWED = {
     ("POST", "/api/developer/handoff"), ("POST", "/api/developer/redeem"),
     ("GET", "/api/pty"), ("POST", "/api/pty/close"), ("WS", "/api/pty/{name}"),
     # v2 Phase 1: Project Operating Profiles, read-only
-    ("GET", "/api/profiles"),
+    ("GET", "/api/profiles"), ("GET", "/api/autonomy"),
 }
 JAY_PRESSES = {"/api/jay/merge", "/api/jay/go-live"}
 FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec", "push",
@@ -141,6 +141,14 @@ class Surface(ApiBase):
         self.assertRegex(body["fingerprint"], r"^[0-9a-f]{64}$")
         self.assertEqual(self.post("/api/profiles", {}).status_code, 405)
         self.assertTrue(any(e["kind"] == "policy.loaded" for e in self.store.since(0)))
+
+    def test_autonomy_shadow_is_read_only_and_token_gated(self):
+        # v2 Phase 1 (D-008): the engine's shadow record is visible; nothing over HTTP changes or enables it.
+        self.assertEqual(self.client.get("/api/autonomy").status_code, 401)
+        body = self.get("/api/autonomy").json()
+        self.assertEqual(body["mode"], "shadow")
+        self.assertIn("disagreements", body)
+        self.assertEqual(self.post("/api/autonomy", {}).status_code, 405)
 
     def test_only_the_approved_jay_presses_live_under_api_jay(self):
         # Merge and Go Live (2026-10-09, Jay): Jay + Developer Unlock approve exactly what is listed and ask the
