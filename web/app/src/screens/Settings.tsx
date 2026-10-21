@@ -6,6 +6,7 @@ import { prefs, usePrefs, commands } from "../lib/prefs";
 import { isRemembered } from "../api/auth";
 import type { ImportPreview, LauncherInfo } from "../api/types";
 import { DevBadge } from "../components/DevMode";
+import { Decisions } from "../components/Decisions";
 import { Policies } from "../components/Policies";
 import { Panel, Seg, Command, DetailRow, EmptyState, Project } from "../components/ui";
 import { stamp } from "../lib/time";
@@ -16,12 +17,13 @@ export function Settings() {
   return <div className="stack">
     <Seg label="Settings section" value={tab} onChange={(v) => go("settings", null, { tab: v === "general" ? undefined : v })}
       options={[{ v: "general", label: "General" }, { v: "desktop", label: "Desktop app" }, { v: "developer", label: "Developer mode" },
-        { v: "connection", label: "Connection" }, { v: "policies", label: "Policies" }, { v: "import", label: "Task migration preview" }, { v: "diagnostics", label: "Diagnostics" }]} />
+        { v: "connection", label: "Connection" }, { v: "policies", label: "Policies" }, { v: "decisions", label: "Decisions" }, { v: "import", label: "Task migration preview" }, { v: "diagnostics", label: "Diagnostics" }]} />
     {tab === "general" && <General />}
     {tab === "desktop" && <DesktopApp />}
     {tab === "developer" && <DeveloperMode />}
     {tab === "connection" && <Connection />}
     {tab === "policies" && <Policies />}
+    {tab === "decisions" && <Decisions />}
     {tab === "import" && <ImportPreviewView />}
     {tab === "diagnostics" && <Diagnostics />}
   </div>;

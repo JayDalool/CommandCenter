@@ -722,7 +722,7 @@ class Pipeline:
             add = {f"merge:{w['review']['head']}"} if gate == "merge" else {gate} - {"failure"}
             confirmed = sorted(set(w["confirmed"]) | add)
             work = {"confirmed": confirmed, "gate": None, "gate_reason": None}
-            events = [("pipeline.gate_confirmed", f"Jay confirmed the {gate} gate", {"gate": gate})]
+            events = [("pipeline.gate_confirmed", f"Jay confirmed the {gate} gate", {"gate": gate, "via": via or "ui"})]
             if gate == "plan":
                 work["plan_state"] = "accepted"
                 return {"status": "READY_TO_IMPLEMENT"}, work, events

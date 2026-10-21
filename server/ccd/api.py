@@ -74,6 +74,9 @@
     GET   /api/autonomy              the Autonomy Engine's SHADOW record: per project and action, how often the target
                                      policy agrees with what ccd did, facts it lacked, recent disagreements. Read-only;
                                      the engine decides nothing (D-008).
+    GET   /api/decisions             Decision records (Jay's policy decisions, answered questions; append-only) and
+                                     Approval records (one per gate, bound to its subject hash). ?project= ?state=
+                                     ?limit=. Read-only: a mirror of the gates, which still decide.
     GET   /api/night-shift           every project's night shift: running?, coordinator, newest morning report
                                      (agent-written text, at most 64 KB), cutoff time, and `goLive`: the tickets a
                                      Go Live would approve and merged tickets that are unverified or wait on a UI review
@@ -427,6 +430,17 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
 
     async def autonomy_state(request, _):
         return daemon.autonomy_state()
+
+    async def decisions_state(request, _):
+        q = request.query_params
+        state = q.get("state")
+        if state is not None and state not in ("pending", "approved", "rejected", "consumed", "void"):
+            raise ActionError(400, "state must be pending, approved, rejected, consumed or void")
+        try:
+            limit = int(q.get("limit") or 100)
+        except ValueError:
+            raise ActionError(400, "limit must be a number") from None
+        return daemon.ledger_state(q.get("project") or None, state, limit)
 
     async def night_state(request, _):
         return daemon.night_state()
@@ -968,6 +982,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/night-shift", guarded(night_state), methods=["GET"]),
         Route("/api/profiles", guarded(profiles_state), methods=["GET"]),
         Route("/api/autonomy", guarded(autonomy_state), methods=["GET"]),
+        Route("/api/decisions", guarded(decisions_state), methods=["GET"]),
         Route("/api/tasks/ui-test", guarded(ui_test), methods=["POST"]),
         Route("/api/ui-tests", guarded(ui_tests_state), methods=["GET"]),
         Route("/api/ui-tests/decide", guarded(ui_decide), methods=["POST"]),

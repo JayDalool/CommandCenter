@@ -327,6 +327,79 @@ CREATE TRIGGER autonomy_shadow_append_only_u BEFORE UPDATE ON autonomy_shadow
 CREATE TRIGGER autonomy_shadow_append_only_d BEFORE DELETE ON autonomy_shadow
   BEGIN SELECT RAISE(ABORT, 'the shadow record is append-only'); END;
 """),
+    # 7: Decision and Approval records (v2 Phase 1, PR 4; ccd/ledger.py). Additive. Decisions are append-only (a change
+    # supersedes). An Approval is bound to its subject hash, moves only forward (pending → approved → consumed, or
+    # → void / rejected), is approved only by Jay, and is never deleted. Mirror only: gates still decide.
+    (7, """
+CREATE TABLE decisions (
+  id           INTEGER PRIMARY KEY,
+  ref          TEXT,
+  project      TEXT NOT NULL,
+  ticket_id    INTEGER REFERENCES tickets(id),
+  question     TEXT NOT NULL CHECK (length(question) BETWEEN 1 AND 1000),
+  options      TEXT NOT NULL DEFAULT '[]',
+  decision     TEXT NOT NULL CHECK (length(decision) BETWEEN 1 AND 4000),
+  rationale    TEXT NOT NULL DEFAULT '',
+  decided_by   TEXT NOT NULL,
+  via          TEXT,
+  rules        TEXT NOT NULL DEFAULT '[]',
+  reconsider   TEXT,
+  evidence     TEXT NOT NULL DEFAULT '[]',
+  decided_at   REAL,
+  recorded_at  REAL NOT NULL,
+  supersedes   INTEGER REFERENCES decisions(id),
+  source       TEXT NOT NULL CHECK (source IN ('policy', 'question')),
+  source_ref   TEXT NOT NULL,
+  content_sha  TEXT NOT NULL,
+  profile_hash TEXT,
+  UNIQUE (source, source_ref, content_sha, supersedes)
+);
+CREATE INDEX decisions_ticket ON decisions(ticket_id, id);
+CREATE TRIGGER decisions_append_only_u BEFORE UPDATE ON decisions
+  BEGIN SELECT RAISE(ABORT, 'decisions are append-only; record a new one that supersedes it'); END;
+CREATE TRIGGER decisions_append_only_d BEFORE DELETE ON decisions
+  BEGIN SELECT RAISE(ABORT, 'decisions are append-only; record a new one that supersedes it'); END;
+
+CREATE TABLE approvals (
+  id            INTEGER PRIMARY KEY,
+  project       TEXT NOT NULL,
+  ticket_id     INTEGER REFERENCES tickets(id),
+  subject_type  TEXT NOT NULL CHECK (subject_type IN ('plan', 'merge', 'ui', 'deploy', 'failure')),
+  subject_hash  TEXT NOT NULL,
+  action        TEXT NOT NULL,
+  required      TEXT NOT NULL DEFAULT 'jay',
+  state         TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'rejected', 'consumed', 'void')),
+  reason        TEXT,
+  requested_at  REAL NOT NULL,
+  requested_by  TEXT NOT NULL,
+  expires_at    REAL,
+  decided_at    REAL,
+  decided_by    TEXT CHECK (decided_by IS NULL OR decided_by = 'jay'),
+  via           TEXT,
+  consumed_at   REAL,
+  voided_at     REAL,
+  void_reason   TEXT,
+  profile_hash  TEXT,
+  CHECK (state NOT IN ('approved', 'consumed') OR decided_by IS 'jay')
+);
+CREATE UNIQUE INDEX approvals_one_open ON approvals(ticket_id, subject_type) WHERE state IN ('pending', 'approved');
+CREATE INDEX approvals_state ON approvals(state, id);
+CREATE TRIGGER approvals_never_deleted BEFORE DELETE ON approvals
+  BEGIN SELECT RAISE(ABORT, 'approvals are history; they are never deleted'); END;
+CREATE TRIGGER approvals_subject_fixed BEFORE UPDATE ON approvals
+  WHEN NEW.subject_hash IS NOT OLD.subject_hash OR NEW.subject_type IS NOT OLD.subject_type
+    OR NEW.ticket_id IS NOT OLD.ticket_id OR NEW.project IS NOT OLD.project OR NEW.requested_at IS NOT OLD.requested_at
+    OR NEW.requested_by IS NOT OLD.requested_by OR NEW.expires_at IS NOT OLD.expires_at
+  BEGIN SELECT RAISE(ABORT, 'an approval is bound to its subject; it never changes'); END;
+CREATE TRIGGER approvals_forward_only BEFORE UPDATE OF state ON approvals
+  WHEN NOT ((OLD.state = 'pending' AND NEW.state IN ('approved', 'rejected', 'void'))
+         OR (OLD.state = 'approved' AND NEW.state IN ('consumed', 'void')))
+  BEGIN SELECT RAISE(ABORT, 'an approval only moves forward: pending, approved, consumed (or void / rejected)'); END;
+CREATE TRIGGER approvals_decision_fixed BEFORE UPDATE ON approvals
+  WHEN OLD.decided_at IS NOT NULL AND (NEW.decided_at IS NOT OLD.decided_at OR NEW.decided_by IS NOT OLD.decided_by
+    OR NEW.via IS NOT OLD.via)
+  BEGIN SELECT RAISE(ABORT, 'who approved and when is recorded once'); END;
+"""),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

@@ -680,3 +680,4 @@ a.ctx-item { text-decoration: none; }
 .pol-dec { display: inline-block; margin-right: 8px; }
 .pol-problems { margin: 8px 0 0; padding-left: 18px; }
 .pol-shadow { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
+.led-note { padding: 10px var(--pad-x); margin: 0; }

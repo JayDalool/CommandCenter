@@ -456,3 +456,27 @@ Pipeline step (plan / ready / auto-merge / deploy request) ─▶ Daemon._pipeli
 `evaluate` is pure and conservative: an invalid profile, an unknown fact (risk, changed files, UI/API impact) or a
 human-only boundary is "jay", never "auto"; a paused project is "refuse"; protected paths (D-007) and personal-data
 paths (D-005) are "jay". Nothing reads the verdict to act, and a failure in it is a log line.
+
+### Decision and Approval records (PR 4)
+
+```text
+Daemon start ─▶ ledger.seed_policy(policy/decisions)  Jay's D-NNN as Decision rows (idempotent; a change supersedes)
+             └▶ ledger.reconcile(tickets with an open gate or approval)   the same reconcile as below
+Pipeline step ─▶ _pipeline_result ─▶ ledger.observe(events, work after the step)
+    gate_confirmed (event)  → approved by Jay, with how (ui / go-live / gate); plan / ui / failure: consumed at once
+    then reconcile against the state the step left:
+      an open gate with no open approval → pending, bound to its subject hash
+                                           (merge: reviewed head; plan: plan hash; deploy: request hash)
+      pending, but the gate closed or its subject changed → void
+      approved merge: merged since → consumed if `merge:<head>` still covers the merged head, else void;
+                      not merged and no longer covered (new head, rework, re-plan) → void
+      approved deploy: a LIVE deployment happened since (pass or fail) → consumed; request withdrawn → void
+      the ticket closed or was archived → void
+    answered → each answered question becomes a Decision
+```
+
+`tasks.db` v7 enforces the rules in the schema: decisions are append-only; an approval's subject never changes, it
+only moves forward (pending → approved → consumed, or → void / rejected), only `jay` can be its approver, who and how
+is written once, at most one is open per ticket and gate, and none is ever deleted. `expires_at` (72 h) is recorded;
+nothing enforces it yet. The gates in `ticket_work` remain the source of truth; the ledger is their record, and a
+failure in it is a log line. GET /api/decisions, Settings → Decisions (read-only).
