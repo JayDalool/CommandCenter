@@ -8,8 +8,8 @@ What is kept: who claimed to act, how far that is verified, method, path, respon
 the path or body names them, the top-level body keys and the SHA-256 of the body. What is never kept: the body itself
 (answers, notes and file contents can hold anything).
 
-Each row carries `sha = sha256(prev_sha + row)`, so the trail is a hash chain: editing or removing a row in the file
-breaks every later link, which `verify()` reports. The triggers already refuse UPDATE and DELETE; the chain covers
+Each row carries `sha = sha256(prev_sha + row)`, so the trail is a hash chain: editing or removing any row except the
+newest breaks every later link, which `verify()` reports. The triggers already refuse UPDATE and DELETE; the chain covers
 someone editing the database file directly.
 """
 import hashlib
@@ -39,6 +39,7 @@ class Audit:
     def __init__(self, db, clock=time.time):
         self.db = db
         self.clock = clock
+        self._good = (0, GENESIS, 0)   # (last id, its sha, rows) already walked and found intact
 
     def record(self, *, actor, verified, via, method, path, status, token_actor=None, project=None, ref=None,
                body=None, summary="", profile_hash=None):
@@ -48,7 +49,7 @@ class Audit:
             ref = m.group(1) if m else None
         if project is None and isinstance(body, dict) and isinstance(body.get("project"), str):
             project = body["project"][:40]
-        row = {"at": self.clock(), "actor": str(actor)[:80], "verified": 1 if verified else 0, "via": via,
+        row = {"at": self.clock(), "actor": re.sub(r"[\x00-\x1f\x7f]+", " ", str(actor))[:80], "verified": 1 if verified else 0, "via": via,
                "token_actor": token_actor, "method": str(method)[:10], "path": str(path)[:300], "status": int(status),
                "project": project, "ref": ref, "body_sha": sha_body, "body_keys": json.dumps(keys),
                "summary": re.sub(r"[\x00-\x1f\x7f]+", " ", str(summary or ""))[:300], "profile_hash": profile_hash}
@@ -63,23 +64,27 @@ class Audit:
                             f"({', '.join('?' * (len(COLUMNS) + 2))})", (*[row[c] for c in COLUMNS], prev_sha, sha))
             self.db.execute("COMMIT" if own else "RELEASE audit_record")
         except BaseException:
-            self.db.execute("ROLLBACK" if own else "ROLLBACK TO audit_record")
-            if not own:
-                self.db.execute("RELEASE audit_record")
+            if self.db.in_transaction:     # SQLite may already have rolled it all back (disk full, I/O)
+                self.db.execute("ROLLBACK" if own else "ROLLBACK TO audit_record")
+                if not own:
+                    self.db.execute("RELEASE audit_record")
             raise
         return sha
 
-    def verify(self, limit=100000):
-        """Walk the chain from the start. {ok, checked, brokenAt}."""
-        prev, n = GENESIS, 0
-        for r in self.db.execute(f"SELECT id, {', '.join(COLUMNS)}, prev_sha, sha FROM audit_events ORDER BY id "
-                                 f"LIMIT ?", (limit,)):
+    def verify(self, full=False):
+        """Walk the chain. By default only rows added since the last intact walk (cheap enough to run on every look);
+        `full` walks from the first row, which also catches an edit to rows already checked. {ok, checked, brokenAt,
+        full}. A broken chain is never remembered as good, so it keeps being reported."""
+        start_id, prev, n = (0, GENESIS, 0) if full else self._good
+        for r in self.db.execute(f"SELECT id, {', '.join(COLUMNS)}, prev_sha, sha FROM audit_events WHERE id > ? "
+                                 f"ORDER BY id", (start_id,)):
             row = dict(zip(COLUMNS, r[1:1 + len(COLUMNS)]))
             prev_sha, sha = r[-2], r[-1]
             if prev_sha != prev or hashlib.sha256((prev + _canon(row)).encode()).hexdigest() != sha:
-                return {"ok": False, "checked": n, "brokenAt": r[0]}
-            prev, n = sha, n + 1
-        return {"ok": True, "checked": n, "brokenAt": None}
+                return {"ok": False, "checked": n, "brokenAt": r[0], "full": full}
+            prev, n, start_id = sha, n + 1, r[0]
+        self._good = (start_id, prev, n)
+        return {"ok": True, "checked": n, "brokenAt": None, "full": full}
 
     def list(self, actor=None, verified=None, limit=100):
         q = f"SELECT id, {', '.join(COLUMNS)} FROM audit_events"

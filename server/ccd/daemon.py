@@ -1869,14 +1869,14 @@ class Daemon:
 
     # ---------- audit trail, actor identity, metering (PR 7) ----------
 
-    def audit_write(self, method, path, status, claimed, body, dev_sid, actor_token):
-        """AuditTrail (api.py) after every write that passed Guard. Records; never raises, never refuses."""
+    def audit_write(self, method, path, status, claimed, body, developer, actor_token):
+        """AuditTrail (api.py) after every write that passed Guard. `developer`: whether the request's Developer
+        Unlock session was live when it arrived (so a lock is still credited to it). Records; never raises."""
         if self.audit is None:
             return
         try:
             tok_actor = self.actor_tokens.verify(actor_token) if actor_token and self.actor_tokens else None
-            who = identity_mod.identify(claimed, identity_mod.developer_session_valid(getattr(self, "dev_gate", None),
-                                                                                      dev_sid), tok_actor)
+            who = identity_mod.identify(claimed, bool(developer), tok_actor)
             self.audit.record(actor=who["actor"], verified=who["verified"], via=who["via"],
                               token_actor=who["tokenActor"], method=method, path=path, status=status, body=body,
                               summary="actor token names a different actor" if who["mismatch"] else "",
@@ -1896,11 +1896,11 @@ class Daemon:
         except Exception as e:  # noqa: BLE001
             log.warning(json.dumps({"msg": "audit (system) skipped", "key": ticket.get("key"), "error": repr(e)[:200]}))
 
-    def audit_state(self, actor=None, verified=None, limit=100):
+    def audit_state(self, actor=None, verified=None, limit=100, full=False):
         if self.audit is None:
             return {"available": False, "events": [], "summary": {}, "chain": {}}
         return {"available": True, "events": self.audit.list(actor, verified, limit), "summary": self.audit.summary(),
-                "chain": self.audit.verify()}
+                "chain": self.audit.verify(full=full)}
 
     def actors_state(self):
         if self.actor_tokens is None:
@@ -1939,9 +1939,7 @@ class Daemon:
         db = self.tasks.db
         if cwd:
             real = os.path.realpath(cwd)
-            for key, proj, wt in db.execute("SELECT t.key, t.project, w.worktree FROM ticket_work w JOIN tickets t "
-                                            "ON t.id = w.ticket_id WHERE w.worktree IS NOT NULL"):
-                r = os.path.realpath(wt)
+            for r, proj, key in self._meter_worktrees():
                 if real == r or real.startswith(r.rstrip("/") + "/"):
                     return proj, key
         for text in (branch or "", os.path.basename(cwd or "")):
@@ -1950,6 +1948,19 @@ class Daemon:
                 if row and (project is None or row[1] == project):
                     return row[1], row[0]
         return project, None
+
+    def _meter_worktrees(self, ttl=60):
+        """Ticket worktrees as (realpath, project, key), longest first, resolved at most once a minute."""
+        now = time.monotonic()
+        cached = getattr(self, "_mwt", None)
+        if cached and now - cached[0] < ttl:
+            return cached[1]
+        rows = [(os.path.realpath(wt), proj, key) for key, proj, wt in self.tasks.db.execute(
+            "SELECT t.key, t.project, w.worktree FROM ticket_work w JOIN tickets t ON t.id = w.ticket_id "
+            "WHERE w.worktree IS NOT NULL")]
+        rows.sort(key=lambda x: -len(x[0]))
+        self._mwt = (now, rows)
+        return rows
 
     def _meter_report(self, key, op, actor, body):
         """A work step's own `usage` (optional). Recorded as reported; never fails the step."""

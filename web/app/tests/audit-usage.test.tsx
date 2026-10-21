@@ -52,6 +52,16 @@ describe("Audit", () => {
     expect(screen.queryByText("cca_SECRET")).not.toBeInTheDocument();
   });
 
+  it("walks the whole chain on request", async () => {
+    const get = vi.spyOn(app.api, "audit").mockImplementation(async (q = "") =>
+      q.includes("full=1") ? { ...audit, chain: { ok: true, checked: 9, brokenAt: null, full: true } } : audit);
+    vi.spyOn(app.api, "actors").mockResolvedValue(actors);
+    render(<Audit />);
+    fireEvent.click(await screen.findByRole("button", { name: "Check whole chain" }));
+    expect(await screen.findByText(/intact \(9 rows, whole chain\)/)).toBeInTheDocument();
+    expect(get).toHaveBeenCalledWith("?full=1&limit=1");
+  });
+
   it("says when the chain is broken", async () => {
     vi.spyOn(app.api, "audit").mockResolvedValue({ ...audit, chain: { ok: false, checked: 1, brokenAt: 2 } });
     vi.spyOn(app.api, "actors").mockResolvedValue(actors);

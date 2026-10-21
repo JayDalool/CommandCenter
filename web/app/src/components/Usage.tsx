@@ -59,5 +59,8 @@ export function Usage() {
     <Panel title="By model"><Table rows={data.byModel ?? []} label="model" /></Panel>
     <Panel title="Top tasks"><Table rows={data.byTicket ?? []} label="task" /></Panel>
     <Panel title="By day"><Table rows={data.byDay ?? []} label="day" /></Panel>
+    <Panel title="By source"><p className="text2 led-note">"reported" is what agents said they used in their work steps.
+      It is usually the same replies the logs already count, so it is shown here and not added to the totals.</p>
+      <Table rows={data.bySource ?? []} label="source" /></Panel>
   </div>;
 }

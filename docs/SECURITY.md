@@ -410,7 +410,8 @@ project and ticket when the path or body names them, the policy fingerprint, the
 top-level key names. **Never the body itself**, and for the Developer Unlock routes not even its hash (their body
 is the developer secret). Requests without ccd's token are not recorded, so the table cannot be flooded from
 outside; a failed sign-in-code redeem is not recorded either. Triggers refuse UPDATE and DELETE; each row also
-carries `sha = sha256(prev_sha + row)`, so editing the file directly breaks the chain, which Settings → Audit checks.
+carries `sha = sha256(prev_sha + row)`, so editing or removing any row but the newest breaks the chain. Settings → Audit checks rows added since
+the last good check on every look, and the whole chain on request (`GET /api/audit?full=1`).
 Recording happens after the response and never changes it; a failure to record is logged.
 
 The Developer Unlock check used for recording is read-only (it does not refresh the session's idle timer);
@@ -430,6 +431,6 @@ the stronger fix.
 on this machine (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`), off the event loop, at most 8 MB
 a pass. From each line it keeps only the model, token counts, time, session id, working directory and branch (to tie
 the use to a project and ticket); **message text is never stored**. A work step may also report its own `usage`
-object. Costs are estimates at Anthropic list prices (a subscription is not billed per token; Codex is counted in
+object; it is shown separately and never added to the totals (it is usually the same replies again). Costs are estimates at Anthropic list prices (a subscription is not billed per token; Codex is counted in
 tokens only). Profile budgets (`target.budget`) are displayed against month-to-date use; nothing is stopped when one
 is passed. Set `"meter": {"enabled": false}` in config to turn reading the logs off.

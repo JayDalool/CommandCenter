@@ -136,7 +136,7 @@ class Ledger:
         except BaseException:
             if self.db.in_transaction:     # SQLite may already have rolled it all back (disk full, I/O)
                 self.db.execute(rollback)
-            if commit.startswith("RELEASE"):
+            if commit.startswith("RELEASE") and self.db.in_transaction:
                 self.db.execute(commit)
             raise
         return c.lastrowid

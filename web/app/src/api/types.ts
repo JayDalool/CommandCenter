@@ -583,7 +583,7 @@ export interface AuditState {
   available: boolean; events: AuditEvent[];
   summary: { since?: number; total?: number; byVia?: Record<string, number>; unverifiedJay?: number; agentUnverified?: number;
     mismatch?: number; wouldRefuse?: number };
-  chain: { ok?: boolean; checked?: number; brokenAt?: number | null };
+  chain: { ok?: boolean; checked?: number; brokenAt?: number | null; full?: boolean };
 }
 export interface ActorToken { id: number; actor: string; fingerprint: string; issuedAt: number; expiresAt: number;
   revokedAt: number | null; note: string; status: "active" | "expired" | "revoked" }

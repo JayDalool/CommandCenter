@@ -15,11 +15,18 @@ export function Audit() {
   const [actors, setActors] = useState<ActorsState | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [filter, setFilter] = useState<"" | "0" | "1">("");
+  const [walking, setWalking] = useState(false);
   const [issued, setIssued] = useState<{ actor: string; token: string; fingerprint: string } | null>(null);
   const load = () => Promise.all([app.api.audit(filter ? `?verified=${filter}` : ""), app.api.actors()])
     .then(([a, t]) => { setData(a); setActors(t); setErr(null); }).catch((e) => setErr((e as Error).message));
   useEffect(() => { void load(); const t = setInterval(() => void load(), 30_000); return () => clearInterval(t); }, [filter]);
 
+  const walk = async () => {
+    setWalking(true);
+    try { const a = await app.api.audit("?full=1&limit=1"); setData((d) => d && { ...d, chain: a.chain }); }
+    catch (e) { app.toast((e as Error).message, "bad"); }
+    finally { setWalking(false); }
+  };
   const issue = async () => {
     if (!dev) { unlockDialogOpen(); return; }
     const name = window.prompt("Issue an actor token for which agent? (agent:<name>, e.g. agent:coordinator)", "agent:");
@@ -47,7 +54,8 @@ export function Audit() {
         <li>would be refused if identity were required: <b>{s.wouldRefuse ?? 0}</b></li>
         <li>claimed to be you without Developer Unlock: <b>{s.unverifiedJay ?? 0}</b></li>
         <li>token named a different actor: <b className={s.mismatch ? "ny-overdue" : ""}>{s.mismatch ?? 0}</b></li>
-        <li>hash chain: <b className={data.chain.ok ? "" : "ny-overdue"}>{data.chain.ok ? `intact (${data.chain.checked} rows)` : `broken at row ${data.chain.brokenAt}`}</b></li>
+        <li>hash chain: <b className={data.chain.ok ? "" : "ny-overdue"}>{data.chain.ok ? `intact (${data.chain.checked} rows${data.chain.full ? ", whole chain" : ""})` : `broken at row ${data.chain.brokenAt}`}</b>{" "}
+          <button type="button" className="btn is-sm" disabled={walking} onClick={() => void walk()}>{walking ? "Checking…" : "Check whole chain"}</button></li>
       </ul>
       <div className="au-pad"><div className="seg" role="group" aria-label="Show">
         <button type="button" aria-pressed={filter === ""} onClick={() => setFilter("")}>All</button>

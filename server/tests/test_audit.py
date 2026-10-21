@@ -42,7 +42,7 @@ class AuditChain(unittest.TestCase):
     def test_chain_verifies_and_breaks_when_a_row_is_edited_in_the_file(self):
         for i in range(5):
             self.rec(path=f"/api/tasks/SAM-{i}/comments", body={"body": f"note {i}"})
-        self.assertEqual(self.a.verify(), {"ok": True, "checked": 5, "brokenAt": None})
+        self.assertEqual(self.a.verify(), {"ok": True, "checked": 5, "brokenAt": None, "full": False})
         with self.assertRaises(sqlite3.DatabaseError):
             self.ts.db.execute("UPDATE audit_events SET actor='agent:x' WHERE id=3")
         with self.assertRaises(sqlite3.DatabaseError):
@@ -50,7 +50,23 @@ class AuditChain(unittest.TestCase):
         # Someone with the file drops the trigger and edits a row: the chain says where.
         self.ts.db.execute("DROP TRIGGER audit_events_append_only_u")
         self.ts.db.execute("UPDATE audit_events SET actor='agent:x' WHERE id=3")
-        self.assertEqual(self.a.verify(), {"ok": False, "checked": 2, "brokenAt": 3})
+        self.assertEqual(self.a.verify(full=True), {"ok": False, "checked": 2, "brokenAt": 3, "full": True})
+
+    def test_verify_checks_new_rows_and_a_full_walk_catches_old_edits(self):
+        for i in range(3):
+            self.rec(path=f"/api/x/{i}")
+        self.assertEqual(self.a.verify()["checked"], 3)
+        self.rec(path="/api/x/3")
+        self.assertEqual(self.a.verify()["checked"], 4)                     # resumes from the last good row
+        self.ts.db.execute("DROP TRIGGER audit_events_append_only_u")
+        self.ts.db.execute("UPDATE audit_events SET path='/edited' WHERE id=1")
+        self.assertTrue(self.a.verify()["ok"])                              # already-checked rows: only a full walk
+        self.assertEqual(self.a.verify(full=True), {"ok": False, "checked": 0, "brokenAt": 1, "full": True})
+        self.assertFalse(self.a.verify(full=True)["ok"])
+
+    def test_actor_is_stored_without_control_characters(self):
+        self.rec(actor="evil\x1b[2Jname")
+        self.assertNotIn("\x1b", self.a.list()[0]["actor"])
 
     def test_the_body_is_never_stored_only_its_hash_and_keys(self):
         self.rec(path="/api/tasks/SAM-1/answers", body={"answers": {"1": "the password is hunter2"}, "project": "samvision"})
@@ -200,6 +216,13 @@ class OverHttp(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(DEV, dump)
         self.assertTrue(self.c.get("/api/audit", headers=self.h).json()["chain"]["ok"])
 
+    def test_a_lock_is_credited_to_the_session_it_ends(self):
+        dev = self.unlock()
+        self.c.post("/api/developer/lock", headers=dev, json={})
+        row = self.d.audit.list()[0]
+        self.assertEqual((row["path"], row["via"], row["verified"]), ("/api/developer/lock", "developer", True))
+        self.assertTrue(self.c.get("/api/audit?full=1", headers=self.h).json()["chain"]["full"])
+
     def test_requests_without_the_token_are_not_recorded_and_failures_are(self):
         self.c.post("/api/tasks", json={"project": "samvision", "title": "x"})
         self.assertEqual(self.d.audit.list(), [])
@@ -339,13 +362,45 @@ class Metering(unittest.TestCase):
         self.assertTrue(self.m.report("r1", "gyst", "GYS-1", "agent:coder",
                                       {"model": "claude-haiku-5-5", "inputTokens": 1_000_000, "outputTokens": 0}))
         self.assertFalse(self.m.report("r1", "gyst", "GYS-1", "agent:coder", {"inputTokens": 5}))   # dedupe by ref
+        f = os.path.join(self.claude, "r.jsonl")
+        with open(f, "w") as fh:
+            fh.write(claude_line("m1", model="claude-haiku-5-5"))
+        self.m.scan()
         s = self.m.summary(14, {"gyst": {"monthly_usd": 5}, "mfe": {"monthly_tokens": 1000}})
-        self.assertEqual(s["total"]["replies"], 1)
-        self.assertAlmostEqual(s["total"]["costUsd"], 0.10)
-        self.assertEqual(s["byTicket"][0]["key"], "GYS-1")
+        self.assertEqual(s["total"]["replies"], 1)                          # the log's reply; reported is not added
+        self.assertEqual({r["key"]: r["replies"] for r in s["bySource"]}, {"claude": 1, "reported": 1})
+        self.assertEqual(s["byTicket"], [])
         self.assertEqual(s["budgets"], [
-            {"project": "gyst", "monthlyUsd": 5, "monthlyTokens": None, "spentUsd": 0.1, "spentTokens": 1_000_000},
+            {"project": "gyst", "monthlyUsd": 5, "monthlyTokens": None, "spentUsd": 0, "spentTokens": 0},
             {"project": "mfe", "monthlyUsd": None, "monthlyTokens": 1000, "spentUsd": 0, "spentTokens": 0}])
+
+    def test_the_fullest_count_of_a_reply_wins(self):
+        f = os.path.join(self.claude, "d.jsonl")
+        with open(f, "w") as fh:
+            fh.write(claude_line("m1", out=5) + claude_line("m1", out=400) + claude_line("m1", out=7))
+        self.m.scan()
+        self.assertEqual(self.ts.db.execute("SELECT output FROM usage_records").fetchall(), [(400,)])
+
+    def test_a_repeated_codex_count_is_not_counted_twice(self):
+        f = os.path.join(self.codex, "rollout-2.jsonl")
+        tc = {"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "last_token_usage": {"input_tokens": 500, "output_tokens": 50},
+            "total_token_usage": {"input_tokens": 500, "output_tokens": 50}}}}
+        with open(f, "w") as fh:
+            fh.write(json.dumps(tc) + "\n" + json.dumps(tc) + "\n")
+        self.assertEqual(self.m.scan(), 1)
+
+    def test_store_inside_a_callers_transaction_and_attribution_once_per_place(self):
+        calls = []
+        self.m.attribute = lambda cwd, br: calls.append((cwd, br)) or ("samvision", None)
+        f = os.path.join(self.claude, "e.jsonl")
+        with open(f, "w") as fh:
+            fh.write("".join(claude_line(f"m{i}") for i in range(20)))
+        self.ts.db.execute("BEGIN")
+        self.assertEqual(self.m.scan(), 20)
+        self.assertTrue(self.ts.db.in_transaction)
+        self.ts.db.execute("COMMIT")
+        self.assertEqual(len(calls), 1)
 
 
 class MeterInTheDaemon(unittest.IsolatedAsyncioTestCase):

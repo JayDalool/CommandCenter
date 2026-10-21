@@ -35,8 +35,8 @@
     GET   /api/attachments/{id}/download   always application/octet-stream + attachment
     DELETE /api/attachments/{id}     DEVELOPER. remove (audited; contents never recorded)
     GET   /api/audit                 the global audit trail (PR 7): newest writes, who made them, how far that is
-                                     verified (developer / token / none / system), the hash chain's check, and what
-                                     enforcing verified identity would refuse. ?actor= ?verified=0|1 ?limit=
+                                     verified (developer / token / none / system), the hash chain's check (new rows;
+                                     ?full=1 walks it all), and what enforcing identity would refuse. ?actor= ?verified=0|1 ?limit=
     GET   /api/usage                 token use and estimated cost from the agents' session logs (PR 7) by project,
                                      model, day and ticket, plus month-to-date against profile budgets. ?days=
     GET   /api/actors                per-agent actor tokens (fingerprints only; a token is shown once, on issue)
@@ -154,6 +154,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from starlette.responses import StreamingResponse
 
+from . import identity as identity_mod
 from . import registry, security
 from .attachments import content_disposition
 from .daemon import ActionError
@@ -216,6 +217,12 @@ class AuditTrail:
                 or getattr(self.daemon, "audit", None) is None:
             return await self.app(scope, receive, send)
         note, status = {}, [0]
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+        # Before the handler runs, so a lock (which ends the session) is still credited to it. Read-only peek.
+        try:
+            dev = identity_mod.developer_session_valid(getattr(self.daemon, "dev_gate", None), headers.get(DEV_HEADER))
+        except Exception:  # noqa: BLE001
+            dev = False
         tok = _AUDIT.set(note)
 
         async def send_status(message):
@@ -229,10 +236,9 @@ class AuditTrail:
             path = scope.get("path", "")
             # Redeem needs no token (Guard checks Host/Origin only): record a sign-in, not every failed guess.
             if not (path == REDEEM_PATH and not 200 <= status[0] < 300):
-                headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
                 claimed = note.get("claimed") or headers.get("x-ccd-actor") or "jay"
                 self.daemon.audit_write(scope["method"], path, status[0] or 500, claimed, note.get("body"),
-                                        headers.get(DEV_HEADER), headers.get("x-ccd-actor-token"))
+                                        dev, headers.get("x-ccd-actor-token"))
 
 
 class Guard:
@@ -545,7 +551,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         v = q.get("verified")
         if v not in (None, "0", "1"):
             raise ActionError(400, "verified must be 0 or 1")
-        return daemon.audit_state(q.get("actor") or None, None if v is None else v == "1", limit)
+        return daemon.audit_state(q.get("actor") or None, None if v is None else v == "1", limit,
+                                  full=q.get("full") == "1")
 
     async def usage_state(request, _):
         try:

@@ -113,6 +113,11 @@ def parse_codex(obj, ctx):
     last = info.get("last_token_usage") if isinstance(info.get("last_token_usage"), dict) else None
     if last is None:
         return None
+    # Codex repeats a token_count (e.g. on rate-limit updates) without new usage: the running total is unchanged.
+    total = json.dumps(info.get("total_token_usage"), sort_keys=True) if info.get("total_token_usage") else None
+    if total is not None and total == ctx.get("total"):
+        return None
+    ctx["total"] = total
     cached = _int(last.get("cached_input_tokens"))
     return {"source": "codex", "ref": None, "at": _ts(obj.get("timestamp")), "session": ctx.get("session"),
             "model": str(ctx.get("model") or "codex")[:80], "input": max(0, _int(last.get("input_tokens")) - cached),
@@ -138,7 +143,7 @@ def _read_file(source, path, offset, limit, ctx):
                     if nl >= 0:
                         return [], f.tell() - len(chunk) + nl + 1, ctx, len(data)
         return [], offset, ctx, len(data)
-    rows, pos = [], 0
+    rows, pos = {}, 0
     for line in data[:end + 1].splitlines(keepends=True):
         line_at = offset + pos
         pos += len(line)
@@ -154,8 +159,10 @@ def _read_file(source, path, offset, limit, ctx):
             continue
         if r["ref"] is None:
             r["ref"] = f"{os.path.basename(path)}:{line_at}"[-200:]
-        rows.append(r)
-    return rows, offset + end + 1, ctx, end + 1
+        # Claude Code logs one line per content block, all with the reply's id; keep the fullest count.
+        if r["ref"] not in rows or r["output"] > rows[r["ref"]]["output"]:
+            rows[r["ref"]] = r
+    return list(rows.values()), offset + end + 1, ctx, end + 1
 
 
 class Meter:
@@ -212,13 +219,18 @@ class Meter:
         return results
 
     def store(self, results):
-        """Event loop: insert the rows and move each cursor, one transaction per file. Returns rows added."""
-        added = 0
+        """Event loop: insert the rows and move each cursor, one transaction per file (a savepoint inside a caller's
+        transaction). Attribution is worked out once per (directory, branch) per pass. Returns rows added."""
+        added, seen = 0, {}
         for path, inode, offset, ctx, rows in results:
-            self.db.execute("BEGIN IMMEDIATE")
+            own = not self.db.in_transaction
+            self.db.execute("BEGIN IMMEDIATE" if own else "SAVEPOINT meter_store")
             try:
                 for r in rows:
-                    project, key = self.attribute(r.get("cwd"), r.get("branch"))
+                    where = (r.get("cwd"), r.get("branch"))
+                    if where not in seen:
+                        seen[where] = self.attribute(*where)
+                    project, key = seen[where]
                     cur = self.db.execute(
                         "INSERT OR IGNORE INTO usage_records (at, source, ref, session, project, ticket_key, model, "
                         "input, output, cache_read, cache_write, cost_usd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -229,9 +241,12 @@ class Meter:
                 self.db.execute("INSERT INTO usage_cursor (path, inode, offset, context) VALUES (?,?,?,?) "
                                 "ON CONFLICT(path) DO UPDATE SET inode=excluded.inode, offset=excluded.offset, "
                                 "context=excluded.context", (path, inode, offset, json.dumps(ctx)[:2000]))
-                self.db.execute("COMMIT")
+                self.db.execute("COMMIT" if own else "RELEASE meter_store")
             except BaseException:
-                self.db.execute("ROLLBACK")
+                if self.db.in_transaction:
+                    self.db.execute("ROLLBACK" if own else "ROLLBACK TO meter_store")
+                    if not own:
+                        self.db.execute("RELEASE meter_store")
                 raise
         return added
 
@@ -264,17 +279,21 @@ class Meter:
         cols = "COUNT(*), SUM(input), SUM(output), SUM(cache_read), SUM(cache_write), SUM(cost_usd), " \
                "SUM(cost_usd IS NULL)"
 
-        def rows(group):
+        # Totals come from the logs only: an agent's own `reported` usage is usually the same replies again, so it is
+        # shown under bySource and never added in.
+        measured = "source != 'reported'"
+
+        def rows(group, where=measured):
             return [dict(zip(("key", "replies", "input", "output", "cacheRead", "cacheWrite", "costUsd", "unpriced"),
                              (r[0],) + tuple(x or 0 for x in r[1:])))
-                    for r in self.db.execute(f"SELECT {group}, {cols} FROM usage_records WHERE at >= ? GROUP BY 1 "
-                                             f"ORDER BY 7 DESC, 4 DESC LIMIT 50", (since,))]
-        total = self.db.execute(f"SELECT {cols} FROM usage_records WHERE at >= ?", (since,)).fetchone()
+                    for r in self.db.execute(f"SELECT {group}, {cols} FROM usage_records WHERE at >= ? AND {where} "
+                                             f"GROUP BY 1 ORDER BY 7 DESC, 4 DESC LIMIT 50", (since,))]
+        total = self.db.execute(f"SELECT {cols} FROM usage_records WHERE at >= ? AND {measured}", (since,)).fetchone()
         month = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).replace(day=1, hour=0, minute=0, second=0,
                                                                                    microsecond=0).timestamp()
         mtd = {r[0]: {"costUsd": r[1] or 0, "tokens": r[2] or 0} for r in self.db.execute(
             "SELECT project, SUM(cost_usd), SUM(input + output + cache_read + cache_write) FROM usage_records "
-            "WHERE at >= ? GROUP BY project", (month,))}
+            f"WHERE at >= ? AND {measured} GROUP BY project", (month,))}
         out_budgets = []
         for project, b in sorted((budgets or {}).items()):
             spent = mtd.get(project, {"costUsd": 0, "tokens": 0})
@@ -286,4 +305,4 @@ class Meter:
                                   tuple(x or 0 for x in total))),
                 "byProject": rows("COALESCE(project, '(unattributed)')"), "byModel": rows("COALESCE(model, '?')"),
                 "byDay": rows("date(at, 'unixepoch')"), "byTicket": [r for r in rows("ticket_key") if r["key"]][:10],
-                "bySource": rows("source"), "budgets": out_budgets}
+                "bySource": rows("source", "1"), "budgets": out_budgets}
