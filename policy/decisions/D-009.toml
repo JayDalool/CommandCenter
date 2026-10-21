@@ -1,0 +1,14 @@
+id = "D-009"
+schema = 1
+date = "2026-10-21"
+decided_by = "jay"
+source = "Jay, CommandCenter project thread, thread 2026-10-21T02:16Z"
+projects = ["gauzemate"]
+question = "What happens to GauzeMate?"
+decision = "Keep it paused for now with a placeholder profile. Its actual autonomy mode is decided later."
+rationale = "Jay paused it until he adds designs and files."
+rules = [
+  "GauzeMate profile mode = paused",
+  "no target policy until Jay decides",
+]
+reconsider = "when Jay adds designs and files"

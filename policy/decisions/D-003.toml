@@ -1,0 +1,14 @@
+id = "D-003"
+schema = 1
+date = "2026-10-21"
+decided_by = "jay"
+source = "Jay, CommandCenter project thread, thread 2026-10-21T02:10Z"
+projects = ["all"]
+question = "Buy a paid GitHub plan for branch protection?"
+decision = "No, not now. Use the Command Center gatekeeper, CI, review rules and whatever repository protections the current plan offers. If a paid tier would materially improve safety or reliability later, raise a Tool Proposal (cost, benefits, free/self-hosted alternatives, why it is worth paying) before asking."
+rationale = "Spend only where it materially improves safety; free controls first."
+rules = [
+  "enforcement is broker-side plus CI and review rules",
+  "a paid GitHub tier enters only as a Tool Proposal",
+]
+reconsider = "when a Tool Proposal shows a material safety gain"

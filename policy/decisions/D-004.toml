@@ -1,0 +1,15 @@
+id = "D-004"
+schema = 1
+date = "2026-10-21"
+decided_by = "jay"
+source = "Jay, CommandCenter project thread, thread 2026-10-21T02:10Z"
+projects = ["samvision", "mfe"]
+question = "May SamVision deploy unattended at 01:00 America/Winnipeg?"
+decision = "Only safe, low-risk releases, and only after automatic health checks and rollback exist. Meaningful downtime, migrations, high blast radius or client-facing workflow changes are prepared and held for approval. Until automatic rollback is ready, 01:00 means release-ready, not auto-deploy."
+rationale = "Nobody is awake at 01:00 to fix a failed deploy; automation must be able to undo it."
+rules = [
+  "unattended deploy only when risk is low, no migration, no meaningful downtime, low blast radius, no client workflow change",
+  "and only when capabilities health_checks and auto_rollback are both true",
+  "otherwise prepare and hold for Jay",
+]
+reconsider = "when health checks and automatic rollback have been rehearsed"

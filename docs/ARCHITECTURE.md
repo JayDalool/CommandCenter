@@ -423,3 +423,22 @@ Layout is per browser (every window of it); the work is not: rooms and panes are
 sessions and herdr panes, so moving a room between windows, popping out a pane or closing a window never
 starts or stops a process. Concurrency limits are unchanged: 4 visible rooms per window is not 4 heavy
 implementation lanes (`pipeline.MAX_LANES` still bounds IN_PROGRESS work).
+
+
+## v2 Phase 1: Project Operating Profiles (policy/)
+
+See [docs/COMMANDCENTER_V2_DISCOVERY.md](COMMANDCENTER_V2_DISCOVERY.md) §0, §7–§8 and [policy/README.md](../policy/README.md).
+
+```text
+policy/projects/<key>.toml ─┐
+policy/decisions/D-NNN.toml ┼─▶ ccd/profiles.py load() at Daemon start (tomllib, never raises)
+policy/examples/*.toml ─────┘      validate (strict schema) · SHA-256 per file · fingerprint · drift vs registry
+                                   ├─▶ security event policy.loaded (fingerprint, problem count)
+                                   ├─▶ alert policy:problems (broken file, missing profile, drift)
+                                   └─▶ GET /api/profiles ─▶ Settings → Policies (read-only)
+```
+
+`[enforced]` restates what `ccd/registry.py` already makes ccd do (merge policy, night mode, pause, lanes, UI-test
+fix mode); the registry still drives behaviour, and any disagreement is drift, an alert, and a failing test.
+`[target]` holds Jay's decisions D-001 … D-009 as structured policy; nothing enforces it. The Autonomy Engine (next)
+reads it in shadow mode only. `policy/**` is in the auto-merge denylist (D-007).

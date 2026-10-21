@@ -1,0 +1,13 @@
+id = "D-005"
+schema = 1
+date = "2026-10-21"
+decided_by = "jay"
+source = "Jay, CommandCenter project thread, thread 2026-10-21T02:10Z"
+projects = ["gyst"]
+question = "How much autonomy for GYST around personal data?"
+decision = "Routine work stays autonomous. Changes that affect the data model, retention, privacy, encryption, deletion, health or personal-data handling, authentication, or an irreversible migration need approval. Normal UI/API fixes around existing personal data stay automatic if reversible and tested."
+rationale = "Personal data mistakes are hard to undo; ordinary fixes are not."
+rules = [
+  "approval for: data model, retention, privacy, encryption, deletion, health/personal-data handling, authentication, irreversible migration",
+  "automatic: reversible, tested UI/API fixes around existing personal data",
+]

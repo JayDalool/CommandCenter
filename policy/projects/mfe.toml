@@ -1,0 +1,29 @@
+# MyFamilyExpenses: CONTROLLED PRODUCTION (target), same rules as SamVision. Its release windows are still open (Jay to decide).
+schema = 1
+project = "mfe"
+mode = "controlled_production"
+decisions = ["D-001", "D-004", "D-006", "D-008"]
+learning = "contextual"
+
+[enforced]
+merge = "owner"
+night = "normal"
+paused = ""
+max_lanes = 2
+ui_fix = "ask"
+
+[target]
+plan_approval = { required_for = ["ui_change_major", "ui_change_client_visible", "workflow_change", "api_change", "migration", "risk_at_least_medium"], package = "full", reviewers = ["claude", "codex"] }
+review = { claude = "always", codex = "on_plan_package", security = "on_trigger" }
+merge = { policy = "release_train", requires = ["ci_green", "review_approved_at_head", "plan_approved_if_required"] }
+deploy = { policy = "release_window", env = "live", requires = ["verify_pass", "health_ok"] }
+release = { windows = [], unattended_when = ["risk_low", "no_migration", "no_meaningful_downtime", "low_blast_radius", "no_client_workflow_change"], unattended_requires = ["health_checks", "auto_rollback"], otherwise = "prepare_and_hold_for_jay", client_note = "required" }
+small_safe_changes = { batch = true, max_risk = "low" }
+constraints = { never = ["prod_docker_compose_changes", "prod_database"] }
+notify = { release = "summary", needs_you = "slack_immediate" }
+execution = { allowed_nodes = ["server"], preferred_node = "server", repo_storage = "server", server_clone = "allowed", secrets = "server_scoped", model_providers = ["anthropic", "openai"] }
+artifacts = { store = "server", drive_mirror = "plan_packages_and_releases" }
+
+[capabilities]
+health_checks = false
+auto_rollback = false

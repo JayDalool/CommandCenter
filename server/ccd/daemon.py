@@ -22,7 +22,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import __version__, coordid, coordinators, github, merge_policy, model, registry, sources
+from . import __version__, coordid, coordinators, github, merge_policy, model, profiles, registry, sources
 from . import pipeline as pipeline_mod
 from . import herdr as herdr_mod
 from . import importer
@@ -270,9 +270,12 @@ def oom_kills_24h():
 
 class Daemon:
     def __init__(self, cfg, store, herdr, *, github_fn=None, host_fn=None, git_fn=None, oom_fn=None, tasks=None,
-                 gh_cli=None):
+                 gh_cli=None, policy=None):
         self.cfg = cfg
         self.store = store
+        # Project Operating Profiles (policy/): read once at start. Read-only here; the registry still drives
+        # behaviour. A broken or drifting profile raises an alert, never stops ccd.
+        self.policy = policy if policy is not None else profiles.load()
         self.herdr = herdr
         self.tasks = tasks  # TaskStore, durable product data (tasks.db); None = task system off
         self.pipeline = pipeline_mod.Pipeline(tasks) if tasks is not None else None
@@ -346,6 +349,7 @@ class Daemon:
         self._loops = [asyncio.create_task(fn(), name=fn.__name__) for fn in loops]
         self._event("daemon", "daemon.started", f"ccd {__version__} started", data={"pid": os.getpid()})
         self._log_merge_policy()
+        self._log_policy()
         self._dirty.set()
 
     async def stop(self):
@@ -882,6 +886,10 @@ class Daemon:
             elif n["kind"] == "ci":
                 out.append({"id": f"ci:{n['project']}", "severity": "warn", "source": "github",
                             "project": n["project"], "text": f"{n['project']} main checks failing"})
+        problems = self.policy.problems()
+        if problems:
+            out.append({"id": "policy:problems", "severity": "warn", "source": "policy", "project": None,
+                        "text": f"policy: {len(problems)} problem(s) — {problems[0]}"})
         h = self.host["data"] or {}
         if h.get("disk", 0) >= self.cfg["disk_warn_percent"]:
             out.append({"id": "host:disk", "severity": "warn", "source": "host", "project": None,
@@ -1869,6 +1877,14 @@ class Daemon:
     def _log_merge_policy(self):
         """Startup: whether ccd may merge anything, as a security event (the audit trail of the first GitHub write)."""
         self._event("security", "merge.policy", self._merge_policy_text(), data={"status": self._merge_policy_state()})
+
+    def _log_policy(self):
+        """Startup: which policy files ccd read (their combined SHA-256) and whether any is broken or drifts."""
+        n = len(self.policy.problems())
+        self._event("security", "policy.loaded",
+                    f"policy {self.policy.fingerprint[:12]}: {len(self.policy.profiles)} project profiles, "
+                    f"{len(self.policy.decisions)} decisions" + (f", {n} problem(s)" if n else ""),
+                    data={"status": "problems" if n else "ok", "count": n})
 
     def _merge_policy_state(self):
         return "enabled" if self.auto_merge_on and self._auto_merge_projects() else "disabled"

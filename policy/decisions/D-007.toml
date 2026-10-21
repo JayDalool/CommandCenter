@@ -1,0 +1,12 @@
+id = "D-007"
+schema = 1
+date = "2026-10-21"
+decided_by = "jay"
+source = "Jay, CommandCenter project thread, thread 2026-10-21T02:16Z"
+projects = ["commandcenter"]
+question = "Which Command Center changes always need Jay, even under full autonomy?"
+decision = "Changes involving the autonomy engine, the capability broker/gatekeeper, security.py, project policy files, or agent permission rules require Jay's approval. No agent may expand its own authority."
+rationale = "Self-modification of the rails would make every other rule optional."
+rules = [
+  "require Jay for: server/ccd/autonomy.py, server/ccd/broker.py, server/ccd/security.py, server/ccd/profiles.py, server/ccd/merge_policy.py, policy/**, agent permission rules",
+]

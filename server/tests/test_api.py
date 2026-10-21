@@ -61,6 +61,8 @@ ALLOWED = {
     # SSH sign-in: cc-session (over Jay's SSH login) mints a one-time code; the page redeems it once
     ("POST", "/api/developer/handoff"), ("POST", "/api/developer/redeem"),
     ("GET", "/api/pty"), ("POST", "/api/pty/close"), ("WS", "/api/pty/{name}"),
+    # v2 Phase 1: Project Operating Profiles, read-only
+    ("GET", "/api/profiles"),
 }
 JAY_PRESSES = {"/api/jay/merge", "/api/jay/go-live"}
 FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec", "push",
@@ -129,6 +131,16 @@ class Surface(ApiBase):
                 continue
             for word in FORBIDDEN_WORDS:
                 self.assertNotIn(word, path.lower(), f"{path} mentions {word}")
+
+    def test_profiles_are_read_only_and_token_gated(self):
+        # v2 Phase 1: GET /api/profiles shows policy; nothing changes it over HTTP.
+        self.assertEqual(self.client.get("/api/profiles").status_code, 401)
+        body = self.get("/api/profiles").json()
+        self.assertEqual(body["problems"], [])
+        self.assertEqual(body["projects"]["gauzemate"]["mode"], "paused")
+        self.assertRegex(body["fingerprint"], r"^[0-9a-f]{64}$")
+        self.assertEqual(self.post("/api/profiles", {}).status_code, 405)
+        self.assertTrue(any(e["kind"] == "policy.loaded" for e in self.store.since(0)))
 
     def test_only_the_approved_jay_presses_live_under_api_jay(self):
         # Merge and Go Live (2026-10-09, Jay): Jay + Developer Unlock approve exactly what is listed and ask the
