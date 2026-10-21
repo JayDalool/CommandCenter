@@ -7,6 +7,7 @@ import { app } from "../store/app";
 import { useSelector } from "../lib/store";
 import { byProjectOrder, initials, isActive, pjVar } from "../lib/control";
 import { Dialog } from "./Dialog";
+import { useNightShift } from "./NightShift";
 import { unlockDialogOpen, useDevActive } from "./DevMode";
 
 type Result = { ok: boolean; text: string };
@@ -45,6 +46,8 @@ export function TaskCheckDialog({ onClose, mode = "check" }: { onClose: () => vo
   const projects = byProjectOrder(taskProjects.filter((p) => !live.size || live.has(p.key)
     || tickets.some((t) => t.project === p.key && isActive(t))));
   const [copied, setCopied] = useState<string | null>(null);
+  const [nightState] = useNightShift();
+  const paused = (k: string) => nightState?.projects[k]?.paused ?? null;
   // No coordinator Claude to send it to: the same message, to paste into any Claude working in that repo.
   const copy = async (k: string) => {
     if (!dev) { unlockDialogOpen(); return; }
@@ -89,19 +92,21 @@ export function TaskCheckDialog({ onClose, mode = "check" }: { onClose: () => vo
           <span className="pj-badge is-sm" aria-hidden>{initials(p.prefix, p.name)}</span>
           <span className="tc-name"><b>{p.name}</b>
             <span className={`mono-xs ${r ? (r.ok ? "tc-ok" : "tc-bad") : "muted"}`}>
-              {r ? r.text : c?.paneId ? `Claude ${c.name} · ${c.status}` : "no coordinator Claude identified"}</span></span>
+              {paused(p.key) ? `Paused — ${paused(p.key)}` : r ? r.text
+                : `${c?.paneId ? `Claude ${c.name} · ${c.status}` : "no coordinator Claude identified"}${
+                  nightState?.projects[p.key]?.mode === "careful" ? " · careful mode: research first, Jay merges" : ""}`}</span></span>
           <span className="row" style={{ gap: 4 }}>
-            {((r && !r.ok) || !c?.paneId) && <button type="button" className="btn is-sm is-quiet" onClick={() => void copy(p.key)}
+            {!paused(p.key) && ((r && !r.ok) || !c?.paneId) && <button type="button" className="btn is-sm is-quiet" onClick={() => void copy(p.key)}
               title="Copy the message to paste into a Claude working in this repo">
               {copied === p.key ? "Copied ✓" : "Copy prompt"}</button>}
-            <button type="button" className="btn is-sm" disabled={busy !== null} onClick={() => void run([p.key])}>
+            <button type="button" className="btn is-sm" disabled={busy !== null || !!paused(p.key)} onClick={() => void run([p.key])}>
               {busy === p.key ? "Sending…" : r?.ok ? "Sent ✓" : night ? "Start" : "Check"}</button></span>
         </div>;
       })}
     </div>
     <div className="row" style={{ marginTop: 14 }}>
       <button type="button" className="btn is-primary" data-autofocus disabled={busy !== null}
-        onClick={() => void run(projects.map((p) => p.key).filter((k) => !res[k]?.ok))}>
+        onClick={() => void run(projects.map((p) => p.key).filter((k) => !res[k]?.ok && !paused(k)))}>
         {night ? "Start night shift in all projects" : "Check all projects"}</button>
       <button type="button" className="btn is-quiet" onClick={onClose}>Close</button>
       {!dev && <span className="mono-xs muted">Needs Developer Mode (it sends a message to Claude).</span>}

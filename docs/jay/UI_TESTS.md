@@ -6,6 +6,8 @@ Screens Jay must check. Newest first. Delete a line when it's done.
 - [ ] CC-024 · Server → Worktrees panel says finished tickets' clean worktrees are removed · http://127.0.0.1:7777/#/server
 - [ ] CC-029 · Go Live: confirm lists tickets; Claude only prepares · http://127.0.0.1:7777/#/dashboard
 - [ ] NIGHT SHIFT · Dashboard → ☾ Night shift → Start; each panel shows "Night shift running"; in the morning its Report shows the release candidate · http://127.0.0.1:7777/#/dashboard
+- [ ] UI TESTS · Dashboard → UI tests → Run UI tests on one project; when done, Report → Fix it / Skip each finding · http://127.0.0.1:7777/#/dashboard
+- [ ] MERGE · Dashboard → ⇉ Merge ready: each repo's ready PRs in order → Merge all ready → Yes; each Claude merges one at a time · http://127.0.0.1:7777/#/dashboard
 - [ ] GO LIVE · Report → Go Live… → Yes, approve and prepare: Claude writes its plan to ~/command-center/deploys/<project>/ and waits; you confirm the deploy in its pane · http://127.0.0.1:7777/#/dashboard
 - [ ] NIGHT SHIFT · In any repo's Claude type /night-shift (after go-live links it) · any Claude pane
 - [ ] TASK CHECK · Dashboard → Check tasks → Check all projects; each Claude answers "<project> task check: …" in its pane · http://127.0.0.1:7777/#/dashboard

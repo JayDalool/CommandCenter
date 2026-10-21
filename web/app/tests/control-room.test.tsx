@@ -9,6 +9,8 @@ import { stageOf, jayHref, jayWords, taskHref } from "../src/lib/control";
 import { NeedsTable } from "../src/screens/needs";
 import { TaskCheckDialog } from "../src/components/TaskCheck";
 import { NightLine, reportInShift } from "../src/components/NightShift";
+import { MergeDialog } from "../src/components/Merge";
+import { UiTestsDialog } from "../src/components/UiTests";
 import type { NightProject } from "../src/api/types";
 import { jayQueue } from "../src/tickets/model";
 import { Dashboard, newsText, projectPanels } from "../src/screens/Dashboard";
@@ -524,6 +526,13 @@ describe("night shift on the Dashboard", () => {
     });
   });
 
+  it("a paused project says so and its row can't be started", async () => {
+    render(<NightLine project="gauzemate" name="GauzeMate" n={np({ paused: "Jay paused GauzeMate until he adds designs and files", report: null })}
+      onChanged={() => {}} />);
+    expect(screen.getByText(/Paused — until he adds designs and files/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Report" })).toBeNull();
+  });
+
   it("while it runs: no Go Live, and End night shift stops it", async () => {
     act(() => developer.set({ active: true, expiresAt: null, error: null }));
     const end = vi.spyOn(app.api, "nightShiftEnd").mockResolvedValue({ ok: true, told: true });
@@ -535,5 +544,62 @@ describe("night shift on the Dashboard", () => {
     expect(screen.getByRole("button", { name: "Go Live…" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "End night shift" }));
     await waitFor(() => expect(end).toHaveBeenCalledWith("gyst"));
+  });
+});
+
+describe("merge ready", () => {
+  it("lists each project's PRs in merge order, skips paused ones, and merges only after a second Yes", async () => {
+    act(() => developer.set({ active: true, expiresAt: null, error: null }));
+    vi.spyOn(app.api, "mergeReady").mockResolvedValue({ projects: {
+      samvision: { paused: null, skipped: [{ key: "SV-090", reason: "CI is not green" }], ready: [
+        { key: "SV-079", title: "Older PR first", pr: "JayDalool/SamVisionAI#129", head: "c1".repeat(20), gate: "merge" },
+        { key: "SV-081", title: "Then this", pr: "JayDalool/SamVisionAI#131", head: "b1".repeat(20), gate: "merge" }] },
+      gauzemate: { paused: "Jay paused GauzeMate until he adds designs and files", skipped: [], ready: [] },
+    } });
+    const merge = vi.spyOn(app.api, "merge").mockResolvedValue({ ok: true, project: "samvision", coordinator: "samvision",
+      merging: [{ key: "SV-079", pr: "#129", head: "c1" }, { key: "SV-081", pr: "#131", head: "b1" }], skipped: [] });
+    render(<MergeDialog onClose={() => {}} />);
+    expect(await screen.findByText("Older PR first")).toBeInTheDocument();
+    const items = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
+    expect(items.findIndex((t) => t.includes("SV-079"))).toBeLessThan(items.findIndex((t) => t.includes("SV-081")));
+    expect(screen.getByText(/not mergeable: CI is not green/)).toBeInTheDocument();
+    expect(screen.getByText(/Paused — Jay paused GauzeMate/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Merge all ready (2)" }));
+    expect(merge).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Yes, merge" }));
+    await waitFor(() => expect(merge).toHaveBeenCalledWith("samvision",               // exactly the heads shown
+      [{ key: "SV-079", head: "c1".repeat(20) }, { key: "SV-081", head: "b1".repeat(20) }]));
+    expect(merge).toHaveBeenCalledTimes(1);                                     // the paused project is never sent
+    expect(await screen.findByText(/samvision is merging SV-079 → SV-081/)).toBeInTheDocument();
+  });
+});
+
+describe("UI tests", () => {
+  const run = { run: "2026-10-10-0930", status: "complete" as const, report: "Status: complete", summary: { features: 3, passed: 9, failed: 2 },
+    findings: [
+      { id: "F1", severity: "major" as const, title: "Merge list keeps merged PRs", feature: "CC-033", steps: ["Open", "Merge"],
+        expected: "They leave", actual: "They stay", evidence: "tests/e2e/merge.spec.ts", decision: null },
+      { id: "F2", severity: "minor" as const, title: "Night line cut at 375 px", feature: "", steps: [], expected: "", actual: "", evidence: "",
+        decision: null }] };
+
+  it("runs on request, and nothing is fixed until Jay presses Fix it", async () => {
+    act(() => developer.set({ active: true, expiresAt: null, error: null }));
+    vi.spyOn(app.api, "uiTests").mockResolvedValue({ projects: {
+      commandcenter: { paused: null, fixMode: "ask", runs: [run.run], latest: run },
+      gauzemate: { paused: "Jay paused GauzeMate until he adds designs and files", fixMode: "ask", runs: [], latest: null } } });
+    const start = vi.spyOn(app.api, "uiTest").mockResolvedValue({ ok: true, project: "commandcenter", coordinator: "commandcenter" });
+    const decide = vi.spyOn(app.api, "uiDecide").mockResolvedValue({ ok: true, finding: "F1", decision: "fix", ticket: "CC-040" });
+    render(<UiTestsDialog onClose={() => {}} />);
+    expect(await screen.findByText(/3 features · 9 passed · 2 failed · 2 findings \(2 to decide\)/)).toBeInTheDocument();
+    const runs = screen.getAllByRole("button", { name: "Run UI tests" });
+    expect(runs.filter((b) => (b as HTMLButtonElement).disabled)).toHaveLength(1);        // GauzeMate is paused
+    fireEvent.click(runs.find((b) => !(b as HTMLButtonElement).disabled)!);
+    await waitFor(() => expect(start).toHaveBeenCalledWith("commandcenter"));
+    fireEvent.click(screen.getByRole("button", { name: "Report" }));
+    expect(screen.getByText("Merge list keeps merged PRs")).toBeInTheDocument();
+    expect(decide).not.toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole("button", { name: "Fix it" })[0]);
+    await waitFor(() => expect(decide).toHaveBeenCalledWith("commandcenter", "2026-10-10-0930", "F1", "fix"));
+    expect(await screen.findByText("CC-040")).toBeInTheDocument();
   });
 });

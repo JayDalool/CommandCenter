@@ -465,10 +465,37 @@ export interface NightReport { name: string; mtime: number; status: "working" | 
 /** One ticket in the Go Live confirm box: `reason` is set only for merged tickets Jay should look at first. */
 export interface GoLiveTicket { key: string; title: string; reason?: string }
 export interface NightProject {
+  /** Why Jay paused the project (no agent works on it), or null. */
+  paused?: string | null;
+  /** careful: research first, one task at a time, risky work stops at a plan. */
+  mode?: "normal" | "careful";
   active: boolean; startedAt: number | null; endedAt: number | null; endReason: string | null; nudges: number | null;
   cutoffAt?: number | null; goLiveAt: number | null; goLive?: { approves: GoLiveTicket[]; warnings: GoLiveTicket[] }; coordinator: { name: string; state: string; status: string | null }; report: NightReport | null;
 }
 export interface NightShiftState { projects: Record<string, NightProject> }
 export interface GoLiveResult {
   ok: boolean; project: string; coordinator: string; approved: string[]; skipped?: { key: string; reason: string }[]; errors?: { key: string; error: string }[];
+}
+/** Merge (ccd /api/jay/merge): per project, what Jay can merge now — reviewed head, PR open and green — in order. */
+export interface MergeItem { key: string; title: string; pr: string; head: string; gate: string | null }
+export interface MergeReady {
+  projects: Record<string, { ready: MergeItem[]; skipped: { key: string; reason: string }[]; paused: string | null }>;
+}
+export interface MergeResult {
+  ok: boolean; project: string; coordinator: string; merging: { key: string; pr: string; head: string }[];
+  skipped: { key: string; reason: string }[]; errors?: { key: string; error: string }[];
+}
+
+/** UI test runs (ccd uitests.py): the latest run per project and Jay's decision on each finding. */
+export interface UiFinding {
+  id: string; severity: "showstopper" | "major" | "minor"; title: string; feature: string; steps: string[];
+  expected: string; actual: string; evidence: string;
+  decision: { decision: "fix" | "skip"; ticket: string | null; at: number } | null;
+}
+export interface UiRun {
+  run: string; status: "working" | "complete" | null; report: string;
+  summary: { features?: number; passed?: number; failed?: number }; findings: UiFinding[];
+}
+export interface UiTestsState {
+  projects: Record<string, { paused: string | null; fixMode: "ask" | "auto"; runs: string[]; latest: UiRun | null }>;
 }

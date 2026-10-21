@@ -1,6 +1,6 @@
 import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
-import type { AnswersResult, CoordinatorState, GoLiveResult, NightShiftState, TaskCheckResult, TaskRecord, TicketWork,
+import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
   Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent,
 } from "./types";
@@ -97,9 +97,30 @@ export class Api {
   nightShiftEnd(project: string) {
     return this.req<{ ok: boolean; told: boolean }>("POST", "/api/night-shift/end", { project });
   }
+  /** A UI test run, when Jay asks (Developer Unlock): the coordinator tests the UI merged since its last run. */
+  uiTest(project: string, copy = false) {
+    return this.req<TaskCheckResult>("POST", "/api/tasks/ui-test", copy ? { project, copy: true } : { project });
+  }
+  /** Every project's latest UI test run and Jay's decisions. */
+  uiTests() {
+    return this.req<UiTestsState>("GET", "/api/ui-tests");
+  }
+  /** Jay decides one finding: fix (a ui-finding task enters the pipeline) or skip. */
+  uiDecide(project: string, run: string, finding: string, decision: "fix" | "skip") {
+    return this.req<{ ok: boolean; finding: string; decision: string; ticket: string | null }>("POST", "/api/ui-tests/decide",
+      { project, run, finding, decision });
+  }
+  /** What each project can merge now (reviewed head, PR open and green), in merge order. */
+  mergeReady() {
+    return this.req<MergeReady>("GET", "/api/jay/merge");
+  }
+  /** Merge (Developer Unlock): approve exactly those heads; the coordinator merges them one at a time. */
+  merge(project: string, items: { key: string; head: string }[]) {
+    return this.req<MergeResult>("POST", "/api/jay/merge", { project, items });
+  }
   /** Go Live (Developer Unlock): approves the open live-deploy gates and asks the coordinator to PREPARE the deploy; Jay confirms it in its pane. */
   goLive(project: string, keys: string[]) {
-    return this.req<GoLiveResult>("POST", "/api/go-live", { project, keys });
+    return this.req<GoLiveResult>("POST", "/api/jay/go-live", { project, keys });
   }
   /** Jay answers Claude's questions (Developer Unlock). The last answer resumes the same task session. */
   answers(key: string, answers: { id: number; answer: string }[], scopeChange = false) {

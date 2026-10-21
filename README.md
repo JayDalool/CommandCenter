@@ -28,7 +28,9 @@ own; when ccd is down, it builds locally exactly as before.
   tasks — only Jay's "Cancel it" cancels one; **Night shift** sends each idle
   coordinator the `/night-shift` skill (`server/ccd/skills/night-shift/SKILL.md`):
   work every task that does not wait for Jay end to end, merge only where no gate
-  is open (SamVision and GauzeMate: Jay merges), never deploy. ccd then reminds an
+  is open (SamVision and GauzeMate: Jay merges), never deploy; **UI tests** (on
+  request) sends the `/ui-test` skill: Playwright tests of the UI merged since the
+  last run, kept in the repo, findings for Jay to Fix it / Skip. ccd then reminds an
   idle night-shift coordinator to continue until its morning report says
   `Status: complete` (or nothing moves after 3 reminders). A coordinator is never a task session.
 - **Waiting for Jay is per task.** A task does not start while it, or a task it
@@ -41,16 +43,23 @@ own; when ccd is down, it builds locally exactly as before.
 - **No dangerous endpoints.** There is no API that merges or deploys, and none
   for production, secrets, Docker, destructive git, or config/rule changes. Merges and deploys
   are done by agents under the pipeline's gates; ccd only records them, and a
-  LIVE deploy cannot be recorded before Jay approved it. **Go Live** is a deploy
-  API that **prepares only** (`POST /api/go-live`, Jay + Developer Unlock): it
-  approves the project's open live-deploy gates and asks its coordinator to
-  prepare the deploy (runbook steps, checks, rollback plan) and wait. Jay confirms
-  the deploy himself in the coordinator's pane. The message orders no deploy, but
-  the approval it records is a full live-deploy approval, so that wait rests on
-  the message text, not on ccd (ADR 0006). The per-ticket **Approve live deploy**
-  button works the same way: a real live-deploy approval, marked `jay:gate`, and
-  a message that asks Claude to prepare and wait for Jay in the pane (the wait
-  rests on the message text only). ccd runs no deploy. Terminals, Claude
+  LIVE deploy cannot be recorded before Jay approved it. Two **Jay presses**
+  (`/api/jay/…`, Jay with Developer Unlock, a second confirm in the UI) are the
+  only exceptions, and a test keeps it to these two: **Merge ready** approves
+  exactly the reviewed, green PR heads and asks each repo's coordinator to merge
+  them one at a time (CI on main between merges); **Go Live** **prepares only**
+  (`POST /api/jay/go-live`): it approves the project's open live-deploy gates and
+  asks its coordinator to prepare the deploy (runbook steps, checks, rollback
+  plan) and wait. Jay confirms the deploy himself in the coordinator's pane. The
+  message orders no deploy, but the approval it records is a full live-deploy
+  approval, so that wait rests on the message text, not on ccd (ADR 0006). Merge
+  ready is a convenience, not a bypass: a ticket with any open gate other than
+  the merge gate, no APPROVE at the PR's current head, red CI or a draft PR is
+  listed as skipped and never sent. The per-ticket **Approve live deploy**
+  button works the same way as Go Live: a real live-deploy approval, marked
+  `jay:gate`, and a message that asks Claude to prepare and wait for Jay in the
+  pane (the wait rests on the message text only). ccd itself deploys nothing and
+  merges only what ADR 0007's low-risk policy allows. Terminals, Claude
   input, answers and file writes need a second credential, Developer Unlock
   (once per app session, [docs/SECURITY.md](docs/SECURITY.md)). A test asserts
   the route table exactly. See [docs/API.md](docs/API.md).
