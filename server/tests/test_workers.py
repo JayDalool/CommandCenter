@@ -161,6 +161,33 @@ class ReviewFixes(unittest.TestCase):
         self.assertEqual(self.w.node("server")["status"], "online")
 
 
+class Atomic(unittest.TestCase):
+    def test_a_status_change_and_its_event_land_together_or_not_at_all(self):
+        ts = TaskStore(os.path.join(tempfile.mkdtemp(prefix="wk3-"), "tasks.db"), task_projects(cfg()))
+        w = workers.Workers(ts.db)
+        w.enrol("laptop", "laptop", {}, "1", "jay")
+        real = w._event
+
+        def boom(*a, **k):
+            raise sqlite3.OperationalError("database is locked")
+        w._event = boom
+        for op in (lambda: w.approve("laptop", "jay"), lambda: w.revoke("laptop", "jay"),
+                   lambda: w.enrol("gpu-1", "gpu", {}, "1", "jay")):
+            with self.assertRaises(sqlite3.OperationalError):
+                op()
+        self.assertEqual(w.node("laptop")["state"], "pending")      # nothing granted without its record
+        self.assertIsNone(w.node("gpu-1"))
+        w._event = real
+        w.approve("laptop", "jay")
+        self.assertEqual([e["kind"] for e in w.events()], ["approved", "enrolled"])
+        for sql in ("UPDATE worker_nodes SET revoked_at=5 WHERE id='laptop'",
+                    "UPDATE worker_nodes SET capabilities='{' WHERE id='laptop'",
+                    "INSERT INTO worker_nodes (id, kind, status, enrolled_at, enrolled_by, approved_at, approved_by) "
+                    "VALUES ('gpu-2', 'gpu', 'active', 1, 'agent:x', 2, 'jay')"):
+            with self.assertRaises(sqlite3.DatabaseError, msg=sql):
+                ts.db.execute(sql)
+
+
 class OverHttp(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         from starlette.testclient import TestClient
@@ -189,6 +216,13 @@ class OverHttp(unittest.IsolatedAsyncioTestCase):
                                      json={"id": "gpu-1", "kind": "gpu"}).status_code, 403)
         self.assertEqual(self.c.post("/api/workers/approve", headers=dict(self.h, **{"x-ccd-actor": "agent:x"}),
                                      json={"id": "laptop"}).status_code, 403)
+        for path in ("/api/workers/approve", "/api/workers/revoke"):             # Jay without Unlock
+            self.assertEqual(self.c.post(path, headers=self.h, json={"id": "laptop"}).status_code, 403)
+            self.assertEqual(self.c.post(path, headers=dict(self.h, **{"x-ccd-developer": "nope"}),
+                                         json={"id": "laptop"}).status_code, 403)
+        self.d._workers_start()
+        self.assertEqual(self.c.post("/api/workers/heartbeat", headers=dict(self.h, **{"x-ccd-node": "server anything"}),
+                                     json={}).status_code, 401)
 
 
 class InTheDaemon(unittest.IsolatedAsyncioTestCase):

@@ -40,6 +40,10 @@ describe("Workers", () => {
     render(<Workers />);
     expect(await screen.findByText("ab12-cd34")).toBeInTheDocument();
     expect(screen.getByText(/jay · /)).toBeInTheDocument();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(act).not.toHaveBeenCalled();                                          // fingerprint not confirmed
+    expect(confirm.mock.calls[0][0]).toContain("ab12-cd34");
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(act).toHaveBeenCalledWith("approve", "laptop", ""));
     const prompt = vi.spyOn(window, "prompt").mockReturnValueOnce(null).mockReturnValueOnce("lost it");
@@ -55,6 +59,7 @@ describe("Workers", () => {
     const get = vi.spyOn(app.api, "workers").mockResolvedValueOnce(data).mockRejectedValueOnce(new Error("ccd is down"));
     setDevSession("s".repeat(43), 3600);
     vi.spyOn(app.api, "workerAct").mockResolvedValue(data.nodes[1]);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<Workers />);
     fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
     expect(await screen.findByText(/Could not refresh: ccd is down/)).toBeInTheDocument();

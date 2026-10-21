@@ -18,6 +18,7 @@ Both enrol and heartbeat go through ccd's API token as well as (for heartbeat) t
 ccd's token too. Until per-actor tokens exist (PR 7), that token is the real credential; see docs/SECURITY.md.
 Status shown: pending | online | offline | revoked (online = heartbeat within ONLINE_FOR).
 """
+import contextlib
 import hashlib
 import hmac
 import json
@@ -89,10 +90,33 @@ def server_caps():
 
 
 class Workers:
-    def __init__(self, db, clock=time.time):
+    def __init__(self, db, clock=time.time, version="unknown"):
         self.db = db
         self.clock = clock
         self._last_beat = 0.0
+        self._version = version
+
+    @contextlib.contextmanager
+    def _tx(self):
+        """One transaction: a status change and its event row land together or not at all. tasks.db runs in
+        autocommit mode (`with conn:` would not group them); inside a caller's transaction, a savepoint."""
+        if self.db.in_transaction:
+            self.db.execute("SAVEPOINT workers_tx")
+            try:
+                yield
+            except BaseException:
+                self.db.execute("ROLLBACK TO workers_tx")
+                self.db.execute("RELEASE workers_tx")
+                raise
+            self.db.execute("RELEASE workers_tx")
+            return
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            raise
+        self.db.execute("COMMIT")
 
     def _event(self, node, kind, actor, data=None):
         text = json.dumps(data or {})
@@ -110,7 +134,7 @@ class Workers:
         """ccd's own host. Active from the start: it is where ccd already runs. Idempotent; refreshes caps/version."""
         caps = caps if caps is not None else server_caps()
         now = self.clock()
-        with self.db:
+        with self._tx():
             if self._row(SERVER_ID) is None:
                 self.db.execute(
                     "INSERT INTO worker_nodes (id, kind, owner, status, capabilities, version, enrolled_at, enrolled_by, "
@@ -129,12 +153,12 @@ class Workers:
         now = self.clock()
         if now - self._last_beat < HEARTBEAT_EVERY:
             return False
-        with self.db:
+        self._last_beat = now         # first, so a failure is retried every HEARTBEAT_EVERY, not every loop
+        with self._tx():
             n = self.db.execute("UPDATE worker_nodes SET last_heartbeat=? WHERE id=? AND status='active'",
                                 (now, SERVER_ID)).rowcount
-        self._last_beat = now         # first, so a failing retry is tried every HEARTBEAT_EVERY, not every loop
         if n == 0:                    # registration failed at start: try again rather than beat nothing
-            self.register_server(getattr(self, "_version", "unknown"))
+            self.register_server(self._version)
         return True
 
     # ---------- other nodes ----------
@@ -154,7 +178,7 @@ class Workers:
         if self.db.execute("SELECT COUNT(*) FROM worker_nodes WHERE status='pending'").fetchone()[0] >= MAX_PENDING:
             raise WorkerError(429, f"{MAX_PENDING} nodes are already waiting for Jay; approve or revoke some first")
         token = secrets.token_urlsafe(32)
-        with self.db:
+        with self._tx():
             self.db.execute(
                 "INSERT INTO worker_nodes (id, kind, owner, status, capabilities, version, enrolled_at, enrolled_by, "
                 "token_sha) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -180,7 +204,7 @@ class Workers:
         if version is not None:
             sets.append("version=?")
             args.append(str(version)[:40])
-        with self.db:
+        with self._tx():
             self.db.execute(f"UPDATE worker_nodes SET {', '.join(sets)} WHERE id=?", (*args, node))
         return {"id": node, "status": row[1]}
 
@@ -192,7 +216,7 @@ class Workers:
             raise WorkerError(404, f"no node {node}")
         if row[1] != "pending":
             raise WorkerError(409, f"{node} is {row[1]}, not pending")
-        with self.db:
+        with self._tx():
             self.db.execute("UPDATE worker_nodes SET status='active', approved_at=?, approved_by='jay' WHERE id=?",
                             (self.clock(), node))
             self._event(node, "approved", "jay")
@@ -209,7 +233,7 @@ class Workers:
         if row[1] == "revoked":
             raise WorkerError(409, f"{node} is already revoked")
         reason = re.sub(r"[\x00-\x1f\x7f]+", " ", str(reason or ""))[:200]
-        with self.db:
+        with self._tx():
             self.db.execute("UPDATE worker_nodes SET status='revoked', revoked_at=? WHERE id=?", (self.clock(), node))
             self._event(node, "revoked", "jay", {"reason": reason})
         return self.node(node)
