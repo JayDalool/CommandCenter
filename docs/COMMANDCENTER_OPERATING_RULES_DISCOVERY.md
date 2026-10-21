@@ -135,30 +135,90 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
 - **Scope:** global.
 - **Type:** approval (choosing and setting it up is Jay's call); not part of Phase 1 or 2.
 
+### D-017 · Remote-hosted projects are first-class
+- **Answer (2026-10-21T19:53Z):** "Think about the case where we have a new project hosted remotely ... it should
+  also be a way in our software."
+- **Rule:** a project's host is a profile field, not an assumption. `hosting.host` is `jay-server` or
+  `remote:<name>`. Every rule in this file (deploy, backups, health checks, restarts, rollback, secrets, browser)
+  applies the same way to a remote host. CommandCenter reaches a remote host only through the access method in
+  that project's profile (decided in Q7), never through Jay's own login.
+- **Controls:** profile `hosting` block gains `host`, `provider`, `access`, `health_url`; the operations page
+  (D-019) shows each host; onboarding (Q8) detects remote hosting.
+- **Scope:** global (schema), set per project.
+- **Type:** requirement; access rules pending Q7.
+
+### D-018 · Databases and backups
+- **Answer (Q4):** The projects use a mix of **Postgres, MySQL and SQLite**. **MFE is backed up, Jay believes
+  daily. SamVision is backed up about weekly.** Others are unknown. Verify on jay-server when it is reachable (§8).
+- **Rule (proposed, Jay did not object):** an automatic backup runs before every deploy or migration that touches a
+  database; retention 14 daily + 8 weekly on jay-server plus one off-server copy; a test restore into a throwaway
+  container runs weekly. Restoring over production, dropping, truncating or bulk-deleting production data needs
+  Jay every time. A project whose database has no backup counts as **not release-ready** for anything that touches data.
+- **Controls:** pre-deploy backup step in the deploy runner; backup and restore-test jobs on a schedule; results
+  feed the operations page (D-019).
+- **Scope:** global; per-project engine and schedule recorded in each profile (`db = { engine, location, backup }`).
+- **Type:** autonomous (backups, test restores into throwaway containers); approval (restore over production,
+  destructive production operations).
+- **Open:** SamVision weekly is below the proposed daily; confirm whether to raise it once verified.
+
+### D-019 · Operations page: backups, restores, health checks, schedule
+- **Answer (Q4):** "We also need an indicator page for our backups and restores, health check and schedule."
+- **Rule:** CommandCenter gets one page that shows, per project and host: last backup (time, size, age warning),
+  last restore test (pass/fail), current health check result, and the schedule of upcoming backups, restore tests,
+  release windows and maintenance. Stale or failed items show red and raise a Needs You item.
+- **Controls:** a read-only page and API; no buttons that change production in its first version.
+- **Scope:** global.
+- **Type:** feature requirement (build later, not Phase 1).
+
+### D-020 · Production operations without a code change
+- **Answer (Q5):** "Yes, agents are allowed, but to restart, send me a message first on why, then restart."
+- **Rule:** agents may read logs and run health checks anytime. Before restarting a container or service, the agent
+  sends Jay a message saying which service, what it saw, and why it is restarting, and then restarts it. It does
+  not wait for a reply (reading of "send me a message first, then restart"). One restart per incident; if the
+  service is still unhealthy, it stops and alerts Jay. After a failed post-deploy health check, it may roll back to
+  the last good image and reports it. Rebuilding images, clearing caches, and changing docker-compose or nginx
+  config need Jay (SamVision/MFE already forbid compose and DB changes).
+- **Controls:** a `restart` action that first emits a Slack/Needs You notice, then runs; a per-incident restart
+  counter; rollback only to an image recorded as last good.
+- **Scope:** global; applies to jay-server and remote hosts (D-017).
+- **Type:** autonomous (logs, health checks, rollback with report); autonomous after notice (restart, once);
+  approval (rebuild, cache clear, config change).
+
+### D-021 · Preview subdomains
+- **Answer (Q6):** "Yes, absolutely."
+- **Rule:** CommandCenter may create private preview hostnames under `*.dev.zaylolabs.com` (tunnel route, nginx
+  config, container) protected so only Jay and agent accounts can open them, and reports each one. Creating or
+  changing a public production hostname, and editing any existing DNS record, needs Jay.
+- **Controls:** a Cloudflare API token scoped to the `dev` zone records only; a register of previews with an
+  owner and expiry; previews older than 14 days with no activity are torn down and reported.
+- **Scope:** global.
+- **Type:** autonomous with report (previews); approval (public hostnames, existing records).
+
 ---
 
 ## 3. Questions asked, awaiting Jay
 
 Batch 1 (Q1 hosting, Q2 browser, Q3 secrets) answered 2026-10-21T17:37Z → D-010 … D-016.
+Batch 2 (Q4 databases, Q5 production ops, Q6 subdomains) answered 2026-10-21T19:53Z → D-017 … D-021.
 
-### Batch 2 (asked 2026-10-21)
+### Batch 3 (asked 2026-10-21)
 
-**Q4 · Databases and backups.** Which database does each project use (Postgres, MySQL, SQLite, other), and is any
-of them backed up today (where, how often, ever restored)? Proposed rule: CommandCenter takes an automatic
-backup before every deploy or migration that touches a database, keeps 14 daily + 8 weekly copies on jay-server
-plus one off-server copy, and tests a restore into a throwaway container weekly. Restoring over production,
-dropping, truncating or bulk-deleting production data needs Jay every time.
+**Q7 · Remote hosts.** Where would a remote project most likely live (a VPS like Hetzner or DigitalOcean, a
+platform like Vercel, Render or Fly, or a client's own server)? Proposed rule: CommandCenter connects to a remote
+host only with a credential made for that one project: a provider API token limited to that project, or SSH as a
+deploy-only user with its own key. Never Jay's personal login or root. A client-owned server needs Jay's approval
+before CommandCenter gets any write access.
 
-**Q5 · Production operations without a code change.** Proposed: agents may read logs and run health checks
-anytime; may restart a crashed or unhealthy container once, then alert Jay; may roll back to the last good image
-when a post-deploy health check fails (with an Immediate Attention report). Rebuilding images, clearing caches,
-changing docker-compose or nginx config, and any other production change need Jay (SamVision/MFE already forbid
-compose and DB changes).
+**Q8 · "Add this repo to CommandCenter."** Proposed default: the project starts in a read-only **observe** mode
+for 7 days. CommandCenter detects the stack, host, database, CI and deploy method; writes a draft profile; runs a
+first audit; and sends Jay a report. It may open PRs that add missing pieces (CI, health check endpoint,
+Dockerfile, backup job), but merges nothing until Jay picks the project's mode.
 
-**Q6 · New sites and subdomains.** May CommandCenter create a new subdomain under zaylolabs.com, add the tunnel
-route and nginx config, and start the container for a new app by itself? Proposed: it may create **preview**
-hostnames (`*.dev.zaylolabs.com`, behind Cloudflare Access so only Jay and agent accounts can open them) and must
-report each one; creating or changing a public production hostname, and editing any existing DNS record, needs Jay.
+**Q9 · Incidents: when to pause and when to stop everything.** Proposed: two failed deploys or two rollbacks in 24
+hours pause that project's autonomy and raise an Immediate Attention alert. Everything stops (all agents, all
+projects) when an agent acts outside its policy, production data is deleted unexpectedly, a secret leaks somewhere
+it cannot be rotated, or a web page or file instruction leads an agent to take an action. Only Jay restarts after a
+full stop.
 
 ---
 
@@ -188,18 +248,17 @@ Not asked yet. Each will be asked in a batch of exactly 3.
 
 1. Migrations: may a reversible migration ship on CommandCenter/GYST without Jay (D-005 covers GYST's personal data)?
 2. Staging: does any project have a staging/dev environment besides localhost? Should CommandCenter create one?
-3. Incident response: when does CommandCenter pause a project, alert Jay, or stop everything?
-4. Certificate, tunnel and domain-expiry monitoring (zaylolabs.com renewal at Cloudflare).
-5. New project onboarding: what "Add this repo to CommandCenter" does by default (mode, learning, first audit).
-6. Tools: approval thresholds for a free library, a new dependency, an MCP server, a browser extension, a SaaS, paid service.
-7. Screenshots and logs: what may leave jay-server (Slack, Drive, model providers) for each project?
-8. Employer data on the laptop: browser use, screenshots and logs for D-002 repos.
-9. Emergency fixes: what counts as an emergency, and may one bypass a release window?
-10. Scheduled maintenance windows per project (OS updates, image updates, DB vacuum).
-11. Service accounts and OAuth: may agents create them; who owns them.
-12. Are agent accounts (D-012) allowed on production apps, or dev/test only?
-13. Exact deploy command per project, and whether CommandCenter should wrap it as the deploy runner.
-14. Which projects besides SamVision are (or should be) public on zaylolabs.com?
+3. Certificate, tunnel and domain-expiry monitoring (zaylolabs.com renewal at Cloudflare).
+4. Tools: approval thresholds for a free library, a new dependency, an MCP server, a browser extension, a SaaS, paid service.
+5. Screenshots and logs: what may leave jay-server (Slack, Drive, model providers) for each project?
+6. Employer data on the laptop: browser use, screenshots and logs for D-002 repos.
+7. Emergency fixes: what counts as an emergency, and may one bypass a release window?
+8. Scheduled maintenance windows per project (OS updates, image updates, DB vacuum).
+9. Service accounts and OAuth: may agents create them; who owns them.
+10. Are agent accounts (D-012) allowed on production apps, or dev/test only?
+11. Exact deploy command per project, and whether CommandCenter should wrap it as the deploy runner.
+12. Which projects besides SamVision are (or should be) public on zaylolabs.com?
+13. Off-server backup location (cloud bucket, second machine, external drive) and whether it is encrypted.
 
 ---
 
@@ -213,6 +272,11 @@ Not asked yet. Each will be asked in a batch of exactly 3.
   report with a red banner: which key, why, where the new one lives, how to undo. The value never appears (D-015).
 - **Agent needs the SamVision production DB password to debug.** Refused: production credentials are broker-only
   (D-014). It debugs against dev data or asks Jay.
+- **The MFE container stops answering at 03:00.** The agent reads the logs, messages Jay "Restarting MFE web:
+  health check failing for 5 min, logs show out-of-memory", restarts it once, and reports the result. If it is
+  still down, it stops and raises an alert (D-020).
+- **Agent needs a place to show a new GYST page.** It creates `gyst-pr42.dev.zaylolabs.com`, private to Jay and
+  agent accounts, and reports the link. It is removed after 14 idle days (D-021).
 
 ---
 
@@ -220,9 +284,23 @@ Not asked yet. Each will be asked in a batch of exactly 3.
 
 | Profile | Decisions that touch it | Pending |
 |---|---|---|
-| commandcenter | D-010 (loopback-only, not on the tunnel), D-011 … D-016 | Q4, Q5 |
-| samvision | D-010 (public via tunnel), D-011 … D-016 | Q4, Q5, Q6 |
-| mfe | D-010, D-011 … D-016 | Q4, Q5, Q6 |
-| gyst | D-010, D-011 … D-016 | Q4, Q5, Q6 |
-| gauzemate | D-010 (inventory only; stays paused per D-009) | Q4 |
+| commandcenter | D-010 (loopback-only, not on the tunnel), D-011 … D-021 | Q8, Q9 |
+| samvision | D-010 (public via tunnel), D-011 … D-021; backups weekly (D-018) | Q9 |
+| mfe | D-010, D-011 … D-021; backups daily (D-018) | Q9 |
+| gyst | D-010, D-011 … D-021; backups unknown | Q9 |
+| gauzemate | D-010 (inventory only; stays paused per D-009) | none |
 | restricted (employer) | D-011, D-014, D-015 (laptop-only per D-002) | none |
+| any remote project | D-017, plus every global rule | Q7, Q8 |
+
+---
+
+## 8. To verify on jay-server (when Jay is back)
+
+Read-only checks, no changes:
+
+- [ ] Database engine and location per project (Postgres / MySQL / SQLite).
+- [ ] Backup jobs per project: what runs, schedule, destination, last success. MFE expected daily, SamVision about weekly.
+- [ ] Whether any restore has ever been tested.
+- [ ] The deploy command per project.
+- [ ] nginx sites and Cloudflare Tunnel routes in use (confirm only SamVision is public, CommandCenter is not exposed).
+- [ ] Where each repo's `.env` lives and whether dev and prod values are separated.
