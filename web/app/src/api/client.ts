@@ -2,7 +2,7 @@ import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
 import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
-  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState } from "./types";
+  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -111,6 +111,10 @@ export class Api {
 
   autonomy() {
     return this.req<AutonomyState>("GET", "/api/autonomy");
+  }
+
+  decisions() {
+    return this.req<LedgerState>("GET", "/api/decisions");
   }
   /** Jay decides one finding: fix (a ui-finding task enters the pipeline) or skip. */
   uiDecide(project: string, run: string, finding: string, decision: "fix" | "skip") {

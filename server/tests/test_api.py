@@ -62,7 +62,7 @@ ALLOWED = {
     ("POST", "/api/developer/handoff"), ("POST", "/api/developer/redeem"),
     ("GET", "/api/pty"), ("POST", "/api/pty/close"), ("WS", "/api/pty/{name}"),
     # v2 Phase 1: Project Operating Profiles, read-only
-    ("GET", "/api/profiles"), ("GET", "/api/autonomy"),
+    ("GET", "/api/profiles"), ("GET", "/api/autonomy"), ("GET", "/api/decisions"),
 }
 JAY_PRESSES = {"/api/jay/merge", "/api/jay/go-live"}
 FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec", "push",
@@ -149,6 +149,15 @@ class Surface(ApiBase):
         self.assertEqual(body["mode"], "shadow")
         self.assertIn("disagreements", body)
         self.assertEqual(self.post("/api/autonomy", {}).status_code, 405)
+
+    def test_decisions_are_read_only_and_token_gated(self):
+        # v2 Phase 1 PR 4: Decision and Approval records are visible; nothing over HTTP writes them.
+        self.assertEqual(self.client.get("/api/decisions").status_code, 401)
+        body = self.get("/api/decisions").json()
+        self.assertIn("approvals", body)
+        self.assertEqual(self.get("/api/decisions?state=bogus").status_code, 400)
+        self.assertEqual(self.get("/api/decisions?limit=x").status_code, 400)
+        self.assertEqual(self.post("/api/decisions", {}).status_code, 405)
 
     def test_only_the_approved_jay_presses_live_under_api_jay(self):
         # Merge and Go Live (2026-10-09, Jay): Jay + Developer Unlock approve exactly what is listed and ask the

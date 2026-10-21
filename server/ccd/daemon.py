@@ -22,7 +22,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import __version__, autonomy, coordid, coordinators, github, merge_policy, model, profiles, registry, sources
+from . import __version__, autonomy, coordid, coordinators, github, ledger, merge_policy, model, profiles, registry, sources
 from . import pipeline as pipeline_mod
 from . import herdr as herdr_mod
 from . import importer
@@ -297,6 +297,8 @@ class Daemon:
         # engine sees the changed files of a PR ccd merged or held; it is never used for anything else.
         self.shadow = autonomy.Shadow(tasks.db) if getattr(tasks, "db", None) is not None else None
         self._shadow_pr = {}
+        # Decision + Approval records (PR 4): a mirror of today's gates and answered questions. Gates still decide.
+        self.ledger = ledger.Ledger(tasks.db) if getattr(tasks, "db", None) is not None else None
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
@@ -355,6 +357,7 @@ class Daemon:
         self._event("daemon", "daemon.started", f"ccd {__version__} started", data={"pid": os.getpid()})
         self._log_merge_policy()
         self._log_policy()
+        self._ledger_start()
         self._dirty.set()
 
     async def stop(self):
@@ -1723,6 +1726,7 @@ class Daemon:
         if events:
             self._record_soon(ticket["key"])
             self._shadow_record(ticket, events)
+            self._ledger_record(ticket, events)
 
     def _shadow_record(self, ticket, events):
         """Autonomy Engine, shadow mode: for each decision in this step (plan accepted or gated, merged by ccd or
@@ -1764,6 +1768,40 @@ class Daemon:
                                      (tid,)).fetchone()[0] or 0
         return self.tasks.db.execute("SELECT 1 FROM autonomy_shadow WHERE ticket_id=? AND action='deploy' AND at > ?",
                                      (tid, last)).fetchone() is not None
+
+    def _ledger_start(self):
+        """At start: Jay's policy decisions become Decision records; every open gate gets its pending Approval."""
+        if self.ledger is None:
+            return
+        try:
+            seeded = self.ledger.seed_policy(self.policy)
+            gates = [(tid, project, key, self.pipeline.work(key)) for tid, project, key in self.tasks.db.execute(
+                "SELECT t.id, t.project, t.key FROM tickets t JOIN ticket_work w ON w.ticket_id = t.id "
+                "WHERE w.gate IS NOT NULL").fetchall()]
+            backfilled = self.ledger.reconcile(gates, self.policy.fingerprint)
+            if seeded or backfilled:
+                self._event("tasks", "ledger.start", f"recorded {seeded} policy decision(s) and {backfilled} open gate(s)",
+                            data={"decisions": seeded, "approvals": backfilled})
+        except Exception as e:  # noqa: BLE001 — the ledger is a record; it must never stop ccd starting
+            log.warning(json.dumps({"msg": "ledger start skipped", "error": repr(e)[:200]}))
+
+    def _ledger_record(self, ticket, events):
+        """Mirror one pipeline step into Approval and Decision records. Never raises, never changes the step."""
+        if self.ledger is None:
+            return
+        try:
+            key = ticket["key"]
+            self.ledger.observe(self.tasks._id_of(key), ticket["project"], key, self.pipeline.work(key), events,
+                                self.policy.fingerprint)
+        except Exception as e:  # noqa: BLE001
+            log.warning(json.dumps({"msg": "ledger skipped a step", "key": ticket.get("key"), "error": repr(e)[:200]}))
+
+    def ledger_state(self, project=None, state=None, limit=100):
+        """GET /api/decisions: Decision and Approval records. Read-only."""
+        if self.ledger is None:
+            return {"available": False, "decisions": [], "approvals": [], "counts": {}}
+        return {"available": True, "decisions": self.ledger.decisions(project, limit),
+                "approvals": self.ledger.approvals(state, limit), "counts": self.ledger.counts()}
 
     def autonomy_state(self):
         """GET /api/autonomy: the shadow record's summary. Read-only."""

@@ -529,3 +529,21 @@ export interface AutonomyState {
   counts: Record<string, Record<string, { total: number; agree: number; pairs: Record<string, number> }>>;
   missing: Record<string, number>; disagreements: AutonomyDisagreement[];
 }
+
+/** Decision and Approval records (ccd GET /api/decisions, v2 Phase 1). A mirror of today's gates and answers. */
+export interface DecisionRecord {
+  id: number; ref: string | null; project: string; key: string | null; question: string; options: string[];
+  decision: string; rationale: string; decidedBy: string; via: string | null; reconsider: string | null;
+  decidedAt: number | null; supersedes: number | null; source: "policy" | "question"; sourceRef: string; sha256: string;
+  current: boolean;
+}
+export type ApprovalState = "pending" | "approved" | "rejected" | "consumed" | "void";
+export interface ApprovalRecord {
+  id: number; project: string; key: string | null; subject: "plan" | "merge" | "ui" | "deploy" | "failure";
+  subjectHash: string; action: string; state: ApprovalState; reason: string | null; requestedAt: number;
+  requestedBy: string; expiresAt: number | null; overdue: boolean; decidedAt: number | null; decidedBy: string | null;
+  via: string | null; consumedAt: number | null; voidedAt: number | null; voidReason: string | null;
+}
+export interface LedgerState {
+  available: boolean; decisions: DecisionRecord[]; approvals: ApprovalRecord[]; counts: Partial<Record<ApprovalState, number>>;
+}
