@@ -461,13 +461,18 @@ paths (D-005) are "jay". Nothing reads the verdict to act, and a failure in it i
 
 ```text
 Daemon start ─▶ ledger.seed_policy(policy/decisions)  Jay's D-NNN as Decision rows (idempotent; a change supersedes)
-             └▶ ledger.reconcile(open gates)          a pending Approval for every gate opened before the ledger
+             └▶ ledger.reconcile(tickets with an open gate or approval)   the same reconcile as below
 Pipeline step ─▶ _pipeline_result ─▶ ledger.observe(events, work after the step)
-    gate_opened      → Approval pending, bound to its subject hash (merge: reviewed head; plan: plan hash; deploy: request hash)
-    gate_confirmed   → approved by Jay (plan / ui / failure: consumed at once)
-    merged / deployed → the approved merge / deploy Approval is consumed
-    gate closed without Jay, or a new head → void, with the reason
-    answered         → each answered question becomes a Decision
+    gate_confirmed (event)  → approved by Jay, with how (ui / go-live / gate); plan / ui / failure: consumed at once
+    then reconcile against the state the step left:
+      an open gate with no open approval → pending, bound to its subject hash
+                                           (merge: reviewed head; plan: plan hash; deploy: request hash)
+      pending, but the gate closed or its subject changed → void
+      approved merge: merged since → consumed if `merge:<head>` still covers the merged head, else void;
+                      not merged and no longer covered (new head, rework, re-plan) → void
+      approved deploy: a LIVE deployment happened since (pass or fail) → consumed; request withdrawn → void
+      the ticket closed or was archived → void
+    answered → each answered question becomes a Decision
 ```
 
 `tasks.db` v7 enforces the rules in the schema: decisions are append-only; an approval's subject never changes, it

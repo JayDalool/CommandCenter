@@ -9,6 +9,10 @@ import { Panel, DetailRow, EmptyState } from "./ui";
 const STATE: Record<ApprovalState, string> = { pending: "waiting for you", approved: "approved, not used yet",
   consumed: "approved and used", void: "void", rejected: "rejected" };
 
+function day(at: number | null): string {   // a policy decision has a date, not a time: show it in UTC
+  return at ? new Date(at * 1000).toLocaleDateString(undefined, { timeZone: "UTC", year: "numeric", month: "short", day: "numeric" }) : "—";
+}
+
 function when(at: number | null): string {
   return at ? new Date(at * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 }
@@ -20,9 +24,10 @@ export function Decisions() {
   if (err) return <EmptyState title="Decisions unavailable">{err}</EmptyState>;
   if (!data) return <p className="muted">Loading…</p>;
   if (!data.available) return <EmptyState title="No records">The task system is off.</EmptyState>;
+  const total = Object.values(data.counts).reduce((a, n) => a + (n ?? 0), 0);
   const counts = Object.entries(data.counts).map(([s, n]) => `${n} ${STATE[s as ApprovalState] ?? s}`).join(" · ");
   return <div className="stack">
-    <Panel title="Approvals" count={data.approvals.length} meta={<span className="mono-xs muted">{counts || "none yet"}</span>}>
+    <Panel title="Approvals" count={total} meta={<span className="mono-xs muted">{counts || "none yet"}</span>}>
       <p className="text2 led-note">One per gate, bound to exactly what it approves: a new PR head or a changed plan makes it void.
         Today's gates still decide; this is their record.</p>
       {data.approvals.length === 0 ? <p className="muted led-note">No approvals recorded yet.</p>
@@ -41,7 +46,7 @@ export function Decisions() {
     <Panel title="Decisions" count={data.decisions.length}>
       <dl className="pol-dl">
         {data.decisions.length === 0 && <DetailRow label="—">No decisions recorded yet.</DetailRow>}
-        {data.decisions.map((d) => <DetailRow key={d.id} label={`${d.ref ?? d.key ?? d.project} · ${when(d.decidedAt)}`}>
+        {data.decisions.map((d) => <DetailRow key={d.id} label={`${d.ref ?? d.key ?? d.project} · ${d.source === "policy" ? day(d.decidedAt) : when(d.decidedAt)}`}>
           <b>{d.question}</b>{!d.current && <span className="muted"> · superseded</span>}<br />{d.decision}
           <br /><span className="muted mono-xs">{d.decidedBy}{d.via ? ` via ${d.via}` : ""} · {d.source}</span>
         </DetailRow>)}

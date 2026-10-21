@@ -69,6 +69,34 @@ class Schema(unittest.TestCase):
         self.assertNotEqual(ledger.subject_hash("deploy", "GYST-1", w),
                             ledger.subject_hash("deploy", "GYST-1", dict(w, deploy={"env": "live", "what": "y"})))
 
+    def test_a_policy_decision_reverted_to_an_earlier_text_is_recorded_again(self):
+        kw = dict(project="gyst", question="q?", decided_by="jay", source="policy", source_ref="D-901")
+        a = self.lg.add_decision(decision="A", **kw)
+        b = self.lg.add_decision(decision="B", **kw)
+        c = self.lg.add_decision(decision="A", **kw)                      # A → B → A: no IntegrityError
+        self.assertEqual([(r["id"], r["decision"], r["supersedes"]) for r in self.lg.decisions()][:3],
+                         [(c, "A", b), (b, "B", a), (a, "A", None)])
+        self.assertNotEqual(self.lg.add_decision(decision="A", **dict(kw, project="gyst,mfe")), c)   # scope counts
+
+    def test_approved_or_consumed_needs_jay_even_when_null(self):
+        aid = self.lg.request(self.tid, "gyst", "plan", "h", "x")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.ts.db.execute("UPDATE approvals SET state='approved' WHERE id=?", (aid,))
+
+    def test_dates_keep_their_zone(self):
+        self.assertEqual(ledger._date_ts("2026-10-21"), 1792540800.0)
+        self.assertEqual(ledger._date_ts("2026-10-21T10:00:00+02:00"), 1792540800.0 + 8 * 3600)
+        self.assertIsNone(ledger._date_ts("soon"))
+
+    def test_project_filters_approvals_too(self):
+        self.lg.request(self.tid, "gyst", "plan", "h", "x")
+        self.assertEqual(len(self.lg.approvals(project="gyst")), 1)
+        self.assertEqual(self.lg.approvals(project="mfe"), [])
+        self.lg.add_decision(project="samvision,mfe", question="q", decision="d", decided_by="jay", source="policy",
+                             source_ref="D-902")
+        self.assertEqual(len(self.lg.decisions(project="mfe")), 1)
+        self.assertEqual(self.lg.decisions(project="%"), [])                 # no LIKE wildcards
+
     def test_policy_decisions_seed_once(self):
         n = self.lg.seed_policy(POL)
         self.assertEqual(n, len([d for d in POL.decisions.values() if d["valid"]]))
@@ -122,6 +150,63 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         a = self.d.ledger.approvals()[0]
         self.assertEqual((a["state"], a["decidedBy"], a["via"]), ("consumed", "jay", "ui"))
         self.assertIsNotNone(a["consumedAt"])
+
+    async def test_an_approved_merge_is_void_when_the_head_changes_and_never_consumed_by_another_head(self):
+        k, ref = self.to_ready()
+        self.d._pipeline_result(*self.d.pipeline.confirm(k, "merge", "jay"))
+        self.d._pipeline_result(*self.d.pipeline.sync_pr(k, {"ref": ref, "head": HEAD2, "ciGreen": True}))
+        a = self.d.ledger.approvals()[0]
+        self.assertEqual(a["state"], "void")
+        self.assertIn("changed after the approval", a["voidReason"])
+        self.ts.update(k, {"status": "VERIFYING"}, "system:automation", trigger="PR merged")
+        self.d._pipeline_result(*self.d.pipeline.merged(k, ref, "f" * 40))
+        self.assertNotIn("consumed", [x["state"] for x in self.d.ledger.approvals()])
+
+    async def test_rework_after_approval_voids_it(self):
+        k, ref = self.to_ready()
+        self.d._pipeline_result(*self.d.pipeline.confirm(k, "merge", "jay"))
+        self.d._pipeline_result(*self.d.pipeline.rework(k, "a defect", "agent:reviewer", open_prs=[ref]))
+        self.assertEqual(self.d.ledger.approvals()[0]["state"], "void")
+
+    async def test_a_failure_gate_gets_its_approval_at_once(self):
+        t, _ = self.ts.create("gyst", "Stuck")
+        self.d._pipeline_result(*self.d.pipeline.block(t["key"], "the API key is missing", "agent:coordinator"))
+        self.assertEqual(self.appr(t["key"])[0][:2], ("failure", "pending"))
+        self.d._pipeline_result(*self.d.pipeline.confirm(t["key"], "failure", "jay"))
+        self.assertEqual(self.appr(t["key"])[0][:2], ("failure", "consumed"))
+
+    async def test_the_deploy_lifecycle(self):
+        k, ref = self.to_ready()
+        pl = self.d.pipeline
+        self.d._pipeline_result(*pl.confirm(k, "merge", "jay"))
+        self.ts.update(k, {"status": "VERIFYING"}, "system:automation", trigger="PR merged")
+        self.d._pipeline_result(*pl.merged(k, ref, "f" * 40))
+        self.d._pipeline_result(*pl.deploy_request(k, "live", "the export", "smoke test", "agent:coordinator"))
+        self.assertEqual(self.appr(k)[-1][:2], ("deploy", "pending"))
+        self.d._pipeline_result(*pl.confirm(k, "deploy", "jay", "go-live"))
+        a = self.d.ledger.approvals()[0]
+        self.assertEqual((a["state"], a["via"]), ("approved", "go-live"))
+        self.d._pipeline_result(*pl.deployed(k, "live", "fail", "health check failed", "agent:coordinator"))
+        dep = [x for x in self.d.ledger.approvals() if x["subject"] == "deploy"][0]
+        self.assertEqual(dep["state"], "consumed")                              # a failed live deploy used it
+        self.assertEqual(self.appr(k)[-1][:2], ("failure", "pending"))
+
+    async def test_a_replan_after_a_deploy_approval_voids_it(self):
+        k, ref = self.to_ready()
+        pl = self.d.pipeline
+        self.d._pipeline_result(*pl.confirm(k, "merge", "jay"))
+        self.ts.update(k, {"status": "VERIFYING"}, "system:automation", trigger="PR merged")
+        self.d._pipeline_result(*pl.merged(k, ref, "f" * 40))
+        self.d._pipeline_result(*pl.deploy_request(k, "live", "the export", "smoke", "agent:coordinator"))
+        self.d._pipeline_result(*pl.confirm(k, "deploy", "jay", "gate"))
+        self.d._pipeline_result(*pl.replan(k, "scope changed", "agent:coordinator"))
+        self.assertEqual(self.d.ledger.approvals()[0]["state"], "void")
+
+    async def test_a_closed_ticket_voids_its_open_approvals_at_start(self):
+        k, _ = self.to_ready()
+        self.ts.update(k, {"status": "CANCELLED"}, "jay", trigger="not needed")
+        self.d._ledger_start()
+        self.assertEqual(self.appr(k)[-1][:2], ("merge", "void"))
 
     async def test_a_plan_gate_is_consumed_by_jays_confirmation(self):
         k, _ = self.to_ready(labels=["migration"])

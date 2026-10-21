@@ -352,7 +352,7 @@ CREATE TABLE decisions (
   source_ref   TEXT NOT NULL,
   content_sha  TEXT NOT NULL,
   profile_hash TEXT,
-  UNIQUE (source, source_ref, content_sha)
+  UNIQUE (source, source_ref, content_sha, supersedes)
 );
 CREATE INDEX decisions_ticket ON decisions(ticket_id, id);
 CREATE TRIGGER decisions_append_only_u BEFORE UPDATE ON decisions
@@ -380,7 +380,7 @@ CREATE TABLE approvals (
   voided_at     REAL,
   void_reason   TEXT,
   profile_hash  TEXT,
-  CHECK (state NOT IN ('approved', 'consumed') OR decided_by = 'jay')
+  CHECK (state NOT IN ('approved', 'consumed') OR decided_by IS 'jay')
 );
 CREATE UNIQUE INDEX approvals_one_open ON approvals(ticket_id, subject_type) WHERE state IN ('pending', 'approved');
 CREATE INDEX approvals_state ON approvals(state, id);

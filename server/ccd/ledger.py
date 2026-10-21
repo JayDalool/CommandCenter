@@ -53,22 +53,21 @@ class Ledger:
                      decided_at=None, ref=None):
         """Insert a Decision unless the same (source, source_ref, content) is already recorded. A changed one
         supersedes the latest for that source_ref. Returns the row id (new or existing)."""
-        body = {"question": question, "decision": decision, "options": list(options), "rationale": rationale,
-                "rules": list(rules), "reconsider": reconsider, "decided_by": decided_by}
+        body = {"project": project, "question": question, "decision": decision, "options": list(options),
+                "rationale": rationale, "rules": list(rules), "reconsider": reconsider, "decided_by": decided_by}
         sha = _sha(body)
         row = self.db.execute("SELECT id, content_sha FROM decisions WHERE source=? AND source_ref=? "
                               "ORDER BY id DESC LIMIT 1", (source, source_ref)).fetchone()
         if row and row[1] == sha:
             return row[0]
-        with self.db:
-            cur = self.db.execute(
-                "INSERT INTO decisions (ref, project, ticket_id, question, options, decision, rationale, decided_by, via, "
-                "rules, reconsider, evidence, decided_at, recorded_at, supersedes, source, source_ref, content_sha, "
-                "profile_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (ref, project, ticket_id, str(question)[:1000], json.dumps(list(options))[:4000], str(decision)[:4000],
-                 str(rationale or "")[:2000], decided_by, via, json.dumps(list(rules))[:4000], reconsider,
-                 json.dumps(list(evidence))[:2000], decided_at or self.clock(), self.clock(),
-                 row[0] if row else None, source, str(source_ref), sha, profile_hash))
+        cur = self.db.execute(
+            "INSERT INTO decisions (ref, project, ticket_id, question, options, decision, rationale, decided_by, via, "
+            "rules, reconsider, evidence, decided_at, recorded_at, supersedes, source, source_ref, content_sha, "
+            "profile_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (ref, project, ticket_id, str(question)[:1000], json.dumps(list(options))[:4000], str(decision)[:4000],
+             str(rationale or "")[:2000], decided_by, via, json.dumps(list(rules))[:4000], reconsider,
+             json.dumps(list(evidence))[:2000], decided_at or self.clock(), self.clock(),
+             row[0] if row else None, source, str(source_ref), sha, profile_hash))
         return cur.lastrowid
 
     def seed_policy(self, policy):
@@ -102,80 +101,123 @@ class Ledger:
     # ---------- approvals ----------
 
     def _open_approval(self, ticket_id, project, gate):
-        return self.db.execute("SELECT id, state, subject_hash FROM approvals WHERE ticket_id=? AND subject_type=? "
-                               "AND state IN ('pending', 'approved') ORDER BY id DESC LIMIT 1",
+        return self.db.execute("SELECT id, state, subject_hash, decided_at FROM approvals WHERE ticket_id=? "
+                               "AND subject_type=? AND state IN ('pending', 'approved') ORDER BY id DESC LIMIT 1",
                                (ticket_id, gate)).fetchone()
 
+    def _begin(self):
+        """One transaction for a multi-statement change (the connection is in autocommit mode)."""
+        self.db.execute("BEGIN IMMEDIATE")
+
     def request(self, ticket_id, project, gate, subject, reason, by="system:pipeline", profile_hash=None):
-        """A pending Approval for an open gate (one per ticket and gate at a time)."""
+        """A pending Approval for an open gate (one per ticket and gate at a time). Voiding a stale open one and
+        inserting the new one happen in one transaction."""
         cur = self._open_approval(ticket_id, project, gate)
         if cur and cur[1] == "pending" and cur[2] == subject:
             return cur[0]
-        if cur:
-            self._set(cur[0], "void", reason="a new request replaced it")
         now = self.clock()
-        with self.db:
+        self._begin()
+        try:
+            if cur:
+                self._set(cur[0], "void", reason="a new request replaced it")
             c = self.db.execute(
                 "INSERT INTO approvals (project, ticket_id, subject_type, subject_hash, action, required, state, reason, "
                 "requested_at, requested_by, expires_at, profile_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (project, ticket_id, gate, subject, f"close the {gate} gate", "jay", "pending", str(reason or "")[:300],
                  now, by, now + APPROVAL_TTL, profile_hash))
+            self.db.execute("COMMIT")
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            raise
         return c.lastrowid
 
     def _set(self, aid, state, by=None, via=None, reason=None):
         now = self.clock()
         cols = {"approved": "decided_at=?, decided_by=?, via=?", "rejected": "decided_at=?, decided_by=?, via=?",
                 "consumed": "consumed_at=?", "void": "voided_at=?, void_reason=?"}[state]
-        args = {"approved": (now, by, via), "rejected": (now, by, via), "consumed": (now,), "void": (now, reason)}[state]
-        with self.db:
-            self.db.execute(f"UPDATE approvals SET state=?, {cols} WHERE id=?", (state, *args, aid))
+        args = {"approved": (now, by, via), "rejected": (now, by, via), "consumed": (now,),
+                "void": (now, str(reason or "")[:300])}[state]
+        self.db.execute(f"UPDATE approvals SET state=?, {cols} WHERE id=?", (state, *args, aid))
 
-    def observe(self, ticket_id, project, key, work, events, profile_hash=None):
-        """Mirror one pipeline step. `work` is pipeline.work(key) AFTER the step."""
-        kinds = [k for k, _t, _d in events or ()]
+    RELEVANT = ("pipeline.gate_opened", "pipeline.gate_confirmed", "pipeline.blocked", "pipeline.merged",
+                "pipeline.auto_merged", "pipeline.deployed", "pipeline.deploy_requested", "pipeline.review_stale",
+                "pipeline.not_ready", "pipeline.rework", "pipeline.replan", "pipeline.answered", "pipeline.done",
+                "pipeline.auto_merge_held", "pipeline.auto_merge_failed", "pipeline.unreviewed_merge")
+
+    def needs_look(self, ticket_id, events):
+        """Cheap pre-check: does this step touch gates, approvals or answers at all?"""
+        if any(k in self.RELEVANT for k, _t, _d in events or ()):
+            return True
+        return self.db.execute("SELECT 1 FROM approvals WHERE ticket_id=? AND state IN ('pending', 'approved') "
+                               "UNION SELECT 1 FROM ticket_work WHERE ticket_id=? AND gate IS NOT NULL",
+                               (ticket_id, ticket_id)).fetchone() is not None
+
+    def observe(self, ticket_id, project, key, work, events, profile_hash=None, closed=False):
+        """Mirror one pipeline step. `work` is pipeline.work(key) AFTER the step. Jay's confirmations come from the
+        events; everything else is reconciled against the state the step left (so a path that closes a gate or
+        changes the subject without a specific event is still caught)."""
         for kind, _text, data in events or ():
             data = data if isinstance(data, dict) else {}
             gate = data.get("gate")
-            if kind == "pipeline.gate_opened" and gate in GATE_TYPES:
-                self.request(ticket_id, project, gate, subject_hash(gate, key, work), work.get("gateReason"),
-                             profile_hash=profile_hash)
-            elif kind == "pipeline.gate_confirmed" and gate in GATE_TYPES:
+            if kind == "pipeline.gate_confirmed" and gate in GATE_TYPES:
                 cur = self._open_approval(ticket_id, project, gate)
-                if cur is None:   # opened before this ledger existed and not backfilled: record it now
-                    aid = self.request(ticket_id, project, gate, subject_hash(gate, key, work), "recorded at approval",
-                                       by="system:backfill", profile_hash=profile_hash)
-                    cur = (aid, "pending", None)
+                if cur is None or cur[1] != "pending":
+                    if cur is None:   # opened before this ledger existed and not backfilled: record it now
+                        aid = self.request(ticket_id, project, gate, subject_hash(gate, key, work),
+                                           "recorded at approval", by="system:backfill", profile_hash=profile_hash)
+                        cur = (aid, "pending", None, None)
                 if cur[1] == "pending":
-                    self._set(cur[0], "approved", by="jay", via="ui")
-                if gate not in CONSUMED_BY:   # plan / ui / failure: Jay's confirmation IS the action
-                    self._set(cur[0], "consumed")
-        for gate, done in CONSUMED_BY.items():
-            if any(k in done for k in kinds):
-                cur = self._open_approval(ticket_id, project, gate)
-                if cur and cur[1] == "approved":
-                    self._set(cur[0], "consumed")
-        # Void what no longer matches: a pending approval whose gate closed without Jay, an approved merge whose
-        # head moved before it was used.
-        for aid, gate, state, subj in self.db.execute(
-                "SELECT id, subject_type, state, subject_hash FROM approvals WHERE ticket_id=? "
-                "AND state IN ('pending', 'approved')", (ticket_id,)).fetchall():
-            if state == "pending" and work.get("gate") != gate:
-                self._set(aid, "void", reason="the gate closed without an approval (" + ", ".join(kinds[:3]) + ")")
-            elif state == "approved" and gate == "merge" and subj != subject_hash("merge", key, work):
-                self._set(aid, "void", reason="the PR head changed after the approval")
-        if "pipeline.answered" in kinds:
+                    self._set(cur[0], "approved", by="jay", via=str(data.get("via") or "ui")[:20])
+                    if gate not in CONSUMED_BY:   # plan / ui / failure: Jay's confirmation IS the action
+                        self._set(cur[0], "consumed")
+        self.reconcile_ticket(ticket_id, project, key, work, profile_hash, closed=closed)
+        if any(k == "pipeline.answered" for k, _t, _d in events or ()):
             self.record_answers(ticket_id, project, profile_hash)
 
-    def reconcile(self, open_gates, profile_hash=None):
-        """At start: a pending Approval for every open gate that has none (gates opened before this ledger)."""
-        n = 0
-        for ticket_id, project, key, work in open_gates:
-            gate = work.get("gate")
-            if gate in GATE_TYPES and self._open_approval(ticket_id, project, gate) is None:
-                self.request(ticket_id, project, gate, subject_hash(gate, key, work), work.get("gateReason"),
-                             by="system:backfill", profile_hash=profile_hash)
-                n += 1
-        return n
+    def reconcile_ticket(self, ticket_id, project, key, work, profile_hash=None, closed=False):
+        """Make the ticket's approvals agree with its gate, subject and what happened since."""
+        gate = work.get("gate")
+        confirmed = set(work.get("confirmed") or [])
+        head = (work.get("review") or {}).get("head")
+        merge, deploy = work.get("merge") or {}, work.get("deploy") or {}
+        for aid, typ, state, subj, decided_at in self.db.execute(
+                "SELECT id, subject_type, state, subject_hash, decided_at FROM approvals WHERE ticket_id=? "
+                "AND state IN ('pending', 'approved')", (ticket_id,)).fetchall():
+            if closed:
+                self._set(aid, "void", reason="the ticket closed")
+            elif state == "pending":
+                if gate != typ:
+                    self._set(aid, "void", reason="the gate closed without an approval")
+                elif subj != subject_hash(typ, key, work):
+                    self._set(aid, "void", reason="what it asked about changed")
+            elif typ == "merge":
+                used = merge.get("at") is not None and merge["at"] >= (decided_at or 0)
+                covered = f"merge:{subj}" in confirmed and head == subj
+                if used:
+                    self._set(aid, "consumed" if covered else "void",
+                              **({} if covered else {"reason": "merged at a head this approval did not cover"}))
+                elif not covered:
+                    self._set(aid, "void", reason="the PR head or its review changed after the approval")
+            elif typ == "deploy":
+                used = deploy.get("env") == "live" and deploy.get("deployedAt") is not None \
+                    and deploy["deployedAt"] >= (decided_at or 0)
+                if used:
+                    self._set(aid, "consumed")          # a failed live deploy used the approval too
+                elif not deploy.get("approvedAt") or deploy.get("env") != "live":
+                    self._set(aid, "void", reason="the live deployment request was withdrawn")
+        if gate in GATE_TYPES and not closed:
+            cur = self._open_approval(ticket_id, project, gate)
+            want = subject_hash(gate, key, work)
+            if cur is None or (cur[1] == "pending" and cur[2] != want):
+                self.request(ticket_id, project, gate, want, work.get("gateReason"), profile_hash=profile_hash)
+
+    def reconcile(self, tickets, profile_hash=None):
+        """At start: reconcile every ticket that has an open gate or an open approval. `tickets`:
+        [(ticket_id, project, key, work, closed)]. Returns how many approvals were requested."""
+        before = self.db.execute("SELECT COUNT(*) FROM approvals").fetchone()[0]
+        for ticket_id, project, key, work, closed in tickets:
+            self.reconcile_ticket(ticket_id, project, key, work, profile_hash, closed=closed)
+        return self.db.execute("SELECT COUNT(*) FROM approvals").fetchone()[0] - before
 
     # ---------- read ----------
 
@@ -185,8 +227,8 @@ class Ledger:
              "LEFT JOIN tickets t ON t.id = d.ticket_id")
         args = []
         if project:
-            q += " WHERE (',' || d.project || ',') LIKE ?"
-            args.append(f"%,{project},%")
+            q += " WHERE instr(',' || d.project || ',', ?) > 0"
+            args.append(f",{project},")
         q += " ORDER BY d.id DESC LIMIT ?"
         args.append(max(1, min(int(limit), 500)))
         superseded = {r[0] for r in self.db.execute("SELECT supersedes FROM decisions WHERE supersedes IS NOT NULL")}
@@ -196,14 +238,19 @@ class Ledger:
                  "current": r[0] not in superseded}
                 for r in self.db.execute(q, args).fetchall()]
 
-    def approvals(self, state=None, limit=100):
+    def approvals(self, state=None, limit=100, project=None):
         q = ("SELECT a.id, a.project, t.key, a.subject_type, a.subject_hash, a.action, a.state, a.reason, a.requested_at, "
              "a.requested_by, a.expires_at, a.decided_at, a.decided_by, a.via, a.consumed_at, a.voided_at, a.void_reason "
              "FROM approvals a LEFT JOIN tickets t ON t.id = a.ticket_id")
-        args = []
+        args, where = [], []
         if state:
-            q += " WHERE a.state = ?"
+            where.append("a.state = ?")
             args.append(state)
+        if project:
+            where.append("a.project = ?")
+            args.append(project)
+        if where:
+            q += " WHERE " + " AND ".join(where)
         q += " ORDER BY a.id DESC LIMIT ?"
         args.append(max(1, min(int(limit), 500)))
         now = self.clock()
@@ -219,8 +266,10 @@ class Ledger:
 
 
 def _date_ts(s):
+    """A policy date (2026-10-21, or a full ISO time) as a timestamp. A value without a zone is UTC."""
+    import datetime
     try:
-        import datetime
-        return datetime.datetime.fromisoformat(str(s)).replace(tzinfo=datetime.timezone.utc).timestamp()
+        d = datetime.datetime.fromisoformat(str(s))
     except (TypeError, ValueError):
         return None
+    return (d if d.tzinfo else d.replace(tzinfo=datetime.timezone.utc)).timestamp()

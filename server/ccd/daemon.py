@@ -1775,10 +1775,13 @@ class Daemon:
             return
         try:
             seeded = self.ledger.seed_policy(self.policy)
-            gates = [(tid, project, key, self.pipeline.work(key)) for tid, project, key in self.tasks.db.execute(
-                "SELECT t.id, t.project, t.key FROM tickets t JOIN ticket_work w ON w.ticket_id = t.id "
-                "WHERE w.gate IS NOT NULL").fetchall()]
-            backfilled = self.ledger.reconcile(gates, self.policy.fingerprint)
+            rows = self.tasks.db.execute(
+                "SELECT t.id, t.project, t.key, t.status, t.archived FROM tickets t WHERE t.id IN ("
+                "SELECT ticket_id FROM ticket_work WHERE gate IS NOT NULL UNION "
+                "SELECT ticket_id FROM approvals WHERE state IN ('pending', 'approved'))").fetchall()
+            backfilled = self.ledger.reconcile(
+                [(tid, project, key, self.pipeline.work(key), bool(archived) or status in pipeline_mod.CLOSED_STATUSES)
+                 for tid, project, key, status, archived in rows], self.policy.fingerprint)
             if seeded or backfilled:
                 self._event("tasks", "ledger.start", f"recorded {seeded} policy decision(s) and {backfilled} open gate(s)",
                             data={"decisions": seeded, "approvals": backfilled})
@@ -1791,8 +1794,12 @@ class Daemon:
             return
         try:
             key = ticket["key"]
-            self.ledger.observe(self.tasks._id_of(key), ticket["project"], key, self.pipeline.work(key), events,
-                                self.policy.fingerprint)
+            tid = self.tasks._id_of(key)
+            if not self.ledger.needs_look(tid, events):
+                return
+            status, archived = self.tasks.db.execute("SELECT status, archived FROM tickets WHERE id=?", (tid,)).fetchone()
+            self.ledger.observe(tid, ticket["project"], key, self.pipeline.work(key), events, self.policy.fingerprint,
+                                closed=bool(archived) or status in pipeline_mod.CLOSED_STATUSES)
         except Exception as e:  # noqa: BLE001
             log.warning(json.dumps({"msg": "ledger skipped a step", "key": ticket.get("key"), "error": repr(e)[:200]}))
 
@@ -1801,7 +1808,7 @@ class Daemon:
         if self.ledger is None:
             return {"available": False, "decisions": [], "approvals": [], "counts": {}}
         return {"available": True, "decisions": self.ledger.decisions(project, limit),
-                "approvals": self.ledger.approvals(state, limit), "counts": self.ledger.counts()}
+                "approvals": self.ledger.approvals(state, limit, project), "counts": self.ledger.counts()}
 
     def autonomy_state(self):
         """GET /api/autonomy: the shadow record's summary. Read-only."""
