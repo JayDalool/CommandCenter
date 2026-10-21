@@ -88,7 +88,7 @@ class Inbox:
         for did, project, key, question, decision, at, by, reconsider, kind, options, purpose in self.db.execute(
                 "SELECT d.id, d.project, t.key, d.question, d.decision, d.decided_at, d.decided_by, d.reconsider, "
                 "q.kind, q.options, q.purpose FROM decisions d LEFT JOIN tickets t ON t.id = d.ticket_id "
-                "LEFT JOIN ticket_questions q ON CAST(q.id AS TEXT) = d.source_ref "
+                "LEFT JOIN ticket_questions q ON q.id = CAST(d.source_ref AS INTEGER) AND CAST(q.id AS TEXT) = d.source_ref "
                 "WHERE d.source = 'question' ORDER BY d.id DESC LIMIT 2000"):
             if did in superseded or purpose == "stale":
                 continue
