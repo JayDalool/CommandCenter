@@ -132,9 +132,9 @@ class Workers:
         with self.db:
             n = self.db.execute("UPDATE worker_nodes SET last_heartbeat=? WHERE id=? AND status='active'",
                                 (now, SERVER_ID)).rowcount
+        self._last_beat = now         # first, so a failing retry is tried every HEARTBEAT_EVERY, not every loop
         if n == 0:                    # registration failed at start: try again rather than beat nothing
             self.register_server(getattr(self, "_version", "unknown"))
-        self._last_beat = now
         return True
 
     # ---------- other nodes ----------
