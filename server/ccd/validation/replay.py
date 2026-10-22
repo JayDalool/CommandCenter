@@ -39,6 +39,12 @@ def open_snapshot(path):
     for d in live_dirs():
         if p == d or d in p.parents:
             raise ReplayError(f"{path} is inside the live data folder {d}: copy it elsewhere first")
+        try:
+            same = [f for f in d.iterdir() if f.is_file() and os.path.samefile(f, p)]
+        except OSError:
+            same = []
+        if same:
+            raise ReplayError(f"{path} is the live file {same[0]} (a hard link): copy it with sqlite3 .backup")
     wal = Path(str(p) + "-wal")
     if wal.exists() and wal.stat().st_size:
         raise ReplayError(f"{path} has a write-ahead log that a read-only replay would not see: make the copy with "
@@ -81,25 +87,47 @@ def audit_walk(db):
     return Audit(db).verify(full=True)
 
 
-def unauthorized(db, since):
-    """Merges and live deploys after `since` without a Jay action on the same ticket before them (gate row 7).
-    While global auto-merge is off every agent merge is unauthorised."""
-    out = []
+def actions(db, since, cache=None, jay_logins=("JayDalool",)):
+    """Every merge and live deploy after `since`, judged for gate row 7: {checked, unauthorized, unverified}.
+
+    - An agent merge (pipeline.auto_merged) is unauthorised: global auto-merge is off.
+    - A merge ccd saw on GitHub (pipeline.merged) is Jay's when Jay confirmed this ticket's merge gate before it, or
+      the GitHub cache says one of `jay_logins` merged the PR. Otherwise it is unverified, never assumed.
+    - A live deploy (pipeline.deployed, env live) needs a deploy approval from Jay after the ticket's previous
+      deploy and before this one."""
+    cache, logins = cache or {}, set(jay_logins or ())
+    out = {"checked": 0, "unauthorized": [], "unverified": []}
     rows = db.execute("SELECT e.id, e.ticket_id, e.at, e.kind, e.data, t.key FROM ticket_events e LEFT JOIN tickets t "
-                      "ON t.id = e.ticket_id WHERE e.at >= ? AND e.kind IN ('pipeline.auto_merged', 'pipeline.deployed') "
-                      "ORDER BY e.id", (since,)).fetchall()
+                      "ON t.id = e.ticket_id WHERE e.at >= ? AND e.kind IN ('pipeline.auto_merged', 'pipeline.merged', "
+                      "'pipeline.deployed') ORDER BY e.id", (since,)).fetchall()
     for eid, tid, at, kind, data, key in rows:
         d = _json(data, {})
+        d = d if isinstance(d, dict) else {}
+        item = {"event": eid, "key": key, "kind": kind}
         if kind == "pipeline.auto_merged":
-            out.append({"event": eid, "key": key, "kind": kind, "why": "an agent merge while auto-merge is off"})
-            continue
-        if (d.get("env") or "live") != "live":
-            continue
-        jay = db.execute("SELECT 1 FROM ticket_events WHERE ticket_id = ? AND at <= ? AND actor = 'jay' "
-                         "AND kind IN ('pipeline.gate_confirmed', 'pipeline.deploy_approved', 'pipeline.released') "
-                         "LIMIT 1", (tid, at)).fetchone()
-        if jay is None:
-            out.append({"event": eid, "key": key, "kind": kind, "why": "a live deploy with no Jay approval before it"})
+            out["checked"] += 1
+            out["unauthorized"].append(dict(item, why="an agent merge while auto-merge is off"))
+        elif kind == "pipeline.merged":
+            out["checked"] += 1
+            confirmed = any(_json(x, {}).get("gate") == "merge" for (x,) in db.execute(
+                "SELECT data FROM ticket_events WHERE ticket_id = ? AND id < ? AND actor = 'jay' "
+                "AND kind = 'pipeline.gate_confirmed'", (tid, eid)))
+            pr = cache.get(d.get("pr")) if isinstance(cache.get(d.get("pr")), dict) else None
+            by = ((pr or {}).get("mergedBy") or {}).get("login") if isinstance((pr or {}).get("mergedBy"), dict) else None
+            if confirmed or (by and by in logins):
+                continue
+            if by:
+                out["unauthorized"].append(dict(item, why=f"merged on GitHub by {by}, not Jay"))
+            else:
+                out["unverified"].append(dict(item, pr=d.get("pr"), why="no merge-gate confirmation and no merger known"))
+        elif (d.get("env") or "live") == "live":
+            out["checked"] += 1
+            prev = db.execute("SELECT COALESCE(MAX(id), 0) FROM ticket_events WHERE ticket_id = ? AND id < ? "
+                              "AND kind = 'pipeline.deployed'", (tid, eid)).fetchone()[0]
+            ok = db.execute("SELECT 1 FROM ticket_events WHERE ticket_id = ? AND id > ? AND id < ? AND actor = 'jay' "
+                            "AND kind = 'pipeline.deploy_approved' LIMIT 1", (tid, prev, eid)).fetchone()
+            if ok is None:
+                out["unauthorized"].append(dict(item, why="a live deploy with no Jay deploy approval since the last one"))
     return out
 
 
@@ -165,11 +193,18 @@ def history(db, github_cache=None):
                                           "ORDER BY ticket_id, at, id"):
         steps.setdefault((tid, at), []).append((kind, "", _json(data, {})))
     out = []
-    review, verified, ci = {}, {}, {}
+    review, verified, ci, planned = {}, {}, {}, set()
     for (tid, at), events in sorted(steps.items()):
         for kind, _t, d in events:
             if kind == "pipeline.review" and isinstance(d, dict):
                 review[tid] = d
+            elif kind in ("pipeline.review_stale", "pipeline.rework", "pipeline.replan"):
+                review.pop(tid, None)          # the approval no longer covers the PR
+                if kind == "pipeline.replan":
+                    planned.discard(tid)
+            elif kind == "pipeline.plan_accepted" or (kind == "pipeline.gate_confirmed" and isinstance(d, dict)
+                                                      and d.get("gate") == "plan"):
+                planned.add(tid)
             elif kind == "pipeline.verified":
                 verified[tid] = True
             elif kind == "pipeline.ready_to_merge" and isinstance(d, dict) and d.get("ci"):
@@ -182,8 +217,8 @@ def history(db, github_cache=None):
         for action, outcome, extra in decided:
             rv = review.get(tid) or {}
             head = rv.get("head") if isinstance(rv.get("head"), str) else None
-            facts = {"project": cur["project"], "type": typ, "labels": labels, "flags": flags,
-                     "plan_accepted": action != "plan" or outcome == "auto",
+            facts = {"project": cur["project"], "type": typ, "labels": labels, "flags": flags, "confirmed": None,
+                     "plan_accepted": tid in planned,
                      "review_at_head": rv.get("verdict") == "APPROVE" and bool(head and len(head) == 40),
                      "review_head": head, "merged": False, "verified": verified.get(tid), "ci": ci.get(tid),
                      "files": None}

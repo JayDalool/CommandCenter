@@ -26,9 +26,13 @@ from .helpers import cfg
 HEAD = "ab" * 20
 
 
-def run_cli(*args):
+LATER = 1792800000.0     # 2026-10-23T00:00:00Z: the wall clock the tests pretend it is, unless they say otherwise
+
+
+def run_cli(*args, wall=LATER):
     err, out = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out), \
+            mock.patch.object(readiness, "WALL", return_value=wall):
         code = cli.main(["phase1-readiness", *args])
     return code, out.getvalue(), err.getvalue()
 
@@ -90,7 +94,7 @@ class Fixtures(unittest.TestCase):
                 self.assertIsNone(oracle.requirement(r["action"], r["profile"], r["facts"])["must"], r["id"])
 
     def test_a_fixtures_run_is_deterministic_and_never_passes_without_evidence(self):
-        a, b = tempfile.mkdtemp(), tempfile.mkdtemp()
+        a, b = tempfile.mkdtemp(), tempfile.mkdtemp()     # (--now is before LATER, the pretend wall clock)
         ca, _o, _e = run_cli("--fixtures", "--now", "2026-10-22T12:00:00Z", "--out", a)
         cb, _o, _e = run_cli("--fixtures", "--now", "2026-10-22T12:00:00Z", "--out", b)
         self.assertEqual((ca, cb), (1, 1))
@@ -177,7 +181,8 @@ class Replay(unittest.TestCase):
         self.assertEqual([(r["action"], r["observed"], r["recorded"]["version"]) for r in rows],
                          [("merge", "jay", autonomy.ENGINE_VERSION)])
         self.assertEqual(replay.integrity(snap)["eventsGaps"], 0)
-        self.assertEqual(replay.unauthorized(snap, 0), [])
+        self.assertEqual(replay.actions(snap, 0), {"checked": 0, "unauthorized": [], "unverified": []})
+        self.assertTrue(hist[1]["facts"]["plan_accepted"])             # the plan was accepted at 1000
 
     def test_the_github_cache_supplies_pr_facts_and_says_so(self):
         snap = sqlite3.connect(self.db)
@@ -204,16 +209,37 @@ class Replay(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("write-ahead log", err)
 
-    def test_an_agent_merge_after_go_live_is_unauthorised(self):
-        snap = sqlite3.connect(self.db)
-        tid = snap.execute("SELECT id FROM tickets LIMIT 1").fetchone()[0]
-        snap.execute("INSERT INTO ticket_events (ticket_id, at, actor, kind, data) VALUES (?, 5000, 'ccd', "
-                     "'pipeline.auto_merged', '{}'), (?, 5001, 'ccd', 'pipeline.deployed', '{\"env\": \"live\"}')",
-                     (tid, tid))
-        snap.commit()
-        snap.close()
-        un = replay.unauthorized(replay.open_snapshot(self.db), 0)
-        self.assertEqual([u["kind"] for u in un], ["pipeline.auto_merged", "pipeline.deployed"])
+    def add(self, *rows):
+        db = sqlite3.connect(self.db)
+        tid = db.execute("SELECT id FROM tickets LIMIT 1").fetchone()[0]
+        for at, actor, kind, data in rows:
+            db.execute("INSERT INTO ticket_events (ticket_id, at, actor, kind, data) VALUES (?, ?, ?, ?, ?)",
+                       (tid, at, actor, kind, json.dumps(data)))
+        db.commit()
+        db.close()
+
+    def test_merges_and_live_deploys_must_be_provably_jays(self):
+        self.add((5000, "ccd", "pipeline.auto_merged", {}),
+                 (5001, "jay", "pipeline.deploy_approved", {}), (5002, "ccd", "pipeline.deployed", {"env": "live"}),
+                 (5003, "ccd", "pipeline.deployed", {"env": "live"}),          # the approval was used up
+                 (5004, "ccd", "pipeline.merged", {"pr": "o/r#1"}),          # nobody known
+                 (5005, "jay", "pipeline.gate_confirmed", {"gate": "plan"}),  # not a merge confirmation
+                 (5006, "ccd", "pipeline.merged", {"pr": "o/r#2"}),
+                 (5007, "ccd", "pipeline.merged", {"pr": "o/r#3"}),
+                 (5008, "jay", "pipeline.gate_confirmed", {"gate": "merge"}),
+                 (5009, "ccd", "pipeline.merged", {"pr": "o/r#4"}))
+        cache = {"o/r#2": {"mergedBy": {"login": "some-agent"}}, "o/r#3": {"mergedBy": {"login": "JayDalool"}}}
+        res = replay.actions(replay.open_snapshot(self.db), 0, cache)
+        self.assertEqual(res["checked"], 7)
+        self.assertEqual(sorted(u["kind"] for u in res["unauthorized"]),
+                         ["pipeline.auto_merged", "pipeline.deployed", "pipeline.merged"])
+        self.assertEqual([u["pr"] for u in res["unverified"]], ["o/r#1"])
+
+    def test_a_copy_with_no_tickets_table_cannot_run(self):
+        bad = os.path.join(self.tmp, "bad.db")
+        sqlite3.connect(bad).execute("CREATE TABLE x (a)").connection.commit()
+        code, _o, err = run_cli("--replay", bad, "--out", tempfile.mkdtemp())
+        self.assertEqual(code, 2, err)
 
     def test_restore_drill_migrates_a_copy_and_leaves_the_backup_alone(self):
         before = open(self.db, "rb").read()
@@ -271,7 +297,7 @@ class FullRun(unittest.TestCase):
             "suites": {"commit": "f" * 40, "green": True},
         }
 
-    def run_full(self, now="2026-10-25T00:00:00Z", **change):
+    def run_full(self, now="2026-10-25T00:00:00Z", wall=1793000000, **change):
         ev = dict(self.evidence, **change)
         path = os.path.join(self.tmp, "evidence.json")
         with open(path, "w") as fh:
@@ -279,7 +305,8 @@ class FullRun(unittest.TestCase):
         out = tempfile.mkdtemp()
         with mock.patch.object(replay, "GO_LIVE_TICKETS", 3):
             code, _o, err = run_cli("--fixtures", "--replay", self.db, "--live", self.url, "--token-file", self.token,
-                                    "--evidence", path, "--restore-backup", self.db, "--now", now, "--out", out)
+                                    "--evidence", path, "--restore-backup", self.db, "--now", now, "--out", out,
+                                    wall=wall)
         rep = json.load(open(os.path.join(out, "readiness.json"))) if code != 2 else None
         return code, rep, err
 
@@ -291,6 +318,67 @@ class FullRun(unittest.TestCase):
         self.assertEqual({m for m, _t in _Live.seen}, {"GET"})
         self.assertEqual({t for _m, t in _Live.seen}, {"tok"})
         self.assertEqual(rep["classes"]["replay-history"]["unknown"], 0)
+
+    def test_inputs_the_first_harness_review_turned_into_a_false_pass(self):
+        # evidence of a restore without --restore-backup
+        ev = dict(self.evidence, drills=dict(self.evidence["drills"], restore={"pass": True}))
+        path = os.path.join(self.tmp, "ev2.json")
+        json.dump(ev, open(path, "w"))
+        out = tempfile.mkdtemp()
+        with mock.patch.object(replay, "GO_LIVE_TICKETS", 3):
+            code, _o, _e = run_cli("--fixtures", "--replay", self.db, "--live", self.url, "--token-file", self.token,
+                                   "--evidence", path, "--now", "2026-10-25T00:00:00Z", "--out", out, wall=1793000000)
+        rep = json.load(open(os.path.join(out, "readiness.json")))
+        self.assertEqual((code, rep["gate"][3]["status"]), (1, "missing"))
+        # wrong-typed evidence
+        for walks in ([{"when": "start"}, {"when": "after_restart", "ok": True}, {"when": "end", "ok": True}],
+                      [{"when": w, "ok": "true"} for w in ("start", "after_restart", "end")]):
+            code, rep, _e = self.run_full(auditWalks=walks)
+            self.assertEqual((code, rep["gate"][5]["status"]), (1, "fail"), walks)
+        code, rep, _e = self.run_full(drills={"restart": {"pass": True}, "rollback": {"pass": "false"}})
+        self.assertEqual((code, rep["gate"][3]["status"]), (1, "fail"))
+        code, rep, err = self.run_full(nightShift={"cycles": [1]})
+        self.assertEqual(code, 2, err)
+        # a time that has not passed
+        code, rep, err = self.run_full(wall=1792700000)
+        self.assertEqual(code, 2)
+        self.assertIn("later than the clock", err)
+
+    def test_live_routes_that_cannot_be_read_never_pass(self):
+        saved = dict(_Live.BODIES)
+        self.addCleanup(lambda: (_Live.BODIES.clear(), _Live.BODIES.update(saved)))
+        del _Live.BODIES["/api/autonomy"]
+        code, rep, _e = self.run_full()
+        gate = {r["row"]: r["status"] for r in rep["gate"]}
+        self.assertEqual(code, 1)
+        self.assertEqual((gate[9], gate[10], gate[11], gate[15]), ("missing", "missing", "missing", "missing"))
+
+    def test_a_live_auto_verdict_not_in_the_replay_is_not_counted_as_checked(self):
+        saved = dict(_Live.BODIES)
+        self.addCleanup(lambda: (_Live.BODIES.clear(), _Live.BODIES.update(saved)))
+        _Live.BODIES["/api/autonomy"] = dict(saved["/api/autonomy"], disagree=1, disagreements=[
+            {"id": 999, "project": "commandcenter", "action": "deploy", "observed": "jay", "engine": "auto",
+             "rule": "deploy:not_live"}])
+        code, rep, _e = self.run_full()
+        self.assertEqual((code, rep["gate"][8]["status"]), (1, "missing"))
+
+    def test_an_unverifiable_merge_or_an_empty_replay_is_missing(self):
+        db = sqlite3.connect(self.db)
+        tid = db.execute("SELECT id FROM tickets LIMIT 1").fetchone()[0]
+        db.execute("INSERT INTO ticket_events (ticket_id, at, actor, kind, data) VALUES (?, ?, 'ccd', "
+                   "'pipeline.merged', '{\"pr\": \"o/r#9\"}')", (tid, 1792700000))
+        db.commit()
+        db.close()
+        code, rep, _e = self.run_full()
+        self.assertEqual((code, rep["gate"][6]["status"]), (1, "missing"))
+        empty = os.path.join(self.tmp, "empty.db")
+        ts = TaskStore(empty, task_projects(cfg()))
+        for i in range(3):
+            ts.create("commandcenter", f"e{i}")
+        ts.close()
+        self.db = empty
+        code, rep, _e = self.run_full()
+        self.assertEqual((code, rep["gate"][11]["status"]), (1, "missing"))
 
     def test_too_early_or_a_quiet_night_or_a_broken_walk_fails(self):
         code, rep, _e = self.run_full(now="2026-10-24T12:00:00Z")

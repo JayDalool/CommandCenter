@@ -502,13 +502,16 @@ and `readiness.md` (exit 0 PASS, 1 FAIL, 2 cannot run). The daemon never imports
   no citation is "unknown". A test fails when the engine gains a rule without one. `validation/fuzz.py` runs
   seeded schema-valid profile variants through both and reports any "auto" a hard rule forbids (a test runs
   three seeds, and checks that it catches an engine with a rule switched off).
-- **Side-effect free.** Before anything runs, a guard blocks starting programs, network connections other than
-  GET requests to the given ccd, writing files outside the report folder, opening a database for writing, and
-  herdr. A self-check proves every block, or the run stops with exit 2. A replay snapshot opens with
+- **Side-effect free.** Before anything runs, a guard blocks starting programs, name lookups and network
+  connections other than GET requests to the given ccd, creating, writing, moving or deleting files outside the
+  report folder, opening or attaching a database for writing, and herdr. It guards Python's own entry points: a
+  safety net for the harness's code, not a sandbox. A self-check proves every block, or the run stops with exit 2. A replay snapshot opens with
   `mode=ro&immutable=1`, and a path inside the live data folder, or a copy with an unmerged write-ahead log, is
   refused. Make the copy with `sqlite3 tasks.db ".backup /tmp/copy.db"`.
 - **Never passes on time alone.** A row without evidence is "missing", and the result is PASS only when all 15
-  rows pass.
+  rows pass. Evidence must have the right types (`ok: true`, not `"true"`), a restore counts only when this run did
+  it, a merge counts as Jay's only with a merge-gate confirmation or the PR's merger from the GitHub cache, an
+  unreadable live route or an empty replay is "missing", and `--now` may not be later than the clock.
 
 ### Decision and Approval records (PR 4)
 

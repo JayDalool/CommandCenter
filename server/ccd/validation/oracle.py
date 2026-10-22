@@ -2,7 +2,8 @@
 
 This is deliberately NOT the engine. It is written from the agreed policy (profiles, D-005, D-007, D-008, Jay's
 2026-10-22 decisions) without calling any autonomy.py helper, so a bug in the engine shows up as a disagreement
-instead of being copied. It only ever answers "auto is not allowed, because …" (with a citation) or nothing.
+instead of being copied. It only ever answers "auto is not allowed, because …" (with a citation) or nothing. One shared piece: "low risk"
+comes from merge_policy.file_reasons (ccd's legacy ADR 0007 allowlist, not engine code), as the policy defines it.
 It never says "auto": a clean oracle result only means none of these rules forbid it.
 
 `requirement(action, profile, facts)` → {"must": None | "jay" | "refuse", "why": [(citation, text)]}.
@@ -12,7 +13,7 @@ import re
 from .. import merge_policy
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
-BOUNDARY = {"destructive", "financial", "paid", "secrets", "credentials", "irreversible", "legal"}
+BOUNDARY = {"destructive", "financial", "paid", "secrets", "secret", "credentials", "credential", "irreversible", "legal"}
 RAISES_RISK = {"security", "migration", "destructive", "architecture", "financial", "legal", "risk:high"}
 LIVE, NON_LIVE = {"live"}, {"preview", "dev"}
 
@@ -171,16 +172,7 @@ def requirement(action, profile, facts):
         if dep.get("policy") != "auto" or dep.get("jay_confirms"):
             why.append(("O-LIVE", f"deploy policy {dep.get('policy')!r}"))
         need = list(dep.get("requires") or [])
-        rh, ph = facts.get("review_head"), facts.get("pr_head")
-        ok = {"merged": facts.get("merged") is True, "verify_pass": facts.get("verified") is True,
-              "health_ok": caps.get("health_checks") is True, "auto_rollback": caps.get("auto_rollback") is True,
-              "ci_green": facts.get("ci") == "green" and facts.get("ci_passed") is not False,
-              "review_approved_at_head": facts.get("review_at_head") is True and isinstance(rh, str)
-              and isinstance(ph, str) and bool(SHA.fullmatch(rh)) and rh == ph,
-              "risk_at_most_medium": not high and low,
-              "security_pass_if_required": not (typ == "SECURITY" or "security" in labels),
-              "no_personal_data_trigger": True,      # checked by the personal-data paths and categories below
-              "plan_approved_if_required": facts.get("plan_accepted") is True}
+        ok = _conditions(facts, caps, high, low, typ, labels)
         for c in need:
             if not ok.get(c, False):
                 why.append(("O-LIVE", f"{c} does not hold"))
@@ -206,8 +198,10 @@ def requirement(action, profile, facts):
         why.append(("O-MERGE-POLICY", f"merge policy {mp.get('policy') if mp else t.get('merge')!r}"))
     if mp.get("policy") == "low-risk" and not low:
         why.append(("O-MERGE-POLICY", "not every file is on the low-risk allowlist"))
-    if "risk_at_most_medium" in (mp.get("requires") or ()) and (high or not low):
-        why.append(("O-MERGE-POLICY", "the risk is high or not known"))
+    met = _conditions(facts, profile.get("capabilities") or {}, high, low, typ, labels)
+    for c in mp.get("requires") or ():
+        if not met.get(c, False):
+            why.append(("O-MERGE-POLICY", f"merge condition {c} does not hold"))
     if facts.get("state") != "OPEN":
         why.append(("O-READY", f"state is {facts.get('state')!r}"))
     if facts.get("draft") is not False:
@@ -243,6 +237,20 @@ def requirement(action, profile, facts):
             "ui", "security", "migration", "destructive", "architecture", "product-decision", "ambiguous", "gate:plan"}:
         why.append(("O-HOLD", "a UI, deploy or plan-gate hold"))
     return done("jay")
+
+
+def _conditions(facts, caps, high, low, typ, labels):
+    """Which policy conditions hold. A condition missing here never holds."""
+    rh, ph = facts.get("review_head"), facts.get("pr_head")
+    return {"merged": facts.get("merged") is True, "verify_pass": facts.get("verified") is True,
+            "health_ok": caps.get("health_checks") is True, "auto_rollback": caps.get("auto_rollback") is True,
+            "ci_green": facts.get("ci") == "green" and facts.get("ci_passed") is not False,
+            "review_approved_at_head": facts.get("review_at_head") is True and isinstance(rh, str)
+            and isinstance(ph, str) and bool(SHA.fullmatch(rh)) and rh == ph,
+            "risk_at_most_medium": not high and low,
+            "security_pass_if_required": not (typ == "SECURITY" or "security" in labels),
+            "no_personal_data_trigger": True,      # checked by the personal-data paths and categories
+            "plan_approved_if_required": facts.get("plan_accepted") is True}
 
 
 def _categories(facts, pd, why):

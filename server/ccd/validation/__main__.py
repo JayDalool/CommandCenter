@@ -12,6 +12,9 @@ Writes DIR/readiness.json and DIR/readiness.md. Exit 0 PASS, 1 FAIL, 2 cannot ru
                      drills.restart / drills.rollback, auditWalks [{when: start|after_restart|end, ok}],
                      suites {commit, green}, restarts, unexplainedExits
   --restore-backup   restore drill: copy this backup to a temporary folder, migrate the copy, check it
+                     (row 4 counts only a restore this run did, never one claimed in --evidence)
+  --now              the time to score at; never later than the wall clock
+  jayLogins          (evidence) GitHub logins that are Jay's, for merges ccd saw on GitHub (default JayDalool)
 """
 import argparse
 import json
@@ -52,7 +55,7 @@ def main(argv=None):
     except readiness.CannotRun as e:
         print(f"phase1-readiness: cannot run: {e}", file=sys.stderr)
         return 2
-    except (OSError, ValueError) as e:
+    except Exception as e:  # noqa: BLE001 — anything unexpected means no verdict: "cannot run", never FAIL or PASS
         print(f"phase1-readiness: cannot run: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
     readiness.write(report, out)

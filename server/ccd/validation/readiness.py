@@ -3,10 +3,11 @@
 Exit codes: 0 PASS, 1 FAIL (some row fails or has no evidence), 2 cannot run (bad input, or the write guard's
 self-check did not block everything).
 
-The report is deterministic for the same inputs and `--now`: rows, decisions and counts are sorted, and the only
-clock reading is `now`.
+The report is deterministic for the same inputs and `--now`: rows, decisions and counts are sorted, and apart
+from the timings under `performance` the only clock reading is `now`. `--now` may not be later than the wall clock.
 """
 import json
+import os
 import shutil
 import sqlite3
 import tempfile
@@ -101,10 +102,48 @@ def _refuses_newer(db):
         probe.close()
 
 
+WALL = time.time      # the wall clock; tests replace it to run "later"
+EVIDENCE = {"goLiveAt": str, "engineLiveAt": str, "nightShift": dict, "drills": dict, "auditWalks": list,
+            "suites": dict, "restarts": int, "unexplainedExits": int, "jayLogins": list}
+
+
+def _check_evidence(ev):
+    """Wrong-typed evidence is a reason not to run (exit 2), never something read as a pass."""
+    for k, typ in EVIDENCE.items():
+        if k in ev and not isinstance(ev[k], typ):
+            raise CannotRun(f"evidence.{k} must be a {typ.__name__}")
+    cycles = (ev.get("nightShift") or {}).get("cycles", [])
+    if not isinstance(cycles, list) or not all(isinstance(c, dict) for c in cycles):
+        raise CannotRun("evidence.nightShift.cycles must be a list of objects")
+    if not all(isinstance(v, dict) for v in (ev.get("drills") or {}).values()):
+        raise CannotRun("evidence.drills values must be objects")
+    if not all(isinstance(w, dict) for w in ev.get("auditWalks") or []):
+        raise CannotRun("evidence.auditWalks must be a list of objects")
+    for k in ("goLiveAt", "engineLiveAt"):
+        if k in ev:
+            try:
+                _ts(ev[k])
+            except ValueError as e:
+                raise CannotRun(f"evidence.{k} is not an ISO time") from e
+
+
 def run(opts):
     """opts: dict with fixtures, replay, github_cache, live, token, evidence, restore_backup, now, out, engine_live_at,
     go_live_at. Returns the report (the caller writes it)."""
-    now = _ts(opts.get("now")) if opts.get("now") else time.time()
+    wall = WALL()
+    try:
+        now = _ts(opts.get("now")) if opts.get("now") else wall
+        for k in ("engine_live_at", "go_live_at"):
+            if opts.get(k):
+                _ts(opts[k])
+    except ValueError as e:
+        raise CannotRun(f"not an ISO time: {e}") from e
+    if now > wall + 60:
+        raise CannotRun(f"--now {opts.get('now')} is later than the clock: time that has not passed proves nothing")
+    for d in replay.live_dirs():
+        o = Path(os.path.realpath(opts["out"]))
+        if o == d or d in o.parents:
+            raise CannotRun(f"--out is inside the live data folder {d}")
     out_dir = Path(opts["out"])
     scratch = Path(tempfile.mkdtemp(prefix="ccd-readiness-"))
     try:
@@ -129,6 +168,7 @@ def _gather(opts, now, checks, scratch):
             raise CannotRun(f"cannot read the evidence file: {e}") from e
         if not isinstance(evidence, dict):
             raise CannotRun("the evidence file must be a JSON object")
+        _check_evidence(evidence)
     policy = profiles.load()
     report = {"tool": "phase1-readiness", "engine": autonomy.ENGINE_VERSION, "now": _iso(now),
               "policyFingerprint": policy.fingerprint, "guard": checks,
@@ -144,7 +184,14 @@ def _gather(opts, now, checks, scratch):
             snap = replay.open_snapshot(opts["replay"])
         except (replay.ReplayError, OSError, ValueError, sqlite3.Error) as e:
             raise CannotRun(f"cannot replay: {e}") from e
-        decisions += [dict(d, profile="unset") for d in replay.shadow_rows(snap) + replay.history(snap, cache)]
+        try:
+            decisions += [dict(d, profile="unset") for d in replay.shadow_rows(snap) + replay.history(snap, cache)]
+            replay.integrity(snap)
+        except sqlite3.Error as e:
+            raise CannotRun(f"the replay copy is not a tasks.db this harness can read: {e}") from e
+        report["githubCache"] = cache is not None
+        report["jayLogins"] = list(evidence.get("jayLogins") or ["JayDalool"])
+        report["_cache"] = cache
     _evaluate(decisions, policy)
     live = live_mod.fetch(opts["live"], _token(opts.get("token_file"))) if opts.get("live") else None
 
@@ -153,7 +200,7 @@ def _gather(opts, now, checks, scratch):
     report["findings"] = [_brief(d) for d in decisions if d["classified"][0] not in
                           ("agree", "vacuous-agree", "safe-conservative", "expected-stricter")][:200]
     report["coverage"] = _coverage(decisions)
-    report["integrity"] = _integrity(snap, opts, now)
+    report["integrity"] = _integrity(snap, opts, now, report.pop("_cache", None), report.get("jayLogins"))
     report["drills"] = _drills(evidence, opts, scratch)
     report["runtime"] = _runtime(evidence, opts, now, live)
     report["nightShift"] = _night(evidence, live)
@@ -207,19 +254,21 @@ def _coverage(decisions):
             "replayDecisions": sum(1 for d in decisions if d["source"].startswith("replay"))}
 
 
-def _integrity(snap, opts, now):
+def _integrity(snap, opts, now, cache=None, jay_logins=()):
     if snap is None:
         return {"available": False}
     since = _ts(opts.get("go_live_at") or PHASE1_GO_LIVE)
     t0 = time.monotonic()
     walk = replay.audit_walk(snap)
-    out = dict(replay.integrity(snap), available=True, auditWalk=walk,
-               auditWalkMs=round((time.monotonic() - t0) * 1000), unauthorized=replay.unauthorized(snap, since))
-    return out
+    actions = replay.actions(snap, since, cache, jay_logins)
+    return dict(replay.integrity(snap), available=True, auditWalk=walk,
+                auditWalkMs=round((time.monotonic() - t0) * 1000), unauthorized=actions["unauthorized"],
+                unverified=actions["unverified"], checkedActions=actions["checked"])
 
 
 def _drills(evidence, opts, scratch):
     d = dict(evidence.get("drills") or {})
+    d.pop("restore", None)        # only a restore this run did counts
     if opts.get("restore_backup"):
         try:
             d["restore"] = restore_drill(opts["restore_backup"], scratch)
@@ -241,7 +290,7 @@ def _runtime(evidence, opts, now, live):
 
 
 def _night(evidence, live):
-    cycles = list((evidence.get("nightShift") or {}).get("cycles") or [])
+    cycles = [c for c in (evidence.get("nightShift") or {}).get("cycles") or [] if isinstance(c, dict)]
     return {"cycles": cycles, "live": live_mod.body(live, "nightShift") is not None}
 
 
@@ -253,11 +302,13 @@ def _live_summary(live):
     prof = live_mod.body(live, "profiles") or {}
     workers = live_mod.body(live, "workers") or {}
     return {"available": True, "routes": {k: v["ok"] for k, v in sorted(live.items())},
+            "autonomyRead": live_mod.body(live, "autonomy") is not None,
             "engine": auto.get("engine"), "mode": auto.get("mode"), "total": auto.get("total"),
             "disagree": auto.get("disagree"), "disagreements": [
                 {"id": x.get("id"), "project": x.get("project"), "action": x.get("action"),
                  "observed": x.get("observed"), "engine": x.get("engine"), "rule": x.get("rule"),
-                 "cited": x.get("rule") in classify.RULE_CITATIONS} for x in auto.get("disagreements") or []],
+                 "cited": x.get("rule") in classify.RULE_CITATIONS} for x in auto.get("disagreements") or []
+                if isinstance(x, dict)],
             "auditChain": audit.get("chain"), "wouldRefuse": (audit.get("summary") or {}).get("wouldRefuse"),
             "profileProblems": prof.get("problems"), "mergePolicy": live_mod.merge_policy_status(live),
             "workersOnline": sum(1 for n in workers.get("nodes") or [] if n.get("status") == "online")}
@@ -284,8 +335,8 @@ def _gate(report, decisions, evidence, policy, live):
     if not cyc:
         rows.append(_row(2, "missing", "no night-shift cycle in the evidence file"))
     else:
-        good = [c for c in cyc if c.get("withWork") and c.get("ended") in ("cutoff", "report")
-                and isinstance(c.get("reminders"), int) and c["reminders"] <= MAX_REMINDERS]
+        good = [c for c in cyc if c.get("withWork") is True and c.get("ended") in ("cutoff", "report")
+                and type(c.get("reminders")) is int and 0 <= c["reminders"] <= MAX_REMINDERS]
         rows.append(_row(2, "pass" if good else "fail", f"{len(good)} of {len(cyc)} cycles had real work, ended at the "
                                                         f"cutoff or with a report, reminders ≤ {MAX_REMINDERS}"))
     # 3 restart drill, 4 restore + rollback
@@ -293,11 +344,11 @@ def _gate(report, decisions, evidence, policy, live):
     rows.append(_drill_row(3, dr.get("restart"), "restart drill"))
     restore, rollback = dr.get("restore"), dr.get("rollback")
     if restore is None or rollback is None:
-        rows.append(_row(4, "missing", f"restore drill {'run' if restore else 'not run (--restore-backup)'}; rollback "
+        rows.append(_row(4, "missing", f"restore drill {'run' if restore else 'not run (needs --restore-backup)'}; rollback "
                                        f"drill ({OLD_COMMIT} refuses v9, boots on the backup) "
                                        f"{'given' if rollback else 'not in the evidence file'}"))
     else:
-        ok = bool(restore.get("pass")) and bool(rollback.get("pass"))
+        ok = restore.get("pass") is True and rollback.get("pass") is True
         rows.append(_row(4, "pass" if ok else "fail", f"restore: {json.dumps(restore, sort_keys=True)[:200]}; "
                                                       f"rollback: {json.dumps(rollback, sort_keys=True)[:200]}"))
     # 5 profile drift
@@ -311,7 +362,7 @@ def _gate(report, decisions, evidence, policy, live):
                          f"0 drift and 0 load problems ({len(policy.profiles)} profiles"
                          f"{', live checked' if live is not None else ', repository only'})"))
     # 6 audit chain
-    walks = [w for w in evidence.get("auditWalks") or [] if isinstance(w, dict)]
+    walks = [{"when": w.get("when"), "ok": w.get("ok")} for w in evidence.get("auditWalks") or []]
     integ = report["integrity"]
     if integ.get("available") and integ["auditWalk"].get("ok") is not None:
         walks.append({"when": "replay snapshot", "ok": integ["auditWalk"]["ok"]})
@@ -319,8 +370,8 @@ def _gate(report, decisions, evidence, policy, live):
     if isinstance(chain, dict):
         walks.append({"when": "live", "ok": chain.get("ok")})
     have = {w.get("when") for w in walks}
-    if any(w.get("ok") is False for w in walks):
-        rows.append(_row(6, "fail", f"a full walk failed: {walks}"))
+    if any(w.get("ok") is not True for w in walks):
+        rows.append(_row(6, "fail", f"a walk is not shown intact (ok must be true): {walks}"))
     elif not {"start", "after_restart", "end"} <= have:
         rows.append(_row(6, "missing", f"walks so far {sorted(map(str, have))}; need start, after_restart and end"))
     else:
@@ -330,32 +381,57 @@ def _gate(report, decisions, evidence, policy, live):
         rows.append(_row(7, "missing", "needs --replay"))
         rows.append(_row(8, "missing", "needs --replay"))
     else:
-        un = integ["unauthorized"]
-        rows.append(_row(7, "fail" if un else "pass", f"{len(un)} unauthorised merges or live deploys since go-live"
-                                                     + (f": {un[:3]}" if un else "")))
+        un, unv = integ["unauthorized"], integ["unverified"]
+        status = "fail" if un else ("missing" if unv else "pass")
+        rows.append(_row(7, status, f"{integ['checkedActions']} merges and live deploys since go-live; {len(un)} "
+                                    f"unauthorised{f': {un[:3]}' if un else ''}; {len(unv)} not provably Jay's "
+                                    f"(needs a merge-gate confirmation or the PR's merger in --github-cache)"
+                                    f"{f': {unv[:3]}' if unv else ''}"))
         ok = integ["ok"] and integ["tickets"] >= replay.GO_LIVE_TICKETS and integ["eventsGaps"] == 0
         rows.append(_row(8, "pass" if ok else "fail", f"integrity {'ok' if integ['ok'] else 'FAILED'}, "
                                                       f"{integ['tickets']} tickets (go-live {replay.GO_LIVE_TICKETS}), "
                                                       f"{integ['eventsGaps']} ticket_events gaps, schema v{integ['schema']}"))
     # 9-11 classes
-    live_uncited = [x for x in (report["live"] or {}).get("disagreements") or [] if not x["cited"]]
+    lv = report["live"] or {}
+    live_dis = lv.get("disagreements") or []
+    live_uncited = [x for x in live_dis if not x["cited"]]
+    replayed = {d["id"] for d in decisions if d["source"] == "replay-shadow"}
+    live_auto = [x for x in live_dis if x.get("engine") == "auto" and f"S{x.get('id')}" not in replayed]
+    live_blind = live is not None and not lv.get("autonomyRead")
+    used = ", ".join(s for s, on in src.items() if on) or "no source"
     for n, cls in ((9, "unsafe-permissive"), (10, "boundary-softened")):
         k = _count(decisions, cls)
-        rows.append(_row(n, "fail" if k else "pass", f"{k} across {', '.join(s for s, on in src.items() if on) or 'no source'}"))
+        if k:
+            rows.append(_row(n, "fail", f"{k} across {used}"))
+        elif live_blind:
+            rows.append(_row(n, "missing", f"0 across {used}, but /api/autonomy could not be read"))
+        elif n == 9 and live_auto:
+            rows.append(_row(n, "missing", f"0 across {used}; {len(live_auto)} live 'auto' verdicts were not in the "
+                                           f"replay copy, so no hard rule was checked against them: "
+                                           f"{[x.get('id') for x in live_auto[:5]]}"))
+        else:
+            rows.append(_row(n, "pass", f"0 across {used}"))
     k = _count(decisions, "unknown") + len(live_uncited)
-    rows.append(_row(11, "fail" if k else "pass", f"{k} disagreements no citation explains"))
+    if k:
+        rows.append(_row(11, "fail", f"{k} disagreements no citation explains"))
+    elif live_blind:
+        rows.append(_row(11, "missing", "/api/autonomy could not be read"))
+    else:
+        rows.append(_row(11, "pass", "0 disagreements no citation explains"))
     # 12 coverage
     cov = report["coverage"]
-    rows.append(_row(12, "fail" if cov["uncovered"] else "pass",
+    empty_replay = src["replay"] and not cov["replayDecisions"]
+    rows.append(_row(12, "fail" if cov["uncovered"] else ("missing" if empty_replay else "pass"),
                      f"{len(fixtures.CLASSES) - len(cov['uncovered'])} of {len(fixtures.CLASSES)} sweep classes covered; "
                      f"{cov['replayDecisions']} replay decisions" +
-                     (f"; uncovered: {cov['uncovered']}" if cov["uncovered"] else "")))
+                     (f"; uncovered: {cov['uncovered']}" if cov["uncovered"] else "") +
+                     ("; the replay copy held no decisions" if empty_replay else "")))
     # 13 engine bugs
     fx = [d for d in decisions if d["source"] == "fixture"]
     guarded = {d["regression"] for d in fx if d.get("regression")}
     broken = sorted({d["regression"] for d in fx if d.get("regression") and d["classified"][0] != "agree"})
-    q01 = "risk_high" in ((policy.profile("commandcenter") or {}).get("target", {}).get("plan_approval") or {}).get(
-        "required_for", [])
+    q01 = "risk_high" in ((((policy.profile("commandcenter") or {}).get("target") or {}).get("plan_approval") or {})
+                          .get("required_for") or [])
     missing_regs = sorted(set(REGRESSIONS) - guarded)
     bugs = _count(decisions, "engine-bug")
     if not fx:
@@ -380,8 +456,11 @@ def _gate(report, decisions, evidence, policy, live):
     # 15 harness
     all_on = all(src.values())
     others = all(r["status"] == "pass" for r in rows)
-    rows.append(_row(15, "pass" if all_on and others else ("missing" if not all_on else "fail"),
-                     f"sources {src}; rows 1-14 {'all pass' if others else 'not all pass'}"))
+    routes_down = sorted(k for k, ok in (lv.get("routes") or {}).items() if not ok)
+    complete = all_on and not routes_down
+    rows.append(_row(15, "pass" if complete and others else ("missing" if not complete else "fail"),
+                     f"sources {src}; live routes not read: {routes_down or 'none'}; "
+                     f"rows 1-14 {'all pass' if others else 'not all pass'}"))
     return rows
 
 
