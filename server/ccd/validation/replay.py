@@ -66,6 +66,11 @@ def _json(s, default):
     return v
 
 
+def _obj(s):
+    v = _json(s, {})
+    return v if isinstance(v, dict) else {}
+
+
 def integrity(db):
     """{ok, tickets, eventsGaps, schema} for gate row 8."""
     ok = db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -112,12 +117,24 @@ def actions(db, since, cache=None, jay_logins=("JayDalool",)):
             # the confirmation must come after the last change that voids an approval (rework, replan, stale review)
             void = db.execute("SELECT COALESCE(MAX(id), 0) FROM ticket_events WHERE ticket_id = ? AND id < ? AND kind IN "
                               "('pipeline.rework', 'pipeline.replan', 'pipeline.review_stale')", (tid, eid)).fetchone()[0]
-            confirmed = any(_json(x, {}).get("gate") == "merge" for (x,) in db.execute(
-                "SELECT data FROM ticket_events WHERE ticket_id = ? AND id > ? AND id < ? AND actor = 'jay' "
-                "AND kind = 'pipeline.gate_confirmed'", (tid, void, eid)))
+            conf = [cid for cid, x in db.execute(
+                "SELECT id, data FROM ticket_events WHERE ticket_id = ? AND id > ? AND id < ? AND actor = 'jay' "
+                "AND kind = 'pipeline.gate_confirmed'", (tid, void, eid)) if _obj(x).get("gate") == "merge"]
             pr = cache.get(d.get("pr")) if isinstance(cache.get(d.get("pr")), dict) else None
             by = ((pr or {}).get("mergedBy") or {}).get("login") if isinstance((pr or {}).get("mergedBy"), dict) else None
-            if confirmed or (by and by in logins):
+            if by and by in logins:
+                continue
+            merged_head = (pr or {}).get("headRefOid")
+            if conf and isinstance(merged_head, str) and merged_head:
+                # Jay confirms a merge for one head: the head reviewed before the confirmation must be the one merged
+                rev = db.execute("SELECT data FROM ticket_events WHERE ticket_id = ? AND id < ? AND kind = "
+                                 "'pipeline.review' ORDER BY id DESC LIMIT 1", (tid, conf[-1])).fetchone()
+                head = _obj(rev[0]).get("head") if rev else None
+                if head != merged_head:
+                    out["unverified"].append(dict(item, pr=d.get("pr"), why=f"Jay confirmed head {str(head)[:12]}, "
+                                                                           f"the PR merged {merged_head[:12]}"))
+                    continue
+            if conf:
                 continue
             if by:
                 out["unauthorized"].append(dict(item, why=f"merged on GitHub by {by}, not Jay"))

@@ -242,6 +242,16 @@ class Replay(unittest.TestCase):
         res = replay.actions(replay.open_snapshot(self.db), 0)
         self.assertEqual([u["pr"] for u in res["unverified"]], ["o/r#1"])
 
+    def test_a_merge_of_a_head_jay_did_not_confirm_is_not_his(self):
+        self.add((5000, "ccd", "pipeline.review", {"verdict": "APPROVE", "head": "a" * 40}),
+                 (5001, "jay", "pipeline.gate_confirmed", {"gate": "merge"}),
+                 (5002, "ccd", "pipeline.merged", {"pr": "o/r#1"}),
+                 (5003, "jay", "pipeline.gate_confirmed", {"gate": "merge"}),
+                 (5004, "ccd", "pipeline.merged", {"pr": "o/r#2"}))
+        cache = {"o/r#1": {"headRefOid": "b" * 40}, "o/r#2": {"headRefOid": "a" * 40}}
+        res = replay.actions(replay.open_snapshot(self.db), 0, cache)
+        self.assertEqual([u["pr"] for u in res["unverified"]], ["o/r#1"])
+
     def test_out_inside_the_live_folder_is_refused_before_anything_is_made(self):
         home = os.path.join(self.tmp, "home")
         target = os.path.join(home, "newdir")
@@ -269,8 +279,8 @@ class Replay(unittest.TestCase):
 class _Live(BaseHTTPRequestHandler):
     BODIES = {
         "/api/health": {"ok": True, "uptimeS": 26 * 3600, "version": "test"},
-        "/api/autonomy": {"mode": "shadow", "engine": autonomy.ENGINE_VERSION, "total": 3, "agree": 3, "disagree": 0, "counts": {
-            "commandcenter": {"plan": {"total": 3, "agree": 3}}}, "disagreements": []},
+        "/api/autonomy": {"mode": "shadow", "engine": autonomy.ENGINE_VERSION, "total": 1, "agree": 1, "disagree": 0, "counts": {
+            "commandcenter": {"merge": {"total": 1, "agree": 1, "pairs": {"jay->jay": 1}}}}, "disagreements": []},
         "/api/profiles": {"problems": []},
         "/api/audit": {"chain": {"ok": True, "checked": 10}, "summary": {"wouldRefuse": 4}},
         "/api/workers": {"nodes": [{"status": "online"}]},
@@ -396,6 +406,40 @@ class FullRun(unittest.TestCase):
              "rule": "target.merge"}])
         code, rep, _e = self.run_full()
         self.assertEqual((code, rep["gate"][8]["status"]), (1, "fail"))
+
+    def shadow(self, engine, rule, version, at=1792700000):
+        db = sqlite3.connect(self.db)
+        tid = db.execute("SELECT id FROM tickets LIMIT 1").fetchone()[0]
+        f = dict(fixtures.ready(), confirmed=["owner:accept"])
+        db.execute("INSERT INTO autonomy_shadow (at, ticket_id, project, action, observed, engine, rule, agree, facts, "
+                   "policy, engine_version) VALUES (?, ?, 'commandcenter', 'merge', 'jay', ?, ?, ?, ?, 'fp', ?)",
+                   (at, tid, engine, rule, int(engine == "jay"), json.dumps(f), version))
+        db.commit()
+        db.close()
+
+    def test_live_verdicts_newer_than_the_replay_copy_are_not_assumed_safe(self):
+        # the third harness review: 40 live plan verdicts that agree with ccd, none of them in the copy
+        saved = dict(_Live.BODIES)
+        self.addCleanup(lambda: (_Live.BODIES.clear(), _Live.BODIES.update(saved)))
+        _Live.BODIES["/api/autonomy"] = dict(saved["/api/autonomy"], total=41, agree=41, counts={"commandcenter": {
+            "merge": {"total": 1, "agree": 1}, "plan": {"total": 40, "agree": 40, "pairs": {"auto->auto": 40}}}})
+        code, rep, _e = self.run_full()
+        gate = {r["row"]: r["status"] for r in rep["gate"]}
+        self.assertEqual((code, gate[9], gate[10], gate[11]), (1, "missing", "missing", "missing"))
+
+    def test_an_older_engine_recording_after_the_claimed_engine_go_live_fails_row_1(self):
+        self.shadow("jay", "target.merge", autonomy.ENGINE_VERSION - 1, at=1792900000)     # 2026-10-24
+        code, rep, _e = self.run_full()
+        self.assertEqual((code, rep["gate"][0]["status"]), (1, "fail"))
+
+    def test_a_recorded_engine_error_counts_even_when_the_outcome_matches(self):
+        self.shadow("jay", "engine:error", autonomy.ENGINE_VERSION)
+        saved = dict(_Live.BODIES)
+        self.addCleanup(lambda: (_Live.BODIES.clear(), _Live.BODIES.update(saved)))
+        _Live.BODIES["/api/autonomy"] = dict(saved["/api/autonomy"], total=2, agree=2, counts={"commandcenter": {
+            "merge": {"total": 2, "agree": 2}}})
+        code, rep, _e = self.run_full()
+        self.assertEqual((code, rep["gate"][12]["status"]), (1, "fail"))
 
     def test_a_truncated_live_disagreement_list_is_not_assumed_complete(self):
         saved = dict(_Live.BODIES)

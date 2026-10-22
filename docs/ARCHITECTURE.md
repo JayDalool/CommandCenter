@@ -514,10 +514,12 @@ and `readiness.md` (exit 0 PASS, 1 FAIL, 2 cannot run). The daemon never imports
   it, a merge counts as Jay's only with a merge-gate confirmation or the PR's merger from the GitHub cache, an
   unreadable live route or an empty replay is "missing", and `--now` may not be later than the clock. A replayed
   shadow row is judged twice, as recorded and as re-run, and the worse class counts, so a stricter engine never
-  hides an "auto" the live one gave. A merge confirmation counts only after the ticket's last rework, replan or
-  stale review. A live disagreement list shorter than its count needs a replay copy that reaches the unlisted rows.
-  The live engine version must be this harness's, the engine cannot go live before Phase 1, a live audit walk
-  must check at least one entry, and the suite result must name its commit.
+  hides an "auto" (or an engine error) the live one gave. Rows 9–11 are "missing" while the live ccd counts more
+  verdicts of its engine, for any project and action, than the replay copy holds: take the copy just before the
+  run. A merge confirmation counts only after the ticket's last rework, replan or stale review, and, when the
+  GitHub cache gives the merged head, only for the head reviewed before it. The live engine version must be this
+  harness's; the engine cannot go live before Phase 1, nor before the copy's last verdict from an older engine; a
+  live audit walk must check at least one entry, and the suite result must name its commit.
 
 ### Decision and Approval records (PR 4)
 

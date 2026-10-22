@@ -74,9 +74,11 @@ WORSE = ("unsafe-permissive", "boundary-softened", "engine-bug", "unknown")
 
 def _judge_recorded(d):
     """A replayed shadow row also carries the verdict the live engine recorded at the time. Re-running today's
-    engine must never hide it: when the recorded verdict differs, it is classified too, and the worse class wins."""
+    engine must never hide it: when the recorded outcome or rule differs, it is classified too, and the worse class
+    wins (so a recorded engine:error still counts as an engine bug)."""
     rec = d.get("recorded")
-    if not isinstance(rec, dict) or rec.get("engine") in (None, d["verdict"].get("outcome")):
+    if not isinstance(rec, dict) or rec.get("engine") is None or (
+            rec.get("engine") == d["verdict"].get("outcome") and rec.get("rule") == d["verdict"].get("rule")):
         return
     then = classify.classify({"outcome": rec.get("engine"), "rule": rec.get("rule")}, d["oracle"],
                              observed=d.get("observed"))
@@ -342,6 +344,36 @@ def _count(decisions, cls):
     return sum(1 for d in decisions if d["classified"][0] == cls)
 
 
+def _older_after(decisions, eng):
+    """(count, newest time) of replayed shadow verdicts an older engine recorded after `eng`, or None."""
+    at = [d.get("at") for d in decisions if d["source"] == "replay-shadow"
+          and isinstance((d.get("recorded") or {}).get("version"), int)
+          and d["recorded"]["version"] < autonomy.ENGINE_VERSION
+          and isinstance(d.get("at"), (int, float)) and d["at"] > eng]
+    return (len(at), max(at)) if at else None
+
+
+def _uncopied(decisions, live_body):
+    """Live verdict counts per project:action the replay copy does not hold yet (newer than the copy): only rows in
+    the copy are checked against the hard rules, and an "auto" that agrees with ccd never shows as a disagreement."""
+    if not isinstance(live_body, dict):
+        return {}
+    have = {}
+    for d in decisions:
+        if d["source"] == "replay-shadow" and (d.get("recorded") or {}).get("version") == live_body.get("engine"):
+            k = f"{d['project']}:{d['action']}"
+            have[k] = have.get(k, 0) + 1
+    want = {}
+    for p, acts in (live_body.get("counts") or {}).items():
+        for a, c in (acts or {}).items():
+            want[f"{p}:{a}"] = c.get("total") if isinstance(c, dict) else None
+    gap = {k: n for k, n in want.items() if type(n) is not int or n > have.get(k, 0)}
+    total = live_body.get("total")
+    if type(total) is not int or total > sum(have.values()):
+        gap["total"] = total
+    return gap
+
+
 def _gate(report, decisions, evidence, policy, live):
     rows = []
     rt, src = report["runtime"], report["sources"]
@@ -352,6 +384,10 @@ def _gate(report, decisions, evidence, policy, live):
     elif rt["hoursOnEngine"] > rt["hoursSinceGoLive"]:
         rows.append(_row(1, "fail", f"the engine's go-live {rt['engineLiveAt']} is before Phase 1 go-live "
                                     f"{rt['goLiveAt']}, so it cannot be the final engine"))
+    elif _older_after(decisions, _ts(rt["engineLiveAt"])):
+        n, last = _older_after(decisions, _ts(rt["engineLiveAt"]))
+        rows.append(_row(1, "fail", f"the replay copy has {n} verdicts from an older engine after the claimed engine "
+                                    f"go-live {rt['engineLiveAt']} (the last at {_iso(last)}), so it went live later"))
     elif live is not None and (report["live"] or {}).get("engine") != autonomy.ENGINE_VERSION:
         rows.append(_row(1, "fail" if (report["live"] or {}).get("autonomyRead") else "missing",
                          f"the live ccd runs engine v{(report['live'] or {}).get('engine')}, this harness checks "
@@ -439,12 +475,17 @@ def _gate(report, decisions, evidence, policy, live):
     truncated = live is not None and lv.get("autonomyRead") and (
         type(total) is not int or total > len(live_dis)) and not (ids and sids and min(ids) <= max(sids))
     used = ", ".join(s for s, on in src.items() if on) or "no source"
+    uncopied = _uncopied(decisions, live_mod.body(live, "autonomy")) if live is not None and not live_blind else {}
+    stale = (f"the live ccd has verdicts the replay copy does not hold ({dict(sorted(uncopied.items()))}); take a "
+             "fresh copy just before the run")
     for n, cls in ((9, "unsafe-permissive"), (10, "boundary-softened")):
         k = _count(decisions, cls)
         if k:
             rows.append(_row(n, "fail", f"{k} across {used}"))
         elif live_blind:
             rows.append(_row(n, "missing", f"0 across {used}, but /api/autonomy could not be read"))
+        elif uncopied:
+            rows.append(_row(n, "missing", f"0 across {used}, but {stale}"))
         elif truncated:
             rows.append(_row(n, "missing", f"0 across {used}, but /api/autonomy counts {total!r} disagreements and "
                                            f"lists {len(live_dis)}, and the replay copy does not reach the unlisted "
@@ -460,6 +501,8 @@ def _gate(report, decisions, evidence, policy, live):
         rows.append(_row(11, "fail", f"{k} disagreements no citation explains"))
     elif live_blind:
         rows.append(_row(11, "missing", "/api/autonomy could not be read"))
+    elif uncopied:
+        rows.append(_row(11, "missing", stale))
     elif truncated:
         rows.append(_row(11, "missing", f"/api/autonomy counts {total!r} disagreements and lists {len(live_dis)}; "
                                         "the replay copy does not reach the unlisted ones"))
