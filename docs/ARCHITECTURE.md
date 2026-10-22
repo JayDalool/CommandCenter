@@ -457,13 +457,15 @@ Pipeline step (plan / ready / auto-merge / deploy request) ─▶ Daemon._pipeli
 human-only boundary is "jay", never "auto"; a paused project is "refuse"; protected paths (D-007) and personal-data
 paths (D-005) are "jay". Nothing reads the verdict to act, and a failure in it is a log line.
 
-Engine v2 (Phase 1 safety patch, 2026-10-22) closes every case found where v1 said "auto" against the agreed policy:
+Engine v2 (Phase 1 safety patch, 2026-10-22) closes every case found where v1 said "auto" against the agreed policy
+(v3 adds the per-ticket holds, prefix labels and the empty file list below; the version tells their verdicts apart):
 
 - an "auto" merge also needs the PR to be ready, whatever the profile's merge conditions say: open, not a draft,
   MERGEABLE, based on main, not from a fork, approved at its current head (`review_head` = `pr_head`), CI green with
   at least one passing check (`ci_passed`; `merge_policy.ci_state` still counts an all-skipped rollup as green for
   today's auto-merge); a codex or security review the profile requires (`always`, or triggered) and Command Center
-  does not record yet makes it "jay";
+  does not record yet makes it "jay"; so do ccd's own per-ticket holds (ADR 0007 rule 3: `owner:accept`, a UI or
+  deploy flag, a DESIGN ticket, the ui or a plan-gate label; `merge:ticket_hold`);
 - every deploy goes through the deploy rules (v1 judged a non-live one by the plan rules); an environment other
   than live, preview or dev is "jay", and `deploy.env = "preview"` allows preview only (`"live"` allows live and
   the non-live environments); `deploy = never` refuses before anything can soften it; an unattended live deploy
@@ -472,7 +474,9 @@ Engine v2 (Phase 1 safety patch, 2026-10-22) closes every case found where v1 sa
   `requires`); D-005 personal-data
   categories (compared case-insensitively) apply to an unattended live deploy as well as a merge;
 - destructive, financial, paid, secrets, credentials, irreversible and legal labels are human-only boundaries;
-  `secret` and `credential` count too; labels and flags compare case-insensitively (`needs-jay`, `needs_jay`), unreadable ones (not a list of strings, or a type that is not a
+  `secret` and `credential` count too, as does a label that starts with one (`secrets:prod`, `legal/review`);
+  labels and flags compare case-insensitively (`needs-jay`, `needs_jay`, `needs.jay`, `needs/jay`); an empty list of
+  changed files is "not listed", never "nothing protected"; unreadable ones (not a list of strings, or a type that is not a
   string) count as a boundary, a `needs:jay` or `needs:legal` label counts like the flag, and missing labels, flags
   or type are never read as "none" (`boundary:unknown`);
 - `autonomy.FIELDS` says for every profile key whether the engine reads it, fails closed on it (restricted mode,
@@ -480,6 +484,47 @@ Engine v2 (Phase 1 safety patch, 2026-10-22) closes every case found where v1 sa
 
 The daemon passes the readiness facts from the `gh pr view` auto-merge already makes (no extra call). Verdicts are
 tagged with the engine version, and `/api/autonomy` and Needs You read the current version only.
+
+### Phase 1 readiness harness (`ccd/validation`)
+
+`python -m ccd.validation phase1-readiness` scores the 15-row Phase 1 graduation gate and writes `readiness.json`
+and `readiness.md` (exit 0 PASS, 1 FAIL, 2 cannot run). The daemon never imports it, and it adds no route.
+
+- **Sources.** `--fixtures`: a case for every class in the Phase 1 sweep, against the real profiles (runs in CI as
+  `tests/test_validation.py`). `--replay COPY.db [--github-cache FILE]`: every `autonomy_shadow` row re-evaluated, and
+  every pipeline step in `ticket_events` rebuilt as the daemon saw it (labels, type and flags as of that moment,
+  the reviewed head, CI), with facts taken from the cache marked as inferred. `--live URL --token-file F`: the
+  read-only API routes. `--evidence FILE`: what it cannot see itself (the final engine's go-live time, night-shift
+  cycles, restart and rollback drills, audit walks, the suite result on the deployed commit).
+  `--restore-backup FILE`: migrates a temporary copy of a backup and checks it.
+- **Judging.** `validation/oracle.py` restates the hard rules independently of the engine; `validation/classify.py`
+  puts every decision into one class (unsafe-permissive, boundary-softened, engine-bug, unknown, safe-conservative,
+  expected-stricter, expected-permissive, legacy-permissive, vacuous-agree, agree). A disagreement whose rule has
+  no citation is "unknown". A test fails when the engine gains a rule without one. `validation/fuzz.py` runs
+  seeded schema-valid profile variants through both and reports any "auto" a hard rule forbids (a test runs
+  three seeds, and checks that it catches an engine with a rule switched off).
+- **Side-effect free.** Before anything runs, a guard blocks starting programs, name lookups and network
+  connections other than GET requests to the given ccd, creating, writing, moving or deleting files outside the
+  report folder, opening or attaching a database for writing, and herdr. It guards Python's own entry points: a
+  safety net for the harness's code, not a sandbox. A self-check proves every block, or the run stops with exit 2. A replay snapshot opens with
+  `mode=ro&immutable=1`, and a path inside the live data folder, or a copy with an unmerged write-ahead log, is
+  refused. Make the copy with `sqlite3 tasks.db ".backup /tmp/copy.db"`.
+- **Never passes on time alone.** A row without evidence is "missing", and the result is PASS only when all 15
+  rows pass. Evidence must have the right types (`ok: true`, not `"true"`), a restore counts only when this run did
+  it, a merge counts as Jay's only with a merge-gate confirmation or the PR's merger from the GitHub cache, an
+  unreadable live route or an empty replay is "missing", and `--now` may not be later than the clock. A replayed
+  shadow row is judged twice, as recorded and as re-run, and the worse class counts, so a stricter engine never
+  hides an "auto" (or an engine error) the live one gave; verdicts older engines recorded are reported under
+  `recordedOlder` and not scored, since the gate is about the final engine. Rows 9–11 are "missing" while the live
+  ccd counts more verdicts of its engine, for any project and action, than the replay copy holds, or lists a
+  disagreement that does not match the copy's row with that id; rows 7–8 are "missing" unless the copy holds
+  the live ccd's newest pipeline step (same ticket and kind, written within 2 s of its activity entry; activity
+  with no ticket event behind it, such as worktree cleanup, is skipped): take the copy just before the run. A merge
+  confirmation counts only after the ticket's last rework, replan, stale review or merge, and, when the GitHub
+  cache gives the merged head, only for the head reviewed before it. The live engine version must be this
+  harness's; the engine cannot go live before Phase 1, nor before the copy's last verdict from an older engine
+  (a claimed time inside a quiet stretch with no verdicts is not caught: take it from the go-live log); a
+  live audit walk must check at least one entry, and the suite result must name its commit.
 
 ### Decision and Approval records (PR 4)
 

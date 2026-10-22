@@ -27,7 +27,7 @@ def ready(**over):
     x = {"project": "commandcenter", "type": "MAINTENANCE", "labels": [], "flags": [], "plan_accepted": True,
          "review_at_head": True, "review_head": HEAD, "pr_head": HEAD, "merged": False, "verified": None,
          "ci": "green", "ci_passed": True, "draft": False, "mergeable": "MERGEABLE", "base": "main",
-         "cross_repo": False, "state": "OPEN", "files": [f("server/tests/test_x.py", "ADDED")], "additions": 5, "deletions": 2}
+         "cross_repo": False, "state": "OPEN", "confirmed": [], "files": [f("server/tests/test_x.py", "ADDED")], "additions": 5, "deletions": 2}
     x.update(over)
     return x
 
@@ -43,7 +43,7 @@ class Baselines(unittest.TestCase):
         self.assertEqual(ev("merge", ready())["outcome"], "auto")
         self.assertEqual(ev("deploy", ready(env="preview"))["outcome"], "auto")
         self.assertEqual(ev("plan", ready())["outcome"], "auto")     # allowlisted files make the risk low
-        self.assertEqual(autonomy.ENGINE_VERSION, 2)
+        self.assertEqual(autonomy.ENGINE_VERSION, 3)
 
 
 class Regressions(unittest.TestCase):
@@ -395,6 +395,40 @@ class ThirdReview(unittest.TestCase):
         self.assertEqual(autonomy.evaluate("deploy", prof, live)["outcome"], "auto")
 
 
+class FourthReview(unittest.TestCase):
+    """Non-blocking notes from the fourth review of #62, closed in #63."""
+
+    def test_ccd_per_ticket_holds_are_mirrored_for_a_merge(self):
+        for over in ({"confirmed": ["owner:accept"]}, {"flags": ["needs_ui_review"]}, {"flags": ["needs_deploy"]},
+                     {"type": "DESIGN"}, {"labels": ["ui"]}, {"labels": ["product-decision"]}, {"labels": ["gate:plan"]},
+                     {"labels": ["ambiguous"]}):
+            v = ev("merge", ready(**over))
+            self.assertEqual((v["outcome"], v["rule"]), ("jay", "merge:ticket_hold"), over)
+        for c in (None, "owner:accept"):
+            v = ev("merge", ready(confirmed=c))
+            self.assertEqual((v["outcome"], v["rule"]), ("jay", "merge:readiness:unknown"), c)
+        self.assertEqual(ev("merge", ready(confirmed=["merge:" + HEAD]))["outcome"], "auto")
+
+    def test_more_boundary_label_spellings(self):
+        for label in ("needs.jay", "needs/jay", "secrets:prod", "legal/review", "destructive-op", "paid_api"):
+            self.assertEqual(ev("deploy", ready(env="preview", labels=[label]))["rule"], "boundary", label)
+        self.assertEqual(ev("deploy", ready(env="preview", labels=["docs", "secretary"]))["outcome"], "auto")
+
+    def test_facts_of_keeps_missing_ticket_data_missing(self):
+        v = autonomy.evaluate("deploy", PROFILES["commandcenter"], autonomy.facts_of(None, None, {"env": "preview"}))
+        self.assertEqual((v["outcome"], v["rule"]), ("jay", "boundary:unknown"))
+        t = {"project": "commandcenter", "type": None, "labels": [], "flags": []}
+        self.assertEqual(autonomy.evaluate("deploy", PROFILES["commandcenter"],
+                                           autonomy.facts_of(t, {}, {"env": "preview"}))["outcome"], "auto")
+
+    def test_an_empty_file_list_is_not_listed(self):
+        prof = copy.deepcopy(PROFILES["commandcenter"])
+        prof["target"]["merge"] = {"policy": "auto", "requires": ["ci_green", "review_approved_at_head"]}
+        prof["target"]["review"] = {"claude": "always", "codex": "never", "security": "never"}
+        v = autonomy.evaluate("merge", prof, ready(files=[]))
+        self.assertEqual((v["outcome"], v["rule"]), ("jay", "self_protection:unknown"))
+
+
 class Coverage(unittest.TestCase):
     """A profile key, mode, trigger or condition the engine does not handle must fail the build, not be ignored."""
 
@@ -408,7 +442,6 @@ class Coverage(unittest.TestCase):
             ("plan_approval", "package"): "what a plan package contains, not whether Jay approves it",
             ("plan_approval", "reviewers"): "who reviews a plan package; approval is required_for",
             ("review", "claude"): "the approving review is always required (readiness)",
-            ("release", "windows"): "a release_window deploy is always jay until unattended release exists",
             ("release", "otherwise"): "the only value is prepare_and_hold_for_jay",
             ("release", "client_note"): "a note, not a permission",
             ("personal_data", "auto_allowed"): "can only allow; the engine never grants it",

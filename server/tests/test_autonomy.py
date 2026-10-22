@@ -27,7 +27,7 @@ def facts(**over):
             "review_at_head": True, "merged": False, "verified": None, "ci": "green", "files": None,
             # a PR that is ready to merge as reviewed (engine v2 needs every one of these for an auto merge)
             "review_head": HEAD, "pr_head": HEAD, "ci_passed": True, "draft": False, "mergeable": "MERGEABLE",
-            "base": "main", "cross_repo": False, "state": "OPEN"}
+            "base": "main", "cross_repo": False, "state": "OPEN", "confirmed": []}
     base.update(over)
     return base
 
@@ -200,7 +200,7 @@ class Versions(unittest.TestCase):
         with mock.patch.object(autonomy, "ENGINE_VERSION", 1):
             sh.record(tid, "commandcenter", "merge", "jay", autonomy._verdict("auto", "v1"), {}, "fp")
         s = sh.summary()
-        self.assertEqual((s["engine"], s["total"], s["older"], s["disagreements"]), (2, 0, 1, []))
+        self.assertEqual((s["engine"], s["total"], s["older"], s["disagreements"]), (autonomy.ENGINE_VERSION, 0, 1, []))
         self.assertEqual(sh.summary(engine=1)["total"], 1)
         self.assertEqual(inbox.Inbox(ts.db)._engine(time.time()), {})
         sh.record(tid, "commandcenter", "merge", "jay", autonomy._verdict("jay", "v2"), {}, "fp")
