@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 
 export interface Route { screen: string; id: string | null; params: URLSearchParams; hash: string }
 
-export const PAGES = ["office", "messages", "decisions", "teams", "topology", "engineering", "revenue", "more"] as const;
+export const PAGES = ["office", "messages", "decisions", "teams", "topology", "engineering", "revenue", "more", "agents", "onboard", "newproject"] as const;
 export type Page = (typeof PAGES)[number];
 const OTHER = ["task", "pop"];
 
@@ -19,8 +19,22 @@ export function href(screen: string, id?: string | null): string {
   return `#/${screen}${id ? `/${encodeURIComponent(id)}` : ""}`;
 }
 
+/** A main-window route a pop-out may ask for: "#/<page>" or "#/<page>/<id>", nothing else. */
+export const NAV_SHAPE = /^#\/[a-z]{2,20}(\/[A-Za-z0-9_-]{1,64})?$/;
+const navChannel: BroadcastChannel | null = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("hq-windows") : null;
+
+/**
+ * Go to a page. In the main window this is a normal hash change. In a pop-out window it asks the main
+ * window to go there instead, so the pop-out keeps showing its own view (the window manager handles it).
+ */
 export function go(screen: string, id?: string | null) {
   const next = href(screen, id);
+  if (location.hash.startsWith("#/pop/")) {
+    if (!NAV_SHAPE.test(next)) return;
+    try { navChannel?.postMessage({ t: "nav", id: next }); } catch { /* closed */ }
+    try { window.opener?.focus(); } catch { /* not allowed */ }
+    return;
+  }
   if (location.hash !== next) location.hash = next;
 }
 

@@ -32,7 +32,7 @@ export function TaskKey({ k }: { k: string }) {
 }
 
 const PRES_TONE: Record<Presence, string> = { working: "ok", idle: "idle", researching: "info", reviewing: "violet", waiting: "warn",
-  blocked: "bad", queued: "warn", paused: "idle", offline: "off", disconnected: "bad", unknown: "idle" };
+  blocked: "bad", queued: "warn", paused: "idle", offline: "off", disconnected: "bad", unknown: "idle", notstarted: "off", offboarded: "off" };
 export function PresenceDot({ s, label, detail }: { s: Presence; label?: boolean; detail?: string }) {
   return <span className={`pres t-${PRES_TONE[s]}`}><i aria-hidden />{label !== false && <b>{PRESENCE_LABEL[s]}</b>}{detail && <span> · {detail}</span>}</span>;
 }

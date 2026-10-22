@@ -15,6 +15,7 @@
 import { SharedStore, WIN_ID, isRecord } from "../lib/shared";
 import { Store } from "../lib/store";
 import { ID_SHAPE, viewById, type ViewDef } from "./views";
+import { NAV_SHAPE } from "../lib/router";
 
 export const BEAT_MS = 1500;
 export const STALE_MS = 6000;
@@ -31,9 +32,11 @@ function isOwners(v: unknown): v is Owners {
 }
 export const owners = new SharedStore<Owners>("owners", {}, isOwners);
 
-type Ctl = { t: "focus"; id: string } | { t: "return"; id: string };
+type Ctl = { t: "focus"; id: string } | { t: "return"; id: string } | { t: "nav"; id: string };
 const ctl: BroadcastChannel | null = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("hq-windows") : null;
-const isCtl = (d: unknown): d is Ctl => isRecord(d) && (d.t === "focus" || d.t === "return") && typeof d.id === "string" && ID_SHAPE.test(d.id);
+const isCtl = (d: unknown): d is Ctl => isRecord(d) && typeof d.id === "string"
+  && (((d.t === "focus" || d.t === "return") && ID_SHAPE.test(d.id)) || (d.t === "nav" && NAV_SHAPE.test(d.id)));
+
 
 export interface Notice { id: number; text: string; tone: "ok" | "warn" | "bad"; action?: { label: string; run: () => void } }
 export const notices = new Store<Notice[]>([]);
@@ -168,7 +171,11 @@ export function startMainWindowDuties(): () => void {
   });
   const t = setInterval(() => { void sweep(); }, 1000);
   void sweep();
-  const onCtl = (e: MessageEvent) => { if (isCtl(e.data) && e.data.t === "return") handles.delete(e.data.id); };
+  const onCtl = (e: MessageEvent) => {
+    if (!isCtl(e.data)) return;
+    if (e.data.t === "return") handles.delete(e.data.id);
+    if (e.data.t === "nav" && location.hash !== e.data.id) { location.hash = e.data.id; try { window.focus(); } catch { /* ignore */ } }
+  };
   ctl?.addEventListener("message", onCtl);
   return () => { started = false; unsub(); clearInterval(t); ctl?.removeEventListener("message", onCtl); };
 }

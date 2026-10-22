@@ -7,42 +7,61 @@
 // What is NOT real: agent persona names, task titles beyond the keys' shape, times, statuses,
 //   counts, conversations, CPU/memory numbers and every revenue figure. The UI labels them Demo.
 
-export type ProjectKey = "samvision" | "gyst" | "mfe" | "gauzemate" | "commandcenter";
+/** Seeded keys: samvision, gyst, mfe, gauzemate, commandcenter. New projects add their own. */
+export type ProjectKey = string;
 
+export interface ProjectBudget { monthlyUsd: number; perTaskUsd: number; alertPct: number }
 export interface Project {
   key: ProjectKey; name: string; prefix: string; color: string; blurb: string;
-  mode: string; modeLabel: string; merge: string; health: "healthy" | "degraded" | "paused" | "unknown";
+  mode: string; modeLabel: string; merge: string; health: "healthy" | "degraded" | "paused" | "unknown" | "onboarding";
   env: string; version: string; pausedReason?: string; releaseWindows?: string[]; icon: IconName;
+  /** owner/name. repoState "proposed" means only proposed to Jay; nothing exists on GitHub. */
+  repo: string; repoState: "connected" | "proposed";
+  envs: string[]; machines: string[]; budget: ProjectBudget; created?: number;
+  /** Who works on it and to whom each reports. The lead is the member who reports to "jay". */
+  team: Member[];
 }
-export type IconName = "image" | "layers" | "chart" | "heart" | "cc" | "code" | "db" | "phone" | "rocket" | "gear" | "server" | "laptop" | "search" | "check" | "shield" | "star" | "spark" | "box";
+export interface Member { id: string; reportsTo: string }
+export type IconName = "image" | "layers" | "chart" | "heart" | "cc" | "code" | "db" | "phone" | "rocket" | "gear" | "server" | "laptop" | "search" | "check" | "shield" | "star" | "spark" | "box" | "doc" | "help";
 
+const T = (...m: [string, string][]): Member[] => m.map(([id, reportsTo]) => ({ id, reportsTo }));
 export const PROJECTS: Project[] = [
   { key: "samvision", name: "SamVision", prefix: "SV", color: "#2fe0a0", icon: "image",
     blurb: "Real-estate analysis tools for realtors: comparables, pricing and listing insight.",
     mode: "controlled_production", modeLabel: "Controlled production", merge: "Jay merges every PR",
-    health: "healthy", env: "Staging", version: "v0.4.2", releaseWindows: ["Thu 01:00", "Sat 01:00"] },
+    health: "healthy", env: "Staging", version: "v0.4.2", releaseWindows: ["Thu 01:00", "Sat 01:00"],
+    repo: "JayDalool/SamVisionAI", repoState: "connected", envs: ["Development", "Staging", "Production"], machines: ["server"], budget: { monthlyUsd: 600, perTaskUsd: 40, alertPct: 80 }, team: T(["claude", "jay"], ["iris", "claude"], ["nova", "claude"], ["atlas", "claude"], ["pixel", "claude"], ["orion", "claude"]) },
   { key: "gyst", name: "GYST / LifeOps", prefix: "GYST", color: "#9d6bff", icon: "layers",
     blurb: "Jay's personal LifeOps software. Personal-data changes always need Jay.",
     mode: "autonomous_product", modeLabel: "Autonomous product (target · shadow only)", merge: "Jay merges every PR",
-    health: "healthy", env: "Development", version: "v0.3.1" },
+    health: "healthy", env: "Development", version: "v0.3.1",
+    repo: "JayDalool/gyst-lifeops", repoState: "connected", envs: ["Development"], machines: ["server"], budget: { monthlyUsd: 300, perTaskUsd: 25, alertPct: 80 }, team: T(["claude", "jay"], ["nova", "claude"]) },
   { key: "mfe", name: "MyFamilyExpenses", prefix: "MFE", color: "#ff9f43", icon: "chart",
     blurb: "Family expense tracking. Separate from GYST.",
     mode: "controlled_production", modeLabel: "Controlled production", merge: "Jay merges every PR",
-    health: "healthy", env: "Production", version: "v0.2.0" },
+    health: "healthy", env: "Production", version: "v0.2.0",
+    repo: "JayDalool/MyFamilyExpenses", repoState: "connected", envs: ["Development", "Production"], machines: ["server"], budget: { monthlyUsd: 250, perTaskUsd: 25, alertPct: 80 }, team: T(["claude", "jay"], ["pixel", "claude"], ["atlas", "claude"]) },
   { key: "gauzemate", name: "GauzeMate", prefix: "GZ", color: "#ff4f7b", icon: "heart",
     blurb: "Paused by Jay until designs and files are added. No agent works on it.",
     mode: "paused", modeLabel: "Paused", merge: "Jay merges every PR", health: "paused", env: "—", version: "v0.1.5",
-    pausedReason: "Jay paused GauzeMate until he adds designs and files" },
+    pausedReason: "Jay paused GauzeMate until he adds designs and files",
+    repo: "JayDalool/GauzeMate", repoState: "connected", envs: ["Development"], machines: ["server"], budget: { monthlyUsd: 0, perTaskUsd: 0, alertPct: 80 }, team: T(["claude", "jay"], ["nova", "claude"]) },
   { key: "commandcenter", name: "CommandCenter", prefix: "CC", color: "#4f8bff", icon: "cc",
     blurb: "This control plane. Experimental autonomy is evaluated in shadow mode only (D-008).",
     mode: "experimental_autonomy", modeLabel: "Experimental autonomy (shadow only)", merge: "Auto-merge for low-risk docs/tests only",
-    health: "healthy", env: "Production", version: "v1.2.0" },
+    health: "healthy", env: "Production", version: "v1.2.0",
+    repo: "JayDalool/CommandCenter", repoState: "connected", envs: ["Development", "Production"], machines: ["server"], budget: { monthlyUsd: 500, perTaskUsd: 30, alertPct: 80 }, team: T(["claude", "jay"], ["nova", "claude"], ["atlas", "claude"], ["orion", "claude"]) },
 ];
+/** NOTE: PROJECTS, AGENTS, TASKS and CONVERSATIONS are LIVE views. data/org.ts keeps them in step with the
+ *  shared organisation store (onboarded agents, created projects), in every window. */
 export const project = (k: string) => PROJECTS.find((p) => p.key === k) ?? PROJECTS[0];
+export const findProject = (k: string | undefined) => PROJECTS.find((p) => p.key === k) ?? null;
+export const leadOf = (p: Project) => p.team.find((m) => m.reportsTo === "jay")?.id ?? null;
 
-export type Presence = "working" | "idle" | "researching" | "reviewing" | "waiting" | "blocked" | "queued" | "paused" | "offline" | "disconnected" | "unknown";
+export type Presence = "working" | "idle" | "researching" | "reviewing" | "waiting" | "blocked" | "queued" | "paused" | "offline" | "disconnected" | "unknown" | "notstarted" | "offboarded";
 export const PRESENCE_LABEL: Record<Presence, string> = { working: "Working", idle: "Idle", researching: "Researching", reviewing: "Reviewing",
-  waiting: "Waiting for Jay", blocked: "Blocked", queued: "Queued", paused: "Paused", offline: "Offline", disconnected: "Disconnected", unknown: "Unknown" };
+  waiting: "Waiting for Jay", blocked: "Blocked", queued: "Queued", paused: "Paused", offline: "Offline", disconnected: "Disconnected", unknown: "Unknown",
+  notstarted: "Not started", offboarded: "Offboarded" };
 
 /** Model IDs as ccd's usage meter records them (server/ccd/meter.py). The label is for display only. */
 export const MODELS: Record<string, { label: string; vendor: string }> = {
@@ -57,7 +76,14 @@ export const modelLabel = (id?: string) => (id ? MODELS[id]?.label ?? id : "No s
  * A persona is a STABLE ROLE. Its name, colour and specialisation never change; the model and the
  * session behind it can (see AgentState). Persona names come from the concept art (approved by Jay).
  */
-export interface Agent { id: string; name: string; role: string; spec: string; stage: string; color: string; glyph: IconName }
+export type Life = "active" | "paused" | "offboarded";
+export interface Agent {
+  /** Stable ID. Never changes, never reused; history is attributed to it. The name can change. */
+  id: string; name: string; role: string; spec: string; stage: string; color: string; glyph: IconName;
+  template?: string; created?: number; description?: string;
+  /** Lifecycle. Missing means active. */
+  life?: Life; lifeNote?: string;
+}
 export const AGENTS: Agent[] = [
   { id: "claude", name: "Claude", role: "Project Lead", spec: "Turns Jay's requests into scoped tasks, delegates, keeps Jay informed", stage: "Coordinates", color: "#ff7a45", glyph: "spark" },
   { id: "iris", name: "Iris", role: "Research / Planning Lead", spec: "Requirements, research and implementation plans", stage: "1. Plan", color: "#4f7bff", glyph: "search" },
@@ -66,7 +92,13 @@ export const AGENTS: Agent[] = [
   { id: "pixel", name: "Pixel", role: "UI Testing Lead", spec: "Playwright runs, screenshots and accessibility checks", stage: "4. Test", color: "#ff4fa0", glyph: "heart" },
   { id: "orion", name: "Orion", role: "Release / DevOps Lead", spec: "Release readiness, gates and post-deploy verification", stage: "5. Verify", color: "#ffb020", glyph: "box" },
 ];
-export const agent = (id: string) => AGENTS.find((a) => a.id === id) ?? AGENTS[0];
+const UNKNOWN_AGENT: Agent = { id: "unknown", name: "Unknown agent", role: "Not in the directory", spec: "", stage: "", color: "#5d6a85", glyph: "help" as IconName };
+export const agent = (id: string) => AGENTS.find((a) => a.id === id) ?? (id === "jay" ? { ...UNKNOWN_AGENT, id: "jay", name: "Jay", role: "Engineering Director" } : UNKNOWN_AGENT);
+export const lifeOf = (id: string): Life => AGENTS.find((a) => a.id === id)?.life ?? "active";
+/** Agents that can work (active or paused). Offboarded agents stay in AGENTS so history still names them. */
+export const rosterAgents = () => AGENTS.filter((a) => a.life !== "offboarded");
+/** The projects an agent belongs to. */
+export const projectsOf = (id: string) => PROJECTS.filter((p) => p.team.some((m) => m.id === id));
 
 /** What the persona is doing NOW. Every field can change between sessions. */
 export interface AgentState {
@@ -97,6 +129,8 @@ export type Stage = "Planning" | "Implementing" | "Reviewing" | "UI Testing" | "
 export interface Task {
   key: string; project: ProjectKey; title: string; stage: Stage; priority: "High" | "Medium" | "Low";
   owner: string; updated: string; why: string; plan: string[]; criteria: string[]; questions: string[]; pr?: string; labels: string[];
+  /** Earlier owners, oldest first. Kept when an agent is offboarded so the work stays attributable. */
+  formerOwners?: string[];
 }
 export const TASKS: Task[] = [
   { key: "SV-025", project: "samvision", title: "Rental comparison redesign", stage: "Implementing", priority: "High", owner: "nova", updated: "2h ago",
@@ -126,7 +160,7 @@ export const TASKS: Task[] = [
 ];
 export const task = (k: string) => TASKS.find((t) => t.key === k) ?? null;
 
-export interface Conversation { id: string; title: string; sub: string; agent?: string; project?: ProjectKey; kind: "dm" | "team" | "slack" }
+export interface Conversation { id: string; title: string; sub: string; agent?: string; project?: ProjectKey; kind: "dm" | "team" | "slack"; archived?: boolean }
 export const CONVERSATIONS: Conversation[] = [
   { id: "sv-lead", title: "Claude", sub: "Project Lead · SamVision", agent: "claude", project: "samvision", kind: "dm" },
   { id: "nova", title: "Nova", sub: "Implementation Agent", agent: "nova", project: "samvision", kind: "dm" },
@@ -139,6 +173,16 @@ export const CONVERSATIONS: Conversation[] = [
   { id: "slack", title: "Slack", sub: "Not connected", kind: "slack" },
 ];
 export const conversation = (id: string) => CONVERSATIONS.find((c) => c.id === id) ?? null;
+/** The private conversation with a project's lead (its own if there is one, else the lead's main one). */
+export function leadConversation(key: string): Conversation | null {
+  const p = findProject(key); const lead = p ? leadOf(p) : null;
+  if (!lead) return null;
+  return CONVERSATIONS.find((c) => c.kind === "dm" && !c.archived && c.agent === lead && c.project === key)
+    ?? CONVERSATIONS.find((c) => c.kind === "dm" && !c.archived && c.agent === lead) ?? null;
+}
+export const teamConversation = (key: string) => CONVERSATIONS.find((c) => c.kind === "team" && c.project === key) ?? null;
+export const healthOf = (p: Project) => p.health === "paused" ? { label: "Paused", tone: "idle" } : p.health === "onboarding" ? { label: "Onboarding", tone: "info" }
+  : p.health === "degraded" ? { label: "Degraded", tone: "warn" } : p.health === "unknown" ? { label: "Unknown", tone: "idle" } : { label: "Healthy", tone: "ok" };
 
 export interface ChatMessage { cid: string; from: string; at: string; text: string; list?: string[]; card?: string; ask?: string }
 export const SEED_CHAT: Record<string, ChatMessage[]> = {

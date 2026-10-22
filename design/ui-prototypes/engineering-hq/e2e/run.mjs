@@ -169,6 +169,31 @@ await test("agent inspector: pops out to its own window; agent clicks in the mai
   assert(await until(async () => (await m.getByRole("dialog", { name: "Agent details" }).count()) === 1), "drawer did not come back after return");
 });
 
+await test("onboarding wizards: pop out, keep the draft across reload, approve in the pop-out, and the main window updates", async (ctx) => {
+  const m = await main(ctx, "onboard");
+  await m.getByRole("button", { name: "Implementation Agent template" }).click();
+  await m.getByRole("button", { name: /^Next:/ }).click();
+  await m.getByLabel("Display name").fill("Mira");
+  const w = await pop(m, "pop-page:onboard");
+  assert(await until(async () => (await placeholder(m, "page:onboard")) === 1), "no placeholder for the agent wizard");
+  assert(await w.getByLabel("Display name").inputValue() === "Mira", "draft did not move to the pop-out");
+  await w.reload(); await w.waitForSelector('[data-testid="popout-window"]');
+  assert(await w.getByLabel("Display name").inputValue() === "Mira", "draft lost on pop-out reload");
+  await m.goto(`${BASE}?nofeed#/teams/samvision`);
+  await w.getByRole("button", { name: /Review & activate/ }).click();
+  await w.getByRole("button", { name: "Approve & Add Agent" }).click();
+  await w.getByRole("dialog").getByRole("button", { name: "Approve & Add Agent" }).click();
+  assert(await until(async () => (await m.getByRole("button", { name: /^Mira, Implementation Agent/ }).count()) === 1), "main window did not show the new agent");
+  assert((await m.getByRole("button", { name: /^Mira, Implementation Agent/ }).textContent()).includes("Not started"), "new agent not shown as Not started");
+  // project wizard: pop out, type, close with the OS button: it comes back with the draft intact
+  await m.goto(`${BASE}?nofeed#/newproject`);
+  const w2 = await pop(m, "pop-page:newproject");
+  await w2.getByLabel("Project name").fill("Listing Scraper");
+  await w2.close();
+  assert(await until(async () => (await placeholder(m, "page:newproject")) === 0, 9000), "project wizard did not come back");
+  assert(await m.getByLabel("Project name").inputValue() === "Listing Scraper", "project draft lost when its window closed");
+});
+
 await test("security: no credential in any window URL or shared storage; only same-origin windows", async (ctx) => {
   const m = await main(ctx, "messages/sv-lead");
   const w = await pop(m, "pop-dm:sv-lead");

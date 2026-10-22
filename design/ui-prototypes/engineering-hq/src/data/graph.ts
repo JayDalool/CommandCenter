@@ -26,15 +26,16 @@ export const ALL_LAYERS: Layers = { manage: true, flow: true, host: true, blocke
 
 /** The control plane sits at the root (as in the approved reference); Jay directs it. */
 export const ROOT: ProjectKey = "commandcenter";
-const W = 1320;
 export function buildGraph(f: Filters, expanded: string[], layers: Layers = ALL_LAYERS) {
   const nodes: GNode[] = [];
+  const nShown = PROJECTS.filter((p) => p.key !== ROOT && (f.projects.length === 0 || f.projects.includes(p.key))).length;
+  const W = Math.max(1320, nShown * 296 + 40);   // widens as projects are added; the canvas fits it
   const edges: GEdge[] = [];
   const shownAll = PROJECTS.filter((p) => f.projects.length === 0 || f.projects.includes(p.key));
   const shown = shownAll.filter((p) => p.key !== ROOT);
   const tasks = TASKS.filter((t) => shownAll.some((p) => p.key === t.project)).filter((t) =>
     f.status === "all" ? true : f.status === "blocked" ? t.stage === "Blocked" || t.stage === "Paused" : t.stage === "Blocked" || t.questions.length > 0);
-  const colorOf = (k: ProjectKey) => PROJECTS.find((p) => p.key === k)!.color;
+  const colorOf = (k: ProjectKey) => PROJECTS.find((p) => p.key === k)?.color ?? "#5d6a85";
   const nodeOf = (k: ProjectKey) => (k === ROOT ? "root" : `p:${k}`);
 
   nodes.push({ id: "root", kind: "root", x: W / 2 - 160, y: 0, w: 330, h: 140, color: colorOf(ROOT), label: "CommandCenter", ref: ROOT });
@@ -42,8 +43,8 @@ export function buildGraph(f: Filters, expanded: string[], layers: Layers = ALL_
   const pw = 262, pg = 34, pTotal = shown.length * pw + Math.max(0, shown.length - 1) * pg, px0 = W / 2 - pTotal / 2;
   shown.forEach((p, i) => {
     nodes.push({ id: `p:${p.key}`, kind: "project", x: px0 + i * (pw + pg), y: 190, w: pw, h: 128, color: p.color, label: p.name, ref: p.key });
-    if (layers.manage) edges.push({ id: `e:root:${p.key}`, from: "root", to: `p:${p.key}`, kind: "manage", color: p.color, paused: p.health === "paused",
-      tag: p.health === "paused" ? "Paused" : p.key === "samvision" ? "Release ready" : undefined });
+    if (layers.manage) edges.push({ id: `e:root:${p.key}`, from: "root", to: `p:${p.key}`, kind: "manage", color: p.color, paused: p.health === "paused" || p.health === "onboarding",
+      tag: p.health === "paused" ? "Paused" : p.health === "onboarding" ? "Onboarding" : p.key === "samvision" ? "Release ready" : undefined });
   });
 
   const groups = STAGE_GROUPS.filter((g) => tasks.some((t) => groupOf(t) === g.id));

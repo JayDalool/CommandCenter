@@ -2,7 +2,7 @@
 // detachable view (term:<KEY>). In the real app every pane attaches to the SAME ccd/herdr session by
 // name (web/app/src/workspace/rooms.ts), so popping out or closing a window never starts or stops one.
 import { useEffect, useState } from "react";
-import { agent, project, task } from "../data/seed";
+import { agent, project, task , leadConversation } from "../data/seed";
 import { AgentMeta, AgentStatus, useAgentView, useOpenAgent } from "../components/agent";
 import { useRoute } from "../lib/router";
 import { Icon } from "../components/Icon";
@@ -24,6 +24,10 @@ export function Terminal({ k }: { k: string }) {
 }
 
 function OwnerChip({ id }: { id: string }) {
+  if (id === "jay") return <span className="owner-chip"><Avatar id="jay" size={30} /><span><b>Jay</b> <small className="muted">Owner until a lead is assigned</small></span></span>;
+  return <AgentOwnerChip id={id} />;
+}
+function AgentOwnerChip({ id }: { id: string }) {
   const v = useAgentView(id);
   const open = useOpenAgent();
   const a = agent(id);
@@ -38,12 +42,14 @@ export function TaskRoom({ k: kp }: { k?: string }) {
   const t = task(k);
   if (!t) return <div className="empty">Unknown task.</div>;
   const a = agent(t.owner);
+  const lead = leadConversation(t.project)?.id;
   return <div className="page page-room">
     <header className="room-head"><ProjIcon k={t.project} size={40} /><div><h1><span className="mono">{t.key}</span> {t.title}</h1><p>{project(t.project).name} · Task Room <Demo /></p></div>
       <StagePill s={t.stage} /><span className="sp" /><OwnerChip id={t.owner} /><PopButton id={`task:${k}`} /></header>
     <ProdBanner compact />
     <div className="room-grid">
-      <Detachable id={`dm:${t.project === "commandcenter" ? "cc-lead" : "sv-lead"}`}><Thread conv={t.project === "commandcenter" ? "cc-lead" : "sv-lead"} /></Detachable>
+      {lead ? <Detachable id={`dm:${lead}`}><Thread conv={lead} /></Detachable>
+        : <section className="panel pad empty-lead"><h2>No lead yet</h2><p className="muted">{project(t.project).name} has no project lead, so there is no lead conversation. Assign one from Teams.</p></section>}
       <div className="room-right">
         <Detachable id={`term:${k}`}><Terminal k={k} /></Detachable>
         <section className="panel pad dossier"><h2>Dossier</h2><p>{t.why}</p><h3>Acceptance</h3><ul className="checks">{t.criteria.map((c) => <li key={c}>{c}</li>)}</ul>

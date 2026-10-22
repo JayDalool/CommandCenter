@@ -10,6 +10,10 @@ import { Detachable, PopButton } from "../windows/Detachable";
 const V = "page:engineering";
 
 function Assignee({ id }: { id: string }) {
+  if (id === "jay") return <span className="assignee"><Avatar id="jay" size={26} /><span><b>Jay</b><small className="muted">until a lead is assigned</small></span></span>;
+  return <AgentAssignee id={id} />;
+}
+function AgentAssignee({ id }: { id: string }) {
   const v = useAgentView(id);
   const open = useOpenAgent();
   return <button type="button" className="assignee" onClick={() => open(id)} aria-label={`${agent(id).name} details`}>
@@ -24,7 +28,7 @@ export function TaskDetail({ k }: { k?: string }) {
     <header className="td-crumb"><ProjIcon k={t.project} size={20} /><span>{project(t.project).name}</span><span className="muted">/</span><TaskKey k={t.key} /><span className="sp" /><PopButton id="panel:task-detail" compact /></header>
     <div className="td-title"><h2>{t.title}</h2><StagePill s={t.stage} /></div>
     <div className="seg seg-under" role="tablist">{["Details", "Plan", "Checks", "Activity"].map((x) => <button key={x} role="tab" type="button" aria-selected={tab === x} onClick={() => setTab(x)}>{x}</button>)}</div>
-    <div className="td-meta"><div><small>Assignee</small><Assignee id={t.owner} /></div><div><small>Reviewers</small><span><Avatar id="atlas" size={24} /><Avatar id="claude" size={24} /></span></div><div><small>Updated</small><span>{t.updated}</span></div></div>
+    <div className="td-meta"><div><small>Assignee</small><Assignee id={t.owner} />{t.formerOwners?.length ? <small className="muted">Previously {t.formerOwners.map((x) => agent(x).name).join(", ")}</small> : null}</div><div><small>Reviewers</small><span><Avatar id="atlas" size={24} /><Avatar id="claude" size={24} /></span></div><div><small>Updated</small><span>{t.updated}</span></div></div>
     <div className="td-labels"><small>Labels</small>{t.labels.map((l) => <span key={l} className="label">{l}</span>)}{t.pr && <span className="label is-link"><Icon name="branch" size={13} /> PR {t.pr}</span>}</div>
     <section className="td-sec"><span className="td-ico t-bad"><Icon name="target" size={18} /></span><h3>Why</h3><p>{t.why}</p></section>
     <section className="td-sec"><span className="td-ico t-info"><Icon name="list" size={18} /></span><h3>Plan</h3><ol>{t.plan.map((p) => <li key={p}>{p}</li>)}</ol></section>

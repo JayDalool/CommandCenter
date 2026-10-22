@@ -18,12 +18,18 @@ import { useFeedRunner } from "./data/runner";
 import { useViewState } from "./data/live";
 import { AgentDrawer, AgentInspector } from "./components/agent";
 import { PROJECTS } from "./data/seed";
+import { useOrg } from "./data/org";
+import { Agents } from "./pages/Agents";
+import { Onboard } from "./pages/onboarding/NewAgent";
+import { NewProject } from "./pages/onboarding/NewProject";
 
-// One source for project colours: seed.ts. CSS reads them as --pj-<key>.
-for (const p of PROJECTS) document.documentElement.style.setProperty(`--pj-${p.key}`, p.color);
+// One source for project colours: the project records (seed.ts, plus projects created in the prototype). CSS reads them as --pj-<key>.
+function publishColours() { for (const p of PROJECTS) document.documentElement.style.setProperty(`--pj-${p.key}`, p.color); }
+publishColours();
 
 const PAGES: Record<string, () => React.JSX.Element> = { office: Office, messages: Messages, decisions: Decisions, teams: Teams, topology: Topology,
-  engineering: Engineering, revenue: Revenue, more: More, task: () => <TaskRoom /> };
+  engineering: Engineering, revenue: Revenue, more: More, task: () => <TaskRoom />,
+  agents: Agents, onboard: Onboard, newproject: NewProject };
 
 function MsgCtx() { const [conv] = useViewState("page:messages", "conv", "sv-lead"); return <TaskContext conv={conv} />; }
 
@@ -65,6 +71,8 @@ function MainWindow() {
 
 export function App() {
   const route = useRoute();
+  const o = useOrg();   // every page re-renders when the organisation changes, in every window
+  useEffect(publishColours, [o.v]);
   useFeedRunner();
   return <>{route.screen === "pop" ? <PopoutWindow render={renderView} /> : <MainWindow />}<AgentDrawer /><Notices /></>;
 }

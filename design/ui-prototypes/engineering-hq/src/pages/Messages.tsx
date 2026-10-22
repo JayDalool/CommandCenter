@@ -2,7 +2,9 @@
 // DM thread, and a collapsible / resizable task-context inspector. Every conversation can be popped
 // out on its own (dm:<id>), and so can the inspector (panel:task-context).
 import { useEffect, useRef, useState } from "react";
-import { AGENTS, CONVERSATIONS, PROJECTS, agent, conversation, project, task, type ChatMessage } from "../data/seed";
+import { CONVERSATIONS, PROJECTS, agent, conversation, project, task, type ChatMessage } from "../data/seed";
+import { useOrg } from "../data/org";
+import { startNewProject } from "./onboarding/NewProject";
 import { chat, sendDemo, useViewState } from "../data/live";
 import { AgentDot, AgentMeta, AgentRow, AgentStatus, useAgentView, useOpenAgent } from "../components/agent";
 import { useStore } from "../lib/store";
@@ -76,11 +78,13 @@ export function Thread({ conv, standalone }: { conv: string; standalone?: boolea
     <div className="thread-scroll" data-testid="thread-scroll">
       {c.kind === "slack" ? <SlackPanel /> : <>
         <p className="thread-note"><Demo label="Demo conversation" /> Mock messages for the prototype. Chatting here never grants authorisation; decisions are recorded in the Decision Room.</p>
+        {c.archived && <p className="callout t-idle"><Icon name="lock" size={15} /> Archived. {a?.name} was offboarded; this conversation is kept for the record and can't receive new messages.</p>}
+        {!msgs.length && !c.archived && <div className="thread-empty"><Icon name="message" size={26} /><b>No messages yet</b><p>{a ? `${a.name} hasn't started a session. Messages you send are queued for its first session (demo).` : "Start the conversation."}</p></div>}
         {msgs.map((m) => <Bubble key={m.cid} m={m} />)}
       </>}
       <div ref={end} />
     </div>
-    {c.kind !== "slack" && <form className="composer" onSubmit={(e) => { e.preventDefault(); send(); }}>
+    {c.kind !== "slack" && !c.archived && <form className="composer" onSubmit={(e) => { e.preventDefault(); send(); }}>
       <button type="button" className="icon-btn is-box" aria-label="Attach (demo)"><Icon name="plus" size={18} /></button>
       <div className="composer-in"><input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={`Message ${c.title}…`} aria-label={`Message ${c.title}`} />
         <Icon name="smile" size={19} /><Icon name="clip" size={19} /></div>
@@ -113,12 +117,14 @@ export function TaskContext({ conv }: { conv: string }) {
       <div className="flow">{flow.map((id, i) => { const a = agent(id); return <div key={id} className="flow-step">{i > 0 && <Icon name="arrowr" size={14} className="flow-arrow" />}
         <Avatar id={id} size={36} /><b>{a.name}</b><small>{SHORT[id]}</small><small className="muted">{a.stage}</small></div>; })}</div></div>
     <div className="ctx-box"><h3><Icon name="users" size={17} /> Agent Status {stale && <Pill tone="warn" dot>Stale</Pill>}<span className="sp" /><button type="button" className="link" onClick={() => go("teams", t.project)}>View All Agents <Icon name="arrowr" size={13} /></button></h3>
-      <div className="status-rows">{AGENTS.map((a) => <AgentRow key={a.id} id={a.id} size={30} />)}</div></div>
+      <div className="status-rows">{project(t.project).team.map((m) => <AgentRow key={m.id} id={m.id} size={30} />)}</div></div>
   </aside>;
 }
 
 export function Messages() {
   const route = useRoute();
+  useOrg();
+  const [showArch, setShowArch] = useViewState("page:messages", "archived", false);
   const [sel, setSel] = useViewState("page:messages", "conv", "sv-lead");
   const conv = route.screen === "messages" && route.id && conversation(route.id) ? route.id : sel;
   useEffect(() => { if (conv !== sel) setSel(conv); }, [conv, sel, setSel]);
@@ -127,7 +133,8 @@ export function Messages() {
   const [ctxW, setCtxW] = useViewState("page:messages", "ctxW", 470);
   const msgs = useStore(chat);
   const elsewhereCtx = useElsewhere("panel:task-context");
-  const list = CONVERSATIONS.filter((c) => !q || `${c.title} ${c.sub}`.toLowerCase().includes(q.toLowerCase()));
+  const list = CONVERSATIONS.filter((c) => (showArch || !c.archived) && (!q || `${c.title} ${c.sub}`.toLowerCase().includes(q.toLowerCase())));
+  const nArch = CONVERSATIONS.filter((c) => c.archived).length;
   const drag = useRef<{ x: number; w: number } | null>(null);
   const [, force] = useState(0);
   return <div className="page page-messages">
@@ -137,12 +144,13 @@ export function Messages() {
       <div className="conv-col">
         <div className="conv-search"><Icon name="search" size={17} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search messages…" aria-label="Search messages" /><Icon name="edit" size={17} /></div>
         <ul className="conv-list" aria-label="Conversations">{list.map((c) => { const last = (msgs[c.id] ?? []).at(-1); const out = false;
-          return <li key={c.id}><a href={`#/messages/${c.id}`} className={cx("conv", conv === c.id && "is-sel", out && "is-out")} aria-current={conv === c.id ? "true" : undefined}>
+          return <li key={c.id}><a href={`#/messages/${c.id}`} className={cx("conv", conv === c.id && "is-sel", out && "is-out", c.archived && "is-archived")} aria-current={conv === c.id ? "true" : undefined}>
             {c.agent ? <span className="av-wrap"><Avatar id={c.agent} size={42} /><AgentDot id={c.agent} /></span> : c.kind === "slack" ? <span className="slack-ico is-sm"><Icon name="slack" size={20} /></span> : <ProjIcon k={c.project ?? "samvision"} size={40} icon="users" />}
             <span className="conv-body"><span className="conv-top"><b>{c.title}</b><time>{last?.at ?? ""}</time></span><small>{c.sub}</small>
               <span className="ellip muted">{c.kind === "slack" ? "Not connected · see proposal" : last ? last.text.split("\n")[0] : ""}</span></span>
             <ConvOut id={c.id} /></a></li>; })}</ul>
-        <div className="conv-projects"><h3>Projects <Icon name="plus" size={16} /></h3>
+        {nArch > 0 && <button type="button" className="link conv-arch" onClick={() => setShowArch(!showArch)}><Icon name="lock" size={12} /> {showArch ? "Hide" : "Show"} archived ({nArch})</button>}
+        <div className="conv-projects"><h3>Projects <button type="button" className="icon-btn" aria-label="New Project" onClick={() => startNewProject()}><Icon name="plus" size={16} /></button></h3>
           {PROJECTS.map((p) => <a key={p.key} href={`#/teams/${p.key}`} className="conv-proj"><i style={{ background: p.color }} />{p.name}{p.health === "paused" && <small className="muted"> · paused</small>}</a>)}</div>
       </div>
       <Detachable id={`dm:${conv}`} className="thread"><Thread conv={conv} /></Detachable>

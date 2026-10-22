@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { App } from "../src/App";
 import { owners } from "../src/windows/manager";
+import { org, seedOrg } from "../src/data/org";
 import { chat, viewState } from "../src/data/live";
 import { SEED_CHAT } from "../src/data/seed";
 
@@ -10,7 +11,7 @@ let open: ReturnType<typeof vi.fn>;
 let fetchSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
-  owners.set({}); viewState.set({}); chat.set(SEED_CHAT); sessionStorage.clear();
+  org.set(seedOrg()); owners.set({}); viewState.set({}); chat.set(SEED_CHAT); sessionStorage.clear();
   open = vi.fn(() => ({ closed: false, focus: vi.fn(), close: vi.fn() }));
   vi.stubGlobal("open", open);
   fetchSpy = vi.fn(); vi.stubGlobal("fetch", fetchSpy);

@@ -7,13 +7,15 @@ import { focusWindow, notices, owners, popOut, returnHere } from "../windows/man
 import { PopButton, useOwner } from "../windows/Detachable";
 import { viewById, viewForRoute, type ViewDef } from "../windows/views";
 import { WIN_ID } from "../lib/shared";
-import { CONVERSATIONS, PROJECTS, TASKS } from "../data/seed";
+import { AGENTS, CONVERSATIONS, PROJECTS, TASKS } from "../data/seed";
+import { useOrg } from "../data/org";
 
 export const NAV = [
   { page: "office", label: "My Office", icon: "home", badge: 0 },
   { page: "messages", label: "Messages", icon: "message", badge: 3 },
   { page: "decisions", label: "Decisions", icon: "shield", badge: 2 },
   { page: "teams", label: "Teams", icon: "users", badge: 0 },
+  { page: "agents", label: "Agents", icon: "spark", badge: 0 },
   { page: "topology", label: "Company", icon: "cube", badge: 0 },
   { page: "engineering", label: "Engineering", icon: "wrench", badge: 0 },
   { page: "revenue", label: "Revenue", icon: "receipt", badge: 0 },
@@ -47,7 +49,7 @@ function NavItem({ n, current }: { n: (typeof NAV)[number]; current: boolean }) 
 
 export function Sidebar() {
   const route = useRoute();
-  const cur = route.screen === "task" ? "engineering" : route.screen;
+  const cur = route.screen === "task" ? "engineering" : route.screen === "onboard" ? "agents" : route.screen === "newproject" ? "teams" : route.screen;
   return <aside className="side" aria-label="Navigation">
     <a className="brand" href="#/office"><Logo /><span><b>Command<em>Center</em></b><small>AI Engineering Company</small></span></a>
     <nav className="nav" aria-label="Pages">{NAV.map((n) => <NavItem key={n.page} n={n} current={cur === n.page} />)}</nav>
@@ -62,6 +64,7 @@ export function Sidebar() {
 
 function Palette({ onClose }: { onClose: () => void }) {
   const [q, setQ] = useState("");
+  const { v } = useOrg();
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => { ref.current?.focus(); }, []);
   const items = useMemo(() => {
@@ -69,12 +72,15 @@ function Palette({ onClose }: { onClose: () => void }) {
       ...NAV.map((n) => ({ id: n.page, label: n.label, sub: "Page", run: () => go(n.page) })),
       ...PROJECTS.map((p) => ({ id: p.key, label: `${p.name} team`, sub: "Team", run: () => go("teams", p.key) })),
       ...TASKS.map((t) => ({ id: t.key, label: `${t.key} ${t.title}`, sub: "Task Room", run: () => go("task", t.key) })),
-      ...CONVERSATIONS.map((c) => ({ id: c.id, label: `${c.title} — ${c.sub}`, sub: "Conversation", run: () => go("messages", c.id) })),
+      ...AGENTS.filter((a) => a.life !== "offboarded").map((a) => ({ id: `a:${a.id}`, label: `${a.name} — ${a.role}`, sub: "Agent", run: () => go("agents") })),
+      { id: "new-agent", label: "New Agent", sub: "Onboarding", run: () => go("onboard") },
+      { id: "new-project", label: "New Project", sub: "Onboarding", run: () => go("newproject") },
+      ...CONVERSATIONS.filter((c) => !c.archived).map((c) => ({ id: c.id, label: `${c.title} — ${c.sub}`, sub: "Conversation", run: () => go("messages", c.id) })),
       { id: "more", label: "Releases, Fleet, Activity, AI Usage, Settings…", sub: "More", run: () => go("more") },
     ];
     const s = q.toLowerCase();
     return all.filter((i) => !s || i.label.toLowerCase().includes(s)).slice(0, 9);
-  }, [q]);
+  }, [q, v]);
   return <div className="palette-veil" onClick={onClose}>
     <div className="palette" role="dialog" aria-label="Search" onClick={(e) => e.stopPropagation()}>
       <div className="palette-in"><Icon name="search" /><input ref={ref} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search projects, agents, tasks, conversations…"

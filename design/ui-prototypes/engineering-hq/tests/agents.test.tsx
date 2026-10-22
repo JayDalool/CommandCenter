@@ -3,13 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { App } from "../src/App";
 import { owners } from "../src/windows/manager";
+import { org, seedOrg } from "../src/data/org";
 import { chat, feed, setOutage, viewState } from "../src/data/live";
 import { AGENTS, INITIAL_AGENT_STATE, PROJECTS, SEED_CHAT, modelLabel, project } from "../src/data/seed";
 
 const go = (h: string) => act(() => { location.hash = h; window.dispatchEvent(new HashChangeEvent("hashchange")); });
 
 beforeEach(() => {
-  owners.set({}); viewState.set({}); chat.set(SEED_CHAT); sessionStorage.clear();
+  org.set(seedOrg()); owners.set({}); viewState.set({}); chat.set(SEED_CHAT); sessionStorage.clear();
   feed.set({ agents: INITIAL_AGENT_STATE, beat: Date.now(), outage: false, source: "demo" });
   vi.stubGlobal("open", vi.fn(() => ({ closed: false, focus: vi.fn(), close: vi.fn() })));
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
@@ -66,7 +67,7 @@ describe("agent identity", () => {
     expect(d).toHaveTextContent("gpt-5-codex");
     expect(d).toHaveTextContent("rev-sv-c470");
     expect(d).toHaveTextContent("SV-029");
-    fireEvent.click(within(d).getByRole("button", { name: /Earlier sessions/ }));
+    fireEvent.click(within(d).getByRole("button", { name: /Work history/ }));
     expect(d).toHaveTextContent("rev-mf-d3e8");
     fireEvent.click(within(d).getByRole("tab", { name: "Pixel" }));
     expect(d).toHaveTextContent("Blocked");
