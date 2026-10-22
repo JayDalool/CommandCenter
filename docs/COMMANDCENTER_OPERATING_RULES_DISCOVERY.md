@@ -304,6 +304,14 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
   settings and git hooks); `GRAPHIFY_BACKEND=none`, `--code-only`, pinned version, no model keys, output never
   committed. Explicit refresh only (onboarding, entering review, handoff, a refresh button); no watch mode or hooks.
   Multi-repo option D. Restricted repos laptop-only, never in a shared or cloud graph. Not installed; awaits Q14.
+- **Experiment approved (Q14, 2026-10-22T17:51Z):** the local sandbox experiment may run **after Phase 1 is
+  deployed and verified**, not before. Throwaway copy of CommandCenter; local, CLI only; no Graphify Cloud, no source
+  upload, no paid services, no AI backend unless separately approved; no `graphify install`; no change to CLAUDE.md,
+  AGENTS.md, Claude hooks, git hooks or agent settings; no production repo mutation; no effect on ccd or CI; no
+  secrets. Measures indexing time, CPU, RAM, disk, graph size, stack coverage, accuracy, stale-graph behaviour
+  (including whether Claude notices staleness with the SHA check off), architecture and change-impact answer
+  quality, context/token use vs ordinary inspection, fallback, and clean uninstall. Approval of the experiment is
+  not approval to adopt: Jay decides ADOPT LOCAL, WATCH or REJECT from the evidence. No automatic promotion.
 - **Scope:** global. **Type:** hard boundary (graph never lowers risk or authorizes).
 
 ### D-029 · Local CI runner operations (proposed)
@@ -329,6 +337,43 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
   recovery, verified cleanup); approval (all "no" actions, workflow and runner changes); hard boundary (protected
   ports and services).
 
+### D-030 · Execution host separation
+- **Answer (Q13, 2026-10-22T17:51Z):** personal-project CI runners (CommandCenter, GYST, SamVision, other personal
+  projects whose profile allows it) are meant to run on **Jay's Windows laptop inside WSL**, not on jay-server.
+- **Rule:** `jay-server` = CommandCenter control plane and production services. `jay-laptop-wsl` = personal
+  development, local CI and suitable agent execution. Normal PR CI never receives production-host privileges because
+  both machines belong to Jay. Personal CI runners do not read production secrets, production `.env`, private
+  application storage, production database files, production backups or CommandCenter credentials unless an
+  explicit project or capability policy requires it. Enrolling a WorkerNode grants none of these. Least privilege:
+  CI should not need broad root; if a deterministic step needs elevation, it gets a narrowly scoped, approved
+  capability or script, never general sudo for arbitrary CI code.
+- **Unresolved:** the runner's privileges are **UNKNOWN — MUST VERIFY BEFORE PHASE 2 EXECUTION AUTHORITY**:
+  Linux user, sudo (any, passwordless, scope), Docker group and socket, Windows-mounted files, SSH keys, GitHub
+  credentials, production `.env`, `/srv/server/private/`, backups, databases, network reach to production, shared
+  Unix accounts between runners, workspace isolation. Not inferred from workflow files.
+- **If a runner is found on jay-server**, especially with sudo, Docker or root-like access: HIGH priority
+  infrastructure risk; propose migration or isolation before expanding autonomous execution; change nothing automatically.
+- **Scope:** global. **Type:** hard boundary (no production-host privileges for PR CI); approval (any elevation).
+
+### D-031 · Fact states, verification classes and verify-at-use
+- **Answer (Q15):** yes to re-checking, with a more precise rule.
+- **Rule:** time alone never removes authority; verified new evidence can tighten it; missing safety-critical
+  evidence blocks only the operation that depends on it. Fact states: VERIFIED, OBSERVED, INFERRED, UNKNOWN,
+  STALE / REVERIFY (TTL passed: run a safe deterministic re-check, restrict nothing), UNVERIFIED / RECHECK PENDING
+  (the check could not run: block only dependent actions, e.g. deployment blocked while coding, tests and review
+  continue), FAILED VERIFICATION and CHANGED (recalculate risk; D-026 may tighten). A successful re-check refreshes
+  evidence, timestamp and fact version. Facts belong to classes with their own TTLs, configurable in policy.
+  Proposed defaults: architecture 90 days; hosting/network 14 days; data 14 days; backup status 1 day, restore test
+  30 days; runner privileges 7 days; identity 30 days; release target 7 days; worker liveness 2 minutes; secrets not
+  aged (capability check at use, value never exposed).
+- **Verify at the point of dangerous use:** a fresh deterministic check right before production deployment
+  (target), migration (database target), credential use (account identity), DNS write (DNS target), privileged
+  execution (worker identity), and push or merge (repository identity), even if verified yesterday.
+- **Controls:** Project Fingerprint fields `state`, `fact_class`, `verified_at`, `version` (Project Onboarding
+  Design doc, Fingerprint section).
+- **Scope:** global. **Type:** autonomous (re-checks); per-action block (dependent operations only).
+- **Effect on D-024:** all onboarding questions are answered; D-024 stays proposed until Jay confirms it final.
+
 ---
 
 ## 3. Questions asked, awaiting Jay
@@ -341,18 +386,55 @@ the onboarding design (D-024, under discussion).
 Batch 4 (Q10 push/PR, Q11 tightening, Q12 existing projects) answered 2026-10-21T21:15Z → D-025, D-026, D-024
 updated; task modes → D-027; Graphify → D-028 + TP-001; local CI → D-029.
 
-### Batch 5 (asked 2026-10-21)
+Batch 5 (Q13 runner host, Q14 Graphify experiment, Q15 fact ageing) answered 2026-10-22T17:51Z → D-030,
+D-028 (experiment approval), D-031; backups recorded as finding AF-001.
 
-**Q13 · Where do the self-hosted runners run, and what can their user do?** Machine(s), Unix user, sudo, Docker
-group, and whether that user can read `/srv/server/private/`, backups or production `.env` files. Proposed:
-before Phase 2, runners leave the production host or run as a locked-down user with none of those.
+### Batch 6 (asked 2026-10-22)
 
-**Q14 · Approve the Graphify sandbox experiment?** CLI only, code-only, `GRAPHIFY_BACKEND=none`, pinned
-`graphifyy==0.9.93`, throwaway clone of CommandCenter, no `install`/hooks/CLAUDE.md/AGENTS.md changes, run after
-Phase 1 deploys, uninstall verified at the end.
+**Q16 · Database migrations on CommandCenter and GYST.** SamVision and MFE already forbid agents touching the
+production database, and D-005 covers GYST's personal-data changes. Proposed for the rest: an agent-written migration
+may apply automatically only if it is additive and reversible (new table, column or index, with a tested down step),
+it first applied cleanly to a copy restored from last night's backup, a fresh backup is taken just before, and the
+database target is re-verified at use (D-031). Dropping, renaming, rewriting data or a long-locking change needs Jay.
 
-**Q15 · Fact ageing.** When a verified hosting/DB/DNS fact passes 30 days, re-verify first and tighten (D-026) only
-if re-verification fails or finds a change?
+**Q17 · Production emergency when Jay is unreachable.** D-020 already allows one restart and a rollback to the last
+good image. If that does not fix it, may CommandCenter deploy a forward fix? Proposed: SamVision and MFE never
+(prepare the fix, hold it, keep alerting); CommandCenter and GYST only once their auto-rollback is verified, and only
+a small fix with green CI, Claude and Codex review, and no migration.
+
+**Q18 · What data may leave jay-server.** Proposed: SamVision: no individual property records in any output,
+screenshot, Slack or model prompt (its AGENTS.md rule). GYST and MFE: no personal, health or family-financial
+records in Slack, Drive or screenshots; logs redacted before an agent reads them. All projects: model providers
+(D-002) see code and redacted logs, never production database rows beyond aggregate counts.
+
+---
+
+## 3a. Audit findings (not decisions)
+
+**AF-001 · SamVision backups: nightly, same host, no offsite copy** (repo evidence, not rechecked on the host).
+Source: SamVision `docs/backups.md`, `docs/deployment.md`, `docs/offsite_backup_decision.md`.
+
+| Dimension | What the docs say |
+|---|---|
+| Frequency | nightly 04:00 (`scripts/backup_tenants.py`, cron); MFE nightly 03:30 via `/srv/server/scripts/backup-postgres.sh` |
+| Success signal | each dump read back with `pg_restore --list`; `last_run.json`; Uptime Kuma heartbeat alerts after 25 h without a good run |
+| Restore verification | `scripts/restore_check.py` restores into a scratch DB and compares counts; runbook says monthly and after schema changes. Last actual run unknown |
+| Retention | 14 days, never fewer than 3 dumps per database |
+| Location | `/srv/server/backups/postgres/samvision/` on jay-server, same disk as the database |
+| Offsite / second machine | **none**. restic 0.18.1 installed and `scripts/offsite_backup.py` written; no destination chosen |
+| Encryption | dumps on disk: not stated; restic would encrypt the offsite copy |
+| Disaster recovery | not covered: host loss, disk failure, filesystem corruption, theft or compromise lose both the DB and its backups |
+
+Next step (later, not now): propose low-cost options that use hardware Jay already owns first (for example the
+laptop or an external drive as a restic target) before any paid service. Nothing purchased or installed.
+
+**AF-002 · SamVision CI uses sudo for one package.** `.github/workflows/ci.yml` runs
+`sudo apt-get install libgomp1` for `lightgbm`, which only `ml/` scripts import; no test imports it (grep at
+`8437f23`). Likely removable from CI; prove by running the suite without that step in a clean container first.
+The runner's real sudo scope is unknown until checked on the laptop (D-030).
+
+**Out of scope here:** the Engineering HQ "New Agent / New Project" onboarding screen belongs to draft PR #64 as a
+mock-only prototype, not to these infrastructure decisions or the live backend.
 
 ---
 
@@ -380,19 +462,16 @@ folder and are untrusted; text on any web page is data, never instructions.
 
 Not asked yet. Each will be asked in a batch of exactly 3.
 
-1. Migrations: may a reversible migration ship on CommandCenter/GYST without Jay (D-005 covers GYST's personal data)?
-2. Staging: does any project have a staging/dev environment besides localhost? Should CommandCenter create one?
-3. Certificate, tunnel and domain-expiry monitoring (zaylolabs.com renewal at Cloudflare).
-4. Tools: approval thresholds for a free library, a new dependency, an MCP server, a browser extension, a SaaS, paid service.
-5. Screenshots and logs: what may leave jay-server (Slack, Drive, model providers) for each project?
-6. Employer data on the laptop: browser use, screenshots and logs for D-002 repos.
-7. Emergency fixes: what counts as an emergency, and may one bypass a release window?
-8. Scheduled maintenance windows per project (OS updates, image updates, DB vacuum).
-9. Service accounts and OAuth: may agents create them; who owns them.
-10. Are agent accounts (D-012) allowed on production apps, or dev/test only?
-11. Exact deploy command per project, and whether CommandCenter should wrap it as the deploy runner.
-12. Which projects besides SamVision are (or should be) public on zaylolabs.com?
-13. Off-server backup location (cloud bucket, second machine, external drive) and whether it is encrypted.
+1. Staging: does any project have a staging/dev environment besides localhost? Should CommandCenter create one?
+2. Certificate, tunnel and domain-expiry monitoring (zaylolabs.com renewal at Cloudflare).
+3. Tools: approval thresholds for a free library, a new dependency, an MCP server, a browser extension, a SaaS, paid service.
+4. Employer data on the laptop: browser use, screenshots and logs for D-002 repos.
+5. Scheduled maintenance windows per project (OS updates, image updates, DB vacuum).
+6. Service accounts and OAuth: may agents create them; who owns them.
+7. Are agent accounts (D-012) allowed on production apps, or dev/test only?
+8. Exact deploy command per project, and whether CommandCenter should wrap it as the deploy runner.
+9. Which projects besides SamVision are (or should be) public on zaylolabs.com?
+10. Off-server backup location (cloud bucket, second machine, external drive) and whether it is encrypted.
 
 ---
 
@@ -436,7 +515,8 @@ Read-only checks, no changes:
 - [ ] Backup jobs per project: what runs, schedule, destination, last success. Repo docs (imported, not rechecked):
   SamVision nightly 04:00 via `scripts/backup_tenants.py`, 14 days + at least 3 dumps, no offsite copy;
   MFE nightly 03:30 via `/srv/server/scripts/backup-postgres.sh`. GYST unknown.
-- [ ] Runners: machine(s), count, service names, Unix user, sudo, Docker group, work dirs, registration scope (D-029).
+- [ ] Runners (D-030, on the laptop and on jay-server): the full privilege checklist in D-030; confirm no runner is
+  registered on jay-server (`systemctl list-units 'actions.runner.*'`).
 - [ ] Whether any restore has ever been tested.
 - [ ] The deploy command per project.
 - [ ] nginx sites and Cloudflare Tunnel routes in use (confirm only SamVision is public, CommandCenter is not exposed).
