@@ -457,19 +457,22 @@ Pipeline step (plan / ready / auto-merge / deploy request) ─▶ Daemon._pipeli
 human-only boundary is "jay", never "auto"; a paused project is "refuse"; protected paths (D-007) and personal-data
 paths (D-005) are "jay". Nothing reads the verdict to act, and a failure in it is a log line.
 
-Engine v2 (Phase 1 safety patch, 2026-10-22) closed every case where v1 said "auto" against the agreed policy:
+Engine v2 (Phase 1 safety patch, 2026-10-22) closes every case found where v1 said "auto" against the agreed policy:
 
 - an "auto" merge also needs the PR to be ready, whatever the profile's merge conditions say: open, not a draft,
   MERGEABLE, based on main, not from a fork, approved at its current head (`review_head` = `pr_head`), CI green with
   at least one passing check (`ci_passed`; `merge_policy.ci_state` still counts an all-skipped rollup as green for
-  today's auto-merge);
+  today's auto-merge); a codex or security review the profile requires (`always`, or triggered) and Command Center
+  does not record yet makes it "jay";
 - every deploy goes through the deploy rules (v1 judged a non-live one by the plan rules); an environment other
-  than live, preview or dev, or one the profile's `deploy.env` does not name, is "jay"; `deploy = never` refuses
-  before anything can soften it; D-005 personal-data categories (compared case-insensitively) apply to an
-  unattended live deploy as well as a merge;
+  than live, preview or dev is "jay", and `deploy.env = "preview"` allows preview only (`"live"` allows live and
+  the non-live environments); `deploy = never` refuses before anything can soften it; an unattended live deploy
+  needs `release.unattended_requires` and `unattended_when` as well as its own conditions; D-005 personal-data
+  categories (compared case-insensitively) apply to an unattended live deploy as well as a merge;
 - destructive, financial, paid, secrets, credentials, irreversible and legal labels are human-only boundaries;
-  labels and flags compare case-insensitively, unreadable ones count as a boundary, and missing labels, flags or
-  type are never read as "none" (`boundary:unknown`);
+  labels and flags compare case-insensitively, unreadable ones (not a list of strings, or a type that is not a
+  string) count as a boundary, a `needs:jay` or `needs:legal` label counts like the flag, and missing labels, flags
+  or type are never read as "none" (`boundary:unknown`);
 - `autonomy.FIELDS` says for every profile key whether the engine reads it, fails closed on it (restricted mode,
   `constraints.never`) or can ignore it safely; a test fails when the schema grows a key without a decision.
 

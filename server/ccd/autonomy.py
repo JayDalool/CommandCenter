@@ -21,9 +21,11 @@ path in `self_protection.require_jay_for_paths` is "jay" (D-007).
 
 Engine v2 (Phase 1 safety patch): an "auto" merge also needs the PR to be ready (not a draft, mergeable, based on
 main, open, from this repository, approved at its current head, CI green with at least one passing check), whatever
-the profile's merge conditions say; every deploy goes through the deploy rules, an unknown environment or one the
-profile does not name is "jay"; missing labels, flags or type are never read as "none"; a profile field the engine cannot check never lets a verdict be
-"auto" (`FIELDS` lists how each profile key is handled, and a test keeps that list complete).
+the profile's merge conditions say, and any codex or security review the profile requires; every deploy goes
+through the deploy rules, and an unknown environment, or one `deploy.env = "preview"` excludes, is "jay"; an
+unattended live deploy needs release.unattended_requires and unattended_when too; missing or unreadable labels,
+flags or type are never read as "none"; a profile field the engine cannot check never lets a verdict be "auto"
+(`FIELDS` lists how each profile key is handled, and a test keeps that list complete).
 """
 import json
 import re
@@ -46,12 +48,14 @@ MAIN = "main"
 # check it, so an action it covers is never "auto". "inert": it cannot make a verdict more permissive (it is read
 # by something else, or only ever narrows). tests/test_autonomy_safety.py fails when a schema key is missing here.
 # self_protection.require_jay_for_actions (change_policy, change_agent_permissions) has no fact of its own: those
-# actions are changes to policy/** and .claude/**, which require_jay_for_paths covers. deploy.env is read: a
-# profile that names one environment allows no other.
+# actions are changes to policy/** and .claude/**, which require_jay_for_paths covers. deploy.env is read: "preview"
+# allows preview deploys only; "live" allows live and the non-live environments. release.unattended_requires and
+# unattended_when apply to every unattended live deploy. review: a codex or security review the profile requires
+# and Command Center does not record yet makes a merge "jay".
 FIELDS = {
     "plan_approval": "enforced", "merge": "enforced", "deploy": "enforced", "self_protection": "enforced",
-    "personal_data": "enforced", "release": "enforced", "constraints": "fails_closed",
-    "budget": "inert", "review": "inert", "notify": "inert", "execution": "inert", "artifacts": "inert",
+    "personal_data": "enforced", "release": "enforced", "review": "enforced", "constraints": "fails_closed",
+    "budget": "inert", "notify": "inert", "execution": "inert", "artifacts": "inert",
     "small_safe_changes": "inert",
 }
 MODES_HANDLED = {"paused": "refuse", "restricted": "never auto", "experimental_autonomy": "profile",
@@ -109,9 +113,12 @@ def _boundaries(facts):
     """Human-only boundaries that hold whatever a profile says."""
     out = []
     for key in ("labels", "flags"):
-        if facts.get(key) is not None and not isinstance(facts.get(key), (list, tuple, set)):
+        v = facts.get(key)
+        if v is not None and (not isinstance(v, (list, tuple, set)) or not all(isinstance(x, str) for x in v)):
             out.append(f"the ticket's {key} cannot be read, so a human-only boundary cannot be ruled out")
-    flags = _flags(facts)
+    if facts.get("type") is not None and not isinstance(facts.get("type"), str):
+        out.append("the ticket's type cannot be read, so a human-only boundary cannot be ruled out")
+    flags = _flags(facts) | {x.replace(":", "_") for x in _labels(facts) if x in ("needs:jay", "needs:legal")}
     if "needs_jay" in flags:
         out.append("the ticket is flagged needs:jay")
     labels = _labels(facts)
@@ -308,6 +315,52 @@ def _readiness(facts):
     return unmet + why, missing + gap
 
 
+def _unattended_when(conds, facts):
+    """(unmet, missing) for release.unattended_when. Every condition needs a fact that says so; none is assumed."""
+    unmet, missing = [], []
+    known = {"no_migration": "no_migration", "no_meaningful_downtime": "no_downtime",
+             "no_client_workflow_change": "no_client_workflow_change", "low_blast_radius": "low_blast_radius"}
+    for c in conds:
+        if c == "risk_low":
+            risk = risk_of(facts)
+            if risk is None:
+                missing.append("risk")
+            elif risk != "low":
+                unmet.append(f"the change is {risk} risk")
+        elif c in known:
+            v = facts.get(known[c])
+            if v is False:
+                unmet.append(f"{c.replace('_', ' ')} does not hold")
+            elif v is not True:
+                missing.append(c.replace("_", " "))
+        else:
+            missing.append(str(c))
+    return unmet, missing
+
+
+def _reviews(t, facts):
+    """(unmet, missing): reviews the profile requires beyond the approving review (which readiness checks)."""
+    unmet, missing = [], []
+    rv = t.get("review") or {}
+    security = _type(facts) == "SECURITY" or "security" in _labels(facts)
+    for who in ("codex", "security"):
+        v = rv.get(who, "never")
+        if v == "never":
+            continue
+        if v == "on_risk_high":
+            risk = risk_of(facts)
+            if risk is None:
+                missing.append("risk")
+            elif risk == "high":
+                unmet.append(f"a high-risk change needs a {who} review, which is not recorded yet")
+        elif v == "on_trigger":
+            if security:
+                unmet.append(f"a {who} review is triggered and not recorded yet")
+        else:
+            unmet.append(f"the profile requires a {who} review ({str(v)[:20]}), which is not recorded yet")
+    return unmet, missing
+
+
 def _env(facts):
     """'live' | 'preview' | 'dev' | None (an environment the engine does not know: never a yes)."""
     env = facts.get("env")
@@ -348,6 +401,16 @@ def _deploy(t, facts, profile, env):
         return _verdict("jay", "target.release:window", ["deploys go out in the release window"] + unmet, missing)
     if unmet:
         return _verdict("jay", "target.deploy:requires", unmet, missing)
+    rel = t.get("release") or {}
+    caps = profile.get("capabilities") or {}
+    lacking = [c for c in rel.get("unattended_requires") or [] if not caps.get(c)]
+    if lacking:
+        return _verdict("jay", "target.release:unattended_requires",
+                        [f"unattended release needs {', '.join(map(str, lacking))}, not built yet"], missing)
+    why, gap = _unattended_when(rel.get("unattended_when") or [], facts)
+    if why:
+        return _verdict("jay", "target.release:unattended_when", why, missing + gap)
+    missing = missing + gap
     # An unattended live deploy also needs to know it has no migration, no downtime and no client-workflow change.
     for fact, what in (("no_migration", "whether it runs a migration"), ("no_downtime", "whether it causes downtime"),
                        ("no_client_workflow_change", "whether it changes a client workflow")):
@@ -453,6 +516,10 @@ def _decide(action, t, facts, profile):
         unmet, gap = _readiness(facts)
         if unmet:
             return _verdict("jay", "merge:readiness", unmet, gap)
+        rv_unmet, rv_gap = _reviews(t, facts)
+        if rv_unmet:
+            return _verdict("jay", "target.review", rv_unmet, missing3 + gap + rv_gap)
+        gap = gap + rv_gap
         if missing3 or gap:
             return _verdict("jay", "merge:readiness:unknown", ["the PR's readiness cannot be checked"], missing3 + gap)
     return v

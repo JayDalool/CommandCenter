@@ -300,12 +300,89 @@ class FirstReview(unittest.TestCase):
         self.assertNotEqual(v["outcome"], "auto", v)
 
 
+class SecondReview(unittest.TestCase):
+    """Inputs the second independent review found still gave "auto" (none reachable today)."""
+
+    def test_unreadable_items_in_labels_flags_or_type_are_a_boundary(self):
+        cases = [("merge", ready(labels=[{"name": "legal"}])), ("merge", ready(labels=[None])),
+                 ("merge", ready(labels=[None, 3, [1]])), ("deploy", ready(env="preview", labels=[{"name": "x"}])),
+                 ("plan", ready(flags=[{"needs_jay": 1}])), ("plan", ready(type=["LEGAL"])),
+                 ("deploy", ready(env="preview", type=["LEGAL"])), ("merge", ready(type=["SECURITY"])),
+                 ("merge", ready(type=7))]
+        for action, fx in cases:
+            v = ev(action, fx)
+            self.assertEqual((v["outcome"], v["rule"]), ("jay", "boundary"), (action, fx["labels"], fx["type"]))
+
+    def test_a_needs_jay_or_needs_legal_label_counts_like_the_flag(self):
+        for label in ("needs:jay", "needs:legal", "Needs:Jay"):
+            self.assertEqual(ev("merge", ready(labels=[label]))["rule"], "boundary", label)
+
+    def live(self, **over):
+        x = dict(env="live", merged=True, verified=True, no_migration=True, no_downtime=True,
+                 no_client_workflow_change=True, low_blast_radius=True, files=[f("docs/a.md")])
+        x.update(over)
+        return ready(**x)
+
+    def test_release_rules_apply_to_every_unattended_live_deploy(self):
+        prof = copy.deepcopy(PROFILES["commandcenter"])
+        prof["target"]["deploy"] = {"policy": "auto", "env": "live", "requires": []}
+        prof["target"]["release"] = {"unattended_requires": ["health_checks", "auto_rollback"],
+                                     "unattended_when": ["risk_low", "no_migration", "no_meaningful_downtime",
+                                                         "low_blast_radius", "no_client_workflow_change"]}
+        self.assertEqual(profiles.validate_profile(prof, POL.decisions, "commandcenter"), [])
+        v = autonomy.evaluate("deploy", prof, self.live())
+        self.assertEqual((v["outcome"], v["rule"]), ("jay", "target.release:unattended_requires"))
+        prof["capabilities"] = {"health_checks": True, "auto_rollback": True}
+        self.assertEqual(autonomy.evaluate("deploy", prof, self.live())["outcome"], "auto")
+        v = autonomy.evaluate("deploy", prof, self.live(low_blast_radius=None))
+        self.assertEqual((v["outcome"], v["rule"]), ("jay", "target.deploy:unknown"))
+        v = autonomy.evaluate("deploy", prof, self.live(low_blast_radius=False))
+        self.assertEqual((v["outcome"], v["rule"]), ("jay", "target.release:unattended_when"))
+        v = autonomy.evaluate("deploy", prof, self.live(files=[f("server/ccd/x.py")]))
+        self.assertEqual(v["outcome"], "jay")
+
+    def test_a_required_review_that_is_not_recorded_makes_a_merge_jay(self):
+        for review in ({"claude": "always", "codex": "always", "security": "never"},
+                       {"claude": "always", "codex": "never", "security": "always"},
+                       {"claude": "always", "codex": "on_plan_package", "security": "never"}):
+            prof = copy.deepcopy(PROFILES["commandcenter"])
+            prof["target"]["review"] = review
+            self.assertEqual(profiles.validate_profile(prof, POL.decisions, "commandcenter"), [], review)
+            v = autonomy.evaluate("merge", prof, ready())
+            self.assertEqual((v["outcome"], v["rule"]), ("jay", "target.review"), review)
+        self.assertEqual(ev("merge", ready())["outcome"], "auto")      # on_risk_high / on_trigger, nothing triggered
+        prof = copy.deepcopy(PROFILES["commandcenter"])
+        prof["target"]["merge"] = {"policy": "auto", "requires": ["ci_green", "review_approved_at_head"]}
+        self.assertEqual(autonomy.evaluate("merge", prof, ready(labels=["security"]))["rule"], "target.review")
+
+
 class Coverage(unittest.TestCase):
     """A profile key, mode, trigger or condition the engine does not handle must fail the build, not be ignored."""
 
     def test_every_target_key_is_enforced_fails_closed_or_inert(self):
         self.assertEqual(set(profiles.TARGET), set(autonomy.FIELDS))
         self.assertTrue(set(autonomy.FIELDS.values()) <= {"enforced", "fails_closed", "inert"})
+
+    def test_every_sub_key_of_an_enforced_field_is_read_or_safe_to_ignore(self):
+        # Sub-keys the engine does not read, and why ignoring each can never make a verdict more permissive.
+        ignored = {
+            ("plan_approval", "package"): "what a plan package contains, not whether Jay approves it",
+            ("plan_approval", "reviewers"): "who reviews a plan package; approval is required_for",
+            ("review", "claude"): "the approving review is always required (readiness)",
+            ("release", "windows"): "a release_window deploy is always jay until unattended release exists",
+            ("release", "otherwise"): "the only value is prepare_and_hold_for_jay",
+            ("release", "client_note"): "a note, not a permission",
+            ("personal_data", "auto_allowed"): "can only allow; the engine never grants it",
+            ("self_protection", "require_jay_for_actions"): "those actions are policy/** and .claude/** paths",
+        }
+        src = inspect.getsource(autonomy)
+        for field, how in autonomy.FIELDS.items():
+            spec = profiles.TARGET[field]
+            if how != "enforced" or not isinstance(spec, dict):
+                continue
+            for sub in spec:
+                if (field, sub) not in ignored:
+                    self.assertIn(f'"{sub}"', src, f"{field}.{sub} is neither read nor listed as safe to ignore")
 
     def test_every_mode_is_handled(self):
         self.assertEqual(set(profiles.MODES), set(autonomy.MODES_HANDLED))
