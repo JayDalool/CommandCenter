@@ -1,0 +1,159 @@
+// DEMO DATA. Every value below is a locally seeded sample for the design prototype.
+//
+// What is TRUE (from the repo, server/ccd/registry.py and policy/projects/*.toml, 2026-10-22):
+//   project keys, names, ticket prefixes, GauzeMate paused, merge = owner (CommandCenter: low-risk
+//   docs/tests only), autonomy modes as *targets* evaluated in shadow only, SamVision release windows
+//   (Thu/Sat 01:00 America/Winnipeg), WorkerNode kinds (server, laptop).
+// What is NOT real: agent persona names, task titles beyond the keys' shape, times, statuses,
+//   counts, conversations, CPU/memory numbers and every revenue figure. The UI labels them Demo.
+
+export type ProjectKey = "samvision" | "gyst" | "mfe" | "gauzemate" | "commandcenter";
+
+export interface Project {
+  key: ProjectKey; name: string; prefix: string; color: string; blurb: string;
+  mode: string; modeLabel: string; merge: string; health: "healthy" | "degraded" | "paused" | "unknown";
+  env: string; version: string; pausedReason?: string; releaseWindows?: string[]; icon: IconName;
+}
+export type IconName = "image" | "layers" | "chart" | "heart" | "cc" | "code" | "db" | "phone" | "rocket" | "gear" | "server" | "laptop" | "search" | "check" | "shield" | "star" | "spark" | "box";
+
+export const PROJECTS: Project[] = [
+  { key: "samvision", name: "SamVision", prefix: "SV", color: "#2fe0a0", icon: "image",
+    blurb: "Real-estate analysis tools for realtors: comparables, pricing and listing insight.",
+    mode: "controlled_production", modeLabel: "Controlled production", merge: "Jay merges every PR",
+    health: "healthy", env: "Staging", version: "v0.4.2", releaseWindows: ["Thu 01:00", "Sat 01:00"] },
+  { key: "gyst", name: "GYST / LifeOps", prefix: "GYST", color: "#9d6bff", icon: "layers",
+    blurb: "Jay's personal LifeOps software. Personal-data changes always need Jay.",
+    mode: "autonomous_product", modeLabel: "Autonomous product (target · shadow only)", merge: "Jay merges every PR",
+    health: "healthy", env: "Development", version: "v0.3.1" },
+  { key: "mfe", name: "MyFamilyExpenses", prefix: "MFE", color: "#ff9f43", icon: "chart",
+    blurb: "Family expense tracking. Separate from GYST.",
+    mode: "controlled_production", modeLabel: "Controlled production", merge: "Jay merges every PR",
+    health: "healthy", env: "Production", version: "v0.2.0" },
+  { key: "gauzemate", name: "GauzeMate", prefix: "GZ", color: "#ff4f7b", icon: "heart",
+    blurb: "Paused by Jay until designs and files are added. No agent works on it.",
+    mode: "paused", modeLabel: "Paused", merge: "Jay merges every PR", health: "paused", env: "—", version: "v0.1.5",
+    pausedReason: "Jay paused GauzeMate until he adds designs and files" },
+  { key: "commandcenter", name: "CommandCenter", prefix: "CC", color: "#4f8bff", icon: "cc",
+    blurb: "This control plane. Experimental autonomy is evaluated in shadow mode only (D-008).",
+    mode: "experimental_autonomy", modeLabel: "Experimental autonomy (shadow only)", merge: "Auto-merge for low-risk docs/tests only",
+    health: "healthy", env: "Production", version: "v1.2.0" },
+];
+export const project = (k: string) => PROJECTS.find((p) => p.key === k) ?? PROJECTS[0];
+
+export type Presence = "working" | "idle" | "researching" | "reviewing" | "waiting" | "blocked" | "queued" | "paused" | "disconnected" | "unknown";
+export const PRESENCE_LABEL: Record<Presence, string> = { working: "Working", idle: "Idle", researching: "Researching", reviewing: "Reviewing",
+  waiting: "Waiting for Jay", blocked: "Blocked", queued: "Queued", paused: "Paused", disconnected: "Disconnected", unknown: "Unknown" };
+
+export interface Agent { id: string; name: string; role: string; stage: string; color: string; glyph: IconName; model: string }
+/** Role names are the real pipeline stages; the persona names are placeholders from the concept art. */
+export const AGENTS: Agent[] = [
+  { id: "claude", name: "Claude", role: "Project Lead", stage: "Coordinates", color: "#ff7a45", glyph: "spark", model: "Claude (high reasoning)" },
+  { id: "iris", name: "Iris", role: "Research / Planning Lead", stage: "1. Plan", color: "#4f7bff", glyph: "search", model: "Claude (high reasoning)" },
+  { id: "nova", name: "Nova", role: "Implementation Agent", stage: "2. Build", color: "#a463ff", glyph: "star", model: "Claude (efficient)" },
+  { id: "atlas", name: "Atlas", role: "Independent Code Reviewer", stage: "3. Review", color: "#22c98e", glyph: "check", model: "Codex" },
+  { id: "pixel", name: "Pixel", role: "UI Testing Lead", stage: "4. Test", color: "#ff4fa0", glyph: "heart", model: "Playwright + Claude" },
+  { id: "orion", name: "Orion", role: "Release / DevOps Lead", stage: "5. Verify", color: "#ffb020", glyph: "box", model: "Claude" },
+];
+export const agent = (id: string) => AGENTS.find((a) => a.id === id) ?? AGENTS[0];
+
+export interface AgentState { status: Presence; detail: string; task?: string; at: number }
+export const INITIAL_AGENT_STATE: Record<string, AgentState> = {
+  claude: { status: "working", detail: "coordinating SV-025", task: "SV-025", at: 0 },
+  iris: { status: "idle", detail: "planning complete", at: 0 },
+  nova: { status: "working", detail: "implementing SV-025", task: "SV-025", at: 0 },
+  atlas: { status: "reviewing", detail: "PR #842 at head 7f3a9c1", task: "CC-061", at: 0 },
+  pixel: { status: "queued", detail: "after review", at: 0 },
+  orion: { status: "waiting", detail: "release v0.4.2 · 1 question", at: 0 },
+};
+
+export type Stage = "Planning" | "Implementing" | "Reviewing" | "UI Testing" | "Verifying" | "Ready to Merge" | "Deploying" | "Needs Jay" | "Blocked" | "Closed" | "Paused";
+export interface Task {
+  key: string; project: ProjectKey; title: string; stage: Stage; priority: "High" | "Medium" | "Low";
+  owner: string; updated: string; why: string; plan: string[]; criteria: string[]; questions: string[]; pr?: string; labels: string[];
+}
+export const TASKS: Task[] = [
+  { key: "SV-025", project: "samvision", title: "Rental comparison redesign", stage: "Implementing", priority: "High", owner: "nova", updated: "2h ago",
+    why: "Realtors compare rentals across tabs today; a single view with inline filters should cut the steps and keep every calculation identical.",
+    plan: ["Single-page comparison layout behind a flag", "Inline filters and sort", "Keep pricing calculations byte-identical", "Playwright screens at 1366 and 1920"],
+    criteria: ["Same numbers as today for 50 fixture listings", "Page load stays under 2 s", "No change to the live site until Jay approves", "Accessible (WCAG 2.1 AA)"],
+    questions: ["Option A (single page) or Option B (split flow)?"], pr: "#842", labels: ["ui", "frontend"] },
+  { key: "SV-031", project: "samvision", title: "Comparable-sales scoring refresh", stage: "Planning", priority: "Medium", owner: "iris", updated: "4h ago",
+    why: "Scoring weights are a year old.", plan: ["Research current weighting", "Back-test against closed sales"], criteria: ["Back-test error within 5%"], questions: [], labels: ["data"] },
+  { key: "SV-029", project: "samvision", title: "Listing import retry and backoff", stage: "Reviewing", priority: "Medium", owner: "atlas", updated: "5h ago",
+    why: "Imports fail on transient errors.", plan: ["Retry with backoff", "Dead-letter list"], criteria: ["No duplicate listings"], questions: [], pr: "#839", labels: ["backend"] },
+  { key: "CC-061", project: "commandcenter", title: "Engineering HQ prototype", stage: "Implementing", priority: "High", owner: "nova", updated: "now",
+    why: "Move from a monitoring dashboard to an engineering-company HQ Jay manages.", plan: ["Isolated prototype", "Pop out any tab", "Screenshot comparison"],
+    criteria: ["Seven pages clickable", "Original tab shaded when popped", "No production change"], questions: ["Keep the repo's project colours or the concept's?"], labels: ["ui", "design"] },
+  { key: "CC-058", project: "commandcenter", title: "Autonomy v3 shadow comparisons", stage: "Verifying", priority: "Medium", owner: "orion", updated: "1d ago",
+    why: "Record what autonomy would have done, change nothing.", plan: ["Shadow ledger", "Daily diff"], criteria: ["Shadow only; no execution"], questions: [], labels: ["autonomy"] },
+  { key: "GYST-019", project: "gyst", title: "Agent memory persistence layer", stage: "Ready to Merge", priority: "Medium", owner: "nova", updated: "6h ago",
+    why: "Sessions forget context between days.", plan: ["Local store", "Retention rules"], criteria: ["Personal-data trigger reviewed by Jay"], questions: [], pr: "#57", labels: ["personal-data"] },
+  { key: "GYST-018", project: "gyst", title: "Evaluation pipeline for routines", stage: "Implementing", priority: "Low", owner: "nova", updated: "2d ago",
+    why: "Measure routine suggestions.", plan: ["Fixtures", "Scoring"], criteria: ["Repeatable run"], questions: [], labels: [] },
+  { key: "MFE-014", project: "mfe", title: "Mobile settings and notifications", stage: "Blocked", priority: "High", owner: "atlas", updated: "8h ago",
+    why: "Settings screen is desktop only.", plan: ["Responsive settings", "Notification toggles"], criteria: ["Works at 375 px"], questions: ["Release window for MFE is still open — pick one?"], labels: ["mobile"] },
+  { key: "MFE-012", project: "mfe", title: "Quarterly budget tracking", stage: "UI Testing", priority: "Low", owner: "pixel", updated: "2d ago",
+    why: "Families asked for quarter views.", plan: ["Quarter rollup"], criteria: ["Totals match monthly sums"], questions: [], labels: ["ui"] },
+  { key: "GZ-015", project: "gauzemate", title: "Onboarding flow", stage: "Paused", priority: "Low", owner: "claude", updated: "13d ago",
+    why: "Paused with the project.", plan: [], criteria: [], questions: [], labels: [] },
+];
+export const task = (k: string) => TASKS.find((t) => t.key === k) ?? null;
+
+export interface Conversation { id: string; title: string; sub: string; agent?: string; project?: ProjectKey; kind: "dm" | "team" | "slack" }
+export const CONVERSATIONS: Conversation[] = [
+  { id: "sv-lead", title: "Claude", sub: "Project Lead · SamVision", agent: "claude", project: "samvision", kind: "dm" },
+  { id: "nova", title: "Nova", sub: "Implementation Agent", agent: "nova", project: "samvision", kind: "dm" },
+  { id: "iris", title: "Iris", sub: "Research Agent", agent: "iris", project: "samvision", kind: "dm" },
+  { id: "atlas", title: "Atlas", sub: "Code Review Agent", agent: "atlas", project: "commandcenter", kind: "dm" },
+  { id: "pixel", title: "Pixel", sub: "UI Testing Agent", agent: "pixel", project: "mfe", kind: "dm" },
+  { id: "orion", title: "Orion", sub: "Deployment Agent", agent: "orion", project: "samvision", kind: "dm" },
+  { id: "cc-lead", title: "Claude", sub: "Project Lead · CommandCenter", agent: "claude", project: "commandcenter", kind: "dm" },
+  { id: "team-samvision", title: "# samvision-team", sub: "Team channel", project: "samvision", kind: "team" },
+  { id: "slack", title: "Slack", sub: "Not connected", kind: "slack" },
+];
+export const conversation = (id: string) => CONVERSATIONS.find((c) => c.id === id) ?? null;
+
+export interface ChatMessage { cid: string; from: string; at: string; text: string; list?: string[]; card?: string }
+export const SEED_CHAT: Record<string, ChatMessage[]> = {
+  "sv-lead": [
+    { cid: "s1", from: "jay", at: "7:58 PM", text: "Claude, can you give me a status update on SV-025 (Rental comparison redesign)?\n\nAlso, reminder: production must remain untouched until I approve the changes. No live deployments." },
+    { cid: "s2", from: "claude", at: "8:02 PM", text: "Understood. Production will remain untouched.\n\nHere's the workflow we've set up for SV-025:",
+      list: ["Requirements and acceptance criteria have been created.", "I've delegated research and planning to Iris.", "Nova is handling the implementation.",
+        "Atlas will perform an independent code review.", "Pixel will run UI testing.", "Orion will verify the deployment (after your approval)."] },
+    { cid: "s3", from: "claude", at: "8:24 PM", text: "Current status:", card: "SV-025" },
+  ],
+  nova: [{ cid: "n1", from: "nova", at: "4:18 PM", text: "PR #842 is in progress. Initial layout is behind the flag; numbers match on 50/50 fixtures." }],
+  iris: [{ cid: "i1", from: "iris", at: "2:11 PM", text: "Research plan completed for SV-025. Two layout options documented with trade-offs." }],
+  atlas: [{ cid: "a1", from: "atlas", at: "1:56 PM", text: "Noted. I'll review once Nova's PR is at a stable head." }],
+  pixel: [{ cid: "p1", from: "pixel", at: "11:03 AM", text: "Test plan is ready. 18 screens, 1366 and 1920." }],
+  orion: [{ cid: "o1", from: "orion", at: "9:24 AM", text: "Standing by for approval. Nothing will deploy without your gate." }],
+  "cc-lead": [{ cid: "c1", from: "claude", at: "Yesterday", text: "Autonomy v3 is running in shadow only. It records what it would have done; nothing executes." }],
+  "team-samvision": [
+    { cid: "t1", from: "claude", at: "2h ago", text: "SV-025 is making good progress. Nova is about 70% complete." },
+    { cid: "t2", from: "nova", at: "4h ago", text: "Pushed a new commit for the comparison layout. Ready for review → PR #842" },
+    { cid: "t3", from: "atlas", at: "6h ago", text: "Left comments on PR #839. Main issue is error handling; should be a quick fix." },
+  ],
+  slack: [],
+};
+
+export const HOSTS = [
+  { id: "server", name: "jay-server", kind: "server", status: "online", sessions: 8, cpu: 24, mem: 62, disk: 38 },
+  { id: "laptop", name: "laptop (WSL)", kind: "laptop", status: "unknown", sessions: 0, cpu: 0, mem: 0, disk: 0 },
+] as const;
+
+export const DECISION = {
+  id: "D-SV-025", task: "SV-025", title: "Choose the rental comparison workflow for SamVision", due: "Thu",
+  options: [
+    { id: "A", title: "Single-page comparison flow", sub: "Keep realtors on a single page with inline filters and pricing.", tag: "Recommended",
+      pros: ["Faster, simpler experience", "Fewer steps for a typical comparison", "Lower engineering complexity", "Easier to maintain"], cons: [] as string[] },
+    { id: "B", title: "Split workflow (search → details)", sub: "A two-step flow with a separate details page.", tag: "Alternative",
+      pros: ["Richer detail per listing", "Better for complex cases"], cons: ["More steps per comparison"] },
+  ],
+};
+
+export const SPARK = {
+  a: [4, 6, 5, 7, 6, 8, 7, 9, 8, 10, 9, 11, 10, 12],
+  b: [5, 4, 6, 5, 7, 6, 5, 7, 8, 7, 9, 8, 9, 10],
+  c: [3, 5, 4, 6, 5, 4, 6, 7, 6, 8, 7, 6, 8, 9],
+  d: [6, 5, 7, 4, 6, 5, 7, 6, 8, 5, 7, 9, 6, 8],
+};
