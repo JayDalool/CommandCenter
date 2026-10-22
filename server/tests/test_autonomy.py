@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -23,7 +24,10 @@ POL = profiles.load()
 
 def facts(**over):
     base = {"project": "commandcenter", "type": "FEATURE", "labels": [], "flags": [], "plan_accepted": True,
-            "review_at_head": True, "merged": False, "verified": None, "ci": "green", "files": None}
+            "review_at_head": True, "merged": False, "verified": None, "ci": "green", "files": None,
+            # a PR that is ready to merge as reviewed (engine v2 needs every one of these for an auto merge)
+            "review_head": HEAD, "pr_head": HEAD, "ci_passed": True, "draft": False, "mergeable": "MERGEABLE",
+            "base": "main", "cross_repo": False}
     base.update(over)
     return base
 
@@ -62,8 +66,10 @@ class Verdicts(unittest.TestCase):
         v = ev("merge", "commandcenter")
         self.assertEqual(v["outcome"], "jay")
         self.assertIn("changed files", v["missing"])
-        v = ev("merge", "commandcenter", files=[f("web/app/src/x.tsx")])
+        v = ev("merge", "commandcenter", files=[f("plans/x.md")])                 # outside the allowlist, not a rail
         self.assertEqual((v["outcome"], v["missing"]), ("jay", ["risk"]))
+        v = ev("merge", "commandcenter", files=[f("web/app/src/x.tsx")])          # the UI is a rail since v2 (L-01)
+        self.assertEqual((v["outcome"], v["rule"]), ("jay", "D-007:self_protection"))
         self.assertEqual(ev("merge", "commandcenter", files=docs, additions=1, deletions=0, ci="failing")["outcome"], "jay")
         self.assertEqual(ev("merge", "commandcenter", files=docs, additions=1, deletions=0,
                             review_at_head=False)["outcome"], "jay")
@@ -112,7 +118,9 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(ev("deploy", "commandcenter", env="preview")["outcome"], "auto")   # no path check off live
 
     def test_plans(self):
-        self.assertEqual(ev("plan", "commandcenter")["outcome"], "auto")             # required_for = []
+        v = ev("plan", "commandcenter")                                              # Q-01: required_for = [risk_high]
+        self.assertEqual((v["outcome"], v["missing"]), ("jay", ["risk"]))           # and nothing assesses risk yet
+        self.assertEqual(ev("plan", "commandcenter", labels=["migration"])["rule"], "target.plan_approval")
         v = ev("plan", "gyst")
         self.assertEqual((v["outcome"], v["missing"]), ("jay", ["risk"]))           # risk_high, risk unknown
         self.assertEqual(ev("plan", "gyst", labels=["risk:low"])["outcome"], "jay")   # a label never lowers risk
@@ -171,12 +179,33 @@ class Record(unittest.TestCase):
 
     def test_summary_counts_and_lists_disagreements(self):
         self.sh.record(None, "gyst", "plan", "auto", ev("plan", "gyst"), facts(project="gyst"), "fp")
-        self.sh.record(None, "gyst", "plan", "auto", ev("plan", "commandcenter"), facts(project="gyst"), "fp")
+        self.sh.record(None, "gyst", "plan", "auto", autonomy._verdict("auto", "x"), facts(project="gyst"), "fp")
         s = self.sh.summary()
         self.assertEqual((s["total"], s["agree"], s["disagree"], s["mode"]), (2, 1, 1, "shadow"))
         self.assertEqual(s["counts"]["gyst"]["plan"]["pairs"], {"auto->jay": 1, "auto->auto": 1})
         self.assertEqual(s["missing"], {"risk": 1})
         self.assertEqual([(d["project"], d["observed"], d["engine"]) for d in s["disagreements"]], [("gyst", "auto", "jay")])
+
+
+class Versions(unittest.TestCase):
+    """Engine v2 fixed verdicts v1 got wrong, so a v1 row never counts or shows next to a v2 one."""
+
+    def test_summary_and_needs_you_read_the_current_engine_only(self):
+        from ccd import inbox
+        tmp = tempfile.mkdtemp(prefix="shv-")
+        ts = TaskStore(os.path.join(tmp, "tasks.db"), task_projects(cfg()))
+        t, _ = ts.create("commandcenter", "x")
+        tid = ts._id_of(t["key"])
+        sh = autonomy.Shadow(ts.db)
+        with mock.patch.object(autonomy, "ENGINE_VERSION", 1):
+            sh.record(tid, "commandcenter", "merge", "jay", autonomy._verdict("auto", "v1"), {}, "fp")
+        s = sh.summary()
+        self.assertEqual((s["engine"], s["total"], s["older"], s["disagreements"]), (2, 0, 1, []))
+        self.assertEqual(sh.summary(engine=1)["total"], 1)
+        self.assertEqual(inbox.Inbox(ts.db)._engine(time.time()), {})
+        sh.record(tid, "commandcenter", "merge", "jay", autonomy._verdict("jay", "v2"), {}, "fp")
+        self.assertEqual(inbox.Inbox(ts.db)._engine(time.time())[(t["key"], "merge")]["rule"], "v2")
+        self.assertEqual(sh.summary()["total"], 1)
 
 
 class InTheDaemon(unittest.IsolatedAsyncioTestCase):
@@ -219,19 +248,37 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         self.to_ready("gyst")                               # GYST plan auto today; owner: merge gate
         await self.d._auto_merge()                          # CC: docs-only PR merged by ccd
         self.assertEqual(self.rows(), [
-            ("commandcenter", "plan", "auto", "auto", "target.plan_approval"),
+            ("commandcenter", "plan", "auto", "jay", "target.plan_approval:unknown"),   # Q-01: risk unknown
             ("gyst", "plan", "auto", "jay", "target.plan_approval:unknown"),
             ("gyst", "merge", "jay", "jay", "target.merge:requires"),
             ("commandcenter", "merge", "auto", "jay", "target.merge:requires"),   # ADR 0007 allows no checks; target doesn't
         ])
         s = self.d.autonomy_state()
-        self.assertEqual((s["total"], s["disagree"], s["available"]), (4, 2, True))
+        self.assertEqual((s["total"], s["disagree"], s["available"]), (4, 3, True))
 
     async def test_green_ci_and_allowlisted_files_agree(self):
         self.gh.pr = view(statusCheckRollup=[{"conclusion": "SUCCESS"}])
         self.to_ready()
         await self.d._auto_merge()
         self.assertEqual(self.rows()[-1], ("commandcenter", "merge", "auto", "auto", "target.merge"))
+
+    async def test_the_readiness_ccd_already_read_reaches_the_engine(self):
+        # engine v2: the PR object _auto_merge_one fetched anyway supplies draft/mergeable/base/fork/head and whether
+        # a check passed. No extra gh call: the same single `gh pr view` per ticket.
+        ok = [{"conclusion": "SUCCESS"}]
+        # The last case is U-08 seen from both sides: today's auto-merge (ci_state) merges an all-skipped PR; the
+        # engine says Jay. Legacy is deliberately unchanged here; the engine records the disagreement.
+        for over, did, rule in (({"isDraft": True}, "jay", "merge:readiness"),
+                                ({"isCrossRepository": True}, "jay", "merge:readiness"),
+                                ({"baseRefName": "release"}, "jay", "merge:readiness"),
+                                ({"statusCheckRollup": [{"conclusion": "SKIPPED"}]}, "auto", "target.merge:requires")):
+            self.gh.pr = view(**dict({"statusCheckRollup": ok}, **over))
+            before = len(self.gh.of("view"))
+            self.to_ready(number=11 + len(self.rows()))
+            await self.d._auto_merge()
+            self.assertEqual(self.rows()[-1][1:], ("merge", did, "jay", rule), over)
+            self.assertEqual(len(self.gh.of("view")) - before, 1)
+        self.assertEqual(len(self.gh.of("merge")), 1)               # only the all-skipped one, by legacy, as before
 
     async def test_a_pr_at_a_newer_head_is_not_used_as_the_reviewed_one(self):
         k = self.to_ready("gyst")

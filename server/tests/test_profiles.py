@@ -7,7 +7,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from ccd import merge_policy, profiles, registry
+from ccd import autonomy, merge_policy, profiles, registry
 
 ROOT = profiles.POLICY_DIR
 
@@ -47,8 +47,10 @@ class RepoPolicy(unittest.TestCase):
         self.assertIn("deletion", p["gyst"]["target"]["personal_data"]["require_approval_for"])
         # D-007: Command Center's rails need Jay.
         paths = p["commandcenter"]["target"]["self_protection"]["require_jay_for_paths"]
-        for f in ("server/ccd/autonomy.py", "server/ccd/broker.py", "server/ccd/security.py", "policy/**"):
-            self.assertIn(f, paths)
+        for f in ("server/ccd/autonomy.py", "server/ccd/broker.py", "server/ccd/security.py", "server/ccd/identity.py",
+                  "policy/projects/gyst.toml", "scripts/go-live.sh", ".github/workflows/ci.yml", ".claude/settings.json",
+                  "AGENTS.md", "server/CLAUDE.md"):
+            self.assertTrue(autonomy._matches(f, paths), f)
         # D-009: GauzeMate paused, no target.
         self.assertEqual(p["gauzemate"]["target"], {})
         # D-002: the restricted example keeps everything on the laptop but allows AI.

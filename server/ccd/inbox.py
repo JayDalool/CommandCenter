@@ -16,6 +16,8 @@ import json
 import re
 import time
 
+from . import autonomy
+
 STOP = {"a", "an", "the", "to", "of", "for", "in", "on", "is", "are", "be", "we", "i", "it", "this", "that", "should",
         "do", "does", "you", "your", "please"}
 MAX_PRECEDENTS = 3
@@ -66,12 +68,14 @@ class Inbox:
         return out
 
     def _engine(self, now):
-        """The newest shadow verdict per (ticket key, action) from the last 30 days (the `at` index keeps it cheap)."""
+        """The newest shadow verdict per (ticket key, action) from the last 30 days (the `at` index keeps it cheap),
+        from the current engine version only: an older engine's verdict may be one a later version fixed."""
         out = {}
         for key, action, engine, observed, rule, agree, at in self.db.execute(
                 "SELECT t.key, s.action, s.engine, s.observed, s.rule, s.agree, s.at FROM autonomy_shadow s "
                 "JOIN tickets t ON t.id = s.ticket_id WHERE s.id IN (SELECT MAX(id) FROM autonomy_shadow "
-                "WHERE at > ? AND ticket_id IS NOT NULL GROUP BY ticket_id, action)", (now - ENGINE_WINDOW,)):
+                "WHERE at > ? AND ticket_id IS NOT NULL AND engine_version = ? GROUP BY ticket_id, action)",
+                (now - ENGINE_WINDOW, autonomy.ENGINE_VERSION)):
             out[(key, action)] = {"engine": engine, "observed": observed, "rule": rule, "agree": bool(agree), "at": at}
         return out
 

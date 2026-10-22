@@ -15,8 +15,14 @@ Outcomes:  "auto"    the target policy lets an agent do it without Jay
 
 The engine is conservative by construction. A missing or invalid profile means "jay". A condition that needs a
 fact Command Center does not have yet (a risk assessment, the changed files) is listed in `missing` and makes the
-answer "jay", never "auto". Human-only boundaries (a needs:jay or needs:legal flag, a LEGAL ticket) are "jay"
-whatever the profile says. A change to any path in `self_protection.require_jay_for_paths` is "jay" (D-007).
+answer "jay", never "auto". Human-only boundaries (a needs:jay or needs:legal flag, a LEGAL ticket, a destructive,
+financial, paid, secrets, credentials or irreversible label) are "jay" whatever the profile says. A change to any
+path in `self_protection.require_jay_for_paths` is "jay" (D-007).
+
+Engine v2 (Phase 1 safety patch): an "auto" merge also needs the PR to be ready (not a draft, mergeable, based on
+main, from this repository, reviewed at its current head, at least one passing check); every deploy goes through the
+deploy rules, an unknown environment is "jay"; a profile field the engine cannot check never lets a verdict be
+"auto" (`FIELDS` lists how each profile key is handled, and a test keeps that list complete).
 """
 import json
 import re
@@ -24,16 +30,46 @@ import time
 
 from . import merge_policy, pipeline
 
-ENGINE_VERSION = 1
+ENGINE_VERSION = 2
 ACTIONS = ("plan", "merge", "deploy")
 OUTCOMES = ("auto", "jay", "refuse")
 RISKS = ("low", "medium", "high")
 GH_FILE_LIMIT = 100    # `gh pr view --json files` lists at most this many
 HIGH_RISK_LABELS = {"security", "migration", "destructive", "architecture", "financial", "legal"}
+# Jay's human-only boundaries as ticket labels: "jay" for every action, whatever the profile says.
+BOUNDARY_LABELS = {"destructive", "financial", "paid", "secrets", "credentials", "irreversible", "legal"}
+LIVE_ENVS = ("live",)
+NON_LIVE_ENVS = ("preview", "dev")
+MAIN = "main"
+# How each profile `[target]` key is handled. "enforced": the engine reads it. "fails_closed": the engine cannot
+# check it, so an action it covers is never "auto". "inert": it cannot make a verdict more permissive (it is read
+# by something else, or only ever narrows). tests/test_autonomy.py fails when a schema key is missing here.
+FIELDS = {
+    "plan_approval": "enforced", "merge": "enforced", "deploy": "enforced", "self_protection": "enforced",
+    "personal_data": "enforced", "release": "enforced", "constraints": "fails_closed",
+    "budget": "inert", "review": "inert", "notify": "inert", "execution": "inert", "artifacts": "inert",
+    "small_safe_changes": "inert",
+}
+MODES_HANDLED = {"paused": "refuse", "restricted": "never auto", "experimental_autonomy": "profile",
+                 "autonomous_product": "profile", "controlled_production": "profile"}
+
+
+def _lower(values):
+    """Labels and flags compared case-insensitively: `Legal` and `NEEDS:JAY` are not a way around a boundary."""
+    return {str(v).strip().lower() for v in values or () if v is not None} if isinstance(values, (list, tuple, set)) \
+        else set()
 
 
 def _flags(facts):
-    return {str(f).replace(":", "_").replace("-", "_") for f in facts.get("flags") or []}
+    return {f.replace(":", "_").replace("-", "_") for f in _lower(facts.get("flags"))}
+
+
+def _labels(facts):
+    return _lower(facts.get("labels"))
+
+
+def _type(facts):
+    return str(facts.get("type") or "").strip().upper()
 
 
 def _matches(path, patterns):
@@ -50,8 +86,8 @@ def risk_of(facts):
     Only signals that RAISE risk are taken from labels (anyone who can label a ticket could otherwise claim
     `risk:low`): a high-risk label, `risk:high`, or a SECURITY / LEGAL type. Low risk comes only from ccd's own
     allowlist classifier (ADR 0007), never from a label."""
-    labels = set(facts.get("labels") or [])
-    if labels & HIGH_RISK_LABELS or "risk:high" in labels or facts.get("type") in ("SECURITY", "LEGAL"):
+    labels = _labels(facts)
+    if labels & HIGH_RISK_LABELS or "risk:high" in labels or _type(facts) in ("SECURITY", "LEGAL"):
         return "high"
     files = facts.get("files")
     if facts.get("project") and isinstance(files, list) and files and not merge_policy.file_reasons(
@@ -68,11 +104,18 @@ def _verdict(outcome, rule, reasons=(), missing=()):
 def _boundaries(facts):
     """Human-only boundaries that hold whatever a profile says."""
     out = []
+    for key in ("labels", "flags"):
+        if facts.get(key) is not None and not isinstance(facts.get(key), (list, tuple, set)):
+            out.append(f"the ticket's {key} cannot be read, so a human-only boundary cannot be ruled out")
     flags = _flags(facts)
     if "needs_jay" in flags:
         out.append("the ticket is flagged needs:jay")
-    if "needs_legal" in flags or facts.get("type") == "LEGAL" or "legal" in (facts.get("labels") or []):
+    labels = _labels(facts)
+    if "needs_legal" in flags or _type(facts) == "LEGAL" or "legal" in labels:
         out.append("legal or compliance needs Jay")
+    hit = sorted((labels & BOUNDARY_LABELS) - {"legal"})
+    if hit:
+        out.append(f"a human-only boundary: {', '.join(hit)}")
     return out
 
 
@@ -98,7 +141,7 @@ def _conditions(requires, facts, profile):
     unmet, missing = [], []
     risk = risk_of(facts)
     caps = profile.get("capabilities") or {}
-    for c in requires:
+    for c in requires or ():
         if c == "ci_green":
             if facts.get("ci") is None:
                 missing.append("ci")
@@ -106,24 +149,32 @@ def _conditions(requires, facts, profile):
                 unmet.append("the PR has no CI checks")        # no checks is not green (ADR 0007 says so too)
             elif facts["ci"] != "green":
                 unmet.append(f"CI is {facts['ci']}")
+            elif facts.get("ci_passed") is False:
+                unmet.append("no CI check passed (every check was skipped)")
+            elif facts.get("ci_passed") is not True:
+                missing.append("a passing CI check")
         elif c == "review_approved_at_head":
-            if not facts.get("review_at_head"):
+            if facts.get("review_at_head") is not True:
                 unmet.append("no approving review at the PR head")
+            else:
+                why, gap = _same_head(facts)
+                unmet += why
+                missing += gap
         elif c == "risk_at_most_medium":
             if risk is None:
                 missing.append("risk")
             elif risk == "high":
                 unmet.append("the change is high risk")
         elif c == "security_pass_if_required":
-            if facts.get("type") == "SECURITY" or "security" in (facts.get("labels") or []):
+            if _type(facts) == "SECURITY" or "security" in _labels(facts):
                 missing.append("security review")      # no security review is recorded yet
         elif c == "no_personal_data_trigger":
             pass                                       # checked by the personal_data rule, with the paths
         elif c == "plan_approved_if_required":
-            if not facts.get("plan_accepted"):
+            if facts.get("plan_accepted") is not True:
                 unmet.append("the plan was not accepted")
         elif c == "merged":
-            if not facts.get("merged"):
+            if facts.get("merged") is not True:
                 unmet.append("not merged yet")
         elif c == "verify_pass":
             if facts.get("verified") is not True:
@@ -143,7 +194,7 @@ def _plan(t, facts):
     pa = t.get("plan_approval")
     if pa is None:
         return _verdict("jay", "target.plan_approval:none", ["the profile has no plan approval rule"])
-    labels = set(facts.get("labels") or [])
+    labels = _labels(facts)
     risk = risk_of(facts)
     hits, missing = [], []
     for trig in pa.get("required_for") or []:
@@ -163,12 +214,14 @@ def _plan(t, facts):
             if "migration" in labels:
                 hits.append("a migration")
         elif trig in ("ui_change_client_visible", "ui_change_major"):
-            if "ui" in labels or facts.get("type") == "DESIGN" or "needs_ui_review" in _flags(facts):
+            if "ui" in labels or _type(facts) == "DESIGN" or "needs_ui_review" in _flags(facts):
                 hits.append("a UI change")
             else:
                 missing.append("ui impact")
         elif trig in ("workflow_change", "api_change"):
             missing.append(trig.replace("_", " "))    # nothing classifies this yet
+        else:
+            missing.append(str(trig))                 # a trigger this engine version does not know: never a yes
     if hits:
         return _verdict("jay", "target.plan_approval", hits)
     if missing:
@@ -198,15 +251,66 @@ def _merge(t, facts, profile):
     return _verdict("auto", "target.merge", ["every merge condition holds"])
 
 
-def _deploy(t, facts, profile):
+def _same_head(facts):
+    """(unmet, missing): the approving review is for the PR's CURRENT head (a review of an older head is not one)."""
+    rh, ph = facts.get("review_head"), facts.get("pr_head")
+    ok = [isinstance(h, str) and pipeline.SHA_RE.match(h) for h in (rh, ph)]
+    if not all(ok):
+        return [], ["the PR head the review is for"]
+    return ([] if rh == ph else ["the approving review is for an older head of the PR"]), []
+
+
+def _readiness(facts):
+    """(unmet, missing): the PR itself can be merged as reviewed. Always required for an "auto" merge, whatever
+    the profile says (the same checks as ADR 0007 rule 5 in merge_policy.classify). Unknown is never ready."""
+    unmet, missing = [], []
+    draft = facts.get("draft")
+    if draft is None:
+        missing.append("whether the PR is a draft")
+    elif draft is not False:
+        unmet.append("the PR is a draft")
+    m = facts.get("mergeable")
+    if m is None or m == "UNKNOWN":
+        missing.append("whether GitHub can merge the PR")
+    elif m != "MERGEABLE":
+        unmet.append(f"the PR is not mergeable ({str(m).lower()[:40]})")
+    base = facts.get("base")
+    if base is None:
+        missing.append("the PR's base branch")
+    elif base != MAIN:
+        unmet.append(f"the PR targets {str(base)[:60]}, not {MAIN}")
+    fork = facts.get("cross_repo")
+    if fork is None:
+        missing.append("whether the PR comes from a fork")
+    elif fork is not False:
+        unmet.append("the PR comes from a fork")
+    why, gap = _same_head(facts)
+    return unmet + why, missing + gap
+
+
+def _env(facts):
+    """'live' | 'preview' | 'dev' | None (an environment the engine does not know: never a yes)."""
+    env = facts.get("env")
+    if env is None:
+        return "live"                 # a deploy that does not say where is treated as live
+    env = str(env).strip().lower()
+    return env if env in LIVE_ENVS + NON_LIVE_ENVS else None
+
+
+def _deploy(t, facts, profile, env):
     d = t.get("deploy")
     if d is None:
         return _verdict("jay", "target.deploy:none", ["the profile has no deploy rule"])
     pol = d.get("policy")
     if pol == "never":
         return _verdict("refuse", "target.deploy:never", ["this project is never deployed by an agent"])
-    if facts.get("env") and facts["env"] != "live":
-        return _verdict("auto", "deploy:not_live", [f"a {facts['env']} deployment"])
+    if d.get("env") == "none":
+        return _verdict("refuse", "target.deploy:env_none", ["the profile allows no deployment environment"])
+    if env is None:
+        return _verdict("jay", "deploy:unknown_env", [f"unknown deployment environment {str(facts.get('env'))[:40]!r}: "
+                                                      "it may be production"])
+    if env != "live":
+        return _verdict("auto", "deploy:not_live", [f"a {env} deployment"])
     if pol == "jay_confirms":
         return _verdict("jay", "target.deploy:jay_confirms", ["Jay confirms every live deployment"])
     unmet, missing = _conditions(d.get("requires") or [], facts, profile)
@@ -220,13 +324,52 @@ def _deploy(t, facts, profile):
         return _verdict("jay", "target.release:window", ["deploys go out in the release window"] + unmet, missing)
     if unmet:
         return _verdict("jay", "target.deploy:requires", unmet, missing)
+    # An unattended live deploy also needs to know it has no migration, no downtime and no client-workflow change.
+    for fact, what in (("no_migration", "whether it runs a migration"), ("no_downtime", "whether it causes downtime"),
+                       ("no_client_workflow_change", "whether it changes a client workflow")):
+        if facts.get(fact) is False:
+            unmet.append(what.replace("whether it ", "it "))
+        elif facts.get(fact) is not True:
+            missing.append(what)
+    if unmet:
+        return _verdict("jay", "target.deploy:requires", unmet, missing)
     if missing:
         return _verdict("jay", "target.deploy:unknown", ["a deploy condition cannot be checked yet"], missing)
     return _verdict("auto", "target.deploy", ["every deploy condition holds"])
 
 
+def _personal_data(t, facts):
+    """(reasons, missing): D-005 categories (retention, privacy, deletion, …) that need approval. Paths are checked
+    separately; a category needs the `personal_data` fact (the categories a change touches), unknown is not none."""
+    want = (t.get("personal_data") or {}).get("require_approval_for") or []
+    if not want:
+        return [], []
+    got = facts.get("personal_data")
+    if not isinstance(got, (list, tuple)):
+        return [], ["which personal-data categories it touches"]
+    hit = sorted(set(map(str, got)) & set(want))
+    return ([f"it touches personal data: {', '.join(hit)}"] if hit else []), []
+
+
+def _closed(profile, t, action):
+    """Why the profile does not allow an "auto" verdict for this action at all: fields the engine cannot check."""
+    if profile.get("mode") == "restricted":
+        return "the project is restricted: every decision needs Jay"
+    never = (t.get("constraints") or {}).get("never") or []
+    if never and action in ("merge", "deploy"):
+        return f"the profile forbids {', '.join(map(str, never[:3]))}, which the engine cannot check"
+    return None
+
+
 def evaluate(action, profile, facts):
     """What the agreed target policy says about one decision. Pure; never raises on odd input."""
+    try:
+        return _evaluate(action, profile, facts)
+    except Exception as e:  # noqa: BLE001 — an engine bug is never a yes
+        return _verdict("jay", "engine:error", [f"the engine failed ({type(e).__name__})"])
+
+
+def _evaluate(action, profile, facts):
     facts = facts if isinstance(facts, dict) else {}
     if action not in ACTIONS:
         return _verdict("jay", "engine:unknown_action", [f"the engine does not know the action {action!r}"])
@@ -234,28 +377,64 @@ def evaluate(action, profile, facts):
         return _verdict("jay", "profile:invalid", ["the project's profile is missing or invalid"])
     if profile.get("mode") == "paused":
         return _verdict("refuse", "mode:paused", [f"{facts.get('project') or 'the project'} is paused"])
+    t = profile.get("target") or {}
+    if action == "deploy" and ((t.get("deploy") or {}).get("policy") == "never" or (t.get("deploy") or {}).get("env") == "none"):
+        return _deploy(t, facts, profile, _env(facts))     # "never" refuses before anything can soften it to "jay"
     hard = _boundaries(facts)
     if hard:
         return _verdict("jay", "boundary", hard)
-    t = profile.get("target") or {}
-    if action == "merge" or (action == "deploy" and facts.get("env") in (None, "live")):
-        sp = t.get("self_protection") or {}
-        why, missing = _paths(facts, sp.get("require_jay_for_paths") or [], "it changes Command Center's own rails")
+    v = _decide(action, t, facts, profile)
+    if v["outcome"] == "auto":
+        why = _closed(profile, t, action)
         if why:
-            return _verdict("jay", "D-007:self_protection", why)
-        pd = t.get("personal_data") or {}
-        why2, missing2 = _paths(facts, pd.get("trigger_paths") or [], "it touches personal-data code")
-        if why2:
-            return _verdict("jay", "D-005:personal_data", why2)
-        v = _merge(t, facts, profile) if action == "merge" else _deploy(t, facts, profile)
-        extra = missing + missing2
-        if extra and v["outcome"] == "auto":
-            return _verdict("jay", "self_protection:unknown", ["the changed files are not known, so the protected "
-                                                               "paths cannot be ruled out"], extra)
-        if extra:
-            v["missing"] = sorted(set(v["missing"]) | set(extra))
-        return v
-    return _plan(t, facts)
+            return _verdict("jay", "profile:fails_closed", [why])
+    return v
+
+
+def _decide(action, t, facts, profile):
+    if action == "plan":
+        return _plan(t, facts)
+    env = _env(facts) if action == "deploy" else "live"
+    if action == "deploy" and env != "live":
+        return _deploy(t, facts, profile, env)              # unknown env: "jay"; preview/dev: no path rules
+    sp = t.get("self_protection") or {}
+    why, missing = _paths(facts, sp.get("require_jay_for_paths") or [], "it changes Command Center's own rails")
+    if why:
+        return _verdict("jay", "D-007:self_protection", why)
+    pd = t.get("personal_data") or {}
+    why2, missing2 = _paths(facts, pd.get("trigger_paths") or [], "it touches personal-data code")
+    if why2:
+        return _verdict("jay", "D-005:personal_data", why2)
+    v = _merge(t, facts, profile) if action == "merge" else _deploy(t, facts, profile, env)
+    extra = missing + missing2
+    if extra and v["outcome"] == "auto":
+        return _verdict("jay", "self_protection:unknown", ["the changed files are not known, so the protected "
+                                                           "paths cannot be ruled out"], extra)
+    if extra:
+        v["missing"] = sorted(set(v["missing"]) | set(extra))
+    if action == "merge" and v["outcome"] == "auto":
+        why3, missing3 = _personal_data(t, facts)
+        if why3:
+            return _verdict("jay", "D-005:personal_data", why3)
+        unmet, gap = _readiness(facts)
+        if unmet:
+            return _verdict("jay", "merge:readiness", unmet, gap)
+        if missing3 or gap:
+            return _verdict("jay", "merge:readiness:unknown", ["the PR's readiness cannot be checked"], missing3 + gap)
+    return v
+
+
+def ci_passed(rollup):
+    """True when at least one check passed and none failed or is pending; False when checks exist but none passed
+    (every one skipped or neutral); None when unknown. Stricter than merge_policy.ci_state, which counts an
+    all-skipped rollup as green (left as is: it decides today's auto-merge)."""
+    if not isinstance(rollup, list) or not rollup:
+        return None
+    states = [str(c.get("conclusion") or c.get("state") or c.get("status") or "").upper() if isinstance(c, dict) else "?"
+              for c in rollup]
+    if any(s not in ("SUCCESS", "NEUTRAL", "SKIPPED") for s in states):
+        return None
+    return "SUCCESS" in states
 
 
 # ---------- what Command Center actually did: read from the pipeline's own events ----------
@@ -282,14 +461,18 @@ def observed(events):
 
 
 def facts_of(ticket, work, extra=None):
-    """The facts the engine reads, from tasks.get() and pipeline.work(). `extra`: what a caller knows besides
-    (the PR's changed files at auto-merge time, the deploy env)."""
+    """The facts the engine reads, from tasks.get() and pipeline.work(). `extra`: what a caller knows besides (the
+    PR read at the reviewed head: files, draft, mergeable, base, cross_repo, pr_head, ci, ci_passed; the deploy env).
+    `review_at_head` only says an approving review exists; the engine compares `review_head` with `pr_head` itself,
+    and without `pr_head` the review is never taken to be for the current head."""
     ticket, work = ticket or {}, work or {}
     rv = work.get("review") or {}
+    head = rv.get("head") if isinstance(rv.get("head"), str) else None
     f = {"project": ticket.get("project"), "type": ticket.get("type"), "labels": list(ticket.get("labels") or []),
          "flags": list(ticket.get("flags") or []),
          "plan_accepted": work.get("planState") == "accepted",
-         "review_at_head": rv.get("verdict") == "APPROVE" and bool(pipeline.SHA_RE.match(str(rv.get("head") or ""))),
+         "review_at_head": rv.get("verdict") == "APPROVE" and bool(pipeline.SHA_RE.match(head or "")),
+         "review_head": head,
          "merged": bool(work.get("merge")),
          "verified": ((work.get("verification") or {}).get("result") == "pass") if work.get("verification") else None,
          "ci": None, "files": None}
@@ -320,12 +503,14 @@ class Shadow:
                  json.dumps(verdict["reasons"])[:2000], json.dumps(verdict["missing"])[:500],
                  json.dumps(f, default=str)[:4000], str(fingerprint or "")[:64], ENGINE_VERSION))
 
-    def summary(self, since=None, recent=50):
-        """Counts per project and action, and the most recent disagreements."""
+    def summary(self, since=None, recent=50, engine=ENGINE_VERSION):
+        """Counts per project and action, and the most recent disagreements, for ONE engine version (the current
+        one by default): verdicts of an older engine are known to differ (v1 said "auto" in cases v2 fixed), so they
+        are never mixed in; `older` says how many rows were left out."""
         since = since if since is not None else 0
         rows = self.db.execute(
-            "SELECT project, action, observed, engine, COUNT(*) FROM autonomy_shadow WHERE at >= ? "
-            "GROUP BY project, action, observed, engine ORDER BY project, action", (since,)).fetchall()
+            "SELECT project, action, observed, engine, COUNT(*) FROM autonomy_shadow WHERE at >= ? AND engine_version = ? "
+            "GROUP BY project, action, observed, engine ORDER BY project, action", (since, engine)).fetchall()
         counts = {}
         for project, action, obs, eng, n in rows:
             c = counts.setdefault(project, {}).setdefault(action, {"total": 0, "agree": 0, "pairs": {}})
@@ -333,7 +518,8 @@ class Shadow:
             c["agree"] += n if obs == eng else 0
             c["pairs"][f"{obs}->{eng}"] = n
         missing = {}
-        for (m,) in self.db.execute("SELECT missing FROM autonomy_shadow WHERE at >= ? AND missing != '[]'", (since,)):
+        for (m,) in self.db.execute("SELECT missing FROM autonomy_shadow WHERE at >= ? AND engine_version = ? "
+                                    "AND missing != '[]'", (since, engine)):
             for x in json.loads(m):
                 missing[x] = missing.get(x, 0) + 1
         dis = [{"id": r[0], "at": r[1], "key": r[2], "project": r[3], "action": r[4], "observed": r[5],
@@ -341,8 +527,11 @@ class Shadow:
                for r in self.db.execute(
                    "SELECT s.id, s.at, t.key, s.project, s.action, s.observed, s.engine, s.rule, s.reasons, s.missing "
                    "FROM autonomy_shadow s LEFT JOIN tickets t ON t.id = s.ticket_id "
-                   "WHERE s.agree = 0 AND s.at >= ? ORDER BY s.id DESC LIMIT ?", (since, recent))]
+                   "WHERE s.agree = 0 AND s.at >= ? AND s.engine_version = ? ORDER BY s.id DESC LIMIT ?",
+                   (since, engine, recent))]
+        older = self.db.execute("SELECT COUNT(*) FROM autonomy_shadow WHERE at >= ? AND engine_version != ?",
+                                (since, engine)).fetchone()[0]
         total = sum(c["total"] for p in counts.values() for c in p.values())
         agree = sum(c["agree"] for p in counts.values() for c in p.values())
-        return {"mode": "shadow", "engine": ENGINE_VERSION, "total": total, "agree": agree,
-                "disagree": total - agree, "counts": counts, "missing": missing, "disagreements": dis}
+        return {"mode": "shadow", "engine": engine, "total": total, "agree": agree,
+                "disagree": total - agree, "counts": counts, "missing": missing, "disagreements": dis, "older": older}
