@@ -1038,6 +1038,7 @@ had a fresh independent review on its final head before merging.
 | 5 | Needs You v2 | #59 | `#/needs` over the existing Needs Jay queue + read-only `/api/inbox` (approval, shadow verdict, precedents) | Precedents shown, never applied; no bulk approve while the engine is in shadow |
 | 6 | Audit trail | PR 7 | `audit_events` (append-only, hash-chained) for every write + pipeline events; per-agent actor tokens issued by Jay; Settings → Audit | **Recorded, not enforced**: `X-CCD-Actor` is not yet required to match its token. The trail measures what enforcing would refuse; turning it on needs Jay (Phase 2) |
 | 7 | Cost metering | PR 7 | `usage_records` from Claude Code / Codex session logs (usage fields only) + optional reported usage; list-price estimates; profile `target.budget` shown; Settings → Usage | Budgets displayed, not enforced. Codex counted in tokens only (no price) |
+| 8 | Engine safety patch | #62 | Engine v2: merge readiness, deploy routing, boundary labels, fail-closed profile fields, folder-level self-protection, `risk_high` CommandCenter plan trigger (Q-01); regression + invariant suites | Validation finding, not new authority: v1 said "auto" in 8 cases the agreed policy sends to Jay (U-01 … U-08); still shadow only |
 
 tasks.db migrations in this phase: v6 (autonomy_shadow, #56), v7 (decisions/approvals, #57), v8 (worker nodes, #58), v9 (audit,
 actor tokens, usage; PR 7) — all additive, forward-only. Rollback for each PR is a revert; the new tables stay unused.

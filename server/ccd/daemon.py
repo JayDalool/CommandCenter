@@ -1774,8 +1774,13 @@ class Daemon:
                     more.setdefault("ci", ci)
                     pr = self._shadow_pr.get(key)
                     if pr and pr.get("headRefOid") == w["review"]["head"]:   # only the PR ccd read at the reviewed head
+                        rollup = pr.get("statusCheckRollup")
                         more.update(files=pr.get("files"), additions=pr.get("additions"),
-                                    deletions=pr.get("deletions"), ci=merge_policy.ci_state(pr.get("statusCheckRollup")))
+                                    deletions=pr.get("deletions"), ci=merge_policy.ci_state(rollup),
+                                    ci_passed=autonomy.ci_passed(rollup), draft=pr.get("isDraft"),
+                                    mergeable=pr.get("mergeable"), base=pr.get("baseRefName"),
+                                    cross_repo=pr.get("isCrossRepository"), pr_head=pr.get("headRefOid"),
+                                    state=pr.get("state"))
                 facts = autonomy.facts_of(t, w, more)
                 verdict = autonomy.evaluate(action, self.policy.profile(project), facts)
                 self.shadow.record(tid, project, action, outcome, verdict, facts,
