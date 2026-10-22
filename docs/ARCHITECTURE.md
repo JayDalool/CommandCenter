@@ -481,6 +481,32 @@ Engine v2 (Phase 1 safety patch, 2026-10-22) closes every case found where v1 sa
 The daemon passes the readiness facts from the `gh pr view` auto-merge already makes (no extra call). Verdicts are
 tagged with the engine version, and `/api/autonomy` and Needs You read the current version only.
 
+### Phase 1 readiness harness (`ccd/validation`)
+
+`python -m ccd.validation phase1-readiness` scores the 15-row Phase 1 graduation gate and writes `readiness.json`
+and `readiness.md` (exit 0 PASS, 1 FAIL, 2 cannot run). The daemon never imports it, and it adds no route.
+
+- **Sources.** `--fixtures`: a case for every class in the Phase 1 sweep, against the real profiles (runs in CI as
+  `tests/test_validation.py`). `--replay COPY.db [--github-cache FILE]`: every `autonomy_shadow` row re-evaluated, and
+  every pipeline step in `ticket_events` rebuilt as the daemon saw it (labels, type and flags as of that moment,
+  the reviewed head, CI), with facts taken from the cache marked as inferred. `--live URL --token-file F`: the
+  read-only API routes. `--evidence FILE`: what it cannot see itself (the final engine's go-live time, night-shift
+  cycles, restart and rollback drills, audit walks, the suite result on the deployed commit).
+  `--restore-backup FILE`: migrates a temporary copy of a backup and checks it.
+- **Judging.** `validation/oracle.py` restates the hard rules independently of the engine; `validation/classify.py`
+  puts every decision into one class (unsafe-permissive, boundary-softened, engine-bug, unknown, safe-conservative,
+  expected-stricter, expected-permissive, legacy-permissive, vacuous-agree, agree). A disagreement whose rule has
+  no citation is "unknown". A test fails when the engine gains a rule without one. `validation/fuzz.py` runs
+  seeded schema-valid profile variants through both and reports any "auto" a hard rule forbids (a test runs
+  three seeds, and checks that it catches an engine with a rule switched off).
+- **Side-effect free.** Before anything runs, a guard blocks starting programs, network connections other than
+  GET requests to the given ccd, writing files outside the report folder, opening a database for writing, and
+  herdr. A self-check proves every block, or the run stops with exit 2. A replay snapshot opens with
+  `mode=ro&immutable=1`, and a path inside the live data folder, or a copy with an unmerged write-ahead log, is
+  refused. Make the copy with `sqlite3 tasks.db ".backup /tmp/copy.db"`.
+- **Never passes on time alone.** A row without evidence is "missing", and the result is PASS only when all 15
+  rows pass.
+
 ### Decision and Approval records (PR 4)
 
 ```text
