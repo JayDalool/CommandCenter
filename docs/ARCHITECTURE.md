@@ -467,10 +467,12 @@ Engine v2 (Phase 1 safety patch, 2026-10-22) closes every case found where v1 sa
 - every deploy goes through the deploy rules (v1 judged a non-live one by the plan rules); an environment other
   than live, preview or dev is "jay", and `deploy.env = "preview"` allows preview only (`"live"` allows live and
   the non-live environments); `deploy = never` refuses before anything can soften it; an unattended live deploy
-  needs `release.unattended_requires` and `unattended_when` as well as its own conditions; D-005 personal-data
+  needs `release.unattended_requires` and `unattended_when` as well as its own conditions, and release `windows`
+  hold it for the window; a preview or dev deploy is agent work whatever `deploy.policy` says (no path rules, no
+  `requires`); D-005 personal-data
   categories (compared case-insensitively) apply to an unattended live deploy as well as a merge;
 - destructive, financial, paid, secrets, credentials, irreversible and legal labels are human-only boundaries;
-  labels and flags compare case-insensitively, unreadable ones (not a list of strings, or a type that is not a
+  `secret` and `credential` count too; labels and flags compare case-insensitively (`needs-jay`, `needs_jay`), unreadable ones (not a list of strings, or a type that is not a
   string) count as a boundary, a `needs:jay` or `needs:legal` label counts like the flag, and missing labels, flags
   or type are never read as "none" (`boundary:unknown`);
 - `autonomy.FIELDS` says for every profile key whether the engine reads it, fails closed on it (restricted mode,

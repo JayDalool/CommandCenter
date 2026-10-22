@@ -356,6 +356,45 @@ class SecondReview(unittest.TestCase):
         self.assertEqual(autonomy.evaluate("merge", prof, ready(labels=["security"]))["rule"], "target.review")
 
 
+class ThirdReview(unittest.TestCase):
+    """Inputs the third independent review found still gave "auto" (none reachable today)."""
+
+    def test_a_migration_trigger_reads_the_files_and_never_assumes_none(self):
+        prof = copy.deepcopy(PROFILES["commandcenter"])
+        prof["target"]["plan_approval"] = {"required_for": ["migration"], "package": "none"}
+        self.assertEqual(profiles.validate_profile(prof, POL.decisions, "commandcenter"), [])
+        v = autonomy.evaluate("plan", prof, ready(files=[f("db/migrations/0001.sql", "ADDED")]))
+        self.assertEqual((v["outcome"], v["rule"]), ("jay", "target.plan_approval"))
+        v = autonomy.evaluate("plan", prof, ready(files=None))
+        self.assertEqual((v["outcome"], v["rule"], v["missing"]), ("jay", "target.plan_approval:unknown", ["migration"]))
+        self.assertEqual(autonomy.evaluate("plan", prof, ready())["outcome"], "auto")
+
+    def test_a_low_risk_merge_still_reads_its_conditions(self):
+        prof = copy.deepcopy(PROFILES["commandcenter"])
+        prof["target"]["merge"] = {"policy": "low-risk", "requires": ["plan_approved_if_required"]}
+        self.assertEqual(profiles.validate_profile(prof, POL.decisions, "commandcenter"), [])
+        v = autonomy.evaluate("merge", prof, ready(plan_accepted=False))
+        self.assertEqual((v["outcome"], v["rule"]), ("jay", "target.merge:requires"))
+        self.assertEqual(autonomy.evaluate("merge", prof, ready())["outcome"], "auto")
+
+    def test_boundary_label_spellings(self):
+        for label in ("needs-jay", "needs_jay", "NEEDS:LEGAL", "secret", "credential"):
+            self.assertEqual(ev("merge", ready(labels=[label]))["rule"], "boundary", label)
+
+    def test_release_windows_hold_an_auto_live_deploy(self):
+        prof = copy.deepcopy(PROFILES["commandcenter"])
+        prof["target"]["deploy"] = {"policy": "auto", "env": "live", "requires": []}
+        prof["target"]["release"] = {"windows": ["Thu 01:00 America/Winnipeg"]}
+        prof["capabilities"] = {"health_checks": True, "auto_rollback": True}
+        self.assertEqual(profiles.validate_profile(prof, POL.decisions, "commandcenter"), [])
+        live = ready(env="live", merged=True, verified=True, no_migration=True, no_downtime=True,
+                     no_client_workflow_change=True, files=[f("docs/a.md")])
+        v = autonomy.evaluate("deploy", prof, live)
+        self.assertEqual((v["outcome"], v["rule"]), ("jay", "target.release:window"))
+        del prof["target"]["release"]
+        self.assertEqual(autonomy.evaluate("deploy", prof, live)["outcome"], "auto")
+
+
 class Coverage(unittest.TestCase):
     """A profile key, mode, trigger or condition the engine does not handle must fail the build, not be ignored."""
 

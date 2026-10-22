@@ -40,7 +40,8 @@ RISKS = ("low", "medium", "high")
 GH_FILE_LIMIT = 100    # `gh pr view --json files` lists at most this many
 HIGH_RISK_LABELS = {"security", "migration", "destructive", "architecture", "financial", "legal"}
 # Jay's human-only boundaries as ticket labels: "jay" for every action, whatever the profile says.
-BOUNDARY_LABELS = {"destructive", "financial", "paid", "secrets", "credentials", "irreversible", "legal"}
+BOUNDARY_LABELS = {"destructive", "financial", "paid", "secrets", "secret", "credentials", "credential", "irreversible",
+                   "legal"}
 LIVE_ENVS = ("live",)
 NON_LIVE_ENVS = ("preview", "dev")
 MAIN = "main"
@@ -118,7 +119,8 @@ def _boundaries(facts):
             out.append(f"the ticket's {key} cannot be read, so a human-only boundary cannot be ruled out")
     if facts.get("type") is not None and not isinstance(facts.get("type"), str):
         out.append("the ticket's type cannot be read, so a human-only boundary cannot be ruled out")
-    flags = _flags(facts) | {x.replace(":", "_") for x in _labels(facts) if x in ("needs:jay", "needs:legal")}
+    flags = _flags(facts) | {n for n in (x.replace(":", "_").replace("-", "_") for x in _labels(facts))
+                             if n in ("needs_jay", "needs_legal")}
     if "needs_jay" in flags:
         out.append("the ticket is flagged needs:jay")
     labels = _labels(facts)
@@ -222,8 +224,12 @@ def _plan(t, facts):
             elif risk in ("medium", "high"):
                 hits.append(f"{risk} risk")
         elif trig == "migration":
-            if "migration" in labels:
+            files = facts.get("files")
+            if "migration" in labels or (isinstance(files, list) and any(
+                    "migration" in str(f.get("path") if isinstance(f, dict) else f).lower() for f in files)):
                 hits.append("a migration")
+            elif not isinstance(files, list) or not files:
+                missing.append("migration")              # no label and no known files: a migration is not ruled out
         elif trig in ("ui_change_client_visible", "ui_change_major"):
             if "ui" in labels or _type(facts) == "DESIGN" or "needs_ui_review" in _flags(facts):
                 hits.append("a UI change")
@@ -251,6 +257,10 @@ def _merge(t, facts, profile):
         return _verdict("jay", "target.merge:release_train", ["merges wait for the release train"])
     if pol == "low-risk":
         if risk_of(facts) == "low":
+            unmet, missing = _conditions(m.get("requires") or [], facts, profile)
+            if unmet or missing:
+                return _verdict("jay", "target.merge:requires" if unmet else "target.merge:unknown",
+                                unmet or ["a merge condition cannot be checked yet"], missing)
             return _verdict("auto", "target.merge:low-risk", ["every file is on the low-risk allowlist"])
         return _verdict("jay", "target.merge:low-risk", ["not every file is on the low-risk allowlist"],
                         [] if isinstance(facts.get("files"), list) else ["changed files"])
@@ -402,6 +412,8 @@ def _deploy(t, facts, profile, env):
     if unmet:
         return _verdict("jay", "target.deploy:requires", unmet, missing)
     rel = t.get("release") or {}
+    if rel.get("windows"):
+        return _verdict("jay", "target.release:window", ["deploys go out in the release window"], missing)
     caps = profile.get("capabilities") or {}
     lacking = [c for c in rel.get("unattended_requires") or [] if not caps.get(c)]
     if lacking:
