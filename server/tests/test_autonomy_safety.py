@@ -27,7 +27,7 @@ def ready(**over):
     x = {"project": "commandcenter", "type": "MAINTENANCE", "labels": [], "flags": [], "plan_accepted": True,
          "review_at_head": True, "review_head": HEAD, "pr_head": HEAD, "merged": False, "verified": None,
          "ci": "green", "ci_passed": True, "draft": False, "mergeable": "MERGEABLE", "base": "main",
-         "cross_repo": False, "files": [f("server/tests/test_x.py", "ADDED")], "additions": 5, "deletions": 2}
+         "cross_repo": False, "state": "OPEN", "files": [f("server/tests/test_x.py", "ADDED")], "additions": 5, "deletions": 2}
     x.update(over)
     return x
 
@@ -192,7 +192,7 @@ class Regressions(unittest.TestCase):
 CORRUPT = (None, "", 0, 1, "yes", "True", [], {}, "UNKNOWN")
 GATES = {
     "merge": ("ci", "ci_passed", "review_at_head", "review_head", "pr_head", "draft", "mergeable", "base",
-              "cross_repo", "files", "additions", "deletions", "project"),
+              "cross_repo", "state", "files", "additions", "deletions", "project"),
     "deploy": ("env",),
     "plan": ("files", "additions", "deletions", "project"),
 }
@@ -240,6 +240,64 @@ class UnknownIsNeverAuto(unittest.TestCase):
         with mock.patch.object(autonomy, "_decide", side_effect=RuntimeError("boom")):
             v = ev("merge", ready())
         self.assertEqual((v["outcome"], v["rule"]), ("jay", "engine:error"))
+
+
+class FirstReview(unittest.TestCase):
+    """Inputs the first independent review of the safety patch found still gave "auto" (none reachable from today's
+    profiles or daemon facts). Each asserts the verdict and the rule."""
+
+    def test_missing_labels_flags_or_type_are_never_read_as_none(self):
+        for action, start in (("merge", ready()), ("plan", ready()), ("deploy", ready(env="preview"))):
+            for key in ("labels", "flags", "type"):
+                fx = dict(start)
+                fx.pop(key)
+                v = ev(action, fx)
+                self.assertEqual((v["outcome"], v["rule"]), ("jay", "boundary:unknown"), (action, key))
+            for key in ("labels", "flags"):
+                v = ev(action, dict(start, **{key: None}))
+                self.assertEqual((v["outcome"], v["rule"]), ("jay", "boundary:unknown"), (action, key))
+        self.assertEqual(ev("merge", ready(type=None))["outcome"], "auto")     # an untyped ticket is a real ticket
+
+    def test_readiness_holds_whatever_the_merge_conditions_say(self):
+        for merge in ({"policy": "low-risk"}, {"policy": "auto", "requires": []}):
+            prof = copy.deepcopy(PROFILES["commandcenter"])
+            prof["target"]["merge"] = merge
+            self.assertEqual(autonomy.evaluate("merge", prof, ready())["outcome"], "auto", merge)
+            for over in ({"ci": "red"}, {"ci_passed": False}, {"review_at_head": False}, {"state": "CLOSED"},
+                         {"ci": None}, {"ci_passed": None}, {"state": None}):
+                v = autonomy.evaluate("merge", prof, ready(**over))
+                self.assertEqual(v["outcome"], "jay", (merge, over, v))
+                self.assertTrue(v["rule"].startswith("merge:readiness"), (merge, over, v))
+
+    def test_a_profile_that_names_one_deploy_environment_allows_no_other(self):
+        prof = copy.deepcopy(PROFILES["commandcenter"])
+        prof["target"]["deploy"] = {"policy": "auto", "env": "preview", "requires": ["merged", "verify_pass"]}
+        prof["capabilities"] = {"health_checks": True, "auto_rollback": True}
+        live = ready(env="live", merged=True, verified=True, no_migration=True, no_downtime=True,
+                     no_client_workflow_change=True)
+        v = autonomy.evaluate("deploy", prof, live)
+        self.assertEqual((v["outcome"], v["rule"]), ("jay", "target.deploy:env"))
+        self.assertEqual(autonomy.evaluate("deploy", prof, ready(env="dev"))["rule"], "target.deploy:env")
+        self.assertEqual(autonomy.evaluate("deploy", prof, ready(env="preview"))["outcome"], "auto")
+
+    def test_personal_data_categories_ignore_case_and_cover_live_deploys(self):
+        prof = copy.deepcopy(PROFILES["commandcenter"])
+        prof["target"]["personal_data"] = {"require_approval_for": ["deletion"]}
+        v = autonomy.evaluate("merge", prof, ready(personal_data=["Deletion"]))
+        self.assertEqual((v["outcome"], v["rule"]), ("jay", "D-005:personal_data"))
+        self.assertEqual(autonomy.evaluate("merge", prof, ready(personal_data=[]))["outcome"], "auto")
+        prof["capabilities"] = {"health_checks": True, "auto_rollback": True}
+        live = dict(ready(env="live", merged=True, verified=True, no_migration=True, no_downtime=True,
+                          no_client_workflow_change=True, files=[f("docs/a.md")]))
+        self.assertEqual(autonomy.evaluate("deploy", prof, dict(live, personal_data=[]))["outcome"], "auto")
+        v = autonomy.evaluate("deploy", prof, dict(live, personal_data=["deletion"]))
+        self.assertEqual((v["outcome"], v["rule"]), ("jay", "D-005:personal_data"))
+        v = autonomy.evaluate("deploy", prof, live)
+        self.assertEqual((v["outcome"], v["rule"]), ("jay", "D-005:personal_data:unknown"))
+
+    def test_a_head_with_a_trailing_newline_is_not_a_head(self):
+        v = ev("merge", ready(review_head=HEAD + "\n", pr_head=HEAD + "\n"))
+        self.assertNotEqual(v["outcome"], "auto", v)
 
 
 class Coverage(unittest.TestCase):

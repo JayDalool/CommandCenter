@@ -20,8 +20,9 @@ financial, paid, secrets, credentials or irreversible label) are "jay" whatever 
 path in `self_protection.require_jay_for_paths` is "jay" (D-007).
 
 Engine v2 (Phase 1 safety patch): an "auto" merge also needs the PR to be ready (not a draft, mergeable, based on
-main, from this repository, reviewed at its current head, at least one passing check); every deploy goes through the
-deploy rules, an unknown environment is "jay"; a profile field the engine cannot check never lets a verdict be
+main, open, from this repository, approved at its current head, CI green with at least one passing check), whatever
+the profile's merge conditions say; every deploy goes through the deploy rules, an unknown environment or one the
+profile does not name is "jay"; missing labels, flags or type are never read as "none"; a profile field the engine cannot check never lets a verdict be
 "auto" (`FIELDS` lists how each profile key is handled, and a test keeps that list complete).
 """
 import json
@@ -43,7 +44,10 @@ NON_LIVE_ENVS = ("preview", "dev")
 MAIN = "main"
 # How each profile `[target]` key is handled. "enforced": the engine reads it. "fails_closed": the engine cannot
 # check it, so an action it covers is never "auto". "inert": it cannot make a verdict more permissive (it is read
-# by something else, or only ever narrows). tests/test_autonomy.py fails when a schema key is missing here.
+# by something else, or only ever narrows). tests/test_autonomy_safety.py fails when a schema key is missing here.
+# self_protection.require_jay_for_actions (change_policy, change_agent_permissions) has no fact of its own: those
+# actions are changes to policy/** and .claude/**, which require_jay_for_paths covers. deploy.env is read: a
+# profile that names one environment allows no other.
 FIELDS = {
     "plan_approval": "enforced", "merge": "enforced", "deploy": "enforced", "self_protection": "enforced",
     "personal_data": "enforced", "release": "enforced", "constraints": "fails_closed",
@@ -254,7 +258,7 @@ def _merge(t, facts, profile):
 def _same_head(facts):
     """(unmet, missing): the approving review is for the PR's CURRENT head (a review of an older head is not one)."""
     rh, ph = facts.get("review_head"), facts.get("pr_head")
-    ok = [isinstance(h, str) and pipeline.SHA_RE.match(h) for h in (rh, ph)]
+    ok = [isinstance(h, str) and pipeline.SHA_RE.fullmatch(h) for h in (rh, ph)]
     if not all(ok):
         return [], ["the PR head the review is for"]
     return ([] if rh == ph else ["the approving review is for an older head of the PR"]), []
@@ -284,6 +288,22 @@ def _readiness(facts):
         missing.append("whether the PR comes from a fork")
     elif fork is not False:
         unmet.append("the PR comes from a fork")
+    state = facts.get("state")
+    if state is None:
+        missing.append("whether the PR is open")
+    elif state != "OPEN":
+        unmet.append(f"the PR is {str(state).lower()[:20]}")
+    ci = facts.get("ci")
+    if ci is None:
+        missing.append("ci")
+    elif ci != "green":
+        unmet.append(f"CI is {str(ci)[:20]}")
+    elif facts.get("ci_passed") is False:
+        unmet.append("no CI check passed (every check was skipped)")
+    elif facts.get("ci_passed") is not True:
+        missing.append("a passing CI check")
+    if facts.get("review_at_head") is not True:
+        unmet.append("no approving review at the PR head")
     why, gap = _same_head(facts)
     return unmet + why, missing + gap
 
@@ -309,6 +329,10 @@ def _deploy(t, facts, profile, env):
     if env is None:
         return _verdict("jay", "deploy:unknown_env", [f"unknown deployment environment {str(facts.get('env'))[:40]!r}: "
                                                       "it may be production"])
+    allowed = d.get("env")
+    if allowed not in (None, "live") and env != allowed:
+        return _verdict("jay", "target.deploy:env", [f"the profile allows only {str(allowed)[:20]} deployments, "
+                                                     f"not {env}"])
     if env != "live":
         return _verdict("auto", "deploy:not_live", [f"a {env} deployment"])
     if pol == "jay_confirms":
@@ -347,7 +371,7 @@ def _personal_data(t, facts):
     got = facts.get("personal_data")
     if not isinstance(got, (list, tuple)):
         return [], ["which personal-data categories it touches"]
-    hit = sorted(set(map(str, got)) & set(want))
+    hit = sorted(_lower(got) & _lower(want))
     return ([f"it touches personal data: {', '.join(hit)}"] if hit else []), []
 
 
@@ -383,6 +407,11 @@ def _evaluate(action, profile, facts):
     hard = _boundaries(facts)
     if hard:
         return _verdict("jay", "boundary", hard)
+    gap = [f"the ticket's {k}" for k in ("labels", "flags") if facts.get(k) is None]
+    if "type" not in facts:      # a ticket may have no type (None); a fact list without the key says nothing
+        gap.append("the ticket's type")
+    if gap:
+        return _verdict("jay", "boundary:unknown", ["a human-only boundary cannot be ruled out"], gap)
     v = _decide(action, t, facts, profile)
     if v["outcome"] == "auto":
         why = _closed(profile, t, action)
@@ -412,10 +441,15 @@ def _decide(action, t, facts, profile):
                                                            "paths cannot be ruled out"], extra)
     if extra:
         v["missing"] = sorted(set(v["missing"]) | set(extra))
-    if action == "merge" and v["outcome"] == "auto":
+    if v["outcome"] == "auto":
         why3, missing3 = _personal_data(t, facts)
         if why3:
             return _verdict("jay", "D-005:personal_data", why3)
+        if action == "deploy":
+            if missing3:
+                return _verdict("jay", "D-005:personal_data:unknown", ["the personal data it touches is not known"],
+                                missing3)
+            return v
         unmet, gap = _readiness(facts)
         if unmet:
             return _verdict("jay", "merge:readiness", unmet, gap)
