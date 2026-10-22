@@ -129,7 +129,7 @@ Errors are typed (`duplicate_id`, `reserved_id`, `confusable_name`, `ceiling_exc
 | System | How onboarding uses it |
 |---|---|
 | Project Operating Profiles (`profiles.py`, `policy/projects/*.toml`) | New project = proposed profile file in a PR. Default task mode and deploy rules come from it. Onboarding projects use the most restrictive profile until Jay merges theirs. |
-| D-024 | Referenced by Jay as the governing decision for agent onboarding. It is not in `policy/decisions/` on this branch (D-001 … D-009). Proposal: record it as a decision file before any of this is built, so profiles can cite it. |
+| D-024 | The proposed project-onboarding decision from the operating-rules discovery (`operating-rules/COMMANDCENTER_OPERATING_RULES_DISCOVERY.md` and the Project Onboarding Design). Still proposed; not yet in `policy/decisions/`. Proposal: once Jay makes it final, record it as a decision file so profiles can cite it, and build against it. |
 | WorkerNodes (`workers.py`) | Worker grants and project eligibility reference approved node IDs only. A pending or revoked node is never eligible. |
 | Capability Broker | The only enforcement point for effective permissions, merges and deploys. Onboarding writes grants; the broker reads them. |
 | Actor tokens (`identity.py`) | Offboarding and pausing revoke or suspend the agent's tokens. Enforcing token ↔ `X-CCD-Actor` match is the Phase 2 prerequisite for §7.5. |
@@ -148,7 +148,7 @@ Errors are typed (`duplicate_id`, `reserved_id`, `confusable_name`, `ceiling_exc
 
 ### 7.8 Proposed order (each its own PR, off by default, after Jay's sign-off)
 
-1. Record D-024 and a short ADR for this design.
+1. Jay makes D-024 final; record it in `policy/decisions/` with a short ADR for this design.
 2. Read-only `GET /api/agents` built from today's sessions and registry (no new writes).
 3. Tables + `POST /api/agents` / lifecycle behind a feature flag, Developer Unlock required, no credentials.
 4. Project creation as a proposed registry row + profile PR, observation only.
