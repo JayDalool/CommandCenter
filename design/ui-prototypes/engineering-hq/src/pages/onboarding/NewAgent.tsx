@@ -10,7 +10,7 @@ import {
   PROVIDERS, REASONING, SKILLS, TASK_MODES, TOOLS, WORKERS, WORKER_CAP_LABEL, effective, projectRules, templateOf, worker,
   type AgentTemplate, type Grant, type Grants, type TaskMode,
 } from "../../data/catalog";
-import { validateAgent, capabilitySentences, type DraftProjectCtx, type Issue } from "../../data/validate";
+import { validateAgent, capabilitySentences, scrubSecrets, type DraftProjectCtx, type Issue } from "../../data/validate";
 import { MODELS, modelLabel, type IconName } from "../../data/seed";
 import { Icon } from "../../components/Icon";
 import { Chips, Field, GrantBadge, GrantPick, Modal, Money, Seg } from "../../components/form";
@@ -18,7 +18,7 @@ import { Pill, cx, plural } from "../../components/ui";
 import { useOpenAgent } from "../../components/agent";
 import { notify } from "../../windows/manager";
 import { go } from "../../lib/router";
-import { Hierarchy, IssueList, Wizard, peekView, putView, showPage, type StepDef } from "./Wizard";
+import { Hierarchy, IssueList, Wizard, leavePopout, peekView, putView, showPage, type StepDef } from "./Wizard";
 
 export const AGENT_VIEW = "page:onboard";
 export const STEPS: StepDef[] = [
@@ -40,6 +40,7 @@ const SECONDARY = ["Release notes", "On-call triage", "Documentation", "Mentors 
 /** Open the New Agent wizard. Resumes an unfinished new-agent draft if there is one. */
 export function startNewAgent(project?: string, template?: string) {
   const cur = peekView<AgentDraft>(AGENT_VIEW, "draft");
+  if (cur && cur.touched && cur.mode !== "new") keepUnfinished();   // an unsaved edit or plan is saved, never dropped
   if (!(cur && cur.mode === "new" && cur.touched)) {
     const d = template ? agentDraftFrom(template, project ?? "samvision") : blankAgentDraft(project ?? "samvision");
     putView(AGENT_VIEW, "draft", { ...d, step: template ? 1 : 0 });
@@ -62,7 +63,7 @@ export function startPlannedAgent(template: string, p: ProjectDraft, existing?: 
 }
 function keepUnfinished() {
   const cur = peekView<AgentDraft>(AGENT_VIEW, "draft");
-  if (cur && cur.touched && cur.mode !== "plan") { saveDraft(cur); notify(`Your unfinished agent “${cur.name || "Untitled"}” was saved to Drafts.`, "warn"); }
+  if (cur && cur.touched) { saveDraft(cur); notify(`Your unfinished agent “${cur.name || "Untitled"}” was saved to Drafts.`, "warn"); }
 }
 
 // ---------------------------------------------------------------- helpers
@@ -108,12 +109,12 @@ export function Onboard() {
   const [approving, setApproving] = useState(false);
   const openAgent = useOpenAgent();
   const d = stored ?? blankAgentDraft();
-  const set = (patch: Partial<AgentDraft>) => setStored({ ...d, ...patch, touched: true });
+  const set = (patch: Partial<AgentDraft>) => { const { value, hit } = scrubSecrets({ ...d, ...patch, touched: true }); if (hit) notify("That looked like a token or password, so it was removed. Never paste secrets here.", "bad"); setStored(value); };
   const setStep = (i: number) => setStored({ ...d, step: Math.max(0, Math.min(STEPS.length - 1, i)) });
   const ctx = projCtx(d, o, pd ?? undefined);
   const result = validateAgent(d, o, ctx?.draft);
   const editing = d.mode === "edit" ? o.agents.find((a) => a.id === d.editing) : null;
-  const close = (to?: () => void) => { setStored(null); (to ?? (() => go(d.mode === "plan" ? "newproject" : "agents")))(); };
+  const close = (to?: () => void) => { setStored(null); (to ?? (() => go(d.mode === "plan" ? "newproject" : "agents")))(); leavePopout(AGENT_VIEW); };
   const applyFix = (i: Issue) => { if (i.fix) setStored({ ...i.fix.apply(d), touched: true }); };
   const goTo = (id: string) => setStep(STEPS.findIndex((s) => s.id === id));
 
@@ -129,7 +130,7 @@ export function Onboard() {
     if (d.mode === "edit") { updateAgent(d); notify(`${d.name}: changes approved (mock). Config version saved; the ID ${d.editing} is unchanged.`); }
     else { activateAgent(d); notify(`${d.name} added to the prototype (mock). Status: Not started. No credentials or sessions were created.`); }
     const id = d.mode === "edit" ? d.editing! : d.id;
-    setApproving(false); setStored(null); go("teams", d.project); openAgent(id);
+    setApproving(false); setStored(null); go("teams", d.project); openAgent(id); leavePopout(AGENT_VIEW);
   };
 
   const title = d.mode === "edit" ? <>Edit <em>{editing?.name ?? d.name}</em></> : d.mode === "plan" ? <>Plan a new agent <small className="muted">for {pd?.name || "the new project"}</small></> : <>New <em>Agent</em></>;
@@ -154,7 +155,7 @@ export function Onboard() {
     {d.step === 9 && <ReviewStep d={d} ctx={ctx} errors={result.errors} warnings={result.warnings} goTo={goTo} applyFix={applyFix} />}
     {approving && <Modal title={d.mode === "edit" ? `Approve changes to ${d.name}?` : `Approve and add ${d.name}?`} onClose={() => setApproving(false)}
       footer={<><button type="button" className="btn" onClick={() => setApproving(false)}>Not yet</button>
-        <button type="button" className="btn btn-primary" data-autofocus onClick={doApprove}><Icon name="shield" size={15} /> {d.mode === "edit" ? "Approve changes" : "Approve & Add Agent"}</button></>}>
+        <button type="button" className="btn btn-primary" onClick={doApprove}><Icon name="shield" size={15} /> {d.mode === "edit" ? "Approve changes" : "Approve & Add Agent"}</button></>}>
       <ul className="checks">
         <li>{d.mode === "edit" ? `Saves config version ${(o.profiles[d.editing!]?.length ?? 0) + 1} for ${d.name}. The ID “${d.editing}” and all history stay.` : `Adds ${d.name} (${d.title}) to ${ctx?.name} in this prototype's mock organisation.`}</li>
         <li>{d.mode === "edit" ? "Its current status is unchanged." : "Its status starts as Not started: no session, nothing running."}</li>

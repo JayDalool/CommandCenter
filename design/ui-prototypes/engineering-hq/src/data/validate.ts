@@ -92,6 +92,10 @@ export function validateAgent(d: AgentDraft, o: Org, draftProject?: DraftProject
   }
   if (!d.stage) W("organization", "Pick a pipeline stage so the team knows where this agent fits.", "stage");
 
+  // secrets: nothing secret may be typed into a draft (see scrubSecrets)
+  if (d.mode === "edit" && d.editing && o.agents.find((a) => a.id === d.editing)?.life === "offboarded")
+    E("identity", `${o.agents.find((a) => a.id === d.editing)!.name} was offboarded. An offboarded agent can't be edited or put back on a team; create a new agent instead.`, "name");
+
   // capabilities
   if (!d.skills.length) W("capabilities", "No skills selected. The agent will only follow its instructions.", "skills");
   for (const t of TOOLS) {
@@ -107,7 +111,8 @@ export function validateAgent(d: AgentDraft, o: Org, draftProject?: DraftProject
   else if (proj) for (const m of d.machines) if (!proj.workers.includes(m)) E("access", `${worker(m)?.label} is not an eligible machine for ${proj.name}.`, "machines");
   for (const m of d.machines) { const w = worker(m); if (w && !w.agentNode) W("access", `${w.label} is not an agent execution node today. Using it needs Jay's approval and a policy change.`, "machines"); }
   if (proj?.type === "employer" && d.machines.includes("server")) E("access", "Employer projects may not run on jay-server.", "machines");
-  if (proj) for (const r of d.repos) if (r !== proj.repo) E("access", `${r} is not ${proj.name}'s repository. An agent only gets repositories of the projects it works on.`, "repos");
+  const allowedRepos = new Set([proj?.repo, ...(d.mode === "edit" && d.editing ? o.projects.filter((p) => p.team.some((m) => m.id === d.editing)).map((p) => p.repo) : [])]);
+  if (proj) for (const r of d.repos) if (!allowedRepos.has(r)) E("access", `${r} is not ${proj.name}'s repository. An agent only gets repositories of the projects it works on.`, "repos");
   if (proj && !d.repos.length && GRANT_RANK[d.grants["repo.read"] ?? "deny"] > 0) W("access", "No repository selected, so its repository permissions have nothing to apply to.", "repos");
 
   // permissions
@@ -156,6 +161,7 @@ export function validateProject(d: ProjectDraft, o: Org, agentIssues?: (a: Agent
   else if (name.length > 40) E("identity", "Keep the name under 40 characters.", "name");
   else if (o.projects.some((p) => norm(p.name) === norm(name))) E("identity", `A project called ${name} already exists.`, "name");
   if (!d.key) E("identity", "The project needs a key.", "key");
+  else if (o.convs.some((c) => c.id === `${d.key}-lead` || c.id === `team-${d.key}`)) E("identity", `The key "${d.key}" would reuse an existing conversation (${d.key}-lead). Choose another key.`, "key");
   else if (!KEY_RE.test(d.key)) E("identity", "The key must start with a letter and use lowercase letters, numbers and hyphens (2–24 characters).", "key");
   else if (o.projects.some((p) => p.key === d.key)) E("identity", `The key "${d.key}" is already used by ${o.projects.find((p) => p.key === d.key)!.name}.`, "key");
   else if (RESERVED_IDS.includes(d.key)) E("identity", `The key "${d.key}" is reserved.`, "key");
@@ -176,7 +182,8 @@ export function validateProject(d: ProjectDraft, o: Org, agentIssues?: (a: Agent
   else if (!BRANCH_RE.test(d.branch.trim())) E("repository", "The default branch name isn't valid.", "branch");
   if (d.visibility === "public" && (d.type === "client" || d.type === "employer")) E("repository", `${d.type === "client" ? "Client" : "Employer"} projects must use a private repository.`, "visibility");
   if (d.repoMode === "proposed") W("repository", `${repo || "The repository"} is only proposed. Nothing is created on GitHub; creating it needs Jay's separate authorisation.`, "repo");
-  if (d.clone && /\.\.|[;&|`$]/.test(d.clone)) E("repository", "The local clone location can't contain '..' or shell characters.", "clone");
+  if (d.clone && looksSecret(d.clone)) E("repository", "The clone location looks like it contains a credential. Never paste tokens or passwords.", "clone");
+  else if (d.clone && /\.\.|[;&|`$]/.test(d.clone)) E("repository", "The local clone location can't contain '..' or shell characters.", "clone");
 
   // environments
   const prod = d.envs.Production?.on;
@@ -245,7 +252,25 @@ export function capabilitySentences(d: AgentDraft, rules: Record<string, Grant>,
   out.push({ tone: "bad", text: "Cannot merge" });
   out.push(ask.includes(perm("prod.deploy").label) ? { tone: "warn", text: "May prepare deploys; each needs Jay's approval" } : { tone: "bad", text: "Cannot deploy" });
   for (const m of d.machines) { const w = worker(m); if (w) out.push(w.agentNode ? { tone: "ok", text: `May use ${w.label}` } : { tone: "warn", text: `May use ${w.label} only after Jay approves it` }); }
-  out.push({ tone: "bad", text: "Production changes denied (observe only)" });
+  const prodAsk = PERMISSIONS.filter((p) => p.group === "Production" && (d.grants[p.id] ?? "deny") !== "deny");
+  out.push(prodAsk.length ? { tone: "warn", text: `Production: ${prodAsk.map((p) => p.label.toLowerCase()).join(", ")} with Jay's approval; everything else denied` } : { tone: "bad", text: "Production changes denied (observe only)" });
   out.push({ tone: "bad", text: "No secrets, no credentials, no infrastructure" });
   return { out, can: s(can), ask: s(ask), cannot: s(cannot) };
+}
+
+/** Tokens, keys, passwords and credential URLs. Used to keep secrets out of every draft and record. */
+const SECRET_RE = /(gh[pousr]_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{10,}|\bsk-[A-Za-z0-9_-]{12,}|xox[abpr]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@|\b(?:password|passwd|secret|api[_-]?key|token)\s*[:=]\s*\S{4,})/i;
+export const looksSecret = (s: string) => SECRET_RE.test(s);
+const SCRUBBED = "[removed: looked like a secret]";
+/** Replace anything secret-looking in a draft's strings before it is stored anywhere (view state, drafts, org). */
+export function scrubSecrets<T>(v: T): { value: T; hit: boolean } {
+  let hit = false;
+  const walk = (x: unknown): unknown => {
+    if (typeof x === "string") { if (!looksSecret(x)) return x; hit = true; return x.replace(new RegExp(SECRET_RE.source, "gi"), SCRUBBED); }
+    if (Array.isArray(x)) return x.map(walk);
+    if (x && typeof x === "object") return Object.fromEntries(Object.entries(x as Record<string, unknown>).map(([k, y]) => [k, walk(y)]));
+    return x;
+  };
+  const value = walk(v) as T;
+  return { value: hit ? value : v, hit };
 }

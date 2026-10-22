@@ -373,3 +373,60 @@ describe("wizard pop-outs", () => {
     expect(s).not.toMatch(/"(token|password|secret|apiKey|api_key)"\s*:/i);
   });
 });
+
+describe("independent review fixes", () => {
+  it("a project key that would reuse an existing conversation ID is rejected (sv → sv-lead)", () => {
+    expect(msgs(validateProject(listing({ key: "sv", prefix: "SVX" }), o()))).toMatch(/existing conversation/);
+    expect(msgs(validateProject(listing({ key: "cc", prefix: "CCX" }), o()))).toMatch(/existing conversation/);
+  });
+  it("an offboarded agent can't be edited back onto a team, even from an old edit draft", () => {
+    const d = agentDraftOf("atlas");
+    act(() => offboard("atlas", "claude", "test"));
+    expect(msgs(validateAgent({ ...d, name: "Atlas 2" }, o()))).toMatch(/was offboarded/);
+    act(() => updateAgent({ ...d, name: "Atlas 2" }));
+    expect(o().projects.some((p) => p.team.some((m) => m.id === "atlas"))).toBe(false);
+    expect(o().agents.find((a) => a.id === "atlas")!.name).toBe("Atlas");
+  });
+  it("secrets and credential URLs are scrubbed before any draft is stored, and rejected in the clone path", async () => {
+    const { scrubSecrets, looksSecret } = await import("../src/data/validate");
+    for (const s of ["postgres://admin:hunter2@db.example.com/x", "https://ghp_abcdefgh12345678@github.com/x/y", "ghp_abcdefghijklmnop", "sk-abcdefghijklmnopqr", "password=hunter22", "AKIAABCDEFGHIJKLMNOP"])
+      expect(looksSecret(s), s).toBe(true);
+    for (const s of ["JayDalool/SamVisionAI", "https://staging.samvision.app", "Writes tests first", "main"]) expect(looksSecret(s), s).toBe(false);
+    const { value, hit } = scrubSecrets(listing({ envs: { ...blankProjectDraft().envs, Production: { ...blankProjectDraft().envs.Production, on: true, db: "postgres://admin:hunter2@db/x" } as never } }));
+    expect(hit).toBe(true); expect(JSON.stringify(value)).not.toMatch(/hunter2/);
+    expect(msgs(validateProject(listing({ clone: "https://ghp_abcdefgh12345678@github.com/x/y" }), o()))).toMatch(/credential/);
+  });
+  it("typing a secret into the wizard never reaches view state or localStorage", () => {
+    render(<App />); go("#/onboard");
+    fireEvent.click(screen.getAllByRole("button", { name: /Implementation Agent/ })[0]);
+    act(() => { (screen.getByRole("navigation", { name: "Steps" }).querySelectorAll("button")[7] as HTMLButtonElement).click(); });
+    const box = screen.getAllByRole("textbox")[0];
+    fireEvent.change(box, { target: { value: "use token ghp_abcdefghijklmnop0000 for pushes" } });
+    expect(JSON.stringify(viewState.get())).not.toMatch(/ghp_abcdefghijklmnop0000/);
+    expect(Object.values(localStorage).join("")).not.toMatch(/ghp_abcdefghijklmnop0000/);
+  });
+  it("New Agent never silently drops an unsaved edit or plan: it is saved to Drafts first", async () => {
+    const { startAgentEdit, startNewAgent, AGENT_VIEW } = await import("../src/pages/onboarding/NewAgent");
+    act(() => startAgentEdit("nova"));
+    viewState.set((s) => ({ ...s, [AGENT_VIEW]: { ...s[AGENT_VIEW], draft: { ...(s[AGENT_VIEW].draft as AgentDraft), name: "Nova Prime", touched: true } } }));
+    act(() => startNewAgent());
+    expect(o().drafts.some((x) => x.label === "Nova Prime")).toBe(true);
+  });
+  it("a project's Strict 'no migrations' rule stays a deny in the effective permissions", () => {
+    const strict = { ...blankProjectDraft().deploy, migrations: "deny" as const };
+    expect(projectRules(strict)["data.dev_write"]).toBe("deny");
+  });
+  it("editing a multi-project agent keeps its repositories in its other projects", () => {
+    const d = agentDraftOf("atlas");
+    expect(d.repos.length).toBeGreaterThan(1);
+    expect(msgs(validateAgent(d, o()))).not.toMatch(/is not .*'s repository/);
+  });
+  it("offboarding hands work only to active agents, team-mates first", () => {
+    act(() => setLife("iris", "paused"));
+    render(<App />); go("#/agents");
+    fireEvent.click(screen.getAllByRole("button", { name: /^Atlas, / })[0]);
+    fireEvent.click(screen.getByRole("button", { name: /^Offboard$/ }));
+    const opts = [...within(screen.getByRole("dialog", { name: /Offboard Atlas/ })).getAllByRole("option")].map((x) => x.textContent ?? "");
+    expect(opts.some((t) => /Iris/.test(t))).toBe(false);
+  });
+});

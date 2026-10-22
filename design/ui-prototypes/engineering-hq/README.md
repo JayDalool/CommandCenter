@@ -31,7 +31,22 @@ Use a normal browser tab so pop-outs can open real windows you can drag to anoth
   In a live build the model comes from ccd's usage meter (`server/ccd/meter.py` records it per session).
 
 Pages: `#/office` · `#/messages/sv-lead` · `#/decisions` · `#/teams/samvision` · `#/topology` ·
-`#/engineering` · `#/revenue` · `#/task/SV-025` · `#/more` (demo controls: feed outage, reset).
+`#/engineering` · `#/revenue` · `#/task/SV-025` · `#/agents` · `#/onboard` (New Agent) · `#/newproject` (New Project) ·
+`#/design` (design system) · `#/more` (demo controls: feed outage, slow loading, reset).
+
+## Look and feel (round 4: macOS-inspired refinement)
+
+Same layouts, palette, project colours and graphs. Added on top, with no new dependencies:
+- Tokens in `src/styles/hq.css` `:root`: radius (`--r-2xs` … `--r-xl`, `--r-pill`), type scale (`--fs-*`), spacing (`--sp-*`),
+  elevation (`--e1` cards, `--e2` popovers, `--e3` modals), a restrained translucent `--material`, and motion (`--ease*`, `--dur-*`).
+  The refinement layer is the last block of the stylesheet.
+- `src/components/overlay.tsx`: context menus (right-click, the context-menu key or Shift+F10; arrow keys, Escape),
+  tooltips for every `title` (styled, delayed, keyboard-aware), anchored popovers, skeletons, and the sliding thumb of every
+  segmented control. Each window, including pop-outs, mounts its own layers.
+- Right-click menus on tabs, sidebar items, agent cards, directory rows, conversations and project nodes.
+- Reduced motion: follows the OS setting, or Jay's menu → Reduce motion (`<html data-motion="reduce">`).
+- Loading states appear only when something loads. The prototype loads nothing, so “Simulate slow loading” (Jay's menu,
+  Settings & more, or `?slow`) shows the skeletons on every navigation.
 
 ## Pop out any tab
 
@@ -46,9 +61,9 @@ Pages: `#/office` · `#/messages/sv-lead` · `#/decisions` · `#/teams/samvision
 ## Tests
 
 ```bash
-npm test                              # 30 unit/component tests (jsdom)
+npm test                              # 63 unit/component tests (jsdom)
 npm run build && npm run preview &    # then, in another shell:
-node e2e/run.mjs                      # 13 real-browser tests with real pop-out windows
+node e2e/run.mjs                      # 21 real-browser tests: pop-out windows, menus, tooltips, popovers, motion, loading
 node e2e/shots.mjs                    # screenshots at 1920×1080, 1366×768 and pop-out sizes → e2e/out
 python3 e2e/compare.py <references> e2e/out <out>   # reference-vs-prototype sheets (Pillow)
 ```

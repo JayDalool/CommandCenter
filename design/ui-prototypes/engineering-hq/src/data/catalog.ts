@@ -298,7 +298,7 @@ export function projectRules(d: DeployRules): Grants {
   const r: Grants = {};
   for (const p of PERMISSIONS) r[p.id] = "allow";
   r["repo.merge"] = d.merge; r["prod.deploy"] = d.deploy; r["prod.rollback"] = d.deploy; r["prod.restart"] = minGrant(d.downtime, d.deploy);
-  r["prod.browser_write"] = minGrant(d.browserProd, d.prodWrite); r["data.prod"] = d.database; r["data.dev_write"] = d.migrations === "deny" ? "approval" : "allow";
+  r["prod.browser_write"] = minGrant(d.browserProd, d.prodWrite); r["data.prod"] = d.database; r["data.dev_write"] = d.migrations;
   return r;
 }
 export interface ProjectBudgetCfg { monthlyWarnUsd: number; costWarnUsd: number; infraWarnUsd: number; maxParallelAgents: number; preferredModel: string; paidTools: Grant }

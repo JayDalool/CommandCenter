@@ -8,14 +8,14 @@ import {
   AGENT_TEMPLATES, DEPLOY_PRESETS, ENVIRONMENTS, ENV_FACTS, ENV_FACT_LABEL, GRANT_LABEL, KNOWN_REPOS, MODEL_PRICE, ONBOARDING_STAGES, PROJECT_COLORS, PROJECT_ICONS,
   PROJECT_TYPES, PROVIDERS, TARGET_MODES, TASK_MODES, WORKERS, WORKER_CAP_LABEL, type DeployRules, type Grant,
 } from "../../data/catalog";
-import { MAX_TASK_MODE, validateAgent, validateProject, type Issue } from "../../data/validate";
+import { MAX_TASK_MODE, scrubSecrets, validateAgent, validateProject, type Issue } from "../../data/validate";
 import { modelLabel, type IconName } from "../../data/seed";
 import { Icon } from "../../components/Icon";
 import { Chips, Field, GrantBadge, GrantPick, Modal, Money, Seg } from "../../components/form";
 import { Avatar, Pill, cx, plural } from "../../components/ui";
 import { notify } from "../../windows/manager";
 import { go } from "../../lib/router";
-import { IssueList, Wizard, peekView, putView, showPage, type StepDef } from "./Wizard";
+import { IssueList, Wizard, leavePopout, peekView, putView, showPage, type StepDef } from "./Wizard";
 import { DraftAvatar, startPlannedAgent } from "./NewAgent";
 
 export const PROJECT_VIEW = "page:newproject";
@@ -48,7 +48,7 @@ export function NewProject() {
   const [stored, setStored] = useViewState<ProjectDraft | null>(PROJECT_VIEW, "draft", null);
   const [approving, setApproving] = useState(false);
   const d = stored ?? blankProjectDraft();
-  const set = (p: Partial<ProjectDraft>) => setStored({ ...d, ...p, touched: true });
+  const set = (p: Partial<ProjectDraft>) => { const { value, hit } = scrubSecrets({ ...d, ...p, touched: true }); if (hit) notify("That looked like a token or password, so it was removed. Never paste secrets here.", "bad"); setStored(value); };
   const setStep = (i: number) => setStored({ ...d, step: Math.max(0, Math.min(PSTEPS.length - 1, i)) });
   const agentCheck = (a: AgentDraft) => validateAgent(a, o, { key: d.key, name: d.name, repo: d.repo, workers: d.workers, type: d.type, deploy: d.deploy, taskMode: d.taskMode,
     members: [d.lead, ...d.members].filter(Boolean), planned: d.planned.filter((x) => x.id !== a.id) });
@@ -61,12 +61,12 @@ export function NewProject() {
     notify(`${d.name} created in Onboarding / Observation (mock). No repository, infrastructure or credentials were created.`);
     setApproving(false); setStored(null);
     const plan = peekView<AgentDraft>("page:onboard", "draft"); if (plan?.mode === "plan") putView("page:onboard", "draft", null);
-    go("teams", d.key);
+    go("teams", d.key); leavePopout(PROJECT_VIEW);
   };
   return <Wizard viewId={PROJECT_VIEW} title={<>New <em>Project</em></>} sub="Every project starts in Onboarding / Observation. Its operating mode applies only after an admission review and your approval."
     steps={PSTEPS} step={d.step} setStep={setStep} result={result} dirty={d.touched}
     onSave={() => { const id = saveDraft(d); setStored({ ...d, savedId: id, touched: false }); notify("Draft saved. Resume it any time from Agents → Drafts."); }}
-    onCancelConfirmed={() => { setStored(null); const plan = peekView<AgentDraft>("page:onboard", "draft"); if (plan?.mode === "plan") putView("page:onboard", "draft", null); go("teams"); }}
+    onCancelConfirmed={() => { setStored(null); const plan = peekView<AgentDraft>("page:onboard", "draft"); if (plan?.mode === "plan") putView("page:onboard", "draft", null); go("teams"); leavePopout(PROJECT_VIEW); }}
     approve={{ label: "Approve Mock Project", run: () => setApproving(true) }}
     preview={<ProjectPreview d={d} o={o} />}>
     {d.step === 0 && <IdentityStep d={d} set={set} o={o} />}
@@ -80,7 +80,7 @@ export function NewProject() {
     {d.step === 8 && <ReviewStep d={d} o={o} errors={result.errors} warnings={result.warnings} goTo={goTo} applyFix={applyFix} />}
     {approving && <Modal title={`Approve ${d.name} as a mock project?`} onClose={() => setApproving(false)}
       footer={<><button type="button" className="btn" onClick={() => setApproving(false)}>Not yet</button>
-        <button type="button" className="btn btn-primary" data-autofocus onClick={approve}><Icon name="shield" size={15} /> Approve Mock Project</button></>}>
+        <button type="button" className="btn btn-primary" onClick={approve}><Icon name="shield" size={15} /> Approve Mock Project</button></>}>
       <ul className="checks">
         <li>Adds {d.name} ({d.prefix}) to this prototype in <b>Onboarding / Observation</b>. Agents may only observe until you approve its operating profile.</li>
         <li>{d.repoMode === "existing" ? `Records ${d.repo} as its repository. Nothing on GitHub changes.` : `Records ${d.repo} as a proposed repository. It is not created; a “Needs Jay” task asks for that separately.`}</li>

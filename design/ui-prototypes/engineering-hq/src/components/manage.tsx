@@ -12,6 +12,33 @@ import { Field, GrantBadge, Modal } from "./form";
 import { Pill, TaskKey, cx, plural } from "./ui";
 import { ago } from "./agent";
 import { startAgentEdit } from "../pages/onboarding/NewAgent";
+import { CONVERSATIONS } from "../data/seed";
+import { go } from "../lib/router";
+import { popOut } from "../windows/manager";
+import { viewState } from "../data/live";
+import type { MenuItem } from "./overlay";
+
+const copy = (t: string) => { void navigator.clipboard?.writeText(t).then(() => notify(`Copied ${t}`), () => notify("Couldn't copy.", "warn")); };
+/** Right-click actions for an agent, wherever it appears (cards, directory, graphs). Same rules as the inspector. */
+export function agentMenu(a: Agent, open: (id: string) => void): MenuItem[] {
+  const life = a.life ?? "active";
+  const dm = CONVERSATIONS.find((c) => c.agent === a.id && c.kind === "dm" && !c.archived);
+  const details: MenuItem[] = [
+    { label: "Open details", icon: "eye", run: () => open(a.id) },
+    { label: "Open details in new window", icon: "popout", run: () => { viewState.set((s) => ({ ...s, "panel:agent": { ...(s["panel:agent"] ?? {}), id: a.id } })); popOut("panel:agent"); } },
+  ];
+  if (life === "offboarded") return [...details, { sep: true }, { label: "Copy agent ID", icon: "doc", run: () => copy(a.id) }];
+  return [...details,
+    { label: dm ? `Message ${a.name}` : "No conversation yet", icon: "message", disabled: !dm, run: () => dm && go("messages", dm.id) },
+    { sep: true },
+    { label: "Edit…", icon: "edit", run: () => startAgentEdit(a.id) },
+    { label: "Change model…", icon: "cpu", run: () => startAgentEdit(a.id, "intelligence") },
+    life === "paused" ? { label: "Resume", icon: "clock", run: () => { setLife(a.id, "active"); notify(`${a.name} resumed (mock).`); } }
+      : { label: "Pause", icon: "clock", run: () => { setLife(a.id, "paused", "Paused from the context menu"); notify(`${a.name} paused (mock). It takes no new work.`, "warn"); } },
+    { sep: true },
+    { label: "Copy agent ID", icon: "doc", run: () => copy(a.id) },
+  ];
+}
 
 export function LifePill({ a }: { a: Agent }) {
   const l = a.life ?? "active";
@@ -78,7 +105,8 @@ function OffboardDialog({ a, onClose }: { a: Agent; onClose: () => void }) {
   const o = useOrg();
   const open = o.tasks.filter((t) => t.owner === a.id && t.stage !== "Closed");
   const leads = o.projects.filter((p) => p.team.some((m) => m.id === a.id && m.reportsTo === "jay"));
-  const candidates = o.agents.filter((x) => x.id !== a.id && x.life !== "offboarded");
+  const mates = new Set(o.projects.filter((p) => p.team.some((m) => m.id === a.id)).flatMap((p) => p.team.map((m) => m.id)));
+  const candidates = o.agents.filter((x) => x.id !== a.id && (x.life ?? "active") === "active").sort((x, y) => Number(mates.has(y.id)) - Number(mates.has(x.id)));
   const [to, setTo] = useState(candidates[0]?.id ?? "");
   const [reason, setReason] = useState("");
   const [ok, setOk] = useState(false);

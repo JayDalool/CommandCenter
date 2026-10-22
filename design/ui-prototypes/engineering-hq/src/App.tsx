@@ -22,6 +22,8 @@ import { useOrg } from "./data/org";
 import { Agents } from "./pages/Agents";
 import { Onboard } from "./pages/onboarding/NewAgent";
 import { NewProject } from "./pages/onboarding/NewProject";
+import { DesignSystem } from "./pages/DesignSystem";
+import { MenuLayer, PageSkeleton, TipLayer, useSegThumbs, useSimulatedLoad } from "./components/overlay";
 
 // One source for project colours: the project records (seed.ts, plus projects created in the prototype). CSS reads them as --pj-<key>.
 function publishColours() { for (const p of PROJECTS) document.documentElement.style.setProperty(`--pj-${p.key}`, p.color); }
@@ -29,7 +31,7 @@ publishColours();
 
 const PAGES: Record<string, () => React.JSX.Element> = { office: Office, messages: Messages, decisions: Decisions, teams: Teams, topology: Topology,
   engineering: Engineering, revenue: Revenue, more: More, task: () => <TaskRoom />,
-  agents: Agents, onboard: Onboard, newproject: NewProject };
+  agents: Agents, onboard: Onboard, newproject: NewProject, design: DesignSystem };
 
 function MsgCtx() { const [conv] = useViewState("page:messages", "conv", "sv-lead"); return <TaskContext conv={conv} />; }
 
@@ -56,6 +58,7 @@ function MainWindow() {
   useEffect(() => { const a = startMainWindowDuties(); const b = beatAsMain(); return () => { a(); b(); }; }, []);
   const view = viewForRoute(route.screen, route.id);
   const Page = PAGES[route.screen] ?? Office;
+  const ready = useSimulatedLoad(`${route.screen}/${route.id ?? ""}`);
   useEffect(() => { document.title = `CommandCenter · ${view?.title ?? "Engineering HQ"}`; }, [view?.title]);
   return <div className="app">
     <Sidebar />
@@ -63,7 +66,7 @@ function MainWindow() {
       <TopBar />
       <TabStrip />
       <main id="main" className="content" tabIndex={-1}>
-        {view ? <Detachable id={view.id} className="page-placeholder"><Page /></Detachable> : <Page />}
+        {!ready ? <PageSkeleton label={`Loading ${view?.title ?? "page"}`} /> : view ? <Detachable id={view.id} className="page-placeholder"><Page /></Detachable> : <Page />}
       </main>
     </div>
   </div>;
@@ -74,5 +77,6 @@ export function App() {
   const o = useOrg();   // every page re-renders when the organisation changes, in every window
   useEffect(publishColours, [o.v]);
   useFeedRunner();
-  return <>{route.screen === "pop" ? <PopoutWindow render={renderView} /> : <MainWindow />}<AgentDrawer /><Notices /></>;
+  useSegThumbs();
+  return <>{route.screen === "pop" ? <PopoutWindow render={renderView} /> : <MainWindow />}<AgentDrawer /><Notices /><MenuLayer /><TipLayer /></>;
 }

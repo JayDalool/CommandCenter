@@ -210,6 +210,114 @@ await test("reduced motion: graph edges do not animate", async (ctx) => {
   assert(anim === "none", `animation ${anim}`);
 });
 
+console.log("Refinement layer (menus, tooltips, popovers, motion, loading)");
+const SHOT = process.env.SHOTS; if (SHOT) fs.mkdirSync(SHOT, { recursive: true });
+const shot = async (p, name) => { if (SHOT) await p.screenshot({ path: `${SHOT}/${name}.png` }); };
+
+await test("context menus: right-click and Shift+F10 open them, arrows move, Escape closes and restores focus; they work in pop-outs too", async (ctx) => {
+  const m = await main(ctx, "office");
+  await m.locator(".agent-card").first().click({ button: "right" });
+  const menu = m.getByRole("menu");
+  assert(await menu.isVisible(), "no menu on right-click");
+  assert(await menu.getByRole("menuitem", { name: "Open details", exact: true }).count() === 1, "agent menu items missing");
+  await m.waitForTimeout(150); await shot(m, "r4_context_menu_agent");
+  const first = await m.evaluate(() => document.activeElement?.textContent);
+  await m.keyboard.press("ArrowDown");
+  const second = await m.evaluate(() => document.activeElement?.textContent);
+  assert(first !== second, "arrow keys don't move");
+  await m.keyboard.press("Escape");
+  assert(await menu.count() === 0, "Escape didn't close");
+  assert(await m.evaluate(() => !!document.activeElement?.closest(".agent-card")), "focus not restored");
+  await m.locator('[data-testid="tab-page:office"] a').focus(); await m.keyboard.press("Shift+F10");
+  assert(await m.getByRole("menuitem", { name: "Pop out to new window" }).count() === 1, "tab menu via keyboard");
+  await m.mouse.click(5, 900); assert(await m.getByRole("menu").count() === 0, "outside click didn't close");
+  const w = await pop(m, "pop-page:agents");
+  await w.locator(".dir tbody tr").first().click({ button: "right" });
+  assert(await w.getByRole("menu").isVisible(), "no menu in pop-out");
+  await shot(w, "r4_context_menu_popout");
+  await w.getByRole("menuitem", { name: "Open details", exact: true }).click();
+  assert(await w.getByRole("menu").count() === 0, "menu stayed open after choosing");
+});
+
+await test("context menu action: Pause from a pop-out changes the shared store in every window and is audited", async (ctx) => {
+  const m = await main(ctx, "agents");
+  await m.evaluate(() => localStorage.clear()); await m.reload(); await m.waitForSelector(".dir");
+  const w = await pop(m, "pop-page:agents");
+  await m.goto(`${BASE}?nofeed#/office`); await m.waitForSelector(".agent-card");
+  await w.locator(".dir tbody tr", { hasText: "Iris" }).click({ button: "right" });
+  await w.getByRole("menuitem", { name: "Pause", exact: true }).click();
+  assert(await until(async () => (await m.locator(".agent-card", { hasText: "Iris" }).locator(".pres", { hasText: "Paused" }).count()) === 1), "main window didn't see the pause");
+  assert(await w.locator(".audit li", { hasText: /Iris/ }).count() >= 1, "not audited");
+  await w.locator(".dir tbody tr", { hasText: "Iris" }).first().click({ button: "right" }).catch(() => {});
+});
+
+await test("tooltips: styled tooltip after a pause, native title parked while shown and restored after", async (ctx) => {
+  const m = await main(ctx, "office");
+  const btn = m.locator('[data-testid="pop-page:topology"]').first();
+  const title = await btn.getAttribute("title");
+  await btn.hover();
+  assert(await until(async () => (await m.locator(".tip").count()) === 1, 2000), "no tooltip");
+  assert((await m.locator(".tip").textContent()) === title, "tooltip text differs from title");
+  assert(await btn.getAttribute("title") === null, "native title not parked");
+  await shot(m, "r4_tooltip");
+  await m.mouse.move(5, 5);
+  assert(await until(async () => (await m.locator(".tip").count()) === 0, 1000), "tooltip stuck");
+  assert(await btn.getAttribute("title") === title, "title not restored");
+});
+
+await test("Jay's menu and notifications popover; reduce-motion setting stops animation app-wide", async (ctx) => {
+  const m = await main(ctx, "office");
+  await m.locator(".bell").click();
+  assert(await m.getByRole("dialog", { name: "Notifications" }).isVisible(), "no notifications popover");
+  await m.waitForTimeout(250); await shot(m, "r4_popover_notifications");
+  await m.keyboard.press("Escape");
+  assert(await m.getByRole("dialog", { name: "Notifications" }).count() === 0, "popover didn't close");
+  await m.locator("button.me").click();
+  await m.waitForTimeout(150); await shot(m, "r4_menu_jay");
+  await m.getByRole("menuitemcheckbox", { name: "Reduce motion" }).click();
+  assert(await m.evaluate(() => document.documentElement.dataset.motion) === "reduce", "data-motion not set");
+  const d = await m.evaluate(() => getComputedStyle(document.querySelector(".btn")).transitionDuration);
+  assert(/^0\.00001s|^1e-05s|^0s/.test(d) || parseFloat(d) < 0.001, `transitions still run: ${d}`);
+  await m.locator("button.me").click(); await m.getByRole("menuitemcheckbox", { name: "Motion: follow system" }).click();
+  assert(await m.evaluate(() => document.documentElement.dataset.motion) === "system", "not back to system");
+});
+
+await test("segmented controls: the thumb sits under the selected segment and follows it", async (ctx) => {
+  const m = await main(ctx, "office");
+  const seg = m.locator(".agents-strip .seg").first();
+  assert(await until(async () => (await seg.getAttribute("class")).includes("has-thumb")), "no thumb");
+  const at = async () => m.evaluate((el) => [parseFloat(el.style.getPropertyValue("--th-x")), parseFloat(el.style.getPropertyValue("--th-w"))], await seg.elementHandle());
+  const [x0, w0] = await at();
+  await seg.getByRole("tab", { name: /^Working/ }).click(); await m.waitForTimeout(80);
+  const [x1] = await at();
+  const sel = await seg.getByRole("tab", { name: /^Working/ }).evaluate((b) => b.offsetLeft);
+  assert(w0 > 0 && x1 > x0 && Math.abs(x1 - sel) < 1, `thumb ${x0}→${x1}, selected at ${sel}`);
+});
+
+await test("command palette: arrow keys choose, Enter opens the chosen result", async (ctx) => {
+  const m = await main(ctx, "office");
+  await m.keyboard.press("Control+k");
+  await m.keyboard.press("ArrowDown"); await m.keyboard.press("ArrowDown");
+  const chosen = await m.locator('.palette [aria-selected="true"] span').first().textContent();
+  await shot(m, "r4_palette");
+  await m.keyboard.press("Enter");
+  assert(chosen === "Decisions" && /#\/decisions$/.test(m.url()), `chose ${chosen}, at ${m.url()}`);
+});
+
+await test("loading: simulated slow loading shows a skeleton, then the page; design system page renders in a pop-out", async (ctx) => {
+  const m = await main(ctx, "office", "?nofeed&slow");
+  await m.locator('.nav a[href="#/decisions"]').click();
+  assert(await m.locator(".page-skel").count() === 1, "no skeleton");
+  await shot(m, "r4_skeleton");
+  assert(await until(async () => (await m.locator(".page-skel").count()) === 0 && (await m.locator(".page h1").count()) > 0, 3000), "never loaded");
+  await m.goto(`${BASE}?nofeed#/design`); await m.waitForSelector(".page-design"); await m.waitForTimeout(400);
+  await shot(m, "r4_design_system");
+  const w = await pop(m, "pop-page:design");
+  assert(await w.locator(".page-design h1").count() === 1, "design page not in pop-out");
+  await w.locator(".ds-card").click({ button: "right" });
+  assert(await w.getByRole("menu").isVisible(), "menu missing in pop-out design page");
+});
+
 await browser.close();
 const pass = results.filter((r) => r.ok).length;
 fs.writeFileSync(`${OUT}/e2e-results.json`, JSON.stringify({ when: new Date().toISOString(), base: BASE, pass, total: results.length, results }, null, 2));

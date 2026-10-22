@@ -1,4 +1,6 @@
 // MESSAGES — a full communication workspace (references 02 and 13): conversations, the project-lead
+import { openMenu, type MenuItem } from "../components/overlay";
+import { popOut } from "../windows/manager";
 // DM thread, and a collapsible / resizable task-context inspector. Every conversation can be popped
 // out on its own (dm:<id>), and so can the inspector (panel:task-context).
 import { useEffect, useRef, useState } from "react";
@@ -121,6 +123,11 @@ export function TaskContext({ conv }: { conv: string }) {
   </aside>;
 }
 
+const convMenu = (id: string, title: string): MenuItem[] => [
+  { label: `Open ${title}`, icon: "message", run: () => go("messages", id) },
+  { label: "Open in new window", icon: "popout", hint: "⌥⇧O", run: () => popOut(`dm:${id}`) },
+];
+
 export function Messages() {
   const route = useRoute();
   useOrg();
@@ -144,7 +151,8 @@ export function Messages() {
       <div className="conv-col">
         <div className="conv-search"><Icon name="search" size={17} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search messages…" aria-label="Search messages" /><Icon name="edit" size={17} /></div>
         <ul className="conv-list" aria-label="Conversations">{list.map((c) => { const last = (msgs[c.id] ?? []).at(-1); const out = false;
-          return <li key={c.id}><a href={`#/messages/${c.id}`} className={cx("conv", conv === c.id && "is-sel", out && "is-out", c.archived && "is-archived")} aria-current={conv === c.id ? "true" : undefined}>
+          return <li key={c.id}><a href={`#/messages/${c.id}`} onContextMenu={(e) => { e.preventDefault(); openMenu({ x: e.clientX, y: e.clientY }, convMenu(c.id, c.title), c.title); }}
+            onKeyDown={(e) => { if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) { e.preventDefault(); openMenu(e.currentTarget, convMenu(c.id, c.title), c.title); } }} className={cx("conv", conv === c.id && "is-sel", out && "is-out", c.archived && "is-archived")} aria-current={conv === c.id ? "true" : undefined}>
             {c.agent ? <span className="av-wrap"><Avatar id={c.agent} size={42} /><AgentDot id={c.agent} /></span> : c.kind === "slack" ? <span className="slack-ico is-sm"><Icon name="slack" size={20} /></span> : <ProjIcon k={c.project ?? "samvision"} size={40} icon="users" />}
             <span className="conv-body"><span className="conv-top"><b>{c.title}</b><time>{last?.at ?? ""}</time></span><small>{c.sub}</small>
               <span className="ellip muted">{c.kind === "slack" ? "Not connected · see proposal" : last ? last.text.split("\n")[0] : ""}</span></span>

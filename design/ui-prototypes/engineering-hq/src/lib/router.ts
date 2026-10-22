@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 
 export interface Route { screen: string; id: string | null; params: URLSearchParams; hash: string }
 
-export const PAGES = ["office", "messages", "decisions", "teams", "topology", "engineering", "revenue", "more", "agents", "onboard", "newproject"] as const;
+export const PAGES = ["office", "messages", "decisions", "teams", "topology", "engineering", "revenue", "more", "agents", "onboard", "newproject", "design"] as const;
 export type Page = (typeof PAGES)[number];
 const OTHER = ["task", "pop"];
 
@@ -20,7 +20,7 @@ export function href(screen: string, id?: string | null): string {
 }
 
 /** A main-window route a pop-out may ask for: "#/<page>" or "#/<page>/<id>", nothing else. */
-export const NAV_SHAPE = /^#\/[a-z]{2,20}(\/[A-Za-z0-9_-]{1,64})?$/;
+export const NAV_SHAPE = /^#\/(?!pop\/)[a-z]{2,20}(\/[A-Za-z0-9_-]{1,64})?$/;
 const navChannel: BroadcastChannel | null = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("hq-windows") : null;
 
 /**

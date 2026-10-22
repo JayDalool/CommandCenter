@@ -11,6 +11,23 @@ import { Icon } from "../components/Icon";
 import { Avatar, AvatarStack, Demo, Panel, Pill, ProjIcon, TaskKey, Spark, ViewAll, cx, plural } from "../components/ui";
 import { GraphFrame, type FEdge, type FNode } from "../components/GraphFrame";
 import { PopButton } from "../windows/Detachable";
+import { popOut } from "../windows/manager";
+import { useContextMenu, type MenuItem } from "../components/overlay";
+import { agentMenu } from "../components/manage";
+import { leadConversation } from "../data/seed";
+
+/** Right-click actions for a project node. */
+export function projectMenu(key: string): MenuItem[] {
+  const p = project(key), lead = leadConversation(key);
+  return [
+    { label: `Open ${p.name} team`, icon: "users", run: () => go("teams", key) },
+    { label: "Open team in new window", icon: "popout", run: () => { go("teams", key); setTimeout(() => popOut("page:teams"), 0); } },
+    { label: lead ? "Message the lead" : "No lead yet", icon: "message", disabled: !lead, run: () => lead && go("messages", lead.id) },
+    { sep: true },
+    { label: "New agent for this project…", icon: "plus", run: () => startNewAgent(key) },
+    { label: "Show in Company topology", icon: "graph", run: () => go("topology") },
+  ];
+}
 import { useNow } from "../lib/time";
 
 const TEAMS = [
@@ -31,7 +48,7 @@ function OfficeGraph() {
   ps.forEach((p, i) => {
     const paused = p.health === "paused";
     const h = healthOf(p);
-    nodes.push({ id: p.key, x: x0 + i * (pw + gap), y: 136, w: pw, h: 124, color: p.color, className: "k-project", label: p.name, onClick: () => go("teams", p.key),
+    nodes.push({ id: p.key, x: x0 + i * (pw + gap), y: 136, w: pw, h: 124, color: p.color, className: "k-project", label: p.name, onClick: () => go("teams", p.key), menu: () => projectMenu(p.key),
       body: <><span className="gn-row"><ProjIcon k={p.key} size={40} /><span className="gn-body"><b>{p.name}</b><small>{p.health === "onboarding" ? "Observation only" : `${p.version} · ${p.env}`}</small></span></span>
         <span className="gn-row gn-mid"><span className={`pres t-${h.tone}`}><i /><b>{h.label}</b></span>{!paused && p.health !== "onboarding" && <Spark data={i % 2 ? SPARK.b : SPARK.a} color={p.color} w={80} h={22} />}</span>
         <span className="gn-row gn-foot">{PA(p.key).length ? <AvatarStack ids={PA(p.key).slice(0, 3)} size={22} /> : <Icon name="lock" size={14} />}<span>{PA(p.key).length ? plural(PA(p.key).length, "agent") : "No agents yet"}</span></span></> });
@@ -64,7 +81,8 @@ function AgentCard({ id }: { id: string }) {
   const a = agent(id);
   const v = useAgentView(id);
   const open = useOpenAgent();
-  return <button type="button" className="agent-card" onClick={() => open(id)} aria-label={`${a.name}, ${a.role}. Open details`}>
+  const menu = useContextMenu(() => agentMenu(a, open), a.name);
+  return <button type="button" className="agent-card" onClick={() => open(id)} {...menu} aria-label={`${a.name}, ${a.role}. Open details`}>
     <Avatar id={id} size={40} />
     <span className="ac-main"><span className="ac-top"><b>{a.name}</b><small className="muted">{a.role}</small></span>
       <AgentStatus v={v} />
@@ -91,9 +109,9 @@ export function Office() {
       <div className="office-left">
         <div className="kpis">
           <button type="button" className="kpi" onClick={() => go("topology")}><span className="kpi-ico t-info"><Icon name="layers" size={24} /></span><span><small>Projects</small><b>{PROJECTS.length}</b><em className="t-ok">↑ {PROJECTS.filter((p) => p.health === "healthy").length} active</em></span><Spark data={SPARK.a} color="#4f7bff" w={72} h={30} /></button>
-          <button type="button" className="kpi" onClick={() => go("teams")}><span className="kpi-ico t-violet"><Icon name="users" size={24} /></span><span><small>Active Agents</small><b>{AGENTS.length}</b><em className="t-ok">↑ {counts("working")} working</em></span><Spark data={SPARK.b} color="#a77bff" w={72} h={30} /></button>
+          <button type="button" className="kpi" onClick={() => go("teams")}><span className="kpi-ico t-violet"><Icon name="users" size={24} /></span><span><small>Active Agents</small><b>{AGENTS.filter((a) => (a.life ?? "active") === "active").length}</b><em className="t-ok">↑ {counts("working")} working</em></span><Spark data={SPARK.b} color="#a77bff" w={72} h={30} /></button>
           <button type="button" className="kpi" onClick={() => go("decisions")}><span className="kpi-ico t-bad"><Icon name="doc" size={24} /></span><span><small>Decisions</small><b>2</b><em className="t-bad">↑ 1 high priority</em></span><Spark data={SPARK.d} color="#ff4f6d" w={72} h={30} /></button>
-          <div className="kpi"><span className="kpi-ico t-ok"><Icon name="pulse" size={24} /></span><span><small>Company Health</small><b className="t-ok">Healthy</b><em>{stale ? <span className="t-warn">Feed stale — showing last known</span> : "All monitored systems OK"}</em></span></div>
+          <div className="kpi"><span className="kpi-ico t-ok"><Icon name="pulse" size={24} /></span><span><small>Company Health</small><b className={stale ? "t-idle" : "t-ok"}>{stale ? "Unknown" : "Healthy"}</b><em>{stale ? <span className="t-warn">Status feed stale</span> : <>All monitored systems OK <Demo label="Demo" /></>}</em></span></div>
         </div>
         <Panel className="office-topo" icon="graph" title="Company Topology" sub="Projects, agents and teams across your organisation"
           action={<><button type="button" className="btn btn-sm" onClick={() => startNewProject()}><Icon name="plus" size={14} /> New Project</button><button type="button" className="btn btn-outline" onClick={() => go("topology")}>View Full Topology <Icon name="arrowr" size={15} /></button><PopButton id="page:topology" /></>}>
@@ -111,9 +129,9 @@ export function Office() {
       </div>
     </div>
     <Panel className="agents-strip" icon="users" iconTone="info" title={<>Active Agents <small className="muted">{AGENTS.length} agents across {PROJECTS.filter((p) => p.team.length && p.health !== "paused").length} projects</small> {stale && <Pill tone="warn" dot>Stale · status may be out of date</Pill>} <Demo label="Demo status" /></>}
-      action={<div className="seg seg-pills" role="tablist">{[["all", `All (${AGENTS.length})`], ["working", `Working (${counts("working")})`], ["reviewing", `Reviewing (${counts("reviewing")})`], ["waiting", `Waiting for Jay (${counts("waiting")})`], ["blocked", `Blocked (${counts("blocked")})`], ["idle", `Idle (${counts("idle")})`]].map(([k, l]) =>
-        <button key={k} type="button" role="tab" aria-selected={filter === k} className={cx(`t-${k}`)} onClick={() => setFilter(k)}>{l}</button>)}
-        <button type="button" className="btn btn-sm btn-outline" onClick={() => startNewAgent()}><Icon name="plus" size={14} /> New Agent</button></div>}>
+      action={<><div className="seg seg-pills" role="tablist" aria-label="Filter agents">{[["all", `All (${AGENTS.length})`], ["working", `Working (${counts("working")})`], ["reviewing", `Reviewing (${counts("reviewing")})`], ["waiting", `Waiting for Jay (${counts("waiting")})`], ["blocked", `Blocked (${counts("blocked")})`], ["idle", `Idle (${counts("idle")})`]].map(([k, l]) =>
+        <button key={k} type="button" role="tab" aria-selected={filter === k} className={cx(`t-${k}`)} onClick={() => setFilter(k)}>{l}</button>)}</div>
+        <button type="button" className="btn btn-sm btn-outline" onClick={() => startNewAgent()}><Icon name="plus" size={14} /> New Agent</button></>}>
       <div className="agent-cards">{agents.map((a) => <AgentCard key={a.id} id={a.id} />)}</div>
     </Panel>
   </div>;

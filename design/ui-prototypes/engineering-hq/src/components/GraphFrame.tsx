@@ -1,10 +1,11 @@
 // A fixed-layout neon graph scaled to fit its box. Used for the Office topology preview and the Teams
+import { openMenu, type MenuItem } from "./overlay";
 // hierarchy. (The full Operations Topology has its own pan/zoom canvas.)
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { curve, type GNode } from "../data/graph";
 import { cx } from "./ui";
 
-export interface FNode { id: string; x: number; y: number; w: number; h: number; color: string; body: ReactNode; className?: string; onClick?: () => void; label: string }
+export interface FNode { id: string; x: number; y: number; w: number; h: number; color: string; body: ReactNode; className?: string; onClick?: () => void; label: string; menu?: () => MenuItem[] }
 export interface FEdge { from: string; to: string; color: string; ao?: number; bo?: number; dashed?: boolean; bus?: number }
 
 /** An org-chart connector: down from a, across at y = bus, down into b, with rounded corners. */
@@ -42,7 +43,9 @@ export function GraphFrame({ w, h, nodes, edges, className }: { w: number; h: nu
       </svg>
       {nodes.map((n) => {
         const st = { left: n.x, top: n.y, width: n.w, height: n.h, ["--c" as string]: n.color };
-        return n.onClick ? <button key={n.id} type="button" className={cx("gnode", n.className)} style={st} onClick={n.onClick} aria-label={n.label}>{n.body}</button>
+        return n.onClick ? <button key={n.id} type="button" className={cx("gnode", n.className)} style={st} onClick={n.onClick} aria-label={n.label}
+          onContextMenu={n.menu ? (e) => { e.preventDefault(); openMenu({ x: e.clientX, y: e.clientY }, n.menu!(), n.label); } : undefined}
+          onKeyDown={n.menu ? (e) => { if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) { e.preventDefault(); openMenu(e.currentTarget, n.menu!(), n.label); } } : undefined}>{n.body}</button>
           : <div key={n.id} className={cx("gnode", n.className)} style={st} aria-label={n.label}>{n.body}</div>;
       })}
     </div>

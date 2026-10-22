@@ -8,7 +8,8 @@ const base = process.argv[2] ?? "http://127.0.0.1:5181/";
 const out = process.argv[3] ?? "e2e/out";
 fs.mkdirSync(out, { recursive: true });
 const pages = [["topology", "00_topology"], ["office", "01_office"], ["messages/sv-lead", "02_messages"], ["decisions", "03_decisions"], ["teams/samvision", "04_teams"],
-  ["engineering", "06_engineering"], ["revenue", "07_revenue_not_connected"], ["task/SV-025", "08_task_room"]];
+  ["engineering", "06_engineering"], ["revenue", "07_revenue_not_connected"], ["task/SV-025", "08_task_room"],
+  ["agents", "11_agents"], ["onboard", "12_new_agent"], ["newproject", "13_new_project"]];
 const browser = await chromium.launch();
 for (const [vw, vh, tag] of [[1920, 1080, ""], [1366, 768, "_1366"]]) {
   const ctx = await browser.newContext({ viewport: { width: vw, height: vh }, deviceScaleFactor: 1 });

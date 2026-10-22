@@ -192,7 +192,8 @@ export function activateAgent(d: AgentDraft) {
 export function updateAgent(d: AgentDraft) {
   const id = d.editing!;
   change((o) => {
-    const before = o.agents.find((a) => a.id === id)!;
+    const before = o.agents.find((a) => a.id === id);
+    if (!before || before.life === "offboarded") return o;   // a retired ID is never edited back onto a team
     const notes: string[] = [];
     if (before.name !== d.name.trim()) notes.push(`renamed ${before.name} → ${d.name.trim()}`);
     const prev = currentProfile(id, o);

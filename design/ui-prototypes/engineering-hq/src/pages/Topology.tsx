@@ -1,4 +1,6 @@
 // OPERATIONS TOPOLOGY — the dedicated full-page graph (reference 00, with 05 and 09).
+import { openMenu } from "../components/overlay";
+import { projectMenu } from "./Office";
 // Jay → projects → pipeline stages → (tasks) → hosts. Pan, zoom, fit, expand stages, filter, layers,
 // Topology | Table | Timeline, and an inspector that can itself be popped out to another monitor.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -35,13 +37,17 @@ function NodeCard({ n, sel, dim, hot, expanded, onSel, onHover, onToggle }: {
   n: GNode; sel: boolean; dim: boolean; hot: boolean; expanded: boolean; onSel: () => void; onHover: (h: boolean) => void; onToggle: () => void }) {
   const style = { left: n.x, top: n.y, width: n.w, height: n.h, ["--c" as string]: n.color };
   const common = { className: cx("gnode", `k-${n.kind}`, sel && "is-sel", dim && "is-dim", hot && "is-hot"), style, onClick: onSel,
-    onMouseEnter: () => onHover(true), onMouseLeave: () => onHover(false), onFocus: () => onHover(true), onBlur: () => onHover(false), "data-node": n.id };
+    onMouseEnter: () => onHover(true), onMouseLeave: () => onHover(false), onFocus: () => onHover(true), onBlur: () => onHover(false), "data-node": n.id,
+    ...(n.ref && (n.kind === "project" || n.kind === "root") ? {
+      onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); openMenu({ x: e.clientX, y: e.clientY }, projectMenu(n.ref!), project(n.ref!).name); },
+      onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => { if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) { e.preventDefault(); openMenu(e.currentTarget, projectMenu(n.ref!), project(n.ref!).name); } },
+    } : {}) };
   if (n.kind === "root") {
     const p = project(n.ref!);
     return <button type="button" {...common} aria-label="CommandCenter, control plane directed by Jay">
       <span className="gn-row"><ProjIcon k={p.key} size={42} /><span className="gn-body"><b className="lg">{p.name}</b><small>{p.version} · {p.env}</small></span>
         <Spark data={SPARK.a} color={p.color} w={70} h={24} /></span>
-      <span className="gn-row gn-mid"><span className="pres t-ok"><i /><b>Healthy</b></span><span className="gn-sep" />
+      <span className="gn-row gn-mid"><span className={`pres t-${healthOf(p).tone}`}><i /><b>{healthOf(p).label}</b></span><span className="gn-sep" />
         <span className="root-jay"><span className="av av-jay" style={{ width: 22, height: 22, fontSize: 11 }}>J</span>Directed by <b>Jay</b></span></span>
       <span className="gn-row gn-foot">{roster(p.key).length ? <AvatarStack ids={roster(p.key).slice(0, 3)} size={20} /> : <Icon name="lock" size={14} />}<span>{roster(p.key).length ? plural(roster(p.key).length, "agent") : "No agents"}</span>
         <span className="gn-sep" /><Icon name="rocket" size={14} /><span>shadow autonomy</span></span>

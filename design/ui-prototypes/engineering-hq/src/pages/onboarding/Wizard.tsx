@@ -5,7 +5,7 @@ import { Icon } from "../../components/Icon";
 import { Modal } from "../../components/form";
 import { Demo, cx, plural } from "../../components/ui";
 import { PopButton } from "../../windows/Detachable";
-import { focusWindow, owners } from "../../windows/manager";
+import { focusWindow, owners, returnHere } from "../../windows/manager";
 import { viewState } from "../../data/live";
 import { go } from "../../lib/router";
 import type { Issue, Result } from "../../data/validate";
@@ -16,6 +16,9 @@ export interface StepDef { id: string; label: string; icon: string; hint: string
 export const peekView = <T,>(view: string, key: string): T | undefined => viewState.get()[view]?.[key] as T | undefined;
 export const putView = (view: string, key: string, v: unknown) => viewState.set((s) => ({ ...s, [view]: { ...(s[view] ?? {}), [key]: v } }));
 /** Show a page: focus its window if it is popped out, else go there in this window. */
+/** A wizard finished in a pop-out: the result opens in the main window and the pop-out returns there, instead of
+ *  staying behind as an empty wizard. */
+export function leavePopout(viewId: string) { if (location.hash.startsWith("#/pop/")) returnHere(viewId); }
 export function showPage(screen: string) { const id = `page:${screen}`; if (owners.get()[id]) focusWindow(id); else go(screen); }
 
 export function Wizard({ viewId, title, sub, steps, step, setStep, result, preview, children, onSave, onCancelConfirmed, dirty, approve, banner, mode }: {
@@ -52,7 +55,7 @@ export function Wizard({ viewId, title, sub, steps, step, setStep, result, previ
       <section className="wz-main" aria-labelledby="wz-step-title">
         <header className="wz-step-h"><span className="wz-step-ico"><Icon name={cur.icon} size={20} /></span>
           <div><small className="muted">Step {step + 1} of {steps.length}</small><h2 id="wz-step-title">{cur.label}</h2><p>{cur.hint}</p></div></header>
-        <div className="wz-body">{children}</div>
+        <div className="wz-body" key={cur.id}>{children}</div>
         {!last && (here.length > 0 || hereW.length > 0) && <IssueList errors={here} warnings={hereW} compact />}
         <footer className="wz-foot">
           <button type="button" className="btn" onClick={cancel}>Cancel</button>
