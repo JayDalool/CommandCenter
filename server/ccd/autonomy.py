@@ -33,7 +33,7 @@ import time
 
 from . import merge_policy, pipeline
 
-ENGINE_VERSION = 2
+ENGINE_VERSION = 3
 ACTIONS = ("plan", "merge", "deploy")
 OUTCOMES = ("auto", "jay", "refuse")
 RISKS = ("low", "medium", "high")

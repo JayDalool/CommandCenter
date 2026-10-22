@@ -43,7 +43,7 @@ class Baselines(unittest.TestCase):
         self.assertEqual(ev("merge", ready())["outcome"], "auto")
         self.assertEqual(ev("deploy", ready(env="preview"))["outcome"], "auto")
         self.assertEqual(ev("plan", ready())["outcome"], "auto")     # allowlisted files make the risk low
-        self.assertEqual(autonomy.ENGINE_VERSION, 2)
+        self.assertEqual(autonomy.ENGINE_VERSION, 3)
 
 
 class Regressions(unittest.TestCase):

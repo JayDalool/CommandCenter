@@ -235,6 +235,22 @@ class Replay(unittest.TestCase):
                          ["pipeline.auto_merged", "pipeline.deployed", "pipeline.merged"])
         self.assertEqual([u["pr"] for u in res["unverified"]], ["o/r#1"])
 
+    def test_a_merge_confirmation_before_a_rework_does_not_count(self):
+        self.add((5000, "jay", "pipeline.gate_confirmed", {"gate": "merge"}),
+                 (5001, "ccd", "pipeline.rework", {}),
+                 (5002, "ccd", "pipeline.merged", {"pr": "o/r#1"}))
+        res = replay.actions(replay.open_snapshot(self.db), 0)
+        self.assertEqual([u["pr"] for u in res["unverified"]], ["o/r#1"])
+
+    def test_out_inside_the_live_folder_is_refused_before_anything_is_made(self):
+        home = os.path.join(self.tmp, "home")
+        target = os.path.join(home, "newdir")
+        with mock.patch.dict(os.environ, {"CCD_DATA_DIR": home}):
+            code, _o, err = run_cli("--fixtures", "--out", target)
+        self.assertEqual(code, 2)
+        self.assertIn("live data folder", err)
+        self.assertFalse(os.path.exists(target))
+
     def test_a_copy_with_no_tickets_table_cannot_run(self):
         bad = os.path.join(self.tmp, "bad.db")
         sqlite3.connect(bad).execute("CREATE TABLE x (a)").connection.commit()
@@ -253,7 +269,7 @@ class Replay(unittest.TestCase):
 class _Live(BaseHTTPRequestHandler):
     BODIES = {
         "/api/health": {"ok": True, "uptimeS": 26 * 3600, "version": "test"},
-        "/api/autonomy": {"mode": "shadow", "engine": 2, "total": 3, "agree": 3, "disagree": 0, "counts": {
+        "/api/autonomy": {"mode": "shadow", "engine": autonomy.ENGINE_VERSION, "total": 3, "agree": 3, "disagree": 0, "counts": {
             "commandcenter": {"plan": {"total": 3, "agree": 3}}}, "disagreements": []},
         "/api/profiles": {"problems": []},
         "/api/audit": {"chain": {"ok": True, "checked": 10}, "summary": {"wouldRefuse": 4}},
@@ -361,6 +377,47 @@ class FullRun(unittest.TestCase):
              "rule": "deploy:not_live"}])
         code, rep, _e = self.run_full()
         self.assertEqual((code, rep["gate"][8]["status"]), (1, "missing"))
+
+    def test_an_unsafe_auto_the_live_engine_recorded_is_not_hidden_by_rescoring(self):
+        # the second harness review: an older engine said auto on an owner:accept merge; today's engine says jay
+        db = sqlite3.connect(self.db)
+        tid = db.execute("SELECT id FROM tickets LIMIT 1").fetchone()[0]
+        f = dict(fixtures.ready(), confirmed=["owner:accept"])
+        db.execute("INSERT INTO autonomy_shadow (at, ticket_id, project, action, observed, engine, rule, agree, facts, "
+                   "policy, engine_version) VALUES (?, ?, 'commandcenter', 'merge', 'jay', 'auto', 'target.merge', "
+                   "0, ?, 'fp', 2)", (1792700000, tid, json.dumps(f)))
+        sid = db.execute("SELECT MAX(id) FROM autonomy_shadow").fetchone()[0]
+        db.commit()
+        db.close()
+        saved = dict(_Live.BODIES)
+        self.addCleanup(lambda: (_Live.BODIES.clear(), _Live.BODIES.update(saved)))
+        _Live.BODIES["/api/autonomy"] = dict(saved["/api/autonomy"], disagree=1, disagreements=[
+            {"id": sid, "project": "commandcenter", "action": "merge", "observed": "jay", "engine": "auto",
+             "rule": "target.merge"}])
+        code, rep, _e = self.run_full()
+        self.assertEqual((code, rep["gate"][8]["status"]), (1, "fail"))
+
+    def test_a_truncated_live_disagreement_list_is_not_assumed_complete(self):
+        saved = dict(_Live.BODIES)
+        self.addCleanup(lambda: (_Live.BODIES.clear(), _Live.BODIES.update(saved)))
+        _Live.BODIES["/api/autonomy"] = dict(saved["/api/autonomy"], disagree=200, disagreements=[])
+        code, rep, _e = self.run_full()
+        gate = {r["row"]: r["status"] for r in rep["gate"]}
+        self.assertEqual((code, gate[9], gate[11]), (1, "missing", "missing"))
+
+    def test_vacuous_live_and_evidence_values_do_not_pass(self):
+        saved = dict(_Live.BODIES)
+        self.addCleanup(lambda: (_Live.BODIES.clear(), _Live.BODIES.update(saved)))
+        _Live.BODIES["/api/profiles"] = {"problems": {}}
+        _Live.BODIES["/api/audit"] = {"chain": {"ok": True, "checked": 0}, "summary": {}}
+        code, rep, _e = self.run_full(suites={"green": True}, engineLiveAt="2026-10-01T00:00:00Z")
+        gate = {r["row"]: r["status"] for r in rep["gate"]}
+        self.assertEqual(code, 1)
+        self.assertEqual((gate[1], gate[5], gate[6], gate[14]), ("fail", "missing", "fail", "missing"))
+        _Live.BODIES.update(saved)
+        _Live.BODIES["/api/autonomy"] = dict(saved["/api/autonomy"], engine=autonomy.ENGINE_VERSION - 1)
+        code, rep, _e = self.run_full()
+        self.assertEqual((code, rep["gate"][0]["status"]), (1, "fail"))
 
     def test_an_unverifiable_merge_or_an_empty_replay_is_missing(self):
         db = sqlite3.connect(self.db)

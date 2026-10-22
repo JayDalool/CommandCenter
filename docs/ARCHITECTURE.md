@@ -457,7 +457,8 @@ Pipeline step (plan / ready / auto-merge / deploy request) ─▶ Daemon._pipeli
 human-only boundary is "jay", never "auto"; a paused project is "refuse"; protected paths (D-007) and personal-data
 paths (D-005) are "jay". Nothing reads the verdict to act, and a failure in it is a log line.
 
-Engine v2 (Phase 1 safety patch, 2026-10-22) closes every case found where v1 said "auto" against the agreed policy:
+Engine v2 (Phase 1 safety patch, 2026-10-22) closes every case found where v1 said "auto" against the agreed policy
+(v3 adds the per-ticket holds, prefix labels and the empty file list below; the version tells their verdicts apart):
 
 - an "auto" merge also needs the PR to be ready, whatever the profile's merge conditions say: open, not a draft,
   MERGEABLE, based on main, not from a fork, approved at its current head (`review_head` = `pr_head`), CI green with
@@ -511,7 +512,12 @@ and `readiness.md` (exit 0 PASS, 1 FAIL, 2 cannot run). The daemon never imports
 - **Never passes on time alone.** A row without evidence is "missing", and the result is PASS only when all 15
   rows pass. Evidence must have the right types (`ok: true`, not `"true"`), a restore counts only when this run did
   it, a merge counts as Jay's only with a merge-gate confirmation or the PR's merger from the GitHub cache, an
-  unreadable live route or an empty replay is "missing", and `--now` may not be later than the clock.
+  unreadable live route or an empty replay is "missing", and `--now` may not be later than the clock. A replayed
+  shadow row is judged twice, as recorded and as re-run, and the worse class counts, so a stricter engine never
+  hides an "auto" the live one gave. A merge confirmation counts only after the ticket's last rework, replan or
+  stale review. A live disagreement list shorter than its count needs a replay copy that reaches the unlisted rows.
+  The live engine version must be this harness's, the engine cannot go live before Phase 1, a live audit walk
+  must check at least one entry, and the suite result must name its commit.
 
 ### Decision and Approval records (PR 4)
 

@@ -48,6 +48,7 @@ def main(argv=None):
         return 2
     out = Path(a.out)
     try:
+        readiness.check_out(out)
         out.mkdir(parents=True, exist_ok=True)
         report = readiness.run({k: getattr(a, k) for k in (
             "fixtures", "replay", "github_cache", "live", "token_file", "evidence", "restore_backup",

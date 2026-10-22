@@ -109,9 +109,12 @@ def actions(db, since, cache=None, jay_logins=("JayDalool",)):
             out["unauthorized"].append(dict(item, why="an agent merge while auto-merge is off"))
         elif kind == "pipeline.merged":
             out["checked"] += 1
+            # the confirmation must come after the last change that voids an approval (rework, replan, stale review)
+            void = db.execute("SELECT COALESCE(MAX(id), 0) FROM ticket_events WHERE ticket_id = ? AND id < ? AND kind IN "
+                              "('pipeline.rework', 'pipeline.replan', 'pipeline.review_stale')", (tid, eid)).fetchone()[0]
             confirmed = any(_json(x, {}).get("gate") == "merge" for (x,) in db.execute(
-                "SELECT data FROM ticket_events WHERE ticket_id = ? AND id < ? AND actor = 'jay' "
-                "AND kind = 'pipeline.gate_confirmed'", (tid, eid)))
+                "SELECT data FROM ticket_events WHERE ticket_id = ? AND id > ? AND id < ? AND actor = 'jay' "
+                "AND kind = 'pipeline.gate_confirmed'", (tid, void, eid)))
             pr = cache.get(d.get("pr")) if isinstance(cache.get(d.get("pr")), dict) else None
             by = ((pr or {}).get("mergedBy") or {}).get("login") if isinstance((pr or {}).get("mergedBy"), dict) else None
             if confirmed or (by and by in logins):

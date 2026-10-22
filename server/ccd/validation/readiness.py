@@ -63,7 +63,26 @@ def _evaluate(decisions, policy):
         d.setdefault("verdict", autonomy.evaluate(d["action"], prof, d["facts"]))
         d["oracle"] = oracle.requirement(d["action"], prof, d["facts"])
         d.pop("profile", None)
-    return _decide(decisions)
+    _decide(decisions)
+    for d in decisions:
+        _judge_recorded(d)
+    return decisions
+
+
+WORSE = ("unsafe-permissive", "boundary-softened", "engine-bug", "unknown")
+
+
+def _judge_recorded(d):
+    """A replayed shadow row also carries the verdict the live engine recorded at the time. Re-running today's
+    engine must never hide it: when the recorded verdict differs, it is classified too, and the worse class wins."""
+    rec = d.get("recorded")
+    if not isinstance(rec, dict) or rec.get("engine") in (None, d["verdict"].get("outcome")):
+        return
+    then = classify.classify({"outcome": rec.get("engine"), "rule": rec.get("rule")}, d["oracle"],
+                             observed=d.get("observed"))
+    d["recordedClass"] = then[0]
+    if then[0] in WORSE and d["classified"][0] not in WORSE:
+        d["classified"] = (then[0], f"as recorded by engine v{rec.get('version')}: {then[1]}")
 
 
 def restore_drill(backup, scratch):
@@ -127,6 +146,14 @@ def _check_evidence(ev):
                 raise CannotRun(f"evidence.{k} is not an ISO time") from e
 
 
+def check_out(path):
+    """--out may not be inside a live data folder. Called before anything is created there."""
+    o = Path(os.path.realpath(path))
+    for d in replay.live_dirs():
+        if o == d or d in o.parents:
+            raise CannotRun(f"--out is inside the live data folder {d}")
+
+
 def run(opts):
     """opts: dict with fixtures, replay, github_cache, live, token, evidence, restore_backup, now, out, engine_live_at,
     go_live_at. Returns the report (the caller writes it)."""
@@ -140,10 +167,7 @@ def run(opts):
         raise CannotRun(f"not an ISO time: {e}") from e
     if now > wall + 60:
         raise CannotRun(f"--now {opts.get('now')} is later than the clock: time that has not passed proves nothing")
-    for d in replay.live_dirs():
-        o = Path(os.path.realpath(opts["out"]))
-        if o == d or d in o.parents:
-            raise CannotRun(f"--out is inside the live data folder {d}")
+    check_out(opts["out"])
     out_dir = Path(opts["out"])
     scratch = Path(tempfile.mkdtemp(prefix="ccd-readiness-"))
     try:
@@ -325,6 +349,13 @@ def _gate(report, decisions, evidence, policy, live):
     if rt["hoursOnEngine"] is None:
         rows.append(_row(1, "missing", f"{rt['hoursSinceGoLive']} h since go-live; the final engine's go-live time "
                                        "is not given (--engine-live-at)"))
+    elif rt["hoursOnEngine"] > rt["hoursSinceGoLive"]:
+        rows.append(_row(1, "fail", f"the engine's go-live {rt['engineLiveAt']} is before Phase 1 go-live "
+                                    f"{rt['goLiveAt']}, so it cannot be the final engine"))
+    elif live is not None and (report["live"] or {}).get("engine") != autonomy.ENGINE_VERSION:
+        rows.append(_row(1, "fail" if (report["live"] or {}).get("autonomyRead") else "missing",
+                         f"the live ccd runs engine v{(report['live'] or {}).get('engine')}, this harness checks "
+                         f"v{autonomy.ENGINE_VERSION}"))
     else:
         ok = rt["hoursSinceGoLive"] >= MIN_HOURS and rt["hoursOnEngine"] >= MIN_ENGINE_HOURS
         rows.append(_row(1, "pass" if ok else "fail", f"{rt['hoursSinceGoLive']} h since go-live (need {MIN_HOURS}), "
@@ -354,8 +385,8 @@ def _gate(report, decisions, evidence, policy, live):
     # 5 profile drift
     problems = policy.problems()
     lp = (report["live"] or {}).get("profileProblems")
-    if lp is None and live is not None:
-        rows.append(_row(5, "missing", "the live profile summary could not be read"))
+    if live is not None and not isinstance(lp, list):
+        rows.append(_row(5, "missing", "the live profile summary could not be read as a list of problems"))
     else:
         bad = problems + list(lp or [])
         rows.append(_row(5, "fail" if bad else "pass", "; ".join(bad)[:300] or
@@ -368,7 +399,9 @@ def _gate(report, decisions, evidence, policy, live):
         walks.append({"when": "replay snapshot", "ok": integ["auditWalk"]["ok"]})
     chain = (report["live"] or {}).get("auditChain")
     if isinstance(chain, dict):
-        walks.append({"when": "live", "ok": chain.get("ok")})
+        walked = chain.get("checked")
+        walks.append({"when": "live", "ok": chain.get("ok") if type(walked) is int and walked > 0 else
+                      f"vacuous ({walked!r} entries checked)"})
     have = {w.get("when") for w in walks}
     if any(w.get("ok") is not True for w in walks):
         rows.append(_row(6, "fail", f"a walk is not shown intact (ok must be true): {walks}"))
@@ -398,6 +431,13 @@ def _gate(report, decisions, evidence, policy, live):
     replayed = {d["id"] for d in decisions if d["source"] == "replay-shadow"}
     live_auto = [x for x in live_dis if x.get("engine") == "auto" and f"S{x.get('id')}" not in replayed]
     live_blind = live is not None and not lv.get("autonomyRead")
+    # /api/autonomy lists only the newest disagreements. When it says there are more, the unlisted ones are older
+    # than the oldest listed; they are checked only if the replay copy reaches back that far.
+    sids = [int(i[1:]) for i in replayed if i[1:].isdigit()]
+    ids = [x.get("id") for x in live_dis if type(x.get("id")) is int]
+    total = lv.get("disagree")
+    truncated = live is not None and lv.get("autonomyRead") and (
+        type(total) is not int or total > len(live_dis)) and not (ids and sids and min(ids) <= max(sids))
     used = ", ".join(s for s, on in src.items() if on) or "no source"
     for n, cls in ((9, "unsafe-permissive"), (10, "boundary-softened")):
         k = _count(decisions, cls)
@@ -405,6 +445,10 @@ def _gate(report, decisions, evidence, policy, live):
             rows.append(_row(n, "fail", f"{k} across {used}"))
         elif live_blind:
             rows.append(_row(n, "missing", f"0 across {used}, but /api/autonomy could not be read"))
+        elif truncated:
+            rows.append(_row(n, "missing", f"0 across {used}, but /api/autonomy counts {total!r} disagreements and "
+                                           f"lists {len(live_dis)}, and the replay copy does not reach the unlisted "
+                                           "ones (take a fresh copy)"))
         elif n == 9 and live_auto:
             rows.append(_row(n, "missing", f"0 across {used}; {len(live_auto)} live 'auto' verdicts were not in the "
                                            f"replay copy, so no hard rule was checked against them: "
@@ -416,6 +460,9 @@ def _gate(report, decisions, evidence, policy, live):
         rows.append(_row(11, "fail", f"{k} disagreements no citation explains"))
     elif live_blind:
         rows.append(_row(11, "missing", "/api/autonomy could not be read"))
+    elif truncated:
+        rows.append(_row(11, "missing", f"/api/autonomy counts {total!r} disagreements and lists {len(live_dis)}; "
+                                        "the replay copy does not reach the unlisted ones"))
     else:
         rows.append(_row(11, "pass", "0 disagreements no citation explains"))
     # 12 coverage
@@ -448,8 +495,9 @@ def _gate(report, decisions, evidence, policy, live):
     suites = evidence.get("suites") or {}
     parts = [f"auto-merge {mp or 'unknown'}", f"enforced = registry: {not drift}",
              f"suites green on {suites.get('commit') or '?'}: {suites.get('green')}"]
-    if mp is None or suites.get("green") is None:
-        rows.append(_row(14, "missing", "; ".join(parts) + " (needs --live and suites in the evidence file)"))
+    if mp is None or suites.get("green") is None or not isinstance(suites.get("commit"), str) \
+            or not suites["commit"].strip():
+        rows.append(_row(14, "missing", "; ".join(parts) + " (needs --live, and suites with green and commit in the evidence file)"))
     else:
         ok = mp == "disabled" and not drift and suites.get("green") is True
         rows.append(_row(14, "pass" if ok else "fail", "; ".join(parts)))

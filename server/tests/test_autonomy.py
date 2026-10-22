@@ -200,7 +200,7 @@ class Versions(unittest.TestCase):
         with mock.patch.object(autonomy, "ENGINE_VERSION", 1):
             sh.record(tid, "commandcenter", "merge", "jay", autonomy._verdict("auto", "v1"), {}, "fp")
         s = sh.summary()
-        self.assertEqual((s["engine"], s["total"], s["older"], s["disagreements"]), (2, 0, 1, []))
+        self.assertEqual((s["engine"], s["total"], s["older"], s["disagreements"]), (autonomy.ENGINE_VERSION, 0, 1, []))
         self.assertEqual(sh.summary(engine=1)["total"], 1)
         self.assertEqual(inbox.Inbox(ts.db)._engine(time.time()), {})
         sh.record(tid, "commandcenter", "merge", "jay", autonomy._verdict("jay", "v2"), {}, "fp")
