@@ -42,6 +42,8 @@ RULE_CITATIONS = {
     "deploy:not_live": "preview and dev deploys are agent work (U-06, Jay 2026-10-22)",
     "deploy:unknown_env": "an unrecognised environment needs Jay (U-06)",
     "merge:readiness": "draft, mergeable, base and fork checks (U-01..U-04)",
+    "merge:ticket_hold": "ccd's per-ticket holds, mirrored (ADR 0007 rule 3: owner:accept, UI/deploy flags, DESIGN, "
+                         "ui and plan-gate labels)",
     "merge:readiness:unknown": "PR readiness that cannot be checked is never a yes (U-01..U-04)",
     "boundary": "human-only boundaries (U-07; needs:jay and legal flags)",
     "boundary:unknown": "missing labels, flags or type cannot rule out a boundary (first review of engine v2)",

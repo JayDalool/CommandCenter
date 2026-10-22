@@ -39,6 +39,7 @@ CITATIONS = {
     "O-LIVE": "An unattended live deploy needs every required condition, health checks, rollback, and no "
               "migration, downtime or client workflow change (L-05).",
     "O-REVIEW": "A codex or security review the profile requires must be recorded first.",
+    "O-HOLD": "ccd's per-ticket holds keep a merge for Jay (ADR 0007 rule 3).",
     "O-PLAN": "A plan trigger in the profile applies, or cannot be ruled out (Q-01: high risk in CommandCenter).",
 }
 
@@ -77,7 +78,7 @@ def _files(facts, patterns, cite, what, why):
     files = facts.get("files")
     if not patterns:
         return
-    if not isinstance(files, list) or len(files) >= 100:
+    if not isinstance(files, list) or not files or len(files) >= 100:
         why.append(("O-FILES", f"{what}: the changed files are not fully known"))
         return
     for f in files:
@@ -124,7 +125,10 @@ def requirement(action, profile, facts):
     typ = str(facts.get("type") or "").strip().upper()
     if labels & BOUNDARY or typ == "LEGAL":
         why.append(("O-BOUNDARY", ", ".join(sorted(labels & BOUNDARY)) or "type LEGAL"))
-    flags |= {x.replace(":", "_") for x in labels if x in ("needs:jay", "needs:legal")}
+    flags |= {re.sub(r"[:\-./]", "_", x) for x in labels} & {"needs_jay", "needs_legal"}
+    roots = {re.split(r"[:\-./_ ]", x, maxsplit=1)[0] for x in labels}
+    if roots & BOUNDARY and not labels & BOUNDARY:
+        why.append(("O-BOUNDARY", "a prefixed boundary label"))
     if flags & {"needs_jay", "needs_legal"}:
         why.append(("O-FLAG", ", ".join(sorted(flags & {"needs_jay", "needs_legal"}))))
     high = bool(labels & RAISES_RISK) or typ in ("SECURITY", "LEGAL")
@@ -232,6 +236,12 @@ def requirement(action, profile, facts):
     _files(facts, sp.get("require_jay_for_paths"), "O-RAILS", "Command Center's rails", why)
     _files(facts, pd.get("trigger_paths"), "O-PERSONAL", "personal-data code", why)
     _categories(facts, pd, why)
+    confirmed = facts.get("confirmed")
+    if not isinstance(confirmed, (list, tuple)) or "owner:accept" in confirmed:
+        why.append(("O-HOLD", "owner:accept, or the confirmations are not known"))
+    if flags & {"needs_ui_review", "needs_deploy"} or typ == "DESIGN" or labels & {
+            "ui", "security", "migration", "destructive", "architecture", "product-decision", "ambiguous", "gate:plan"}:
+        why.append(("O-HOLD", "a UI, deploy or plan-gate hold"))
     return done("jay")
 
 

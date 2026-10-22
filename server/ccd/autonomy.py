@@ -119,14 +119,16 @@ def _boundaries(facts):
             out.append(f"the ticket's {key} cannot be read, so a human-only boundary cannot be ruled out")
     if facts.get("type") is not None and not isinstance(facts.get("type"), str):
         out.append("the ticket's type cannot be read, so a human-only boundary cannot be ruled out")
-    flags = _flags(facts) | {n for n in (x.replace(":", "_").replace("-", "_") for x in _labels(facts))
+    flags = _flags(facts) | {n for n in (re.sub(r"[:\-./]", "_", x) for x in _labels(facts))
                              if n in ("needs_jay", "needs_legal")}
     if "needs_jay" in flags:
         out.append("the ticket is flagged needs:jay")
     labels = _labels(facts)
-    if "needs_legal" in flags or _type(facts) == "LEGAL" or "legal" in labels:
+    if "needs_legal" in flags or _type(facts) == "LEGAL" or any(re.split(r"[:\-./_ ]", x, maxsplit=1)[0] == "legal"
+                                                                for x in labels):
         out.append("legal or compliance needs Jay")
-    hit = sorted((labels & BOUNDARY_LABELS) - {"legal"})
+    hit = sorted({x for x in labels if re.split(r"[:\-./_ ]", x, maxsplit=1)[0] in BOUNDARY_LABELS}
+                 - {"legal"})
     if hit:
         out.append(f"a human-only boundary: {', '.join(hit)}")
     return out
@@ -137,7 +139,7 @@ def _paths(facts, patterns, what):
     if not patterns:
         return [], []
     files = facts.get("files")
-    if not isinstance(files, list):
+    if not isinstance(files, list) or not files:     # an empty list is "not listed", not "nothing changed"
         return [], ["changed files"]
     if len(files) >= GH_FILE_LIMIT:   # gh lists at most 100 files: a protected one may be past the end
         return [], ["the complete list of changed files"]
@@ -279,6 +281,27 @@ def _same_head(facts):
     if not all(ok):
         return [], ["the PR head the review is for"]
     return ([] if rh == ph else ["the approving review is for an older head of the PR"]), []
+
+
+def _ticket_holds(facts):
+    """(unmet, missing): the per-ticket holds ccd's own merge rule keeps (ADR 0007 rule 3), mirrored: Jay asked to
+    accept the merge himself (owner:accept), a UI or deploy flag, a DESIGN ticket, the ui or a plan-gate label."""
+    unmet, missing = [], []
+    confirmed = facts.get("confirmed")
+    if not isinstance(confirmed, (list, tuple)):
+        missing.append("Jay's per-ticket confirmations")
+    elif "owner:accept" in confirmed:
+        unmet.append("Jay asked to accept this ticket's merge himself")
+    flags, labels = _flags(facts), _labels(facts)
+    for flag in ("needs_ui_review", "needs_deploy"):
+        if flag in flags:
+            unmet.append(f"the ticket is flagged {flag.replace('_', ':', 1)}")
+    if _type(facts) == "DESIGN":
+        unmet.append("a DESIGN ticket")
+    hold = sorted(labels & ({"ui"} | set(pipeline.PLAN_GATE_LABELS)))
+    if hold:
+        unmet.append(f"the ticket has hold labels: {', '.join(hold)}")
+    return unmet, missing
 
 
 def _readiness(facts):
@@ -531,7 +554,10 @@ def _decide(action, t, facts, profile):
         rv_unmet, rv_gap = _reviews(t, facts)
         if rv_unmet:
             return _verdict("jay", "target.review", rv_unmet, missing3 + gap + rv_gap)
-        gap = gap + rv_gap
+        hold, hold_gap = _ticket_holds(facts)
+        if hold:
+            return _verdict("jay", "merge:ticket_hold", hold, missing3 + gap + rv_gap + hold_gap)
+        gap = gap + rv_gap + hold_gap
         if missing3 or gap:
             return _verdict("jay", "merge:readiness:unknown", ["the PR's readiness cannot be checked"], missing3 + gap)
     return v
@@ -581,14 +607,17 @@ def facts_of(ticket, work, extra=None):
     ticket, work = ticket or {}, work or {}
     rv = work.get("review") or {}
     head = rv.get("head") if isinstance(rv.get("head"), str) else None
-    f = {"project": ticket.get("project"), "type": ticket.get("type"), "labels": list(ticket.get("labels") or []),
-         "flags": list(ticket.get("flags") or []),
+    lists = {k: (list(ticket[k]) if isinstance(ticket.get(k), (list, tuple)) else ticket.get(k)) for k in ("labels", "flags")}
+    f = {"project": ticket.get("project"), "labels": lists["labels"], "flags": lists["flags"],
+         "confirmed": list(work["confirmed"]) if isinstance(work.get("confirmed"), (list, tuple)) else None,
          "plan_accepted": work.get("planState") == "accepted",
          "review_at_head": rv.get("verdict") == "APPROVE" and bool(pipeline.SHA_RE.match(head or "")),
          "review_head": head,
          "merged": bool(work.get("merge")),
          "verified": ((work.get("verification") or {}).get("result") == "pass") if work.get("verification") else None,
          "ci": None, "files": None}
+    if "type" in ticket:          # a ticket with no type has type None; no ticket at all says nothing
+        f["type"] = ticket["type"]
     f.update(extra or {})
     return f
 

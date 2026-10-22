@@ -27,7 +27,7 @@ def facts(**over):
             "review_at_head": True, "merged": False, "verified": None, "ci": "green", "files": None,
             # a PR that is ready to merge as reviewed (engine v2 needs every one of these for an auto merge)
             "review_head": HEAD, "pr_head": HEAD, "ci_passed": True, "draft": False, "mergeable": "MERGEABLE",
-            "base": "main", "cross_repo": False, "state": "OPEN"}
+            "base": "main", "cross_repo": False, "state": "OPEN", "confirmed": []}
     base.update(over)
     return base
 

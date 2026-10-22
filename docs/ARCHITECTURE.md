@@ -463,7 +463,8 @@ Engine v2 (Phase 1 safety patch, 2026-10-22) closes every case found where v1 sa
   MERGEABLE, based on main, not from a fork, approved at its current head (`review_head` = `pr_head`), CI green with
   at least one passing check (`ci_passed`; `merge_policy.ci_state` still counts an all-skipped rollup as green for
   today's auto-merge); a codex or security review the profile requires (`always`, or triggered) and Command Center
-  does not record yet makes it "jay";
+  does not record yet makes it "jay"; so do ccd's own per-ticket holds (ADR 0007 rule 3: `owner:accept`, a UI or
+  deploy flag, a DESIGN ticket, the ui or a plan-gate label; `merge:ticket_hold`);
 - every deploy goes through the deploy rules (v1 judged a non-live one by the plan rules); an environment other
   than live, preview or dev is "jay", and `deploy.env = "preview"` allows preview only (`"live"` allows live and
   the non-live environments); `deploy = never` refuses before anything can soften it; an unattended live deploy
@@ -472,7 +473,9 @@ Engine v2 (Phase 1 safety patch, 2026-10-22) closes every case found where v1 sa
   `requires`); D-005 personal-data
   categories (compared case-insensitively) apply to an unattended live deploy as well as a merge;
 - destructive, financial, paid, secrets, credentials, irreversible and legal labels are human-only boundaries;
-  `secret` and `credential` count too; labels and flags compare case-insensitively (`needs-jay`, `needs_jay`), unreadable ones (not a list of strings, or a type that is not a
+  `secret` and `credential` count too, as does a label that starts with one (`secrets:prod`, `legal/review`);
+  labels and flags compare case-insensitively (`needs-jay`, `needs_jay`, `needs.jay`, `needs/jay`); an empty list of
+  changed files is "not listed", never "nothing protected"; unreadable ones (not a list of strings, or a type that is not a
   string) count as a boundary, a `needs:jay` or `needs:legal` label counts like the flag, and missing labels, flags
   or type are never read as "none" (`boundary:unknown`);
 - `autonomy.FIELDS` says for every profile key whether the engine reads it, fails closed on it (restricted mode,

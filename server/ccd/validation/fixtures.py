@@ -16,7 +16,7 @@ def ready(**over):
     x = {"project": "commandcenter", "type": "MAINTENANCE", "labels": [], "flags": [], "plan_accepted": True,
          "review_at_head": True, "review_head": HEAD, "pr_head": HEAD, "merged": False, "verified": None,
          "ci": "green", "ci_passed": True, "draft": False, "mergeable": "MERGEABLE", "base": "main",
-         "cross_repo": False, "state": "OPEN", "files": [{"path": "server/tests/test_x.py", "changeType": "ADDED", "additions": 5, "deletions": 2}],
+         "cross_repo": False, "state": "OPEN", "confirmed": [], "files": [{"path": "server/tests/test_x.py", "changeType": "ADDED", "additions": 5, "deletions": 2}],
          "additions": 5, "deletions": 2}
     x.update(over)
     return x
