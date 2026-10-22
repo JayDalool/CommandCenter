@@ -517,8 +517,9 @@ and `readiness.md` (exit 0 PASS, 1 FAIL, 2 cannot run). The daemon never imports
   hides an "auto" (or an engine error) the live one gave; verdicts older engines recorded are reported under
   `recordedOlder` and not scored, since the gate is about the final engine. Rows 9–11 are "missing" while the live
   ccd counts more verdicts of its engine, for any project and action, than the replay copy holds, or lists a
-  disagreement that does not match the copy's row with that id; rows 7–8 are "missing" while the live ccd has
-  logged a pipeline step newer than the copy's newest ticket event: take the copy just before the run. A merge
+  disagreement that does not match the copy's row with that id; rows 7–8 are "missing" unless the copy holds
+  the live ccd's newest pipeline step (same ticket and kind, written within 2 s of its activity entry; activity
+  with no ticket event behind it, such as worktree cleanup, is skipped): take the copy just before the run. A merge
   confirmation counts only after the ticket's last rework, replan, stale review or merge, and, when the GitHub
   cache gives the merged head, only for the head reviewed before it. The live engine version must be this
   harness's; the engine cannot go live before Phase 1, nor before the copy's last verdict from an older engine

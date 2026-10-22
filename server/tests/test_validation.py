@@ -300,7 +300,7 @@ class _Live(BaseHTTPRequestHandler):
 
     def do_GET(self):     # noqa: N802
         type(self).seen.append((self.command, self.headers.get("X-CCD-Token")))
-        body = self.BODIES.get(self.path.split("?")[0])
+        body = self.BODIES.get(self.path, self.BODIES.get(self.path.split("?")[0]))
         self.send_response(200 if body is not None else 404)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -311,10 +311,18 @@ class _Live(BaseHTTPRequestHandler):
 
 
 class FullRun(unittest.TestCase):
+    PIPELINE = "/api/activity?limit=200&kind=task.pipeline"
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="full-")
         self.db = os.path.join(self.tmp, "copy.db")
-        make_db(self.db)
+        self.keys = make_db(self.db)
+        saved = dict(_Live.BODIES)
+        self.addCleanup(lambda: (_Live.BODIES.clear(), _Live.BODIES.update(saved)))
+        # the live ccd's newest pipeline step is the copy's newest one: the copy is fresh
+        _Live.BODIES[self.PIPELINE] = {"events": [
+            {"kind": "task.pipeline", "at": 1201.0, "ref": self.keys[0], "data": {"kind": "pipeline.gate_opened"}},
+            {"kind": "task.pipeline", "at": 1300.0, "ref": self.keys[0], "data": {"kind": "pipeline.worktree_removed"}}]}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _Live)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.shutdown)
@@ -426,11 +434,19 @@ class FullRun(unittest.TestCase):
     def test_a_copy_older_than_the_live_pipeline_activity_misses_rows_7_and_8(self):
         saved = dict(_Live.BODIES)
         self.addCleanup(lambda: (_Live.BODIES.clear(), _Live.BODIES.update(saved)))
-        _Live.BODIES["/api/activity"] = {"events": saved["/api/activity"]["events"] + [
-            {"kind": "task.pipeline", "at": 1792950000, "data": {"kind": "pipeline.merged"}}]}
+        fresh = saved[self.PIPELINE]["events"]
+        for newer in ({"kind": "task.pipeline", "at": 1201.5, "ref": self.keys[1], "data": {"kind": "pipeline.merged"}},
+                      {"kind": "task.pipeline", "at": "1201.5", "ref": self.keys[0],
+                       "data": {"kind": "pipeline.gate_opened"}}):
+            _Live.BODIES[self.PIPELINE] = {"events": fresh + [newer]}
+            code, rep, _e = self.run_full()
+            gate = {r["row"]: r["status"] for r in rep["gate"]}
+            self.assertEqual((code, gate[7], gate[8]), (1, "missing", "missing"), newer)
+        # only activity with no ticket event behind it is newer: the copy is still complete
+        _Live.BODIES[self.PIPELINE] = {"events": fresh + [
+            {"kind": "task.pipeline", "at": 1792950000, "ref": self.keys[0], "data": {"kind": "pipeline.session_left"}}]}
         code, rep, _e = self.run_full()
-        gate = {r["row"]: r["status"] for r in rep["gate"]}
-        self.assertEqual((code, gate[7], gate[8]), (1, "missing", "missing"))
+        self.assertEqual((rep["gate"][6]["status"], rep["gate"][7]["status"]), ("pass", "pass"))
 
     def test_live_disagreements_that_do_not_match_the_copy_are_not_trusted(self):
         saved = dict(_Live.BODIES)

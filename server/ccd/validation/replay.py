@@ -71,6 +71,14 @@ def _obj(s):
     return v if isinstance(v, dict) else {}
 
 
+def holds_step(db, step):
+    """Whether the copy holds this live pipeline step: a ticket event of that kind, on that ticket, written at most
+    2 s before ccd logged the activity (the daemon commits the ticket event first)."""
+    return db.execute("SELECT 1 FROM ticket_events e JOIN tickets t ON t.id = e.ticket_id WHERE t.key = ? AND "
+                      "e.kind = ? AND e.at BETWEEN ? AND ? LIMIT 1",
+                      (step["key"], step["kind"], step["at"] - 2, step["at"])).fetchone() is not None
+
+
 def integrity(db):
     """{ok, tickets, eventsGaps, schema} for gate row 8."""
     ok = db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

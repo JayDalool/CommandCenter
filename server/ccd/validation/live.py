@@ -16,7 +16,7 @@ ROUTES = {
     "decisions": "/api/decisions?limit=1",
     "usage": "/api/usage?days=7",
     "activity": "/api/activity?limit=5&kind=merge.policy",
-    "pipeline": "/api/activity?limit=1&kind=task.pipeline",
+    "pipeline": "/api/activity?limit=200&kind=task.pipeline",
 }
 
 
@@ -58,14 +58,34 @@ def merge_policy_status(live):
     return None
 
 
-def newest_pipeline_at(live):
-    """When ccd last logged a pipeline step (merge, deploy, gate...), or None when it cannot be read. A replay copy
-    older than this misses steps rows 7 and 8 must see."""
+# task.pipeline activity the daemon logs with no ticket event behind it (worktree cleanup, nudges, auto-merge reads)
+NO_TICKET_EVENT = {"pipeline.worktree_removed", "pipeline.worktree_kept", "pipeline.answers_delivered",
+                   "pipeline.session_left", "pipeline.auto_merge_unreadable"}
+
+
+def newest_pipeline_step(live):
+    """The newest pipeline step ccd logged that is also a ticket event: {"at", "key", "kind"}; {} when ccd logged
+    none; None when it cannot be told (route unreadable, an unusable entry, or only non-ticket activity in the page).
+    A replay copy that does not hold this step misses steps rows 7 and 8 must see."""
     act = body(live, "pipeline")
     events = act.get("events") if isinstance(act, dict) else None
     if not isinstance(events, list):
         return None
-    ats = [e.get("at") for e in events if isinstance(e, dict) and e.get("kind") == "task.pipeline"
-           and isinstance(e.get("at"), (int, float))
-           and not isinstance(e.get("at"), bool)]
-    return max(ats) if ats else 0.0
+    if not events:
+        return {}
+    steps = []
+    for e in events:
+        if not isinstance(e, dict) or e.get("kind") != "task.pipeline":
+            continue
+        data = e.get("data")
+        data = json.loads(data) if isinstance(data, str) else data
+        kind = (data or {}).get("kind") if isinstance(data, dict) else None
+        at = e.get("at")
+        if not isinstance(kind, str) or not isinstance(at, (int, float)) or isinstance(at, bool):
+            return None
+        if kind in NO_TICKET_EVENT:
+            continue
+        if not isinstance(e.get("ref"), str) or not e["ref"]:
+            return None
+        steps.append({"at": float(at), "key": e["ref"], "kind": kind})
+    return max(steps, key=lambda x: x["at"]) if steps else None

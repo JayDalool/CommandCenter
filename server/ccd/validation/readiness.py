@@ -230,6 +230,10 @@ def _gather(opts, now, checks, scratch):
                           ("agree", "vacuous-agree", "safe-conservative", "expected-stricter")][:200]
     report["coverage"] = _coverage(decisions)
     report["integrity"] = _integrity(snap, opts, now, report.pop("_cache", None), report.get("jayLogins"))
+    if snap is not None and live is not None:
+        step = live_mod.newest_pipeline_step(live)
+        report["integrity"]["liveStep"] = step
+        report["integrity"]["liveStepInCopy"] = None if step is None else (not step or replay.holds_step(snap, step))
     report["drills"] = _drills(evidence, opts, scratch)
     report["runtime"] = _runtime(evidence, opts, now, live)
     report["nightShift"] = _night(evidence, live)
@@ -461,16 +465,15 @@ def _gate(report, decisions, evidence, policy, live):
     else:
         rows.append(_row(6, "pass", f"{len(walks)} full walks, all intact"))
     # 7 unauthorized actions, 8 data regressions
-    live_step = live_mod.newest_pipeline_at(live) if live is not None else None
-    copy_step = integ.get("newestEventAt") if integ.get("available") else None
-    behind = live is not None and (live_step is None or (live_step > (copy_step or 0) + 2))
+    step, held = integ.get("liveStep"), integ.get("liveStepInCopy")
+    behind = live is not None and held is not True
     if not integ.get("available"):
         rows.append(_row(7, "missing", "needs --replay"))
         rows.append(_row(8, "missing", "needs --replay"))
     elif behind:
-        why = ("the live pipeline activity could not be read" if live_step is None else
-               f"the live ccd logged a pipeline step at {_iso(live_step)}, after the replay copy's newest ticket event "
-               f"({_iso(copy_step)}): take a fresh copy just before the run")
+        why = ("the live pipeline activity could not be read or told apart" if not isinstance(step, dict) else
+               f"the replay copy does not hold the live ccd's newest pipeline step ({step.get('kind')} on "
+               f"{step.get('key')} at {_iso(step.get('at'))}): take a fresh copy just before the run")
         rows.append(_row(7, "missing", why))
         rows.append(_row(8, "missing", why))
     else:
