@@ -514,11 +514,15 @@ and `readiness.md` (exit 0 PASS, 1 FAIL, 2 cannot run). The daemon never imports
   it, a merge counts as Jay's only with a merge-gate confirmation or the PR's merger from the GitHub cache, an
   unreadable live route or an empty replay is "missing", and `--now` may not be later than the clock. A replayed
   shadow row is judged twice, as recorded and as re-run, and the worse class counts, so a stricter engine never
-  hides an "auto" (or an engine error) the live one gave. Rows 9–11 are "missing" while the live ccd counts more
-  verdicts of its engine, for any project and action, than the replay copy holds: take the copy just before the
-  run. A merge confirmation counts only after the ticket's last rework, replan or stale review, and, when the
-  GitHub cache gives the merged head, only for the head reviewed before it. The live engine version must be this
-  harness's; the engine cannot go live before Phase 1, nor before the copy's last verdict from an older engine; a
+  hides an "auto" (or an engine error) the live one gave; verdicts older engines recorded are reported under
+  `recordedOlder` and not scored, since the gate is about the final engine. Rows 9–11 are "missing" while the live
+  ccd counts more verdicts of its engine, for any project and action, than the replay copy holds, or lists a
+  disagreement that does not match the copy's row with that id; rows 7–8 are "missing" while the live ccd has
+  logged a pipeline step newer than the copy's newest ticket event: take the copy just before the run. A merge
+  confirmation counts only after the ticket's last rework, replan, stale review or merge, and, when the GitHub
+  cache gives the merged head, only for the head reviewed before it. The live engine version must be this
+  harness's; the engine cannot go live before Phase 1, nor before the copy's last verdict from an older engine
+  (a claimed time inside a quiet stretch with no verdicts is not caught: take it from the go-live log); a
   live audit walk must check at least one entry, and the suite result must name its commit.
 
 ### Decision and Approval records (PR 4)

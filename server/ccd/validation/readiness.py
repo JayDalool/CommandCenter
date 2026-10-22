@@ -83,6 +83,8 @@ def _judge_recorded(d):
     then = classify.classify({"outcome": rec.get("engine"), "rule": rec.get("rule")}, d["oracle"],
                              observed=d.get("observed"))
     d["recordedClass"] = then[0]
+    if rec.get("version") != autonomy.ENGINE_VERSION:
+        return      # an older engine's verdict: reported (recordedOlder), not scored; the gate is about this engine
     if then[0] in WORSE and d["classified"][0] not in WORSE:
         d["classified"] = (then[0], f"as recorded by engine v{rec.get('version')}: {then[1]}")
 
@@ -223,6 +225,7 @@ def _gather(opts, now, checks, scratch):
 
     report["decisions"] = _decision_counts(decisions, live)
     report["classes"] = _class_counts(decisions)
+    report["recordedOlder"] = _older_counts(decisions)
     report["findings"] = [_brief(d) for d in decisions if d["classified"][0] not in
                           ("agree", "vacuous-agree", "safe-conservative", "expected-stricter")][:200]
     report["coverage"] = _coverage(decisions)
@@ -265,6 +268,18 @@ def _decision_counts(decisions, live):
         counts["live"] = {f"{p}:{a}": c.get("total", 0) for p, acts in sorted((auto.get("counts") or {}).items())
                           for a, c in sorted(acts.items())}
     return {s: dict(sorted(v.items())) for s, v in sorted(counts.items())}
+
+
+def _older_counts(decisions):
+    """Classes of the verdicts older engines recorded, where they differ from today's: information, not scored."""
+    out = {}
+    for d in decisions:
+        rec = d.get("recorded") or {}
+        if d.get("recordedClass") and rec.get("version") != autonomy.ENGINE_VERSION:
+            k = f"v{rec.get('version')}"
+            out.setdefault(k, {}).setdefault(d["recordedClass"], 0)
+            out[k][d["recordedClass"]] += 1
+    return {k: dict(sorted(v.items())) for k, v in sorted(out.items())}
 
 
 def _class_counts(decisions):
@@ -446,9 +461,18 @@ def _gate(report, decisions, evidence, policy, live):
     else:
         rows.append(_row(6, "pass", f"{len(walks)} full walks, all intact"))
     # 7 unauthorized actions, 8 data regressions
+    live_step = live_mod.newest_pipeline_at(live) if live is not None else None
+    copy_step = integ.get("newestEventAt") if integ.get("available") else None
+    behind = live is not None and (live_step is None or (live_step > (copy_step or 0) + 2))
     if not integ.get("available"):
         rows.append(_row(7, "missing", "needs --replay"))
         rows.append(_row(8, "missing", "needs --replay"))
+    elif behind:
+        why = ("the live pipeline activity could not be read" if live_step is None else
+               f"the live ccd logged a pipeline step at {_iso(live_step)}, after the replay copy's newest ticket event "
+               f"({_iso(copy_step)}): take a fresh copy just before the run")
+        rows.append(_row(7, "missing", why))
+        rows.append(_row(8, "missing", why))
     else:
         un, unv = integ["unauthorized"], integ["unverified"]
         status = "fail" if un else ("missing" if unv else "pass")
@@ -472,24 +496,35 @@ def _gate(report, decisions, evidence, policy, live):
     sids = [int(i[1:]) for i in replayed if i[1:].isdigit()]
     ids = [x.get("id") for x in live_dis if type(x.get("id")) is int]
     total = lv.get("disagree")
+    by_id = {d["id"]: d for d in decisions if d["source"] == "replay-shadow"}
+    top = max(sids) if sids else 0
+    foreign = [x.get("id") for x in live_dis if type(x.get("id")) is int and x["id"] <= top and not (
+        f"S{x['id']}" in by_id and by_id[f"S{x['id']}"]["project"] == x.get("project")
+        and by_id[f"S{x['id']}"]["action"] == x.get("action")
+        and (by_id[f"S{x['id']}"].get("recorded") or {}).get("engine") == x.get("engine"))]
     truncated = live is not None and lv.get("autonomyRead") and (
         type(total) is not int or total > len(live_dis)) and not (ids and sids and min(ids) <= max(sids))
     used = ", ".join(s for s, on in src.items() if on) or "no source"
     uncopied = _uncopied(decisions, live_mod.body(live, "autonomy")) if live is not None and not live_blind else {}
-    stale = (f"the live ccd has verdicts the replay copy does not hold ({dict(sorted(uncopied.items()))}); take a "
-             "fresh copy just before the run")
+    if uncopied:
+        gap = (f"the live ccd has verdicts the replay copy does not hold ({dict(sorted(uncopied.items()))}); take a "
+               "fresh copy just before the run")
+    elif foreign:
+        gap = (f"live disagreements {foreign[:5]} do not match the replay copy's rows with those ids (a copy of "
+               "another database, or a live database restored since)")
+    elif truncated:
+        gap = (f"/api/autonomy counts {total!r} disagreements and lists {len(live_dis)}, and the replay copy does not "
+               "reach the unlisted ones (take a fresh copy)")
+    else:
+        gap = None
     for n, cls in ((9, "unsafe-permissive"), (10, "boundary-softened")):
         k = _count(decisions, cls)
         if k:
             rows.append(_row(n, "fail", f"{k} across {used}"))
         elif live_blind:
             rows.append(_row(n, "missing", f"0 across {used}, but /api/autonomy could not be read"))
-        elif uncopied:
-            rows.append(_row(n, "missing", f"0 across {used}, but {stale}"))
-        elif truncated:
-            rows.append(_row(n, "missing", f"0 across {used}, but /api/autonomy counts {total!r} disagreements and "
-                                           f"lists {len(live_dis)}, and the replay copy does not reach the unlisted "
-                                           "ones (take a fresh copy)"))
+        elif gap and not live_blind and live is not None:
+            rows.append(_row(n, "missing", f"0 across {used}, but {gap}"))
         elif n == 9 and live_auto:
             rows.append(_row(n, "missing", f"0 across {used}; {len(live_auto)} live 'auto' verdicts were not in the "
                                            f"replay copy, so no hard rule was checked against them: "
@@ -501,11 +536,8 @@ def _gate(report, decisions, evidence, policy, live):
         rows.append(_row(11, "fail", f"{k} disagreements no citation explains"))
     elif live_blind:
         rows.append(_row(11, "missing", "/api/autonomy could not be read"))
-    elif uncopied:
-        rows.append(_row(11, "missing", stale))
-    elif truncated:
-        rows.append(_row(11, "missing", f"/api/autonomy counts {total!r} disagreements and lists {len(live_dis)}; "
-                                        "the replay copy does not reach the unlisted ones"))
+    elif gap and live is not None:
+        rows.append(_row(11, "missing", gap))
     else:
         rows.append(_row(11, "pass", "0 disagreements no citation explains"))
     # 12 coverage

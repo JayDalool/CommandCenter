@@ -242,6 +242,13 @@ class Replay(unittest.TestCase):
         res = replay.actions(replay.open_snapshot(self.db), 0)
         self.assertEqual([u["pr"] for u in res["unverified"]], ["o/r#1"])
 
+    def test_one_merge_confirmation_does_not_cover_a_second_merge(self):
+        self.add((5000, "jay", "pipeline.gate_confirmed", {"gate": "merge"}),
+                 (5001, "ccd", "pipeline.merged", {"pr": "o/r#1"}),
+                 (5002, "ccd", "pipeline.merged", {"pr": "o/r#2"}))
+        res = replay.actions(replay.open_snapshot(self.db), 0)
+        self.assertEqual([u["pr"] for u in res["unverified"]], ["o/r#2"])
+
     def test_a_merge_of_a_head_jay_did_not_confirm_is_not_his(self):
         self.add((5000, "ccd", "pipeline.review", {"verdict": "APPROVE", "head": "a" * 40}),
                  (5001, "jay", "pipeline.gate_confirmed", {"gate": "merge"}),
@@ -389,13 +396,22 @@ class FullRun(unittest.TestCase):
         self.assertEqual((code, rep["gate"][8]["status"]), (1, "missing"))
 
     def test_an_unsafe_auto_the_live_engine_recorded_is_not_hidden_by_rescoring(self):
-        # the second harness review: an older engine said auto on an owner:accept merge; today's engine says jay
+        # the second harness review: the live engine said auto on an owner:accept merge; a re-run says jay
+        code, rep = self.recorded_auto(autonomy.ENGINE_VERSION)
+        self.assertEqual((code, rep["gate"][8]["status"]), (1, "fail"))
+
+    def test_an_older_engines_recorded_verdict_is_reported_not_scored(self):
+        code, rep = self.recorded_auto(autonomy.ENGINE_VERSION - 1)
+        self.assertEqual(rep["gate"][8]["status"], "pass")
+        self.assertEqual(rep["recordedOlder"], {f"v{autonomy.ENGINE_VERSION - 1}": {"unsafe-permissive": 1}})
+
+    def recorded_auto(self, version):
         db = sqlite3.connect(self.db)
         tid = db.execute("SELECT id FROM tickets LIMIT 1").fetchone()[0]
         f = dict(fixtures.ready(), confirmed=["owner:accept"])
         db.execute("INSERT INTO autonomy_shadow (at, ticket_id, project, action, observed, engine, rule, agree, facts, "
                    "policy, engine_version) VALUES (?, ?, 'commandcenter', 'merge', 'jay', 'auto', 'target.merge', "
-                   "0, ?, 'fp', 2)", (1792700000, tid, json.dumps(f)))
+                   "0, ?, 'fp', ?)", (1792700000, tid, json.dumps(f), version))
         sid = db.execute("SELECT MAX(id) FROM autonomy_shadow").fetchone()[0]
         db.commit()
         db.close()
@@ -405,7 +421,26 @@ class FullRun(unittest.TestCase):
             {"id": sid, "project": "commandcenter", "action": "merge", "observed": "jay", "engine": "auto",
              "rule": "target.merge"}])
         code, rep, _e = self.run_full()
-        self.assertEqual((code, rep["gate"][8]["status"]), (1, "fail"))
+        return code, rep
+
+    def test_a_copy_older_than_the_live_pipeline_activity_misses_rows_7_and_8(self):
+        saved = dict(_Live.BODIES)
+        self.addCleanup(lambda: (_Live.BODIES.clear(), _Live.BODIES.update(saved)))
+        _Live.BODIES["/api/activity"] = {"events": saved["/api/activity"]["events"] + [
+            {"kind": "task.pipeline", "at": 1792950000, "data": {"kind": "pipeline.merged"}}]}
+        code, rep, _e = self.run_full()
+        gate = {r["row"]: r["status"] for r in rep["gate"]}
+        self.assertEqual((code, gate[7], gate[8]), (1, "missing", "missing"))
+
+    def test_live_disagreements_that_do_not_match_the_copy_are_not_trusted(self):
+        saved = dict(_Live.BODIES)
+        self.addCleanup(lambda: (_Live.BODIES.clear(), _Live.BODIES.update(saved)))
+        _Live.BODIES["/api/autonomy"] = dict(saved["/api/autonomy"], disagree=1, agree=0, disagreements=[
+            {"id": 1, "project": "commandcenter", "action": "plan", "observed": "auto", "engine": "jay",
+             "rule": "target.merge"}])
+        code, rep, _e = self.run_full()
+        gate = {r["row"]: r["status"] for r in rep["gate"]}
+        self.assertEqual((code, gate[9], gate[11]), (1, "missing", "missing"))
 
     def shadow(self, engine, rule, version, at=1792700000):
         db = sqlite3.connect(self.db)

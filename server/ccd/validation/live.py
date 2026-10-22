@@ -16,6 +16,7 @@ ROUTES = {
     "decisions": "/api/decisions?limit=1",
     "usage": "/api/usage?days=7",
     "activity": "/api/activity?limit=5&kind=merge.policy",
+    "pipeline": "/api/activity?limit=1&kind=task.pipeline",
 }
 
 
@@ -55,3 +56,16 @@ def merge_policy_status(live):
             data = json.loads(data) if isinstance(data, str) else data
             return (data or {}).get("status")
     return None
+
+
+def newest_pipeline_at(live):
+    """When ccd last logged a pipeline step (merge, deploy, gate...), or None when it cannot be read. A replay copy
+    older than this misses steps rows 7 and 8 must see."""
+    act = body(live, "pipeline")
+    events = act.get("events") if isinstance(act, dict) else None
+    if not isinstance(events, list):
+        return None
+    ats = [e.get("at") for e in events if isinstance(e, dict) and e.get("kind") == "task.pipeline"
+           and isinstance(e.get("at"), (int, float))
+           and not isinstance(e.get("at"), bool)]
+    return max(ats) if ats else 0.0

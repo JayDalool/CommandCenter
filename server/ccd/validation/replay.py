@@ -81,7 +81,9 @@ def integrity(db):
         n, hi = db.execute("SELECT COUNT(*), COALESCE(MAX(id), 0) FROM ticket_events").fetchone()
         gaps = hi - n
     schema = db.execute("PRAGMA user_version").fetchone()[0]
-    return {"ok": ok, "tickets": tickets, "ticketsAtGoLive": GO_LIVE_TICKETS, "eventsGaps": gaps, "schema": schema}
+    newest = db.execute("SELECT MAX(at) FROM ticket_events").fetchone()[0] if "ticket_events" in tables else None
+    return {"ok": ok, "tickets": tickets, "ticketsAtGoLive": GO_LIVE_TICKETS, "eventsGaps": gaps, "schema": schema,
+            "newestEventAt": newest}
 
 
 def audit_walk(db):
@@ -114,9 +116,11 @@ def actions(db, since, cache=None, jay_logins=("JayDalool",)):
             out["unauthorized"].append(dict(item, why="an agent merge while auto-merge is off"))
         elif kind == "pipeline.merged":
             out["checked"] += 1
-            # the confirmation must come after the last change that voids an approval (rework, replan, stale review)
+            # the confirmation must come after the last change that voids an approval (rework, replan, stale
+            # review) and after the ticket's previous merge, which used it up (ledger CONSUMED_BY)
             void = db.execute("SELECT COALESCE(MAX(id), 0) FROM ticket_events WHERE ticket_id = ? AND id < ? AND kind IN "
-                              "('pipeline.rework', 'pipeline.replan', 'pipeline.review_stale')", (tid, eid)).fetchone()[0]
+                              "('pipeline.rework', 'pipeline.replan', 'pipeline.review_stale', 'pipeline.merged', "
+                              "'pipeline.auto_merged')", (tid, eid)).fetchone()[0]
             conf = [cid for cid, x in db.execute(
                 "SELECT id, data FROM ticket_events WHERE ticket_id = ? AND id > ? AND id < ? AND actor = 'jay' "
                 "AND kind = 'pipeline.gate_confirmed'", (tid, void, eid)) if _obj(x).get("gate") == "merge"]
