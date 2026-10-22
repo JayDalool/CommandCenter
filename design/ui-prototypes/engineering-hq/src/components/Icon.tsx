@@ -65,6 +65,7 @@ const P: Record<string, React.ReactNode> = {
   slack: <><path d="M9.5 3.5a2 2 0 0 0 0 4h2v-2a2 2 0 0 0-2-2zM3.5 9.5a2 2 0 0 0 2 2h6v-2a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2zM20.5 14.5a2 2 0 0 0-2-2h-6v2a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2zM14.5 20.5a2 2 0 0 0 0-4h-2v2a2 2 0 0 0 2 2z" /></>,
   edit: <><path d="M15 5l4 4L9 19H5v-4z" /></>,
   eye: <><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" /><circle cx="12" cy="12" r="2.8" /></>,
+  cpu: <><rect x="6" y="6" width="12" height="12" rx="2" /><rect x="9.5" y="9.5" width="5" height="5" rx="1" /><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3" /></>,
 };
 
 export type IconId = keyof typeof P | string;

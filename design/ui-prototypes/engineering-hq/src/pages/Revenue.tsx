@@ -16,7 +16,7 @@ function Line({ data, range }: { data: number[]; range: string }) {
   const line = d.map((v, i) => `${px(i)},${py(v)}`).join(" ");
   return <svg className="line-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Fictional MRR trend">
     <defs><linearGradient id="rev-a" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#5b6cff" stopOpacity=".45" /><stop offset="1" stopColor="#5b6cff" stopOpacity="0" /></linearGradient>
-      <linearGradient id="rev-l" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#3f8bff" /><stop offset="1" stopColor="#9d6bff" /></linearGradient></defs>
+      <linearGradient id="rev-l" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#3f8bff" /><stop offset="1" stopColor="#a77bff" /></linearGradient></defs>
     {[0, 10, 20, 30, 40].map((v) => <g key={v}><line x1="46" x2={W - 20} y1={py(v)} y2={py(v)} className="gridline" /><text x="38" y={py(v) + 4} textAnchor="end">${v}K</text></g>)}
     <polygon points={`${px(0)},${py(0)} ${line} ${px(d.length - 1)},${py(0)}`} fill="url(#rev-a)" />
     <polyline points={line} fill="none" stroke="url(#rev-l)" strokeWidth="3" strokeLinejoin="round" />
@@ -62,18 +62,18 @@ export function Revenue() {
         <div key={l} className="rkpi"><span className="kpi-ico"><Icon name="plug" size={20} /></span><div><small>{l}</small><b>—</b><em className="muted">Not connected</em></div></div>)}</div>
       <NotConnected onDemo={() => setDemo(true)} /></> : <>
       <div className="demo-ribbon" role="note"><Icon name="info" size={16} /> Every number on this page is FICTIONAL sample data for reviewing the layout. None of it is your revenue.</div>
-      <div className="rev-kpis">{[["Monthly Recurring Revenue", "$39,600", "↑ 12%", "#2fe0a0", "card"], ["Annual Recurring Revenue", "$475,200", "↑ 16%", "#9d6bff", "calendar"], ["Active Subscriptions", "87", "↑ 8%", "#4f8bff", "users"],
-        ["Net Receipts (MTD)", "$41,020", "↑ 24%", "#ff9f43", "receipt"], ["Churn Rate", "2.3%", "↓ 0.8%", "#ff4f6d", "pulse"], ["Trial → Paid", "18.4%", "↑ 3.1%", "#5b7cff", "target"]].map(([l, v, d, col, ic]) =>
+      <div className="rev-kpis">{[["Monthly Recurring Revenue", "$39,600", "↑ 12%", "#8fa2ff", "card"], ["Annual Recurring Revenue", "$475,200", "↑ 16%", "#a77bff", "calendar"], ["Active Subscriptions", "87", "↑ 8%", "#6d8bff", "users"],
+        ["Net Receipts (MTD)", "$41,020", "↑ 24%", "#8fa2ff", "receipt"], ["Churn Rate", "2.3%", "↓ 0.8%", "#ff4f6d", "pulse"], ["Trial → Paid", "18.4%", "↑ 3.1%", "#a77bff", "target"]].map(([l, v, d, col, ic]) =>
         <div key={l} className="rkpi"><span className="kpi-ico" style={{ color: col, background: `${col}22` }}><Icon name={ic} size={22} /></span><div><small>{l}</small><b>{v}</b><em className={d.startsWith("↓") && l !== "Churn Rate" ? "t-bad" : "t-ok"}>{d} <span className="muted">vs last month</span></em></div><Spark data={[4, 6, 5, 7, 6, 8, 7, 9, 8, 10, 9, 11]} color={col} w={92} h={34} /></div>)}</div>
       <div className="rev-grid">
         <Panel className="rev-trend" icon="chart" title="Revenue Trend" sub="Monthly recurring revenue (fictional)" action={<div className="seg seg-boxed">{["3M", "6M", "12M"].map((r) => <button key={r} type="button" aria-selected={range === r} onClick={() => setRange(r)}>{r}</button>)}</div>}>
           <Line data={TREND} range={range} />
           <div className="rev-split">{[["Gross sales", "$44,310"], ["Refunds", "−$1,120"], ["Tax collected", "−$1,410"], ["Processor fees", "−$760"], ["Net receipts", "$41,020"]].map(([l, v]) => <div key={l}><small>{l}</small><b>{v}</b></div>)}</div>
         </Panel>
-        <Panel icon="users" title="Subscriptions by Plan" sub="Active subscription distribution"><Donut total={87} label="Subscriptions" parts={[["Starter", 28, "#2fe0a0"], ["Team", 24, "#9d6bff"], ["Business", 20, "#4f8bff"], ["Enterprise", 11, "#ff9f43"], ["Other", 4, "#8892a8"]]} /></Panel>
-        <Panel icon="card" title="Payment Status" sub="Current subscription payment status"><Donut total={87} label="Total" parts={[["Paid", 78, "#2fe0a0"], ["Past due", 4, "#ffb020"], ["Failed", 2, "#ff4f6d"], ["Upcoming", 3, "#8892a8"]]} /></Panel>
+        <Panel icon="users" title="Subscriptions by Plan" sub="Active subscription distribution"><Donut total={87} label="Subscriptions" parts={[["Starter", 28, "#c3ccff"], ["Team", 24, "#8fa2ff"], ["Business", 20, "#6d5cff"], ["Enterprise", 11, "#4a3fb8"], ["Other", 4, "#4e5a78"]]} /></Panel>
+        <Panel icon="card" title="Payment Status" sub="Current subscription payment status"><Donut total={87} label="Total" parts={[["Paid", 78, "#2fe08c"], ["Past due", 4, "#ffb020"], ["Failed", 2, "#ff4f6d"], ["Upcoming", 3, "#8892a8"]]} /></Panel>
         <Panel icon="box" title="Revenue by Product" sub="MRR by product (fictional)">
-          <ul className="bars-h">{[["samvision", "SamVision", 38, "$15,050"], ["gyst", "GYST / LifeOps", 26, "$10,300"], ["mfe", "MyFamilyExpenses", 20, "$7,920"], ["commandcenter", "Consulting", 12, "$4,750"], ["", "Other", 4, "$1,580"]].map(([k, n, pct, v]) =>
+          <ul className="bars-h">{[["samvision", "SamVision", 38, "$15,050"], ["gyst", "GYST / LifeOps", 26, "$10,300"], ["mfe", "MyFamilyExpenses", 20, "$7,920"], ["commandcenter", "CommandCenter", 12, "$4,750"], ["", "Other", 4, "$1,580"]].map(([k, n, pct, v]) =>
             <li key={n as string}><span>{n}</span><small>{pct}%</small><span className="bar"><i style={{ width: `${pct as number * 2.2}%`, background: k ? `var(--pj-${k})` : "#8892a8" }} /></span><b>{v}</b></li>)}</ul></Panel>
         <Panel icon="bulb" title="Insights" sub="Key revenue signals (fictional)">
           <ul className="insights">{[["$41,020", "Net receipts this month", "↑ 24%"], ["12", "Renewals in the next 30 days", ""], ["7", "Trial to paid conversions", "↑ 40%"], ["4", "Overdue invoices", ""]].map(([v, l, d]) => <li key={l}><b>{v}</b><small>{l}</small>{d && <em className="t-ok">{d}</em>}<Icon name="chevron" size={15} /></li>)}</ul></Panel>

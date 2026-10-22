@@ -3,12 +3,12 @@
 // out on its own (dm:<id>), and so can the inspector (panel:task-context).
 import { useEffect, useRef, useState } from "react";
 import { AGENTS, CONVERSATIONS, PROJECTS, agent, conversation, project, task, type ChatMessage } from "../data/seed";
-import { chat, feed, sendDemo, useViewState, FEED_STALE_MS } from "../data/live";
+import { chat, sendDemo, useViewState } from "../data/live";
+import { AgentDot, AgentMeta, AgentRow, AgentStatus, useAgentView, useOpenAgent } from "../components/agent";
 import { useStore } from "../lib/store";
 import { go, useRoute } from "../lib/router";
-import { useNow } from "../lib/time";
 import { Icon } from "../components/Icon";
-import { Avatar, Demo, Pill, PresenceDot, ProdBanner, ProjIcon, cx } from "../components/ui";
+import { Avatar, Demo, Pill, ProdBanner, ProjIcon, cx } from "../components/ui";
 import { Detachable, PopButton, useElsewhere } from "../windows/Detachable";
 
 function Bubble({ m }: { m: ChatMessage }) {
@@ -27,6 +27,11 @@ function Bubble({ m }: { m: ChatMessage }) {
           <div className="tc-grid"><dl><dt>Project</dt><dd><ProjIcon k={t.project} size={18} /> {project(t.project).name}</dd><dt>Priority</dt><dd className="t-bad">↑ {t.priority}</dd><dt>Created</dt><dd>2 days ago</dd><dt>Last updated</dt><dd>{t.updated}</dd></dl>
             <div className="tc-progress"><small>Overall status</small><span className="dots">{[1, 1, 1, 2, 0, 0, 0].map((s, i) => <i key={i} className={s === 2 ? "is-now" : s ? "is-done" : ""} />)}</span><span className="tc-foot"><small>3 of 6 complete</small><button type="button" className="link" onClick={() => go("task", t.key)}>View task <Icon name="arrowr" size={13} /></button></span></div></div>
           <p className="tc-note"><Icon name="shield" size={17} /> All work is proceeding as planned. Production remains untouched and no live changes have been made.</p>
+        </div>}
+        {m.ask && <div className="ask-card">
+          <span className="ask-ico"><Icon name="help" size={18} /></span>
+          <div><b>Decision needed · {m.ask}</b><small>Replying here is not a decision. Choose in the Decision Room; this conversation keeps its place.</small></div>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => go("decisions")}><Icon name="shield" size={15} /> Open Decision Room</button>
         </div>}
       </div>
     </div>
@@ -47,23 +52,22 @@ function SlackPanel() {
 export function Thread({ conv, standalone }: { conv: string; standalone?: boolean }) {
   const c = conversation(conv);
   const msgs = useStore(chat)[conv] ?? [];
-  const f = useStore(feed);
-  const now = useNow(5000);
+  const v = useAgentView(c?.agent ?? "claude");
+  const openAgent = useOpenAgent();
   const [draft, setDraft] = useViewState(`dm:${conv}`, "draft", "");
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [msgs.length, conv]);
   if (!c) return <div className="empty">Choose a conversation.</div>;
   const a = c.agent ? agent(c.agent) : null;
-  const st = c.agent ? f.agents[c.agent] : null;
-  const stale = f.outage || now - f.beat > FEED_STALE_MS;
   const send = () => { const t = draft.trim(); if (!t) return; setDraft(""); sendDemo(conv, t, c.agent); };
   return <section className={cx("thread", standalone && "is-standalone")} aria-label={`Conversation with ${c.title}`}>
     <header className="thread-head">
       {standalone && <button type="button" className="icon-btn" aria-label="Back to Messages" onClick={() => go("messages", conv)}><Icon name="arrowl" size={18} /></button>}
-      {a ? <Avatar id={a.id} size={44} /> : c.kind === "slack" ? <span className="slack-ico is-sm"><Icon name="slack" size={22} /></span> : <ProjIcon k={c.project ?? "samvision"} size={40} icon="users" />}
-      <div className="thread-title"><h2>{c.title}{a && <span className="muted"> · {a.role}</span>}</h2>
-        <p>{c.project ? `${project(c.project).name} ${c.kind === "team" ? "team channel" : "team"}` : c.sub}
-          {st && <PresenceDot s={stale ? "unknown" : st.status} detail={stale ? "status stale" : st.detail} />}</p></div>
+      {a ? <button type="button" className="av-btn" onClick={() => openAgent(a.id)} aria-label={`${a.name} details`}><Avatar id={a.id} size={44} /></button>
+        : c.kind === "slack" ? <span className="slack-ico is-sm"><Icon name="slack" size={22} /></span> : <ProjIcon k={c.project ?? "samvision"} size={40} icon="users" />}
+      <div className="thread-title"><h2>{c.title}{a && <span className="muted"> · {a.role}</span>}{c.kind === "dm" && <span className="private-chip" title="Only you and this agent's sessions see this conversation"><Icon name="lock" size={12} /> Private</span>}</h2>
+        <p>{c.project && <span className="am-proj"><i style={{ background: project(c.project).color }} />{project(c.project).name} {c.kind === "team" ? "team channel" : "team"}</span>}{!c.project && c.sub}</p>
+        {a && <p className="thread-agent"><AgentStatus v={v} detail /><AgentMeta v={v} project={false} /></p>}</div>
       <span className="sp" />
       {c.kind !== "slack" && <><button type="button" className="btn btn-outline" onClick={() => go("teams", c.project)}><Icon name="users" size={16} /><span className="btn-text">Open Team Space</span></button>
         <button type="button" className="btn btn-outline" onClick={() => go("decisions")} title="Formal decisions are recorded in the Decision Room, not by chat"><Icon name="shield" size={16} /><span className="btn-text">Decision Room</span></button></>}
@@ -91,9 +95,7 @@ export function TaskContext({ conv }: { conv: string }) {
   const c = conversation(conv);
   const t = task(c?.project === "commandcenter" ? "CC-061" : "SV-025")!;
   const [tab, setTab] = useViewState("panel:task-context", "tab", "Requirements");
-  const f = useStore(feed);
-  const now = useNow(5000);
-  const stale = f.outage || now - f.beat > FEED_STALE_MS;
+  const stale = useAgentView("claude").stale;
   const flow = ["claude", "iris", "nova", "atlas", "pixel", "orion"];
   return <aside className="ctx" aria-label="Current task context">
     <header className="ctx-head"><Icon name="gear" size={20} /><h2>Current Task Context</h2><span className="sp" /><PopButton id="panel:task-context" compact />
@@ -111,7 +113,7 @@ export function TaskContext({ conv }: { conv: string }) {
       <div className="flow">{flow.map((id, i) => { const a = agent(id); return <div key={id} className="flow-step">{i > 0 && <Icon name="arrowr" size={14} className="flow-arrow" />}
         <Avatar id={id} size={36} /><b>{a.name}</b><small>{SHORT[id]}</small><small className="muted">{a.stage}</small></div>; })}</div></div>
     <div className="ctx-box"><h3><Icon name="users" size={17} /> Agent Status {stale && <Pill tone="warn" dot>Stale</Pill>}<span className="sp" /><button type="button" className="link" onClick={() => go("teams", t.project)}>View All Agents <Icon name="arrowr" size={13} /></button></h3>
-      <ul className="status-list">{AGENTS.map((a) => { const s = f.agents[a.id]; return <li key={a.id}><Avatar id={a.id} size={22} /><b>{a.name}</b><PresenceDot s={stale ? "unknown" : s.status} detail={s.detail} label /><time>{stale ? `${Math.round((now - f.beat) / 1000)}s ago` : "live"}</time></li>; })}</ul></div>
+      <div className="status-rows">{AGENTS.map((a) => <AgentRow key={a.id} id={a.id} size={30} />)}</div></div>
   </aside>;
 }
 
@@ -136,7 +138,7 @@ export function Messages() {
         <div className="conv-search"><Icon name="search" size={17} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search messages…" aria-label="Search messages" /><Icon name="edit" size={17} /></div>
         <ul className="conv-list" aria-label="Conversations">{list.map((c) => { const last = (msgs[c.id] ?? []).at(-1); const out = false;
           return <li key={c.id}><a href={`#/messages/${c.id}`} className={cx("conv", conv === c.id && "is-sel", out && "is-out")} aria-current={conv === c.id ? "true" : undefined}>
-            {c.agent ? <Avatar id={c.agent} size={42} /> : c.kind === "slack" ? <span className="slack-ico is-sm"><Icon name="slack" size={20} /></span> : <ProjIcon k={c.project ?? "samvision"} size={40} icon="users" />}
+            {c.agent ? <span className="av-wrap"><Avatar id={c.agent} size={42} /><AgentDot id={c.agent} /></span> : c.kind === "slack" ? <span className="slack-ico is-sm"><Icon name="slack" size={20} /></span> : <ProjIcon k={c.project ?? "samvision"} size={40} icon="users" />}
             <span className="conv-body"><span className="conv-top"><b>{c.title}</b><time>{last?.at ?? ""}</time></span><small>{c.sub}</small>
               <span className="ellip muted">{c.kind === "slack" ? "Not connected · see proposal" : last ? last.text.split("\n")[0] : ""}</span></span>
             <ConvOut id={c.id} /></a></li>; })}</ul>

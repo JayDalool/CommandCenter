@@ -4,7 +4,7 @@
 import { useCallback } from "react";
 import { SharedStore, WIN_ID, isRecord } from "../lib/shared";
 import { useStore } from "../lib/store";
-import { INITIAL_AGENT_STATE, SEED_CHAT, type AgentState, type ChatMessage, type Presence } from "./seed";
+import { INITIAL_AGENT_STATE, SEED_CHAT, type AgentState, type ChatMessage } from "./seed";
 
 // ---- per-view UI state ----
 type VS = Record<string, Record<string, unknown>>;
@@ -46,27 +46,35 @@ export function sendDemo(conv: string, text: string, agentId: string | undefined
 }
 
 // ---- simulated live feed ----
-export interface Feed { agents: Record<string, AgentState>; beat: number; outage: boolean }
-const isFeed = (v: unknown): v is Feed => isRecord(v) && isRecord(v.agents) && typeof v.beat === "number" && typeof v.outage === "boolean";
-export const feed = new SharedStore<Feed>("feed", { agents: INITIAL_AGENT_STATE, beat: Date.now(), outage: false }, isFeed);
+/**
+ * source says where agent presence comes from. The prototype only ever has "demo". A live build would
+ * set "live" from ccd session events; the UI marks every "demo" status so it never reads as real activity.
+ */
+export interface Feed { agents: Record<string, AgentState>; beat: number; outage: boolean; source: "demo" | "live" }
+const isFeed = (v: unknown): v is Feed => isRecord(v) && isRecord(v.agents) && typeof v.beat === "number" && typeof v.outage === "boolean"
+  && (v.source === "demo" || v.source === "live") && Object.values(v.agents).every((s) => isRecord(s) && typeof s.status === "string" && typeof s.at === "number");
+export const feed = new SharedStore<Feed>("feed2", { agents: INITIAL_AGENT_STATE, beat: Date.now(), outage: false, source: "demo" }, isFeed);
 export const FEED_STALE_MS: number = (() => {
   try { const v = Number(new URLSearchParams(location.search).get("stalems")); return v > 0 ? v : 15000; } catch { return 15000; }
 })();
 
-const CYCLE: { id: string; status: Presence; detail: string; task?: string }[] = [
-  { id: "nova", status: "working", detail: "implementing SV-025 · tests 41/48", task: "SV-025" },
-  { id: "atlas", status: "reviewing", detail: "PR #842 at head 7f3a9c1", task: "SV-025" },
-  { id: "nova", status: "working", detail: "implementing SV-025 · tests 48/48", task: "SV-025" },
-  { id: "pixel", status: "queued", detail: "after review" },
-  { id: "iris", status: "researching", detail: "SV-031 scoring weights", task: "SV-031" },
-  { id: "iris", status: "idle", detail: "planning complete" },
+type Step = { id: string } & Partial<AgentState> & Pick<AgentState, "status" | "detail">;
+const CYCLE: Step[] = [
+  { id: "nova", status: "working", detail: "implementing · tests 44/48", task: "SV-025", project: "samvision" },
+  { id: "atlas", status: "reviewing", detail: "PR #839 · 2 comments left", task: "SV-029", project: "samvision" },
+  { id: "nova", status: "working", detail: "implementing · tests 48/48", task: "SV-025", project: "samvision" },
+  { id: "iris", status: "researching", detail: "comparable-sales weights", task: "SV-031", project: "samvision" },
+  { id: "atlas", status: "idle", detail: "review posted on PR #839", task: "SV-029", project: "samvision" },
+  { id: "iris", status: "offline", detail: "session ended · plan saved", task: "SV-031", project: "samvision", session: undefined },
+  { id: "iris", status: "idle", detail: "planning complete", task: "SV-031", project: "samvision", session: "plan-sv-92f4", model: "claude-opus-5-5" },
+  { id: "atlas", status: "reviewing", detail: "PR #839 at head 7f3a9c1", task: "SV-029", project: "samvision" },
 ];
 let step = 0;
 /** One tick of the DEMO feed (one window runs it; see App). */
 export function tickFeed(now = Date.now()) {
   const f = feed.get();
   if (f.outage) return;
-  const c = CYCLE[step++ % CYCLE.length];
-  feed.set({ ...f, beat: now, agents: { ...f.agents, [c.id]: { status: c.status, detail: c.detail, task: c.task, at: now } } });
+  const { id, ...c } = CYCLE[step++ % CYCLE.length];
+  feed.set({ ...f, beat: now, agents: { ...f.agents, [id]: { ...f.agents[id], ...c, at: now } } });
 }
 export function setOutage(on: boolean) { feed.set((f) => ({ ...f, outage: on, beat: on ? f.beat : Date.now() })); }

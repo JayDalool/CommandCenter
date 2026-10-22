@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { agent, project, PRESENCE_LABEL, type Presence, type Stage } from "../data/seed";
+import { agent, project, task, PRESENCE_LABEL, type Presence, type Stage } from "../data/seed";
 import { Icon, type IconId } from "./Icon";
 
 export const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
@@ -25,8 +25,14 @@ export function ProjIcon({ k, size = 34, icon }: { k: string; size?: number; ico
     <Icon name={icon ?? p.icon} size={size * 0.55} stroke={2} /></span>;
 }
 
+/** A task key (SV-025) with its project's colour, the same on every page. */
+export function TaskKey({ k }: { k: string }) {
+  const t = task(k);
+  return <b className="tkey" style={{ ["--c" as string]: t ? project(t.project).color : "var(--muted)" }}><i aria-hidden />{k}</b>;
+}
+
 const PRES_TONE: Record<Presence, string> = { working: "ok", idle: "idle", researching: "info", reviewing: "violet", waiting: "warn",
-  blocked: "bad", queued: "warn", paused: "idle", disconnected: "bad", unknown: "idle" };
+  blocked: "bad", queued: "warn", paused: "idle", offline: "off", disconnected: "bad", unknown: "idle" };
 export function PresenceDot({ s, label, detail }: { s: Presence; label?: boolean; detail?: string }) {
   return <span className={`pres t-${PRES_TONE[s]}`}><i aria-hidden />{label !== false && <b>{PRESENCE_LABEL[s]}</b>}{detail && <span> · {detail}</span>}</span>;
 }

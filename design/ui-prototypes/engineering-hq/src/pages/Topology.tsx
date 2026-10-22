@@ -2,18 +2,20 @@
 // Jay → projects → pipeline stages → (tasks) → hosts. Pan, zoom, fit, expand stages, filter, layers,
 // Topology | Table | Timeline, and an inspector that can itself be popped out to another monitor.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { HOSTS, PROJECTS, TASKS, project, task as taskOf, type ProjectKey } from "../data/seed";
-import { ALL_LAYERS, STAGE_GROUPS, buildGraph, curve, groupOf, ports, type Filters, type GNode, type Layers } from "../data/graph";
+import { HOSTS, PROJECTS, TASKS, agent, project, task as taskOf, type ProjectKey } from "../data/seed";
+import { ALL_LAYERS, ROOT, STAGE_GROUPS, buildGraph, curve, groupOf, ports, type Filters, type GNode, type Layers } from "../data/graph";
 import { useViewState } from "../data/live";
 import { go } from "../lib/router";
 import { Icon } from "../components/Icon";
-import { AvatarStack, Demo, Panel, Pill, ProjIcon, Spark, StagePill, ViewAll, cx, plural } from "../components/ui";
+import { Avatar, AvatarStack, Demo, Panel, Pill, ProjIcon, Spark, StagePill, TaskKey, ViewAll, cx, plural } from "../components/ui";
+import { AgentDot, AgentRow, AgentStatus, useAgentView, useOpenAgent } from "../components/agent";
 import { Detachable, PopButton } from "../windows/Detachable";
 import { SPARK } from "../data/seed";
 
 const V = "page:topology";
-const AGENTS_BY_PROJECT: Record<string, string[]> = { samvision: ["claude", "nova", "atlas"], gyst: ["claude", "nova"], mfe: ["atlas", "pixel"],
-  gauzemate: ["claude"], commandcenter: ["claude", "nova", "orion", "atlas"] };
+/** Who is assigned to each project's team (demo roster). Their live status comes from the feed. */
+const ROSTER: Record<string, string[]> = { samvision: ["claude", "iris", "nova", "atlas", "orion"], gyst: ["claude", "nova"], mfe: ["pixel", "atlas"],
+  gauzemate: [], commandcenter: ["claude", "nova", "orion", "atlas"] };
 
 export function AlertStrip() {
   const cards = [
@@ -31,11 +33,17 @@ function NodeCard({ n, sel, dim, hot, expanded, onSel, onHover, onToggle }: {
   const style = { left: n.x, top: n.y, width: n.w, height: n.h, ["--c" as string]: n.color };
   const common = { className: cx("gnode", `k-${n.kind}`, sel && "is-sel", dim && "is-dim", hot && "is-hot"), style, onClick: onSel,
     onMouseEnter: () => onHover(true), onMouseLeave: () => onHover(false), onFocus: () => onHover(true), onBlur: () => onHover(false), "data-node": n.id };
-  if (n.kind === "jay") return <button type="button" {...common} aria-label="Jay, Engineering Director">
-    <span className="av av-jay" style={{ width: 46, height: 46, fontSize: 20 }}>J</span>
-    <span className="gn-body"><b>Jay</b><small>Engineering Director</small><span className="pres t-ok"><i /><b>Online</b></span></span>
-    <Spark data={SPARK.a} color="#5ee0a0" w={70} h={24} />
-  </button>;
+  if (n.kind === "root") {
+    const p = project(n.ref!);
+    return <button type="button" {...common} aria-label="CommandCenter, control plane directed by Jay">
+      <span className="gn-row"><ProjIcon k={p.key} size={42} /><span className="gn-body"><b className="lg">{p.name}</b><small>{p.version} · {p.env}</small></span>
+        <Spark data={SPARK.a} color={p.color} w={70} h={24} /></span>
+      <span className="gn-row gn-mid"><span className="pres t-ok"><i /><b>Healthy</b></span><span className="gn-sep" />
+        <span className="root-jay"><span className="av av-jay" style={{ width: 22, height: 22, fontSize: 11 }}>J</span>Directed by <b>Jay</b></span></span>
+      <span className="gn-row gn-foot">{ROSTER[p.key].length ? <AvatarStack ids={ROSTER[p.key].slice(0, 3)} size={20} /> : <Icon name="lock" size={14} />}<span>{ROSTER[p.key].length ? plural(ROSTER[p.key].length, "agent") : "No agents"}</span>
+        <span className="gn-sep" /><Icon name="rocket" size={14} /><span>shadow autonomy</span></span>
+    </button>;
+  }
   if (n.kind === "project") {
     const p = project(n.ref!);
     const paused = p.health === "paused";
@@ -44,7 +52,7 @@ function NodeCard({ n, sel, dim, hot, expanded, onSel, onHover, onToggle }: {
       <span className="gn-row"><ProjIcon k={p.key} size={40} /><span className="gn-body"><b>{p.name}</b><small>{p.version} · {p.env}</small></span></span>
       <span className="gn-row gn-mid"><span className={`pres t-${paused ? "idle" : "ok"}`}><i /><b>{paused ? "Paused" : "Healthy"}</b></span>
         {!paused && <Spark data={p.key === "mfe" ? SPARK.c : p.key === "gyst" ? SPARK.b : SPARK.a} color={p.color} w={84} h={22} />}</span>
-      <span className="gn-row gn-foot"><AvatarStack ids={AGENTS_BY_PROJECT[p.key].slice(0, 3)} size={20} /><span>{plural(AGENTS_BY_PROJECT[p.key].length, "agent")}</span>
+      <span className="gn-row gn-foot">{ROSTER[p.key].length ? <AvatarStack ids={ROSTER[p.key].slice(0, 3)} size={20} /> : <Icon name="lock" size={14} />}<span>{ROSTER[p.key].length ? plural(ROSTER[p.key].length, "agent") : "No agents"}</span>
         <span className="gn-sep" /><Icon name="list" size={14} /><span>{plural(nTasks, "task")}</span></span>
     </button>;
   }
@@ -84,8 +92,9 @@ function useFit(box: React.RefObject<HTMLDivElement | null>, bounds: { w: number
     const el = box.current; if (!el) return;
     const r = el.getBoundingClientRect();
     if (!r.width || !r.height) return;
-    const k = Math.min(r.width / (bounds.w + 60), r.height / (bounds.h + 40), 1.25);
-    setT({ k, x: (r.width - bounds.w * k) / 2, y: Math.max(14, (r.height - bounds.h * k) / 2) });
+    const legend = 48;   // keep the bottom legend and zoom tools clear of the graph
+    const k = Math.min(r.width / (bounds.w + 60), (r.height - legend) / (bounds.h + 30), 1.25);
+    setT({ k, x: (r.width - bounds.w * k) / 2, y: Math.max(12, (r.height - legend - bounds.h * k) / 2) });
   }, [box, bounds.w, bounds.h]);
   useLayoutEffect(() => { fit(); }, [fit]);
   useEffect(() => {
@@ -204,11 +213,20 @@ function TimelineMode() {
   </div>;
 }
 
+function TeamDot({ id }: { id: string }) {
+  const open = useOpenAgent();
+  const v = useAgentView(id);
+  const a = agent(id);
+  return <button type="button" className="team-dot" onClick={() => open(id)} title={`${a.name} · ${a.role}`} aria-label={`${a.name} details`}>
+    <span className="av-wrap"><Avatar id={id} size={30} /><AgentDot id={id} /></span><small>{a.name}</small>
+    <AgentStatus v={v} task={false} /></button>;
+}
+
 export function TopologyInspector() {
   const [sel, setSel] = useViewState(V, "sel", "p:samvision");
   const [tab, setTab] = useViewState(V, "itab", "Overview");
-  const kind = sel.split(":")[0];
-  const ref = sel.slice(sel.indexOf(":") + 1);
+  const kind = sel === "root" || sel === "jay" ? "p" : sel.split(":")[0];
+  const ref = sel === "root" || sel === "jay" ? ROOT : sel.slice(sel.indexOf(":") + 1);
   let body: React.ReactNode;
   if (kind === "p") {
     const p = project(ref);
@@ -216,22 +234,27 @@ export function TopologyInspector() {
     const paused = p.health === "paused";
     body = <>
       <div className="insp-head"><ProjIcon k={p.key} size={46} /><div><h2>{p.name}</h2><p>{p.blurb}</p></div></div>
-      <div className="seg seg-under" role="tablist">{["Overview", "Tasks", "Releases", "Policy"].map((x) => <button key={x} role="tab" type="button" aria-selected={tab === x} onClick={() => setTab(x)}>{x}</button>)}</div>
+      <div className="seg seg-under" role="tablist">{["Overview", "Team", "Tasks", "Releases", "Policy"].map((x) => <button key={x} role="tab" type="button" aria-selected={tab === x} onClick={() => setTab(x)}>{x}</button>)}</div>
       {tab === "Overview" && <>
+        {p.key === ROOT && <div className="insp-jay"><span className="av av-jay" style={{ width: 30, height: 30, fontSize: 14 }}>J</span><span><b>Jay</b> · Engineering Director<small>Directs every project from here. Merges, deploys and personal-data changes need Jay.</small></span></div>}
         <div className="insp-status"><span className={`pres is-lg t-${paused ? "idle" : "ok"}`}><i /><b>{paused ? "Paused" : "Healthy"}</b></span><Pill tone="info">{p.env}</Pill><span className="sp" /><b>{p.version}</b></div>
         {paused && <p className="callout t-idle">{p.pausedReason}. No agent works on it.</p>}
-        <div className="insp-stats"><div><b>{ts.filter((t) => t.stage !== "Paused").length}</b><small>Active tasks</small></div><div><b>{AGENTS_BY_PROJECT[p.key].length}</b><small>Agent sessions</small></div><div><b>{p.key === "samvision" ? 1 : 0}</b><small>Release ready</small></div></div>
+        <div className="insp-stats"><div><b>{ts.filter((t) => t.stage !== "Paused").length}</b><small>Active tasks</small></div><div><b>{ROSTER[p.key].length}</b><small>Agent sessions</small></div><div><b>{p.key === "samvision" ? 1 : 0}</b><small>Release ready</small></div></div>
+        <h3 className="insp-h">Team now <button type="button" className="link" onClick={() => setTab("Team")}>Details <Icon name="arrowr" size={13} /></button></h3>
+        {ROSTER[p.key].length ? <div className="insp-team">{ROSTER[p.key].map((id) => <TeamDot key={id} id={id} />)}</div> : <p className="muted small">No agents assigned while the project is paused.</p>}
         <h3 className="insp-h">Live health <Demo label="Demo" /></h3>
         <div className="insp-health">{[["CPU", "28%", SPARK.a], ["Memory", "52%", SPARK.b], ["Task success", "98%", SPARK.c]].map(([l, v, d]) => <div key={l as string}><small>{l as string}</small><b>{v as string}</b><Spark data={d as number[]} color="#5b7cff" w={96} h={28} /></div>)}</div>
         <h3 className="insp-h">Active tasks <ViewAll onClick={() => go("engineering")} /></h3>
-        <ul className="mini-list">{ts.slice(0, 4).map((t) => <li key={t.key}><button type="button" onClick={() => go("task", t.key)}><b className="mono">{t.key}</b><span className="ellip">{t.title}</span><StagePill s={t.stage} /></button></li>)}</ul>
+        <ul className="mini-list">{ts.slice(0, 4).map((t) => <li key={t.key}><button type="button" onClick={() => go("task", t.key)}><TaskKey k={t.key} /><span className="ellip">{t.title}</span><StagePill s={t.stage} /></button></li>)}</ul>
         {p.releaseWindows && <><h3 className="insp-h">Releases</h3>
           <div className="release-row"><div><b>v0.4.2</b> <Pill tone="ok">Release ready</Pill><small>Staging · waits for a release window ({p.releaseWindows.join(", ")} America/Winnipeg)</small></div>
             <button type="button" className="btn btn-sm" disabled title="Releases go through the existing gates, never from this prototype">Gated</button></div></>}
         <div className="insp-actions"><button type="button" className="btn btn-primary" onClick={() => go("teams", p.key)}><Icon name="users" size={16} /> Open team</button>
           <button type="button" className="btn" onClick={() => go("messages", p.key === "commandcenter" ? "cc-lead" : "sv-lead")}><Icon name="message" size={16} /> Message lead</button></div>
       </>}
-      {tab === "Tasks" && <ul className="mini-list">{ts.map((t) => <li key={t.key}><button type="button" onClick={() => go("task", t.key)}><b className="mono">{t.key}</b><span className="ellip">{t.title}</span><StagePill s={t.stage} /></button></li>)}</ul>}
+      {tab === "Team" && (ROSTER[p.key].length ? <div className="status-rows">{ROSTER[p.key].map((id) => <AgentRow key={id} id={id} size={30} />)}</div>
+        : <p className="muted">No agents are assigned while {p.name} is paused.</p>)}
+      {tab === "Tasks" && <ul className="mini-list">{ts.map((t) => <li key={t.key}><button type="button" onClick={() => go("task", t.key)}><TaskKey k={t.key} /><span className="ellip">{t.title}</span><StagePill s={t.stage} /></button></li>)}</ul>}
       {tab === "Releases" && <p className="muted">{p.releaseWindows ? `Release windows: ${p.releaseWindows.join(", ")} America/Winnipeg. Unattended release needs health checks and auto-rollback, which are not enabled yet; otherwise prepared and held for Jay.` : "No release windows decided yet."}</p>}
       {tab === "Policy" && <dl className="kv"><dt>Mode</dt><dd>{p.modeLabel}</dd><dt>Merge</dt><dd>{p.merge}</dd><dt>Source</dt><dd className="mono">policy/projects/{p.key}.toml</dd><dt>Autonomy</dt><dd>Evaluated in shadow mode only. Nothing executes from it.</dd></dl>}
     </>;
@@ -239,7 +262,9 @@ export function TopologyInspector() {
     const g = STAGE_GROUPS.find((s) => s.id === ref)!;
     const ts = TASKS.filter((t) => groupOf(t) === ref);
     body = <><div className="insp-head"><span className="gn-ico is-lg"><Icon name={g.icon} size={26} /></span><div><h2>{g.label}</h2><p>Pipeline stage · {ts.length} tasks across {new Set(ts.map((t) => t.project)).size} projects</p></div></div>
-      <ul className="mini-list">{ts.map((t) => <li key={t.key}><button type="button" onClick={() => go("task", t.key)}><ProjIcon k={t.project} size={22} /><b className="mono">{t.key}</b><span className="ellip">{t.title}</span><StagePill s={t.stage} /></button></li>)}</ul></>;
+      <ul className="mini-list">{ts.map((t) => <li key={t.key}><button type="button" onClick={() => go("task", t.key)}><TaskKey k={t.key} /><span className="ellip">{t.title}</span><StagePill s={t.stage} /></button></li>)}</ul>
+      <h3 className="insp-h">Agents on this stage</h3>
+      <div className="status-rows">{[...new Set(ts.map((t) => t.owner))].map((id) => <AgentRow key={id} id={id} size={30} />)}</div></>;
   } else if (kind === "h") {
     const h = HOSTS.find((x) => x.id === ref)!;
     body = <><div className="insp-head"><span className="gn-ico is-lg"><Icon name={h.kind === "server" ? "server" : "laptop"} size={26} /></span><div><h2>{h.name}</h2><p>WorkerNode · {h.kind}</p></div></div>
@@ -249,6 +274,7 @@ export function TopologyInspector() {
     const t = taskOf(ref)!;
     body = <><div className="insp-head"><ProjIcon k={t.project} size={40} /><div><h2>{t.key} · {t.title}</h2><p>{project(t.project).name}</p></div></div>
       <div className="insp-status"><StagePill s={t.stage} /><span className="sp" /></div><p>{t.why}</p>
+      <h3 className="insp-h">Owner</h3><AgentRow id={t.owner} size={30} />
       <div className="insp-actions"><button type="button" className="btn btn-primary" onClick={() => go("task", t.key)}>Open Task Room</button></div></>;
   } else {
     body = <><div className="insp-head"><span className="av av-jay" style={{ width: 46, height: 46, fontSize: 20 }}>J</span><div><h2>Jay</h2><p>Engineering Director · Senior Technical Lead</p></div></div>
@@ -310,7 +336,7 @@ export function Topology() {
     {!immersive && <div className="topo-bottom">
       <Panel title={<>Needs You <span className="count t-bad">3</span></>} action={<ViewAll onClick={() => go("decisions")} />}>
         <ul className="need-list">{[["SV-025", "Choose the comparison workflow (Option A / B)", "22m"], ["MFE-014", "Pick a release window for MyFamilyExpenses", "47m"], ["GYST-019", "Personal-data trigger: memory retention", "2h"]].map(([k, t, a]) =>
-          <li key={k}><i /><b className="mono">{k}</b><span className="ellip">{t}</span><small>{a}</small></li>)}</ul></Panel>
+          <li key={k}><i /><TaskKey k={k} /><span className="ellip">{t}</span><small>{a}</small></li>)}</ul></Panel>
       <Panel title={<>Release Gates <span className="count t-bad">1</span></>} action={<ViewAll onClick={() => go("engineering")} />}>
         <ul className="gate-list">{[["samvision", "SamVision v0.4.2", "Ready · waits for window", "ok", "12/12"], ["commandcenter", "CommandCenter v1.2.0", "In progress", "info", "8/12"],
           ["gyst", "GYST v0.3.1", "Owner merge", "info", "6/10"], ["mfe", "MyFamilyExpenses v0.2.0", "Blocked (no window)", "bad", "3/10"]].map(([k, n, s, tone, c]) =>

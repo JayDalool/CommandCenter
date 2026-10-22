@@ -18,6 +18,7 @@ const PANELS: Record<string, { title: string; hash: string }> = {
   "task-context": { title: "Current Task Context", hash: "#/messages" },
   evidence: { title: "Evidence & Context", hash: "#/decisions" },
   "task-detail": { title: "Task Detail", hash: "#/engineering" },
+  agent: { title: "Agent Inspector", hash: "#/teams" },
 };
 
 export const ID_SHAPE = /^(page|dm|task|term|panel):[A-Za-z0-9_-]{1,64}$/;

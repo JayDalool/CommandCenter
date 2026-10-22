@@ -5,7 +5,15 @@ import { curve, type GNode } from "../data/graph";
 import { cx } from "./ui";
 
 export interface FNode { id: string; x: number; y: number; w: number; h: number; color: string; body: ReactNode; className?: string; onClick?: () => void; label: string }
-export interface FEdge { from: string; to: string; color: string; ao?: number; bo?: number; dashed?: boolean }
+export interface FEdge { from: string; to: string; color: string; ao?: number; bo?: number; dashed?: boolean; bus?: number }
+
+/** An org-chart connector: down from a, across at y = bus, down into b, with rounded corners. */
+function busPath(a: GNode, b: GNode, ao: number, bo: number, bus: number) {
+  const px = a.x + a.w / 2 + ao, py = a.y + a.h, qx = b.x + b.w / 2 + bo, qy = b.y;
+  if (Math.abs(px - qx) < 1) return `M${px},${py} V${qy}`;
+  const r = Math.min(14, Math.abs(qx - px) / 2), dir = qx > px ? 1 : -1;
+  return `M${px},${py} V${bus - r} Q${px},${bus} ${px + dir * r},${bus} H${qx - dir * r} Q${qx},${bus} ${qx},${bus + r} V${qy}`;
+}
 
 export function GraphFrame({ w, h, nodes, edges, className }: { w: number; h: number; nodes: FNode[]; edges: FEdge[]; className?: string }) {
   const box = useRef<HTMLDivElement>(null);
@@ -24,7 +32,7 @@ export function GraphFrame({ w, h, nodes, edges, className }: { w: number; h: nu
         <defs><filter id="glow2" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="3" /></filter></defs>
         {edges.map((e, i) => {
           const a = byId.get(e.from) as unknown as GNode, b = byId.get(e.to) as unknown as GNode; if (!a || !b) return null;
-          const d = curve(a, b, e.ao ?? 0, e.bo ?? 0);
+          const d = e.bus != null ? busPath(a, b, e.ao ?? 0, e.bo ?? 0, e.bus) : curve(a, b, e.ao ?? 0, e.bo ?? 0);
           return <g key={i} className={cx("edge", e.dashed && "is-paused")}>
             {!e.dashed && <path d={d} stroke={e.color} className="edge-glow" filter="url(#glow2)" />}
             <path d={d} stroke={e.color} className="edge-line" />

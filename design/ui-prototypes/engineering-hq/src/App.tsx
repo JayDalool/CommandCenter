@@ -16,6 +16,11 @@ import { More } from "./pages/More";
 import { TaskRoom, Terminal } from "./pages/TaskRoom";
 import { useFeedRunner } from "./data/runner";
 import { useViewState } from "./data/live";
+import { AgentDrawer, AgentInspector } from "./components/agent";
+import { PROJECTS } from "./data/seed";
+
+// One source for project colours: seed.ts. CSS reads them as --pj-<key>.
+for (const p of PROJECTS) document.documentElement.style.setProperty(`--pj-${p.key}`, p.color);
 
 const PAGES: Record<string, () => React.JSX.Element> = { office: Office, messages: Messages, decisions: Decisions, teams: Teams, topology: Topology,
   engineering: Engineering, revenue: Revenue, more: More, task: () => <TaskRoom /> };
@@ -35,6 +40,7 @@ export function renderView(id: string): ReactNode {
   if (rest === "task-context") return <MsgCtx />;
   if (rest === "evidence") return <Evidence />;
   if (rest === "task-detail") return <TaskDetail />;
+  if (rest === "agent") return <AgentInspector />;
   return null;
 }
 
@@ -60,5 +66,5 @@ function MainWindow() {
 export function App() {
   const route = useRoute();
   useFeedRunner();
-  return <>{route.screen === "pop" ? <PopoutWindow render={renderView} /> : <MainWindow />}<Notices /></>;
+  return <>{route.screen === "pop" ? <PopoutWindow render={renderView} /> : <MainWindow />}<AgentDrawer /><Notices /></>;
 }

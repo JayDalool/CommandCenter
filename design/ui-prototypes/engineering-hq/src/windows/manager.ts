@@ -66,7 +66,10 @@ export function popOut(id: string, open: typeof window.open = window.open.bind(w
   const win = open(url, windowName(id), `popup=yes,width=${w},height=${h}`);
   if (!win) {
     owners.set((o) => { const n = { ...o }; delete n[id]; return n; });
-    notify(`Your browser blocked the pop-out window for “${def.title}”. Allow pop-ups for this site (address bar → pop-up icon), then try again.`, "bad");
+    const framed = (() => { try { return window.top !== window.self; } catch { return true; } })();
+    notify(framed
+      ? `This copy is running inside a page that does not allow new windows, so “${def.title}” cannot pop out here. To try pop-outs on your monitors, run the prototype locally (npm run review) and open it in its own browser tab.`
+      : `Your browser blocked the pop-out window for “${def.title}”. Allow pop-ups for this site (address bar → pop-up icon), then try again.`, "bad");
     return "blocked";
   }
   handles.set(id, win);

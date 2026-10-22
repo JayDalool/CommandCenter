@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 5181 --strictPort",
+    "review": "npm run build && vite preview --host 127.0.0.1 --port 5181 --strictPort --open",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "e2e": "node e2e/run.mjs"

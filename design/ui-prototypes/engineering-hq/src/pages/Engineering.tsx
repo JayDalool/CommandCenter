@@ -1,22 +1,30 @@
 // ENGINEERING — dense workbench behind its own tab (references 06 and 10).
 import { TASKS, project, agent, task as taskOf, type Task } from "../data/seed";
 import { useViewState } from "../data/live";
+import { AgentStatus, useAgentView, useOpenAgent } from "../components/agent";
 import { go } from "../lib/router";
 import { Icon } from "../components/Icon";
-import { Avatar, Demo, Prio, ProjIcon, StagePill, cx } from "../components/ui";
+import { Avatar, Demo, Prio, ProjIcon, StagePill, TaskKey, cx } from "../components/ui";
 import { Detachable, PopButton } from "../windows/Detachable";
 
 const V = "page:engineering";
+
+function Assignee({ id }: { id: string }) {
+  const v = useAgentView(id);
+  const open = useOpenAgent();
+  return <button type="button" className="assignee" onClick={() => open(id)} aria-label={`${agent(id).name} details`}>
+    <Avatar id={id} size={26} /><span><b>{agent(id).name}</b><AgentStatus v={v} task={false} /></span></button>;
+}
 
 export function TaskDetail({ k }: { k?: string }) {
   const [selV] = useViewState(V, "sel", "CC-061");
   const t = taskOf(k ?? selV) ?? TASKS[0];
   const [tab, setTab] = useViewState("panel:task-detail", "tab", "Details");
   return <aside className="tdetail" aria-label="Task detail">
-    <header className="td-crumb"><ProjIcon k={t.project} size={20} /><span>{project(t.project).name}</span><span className="muted">/</span><b className="mono">{t.key}</b><span className="sp" /><PopButton id="panel:task-detail" compact /></header>
+    <header className="td-crumb"><ProjIcon k={t.project} size={20} /><span>{project(t.project).name}</span><span className="muted">/</span><TaskKey k={t.key} /><span className="sp" /><PopButton id="panel:task-detail" compact /></header>
     <div className="td-title"><h2>{t.title}</h2><StagePill s={t.stage} /></div>
     <div className="seg seg-under" role="tablist">{["Details", "Plan", "Checks", "Activity"].map((x) => <button key={x} role="tab" type="button" aria-selected={tab === x} onClick={() => setTab(x)}>{x}</button>)}</div>
-    <div className="td-meta"><div><small>Assignee</small><span><Avatar id={t.owner} size={26} /> {agent(t.owner).name}</span></div><div><small>Reviewers</small><span><Avatar id="atlas" size={24} /><Avatar id="claude" size={24} /></span></div><div><small>Updated</small><span>{t.updated}</span></div></div>
+    <div className="td-meta"><div><small>Assignee</small><Assignee id={t.owner} /></div><div><small>Reviewers</small><span><Avatar id="atlas" size={24} /><Avatar id="claude" size={24} /></span></div><div><small>Updated</small><span>{t.updated}</span></div></div>
     <div className="td-labels"><small>Labels</small>{t.labels.map((l) => <span key={l} className="label">{l}</span>)}{t.pr && <span className="label is-link"><Icon name="branch" size={13} /> PR {t.pr}</span>}</div>
     <section className="td-sec"><span className="td-ico t-bad"><Icon name="target" size={18} /></span><h3>Why</h3><p>{t.why}</p></section>
     <section className="td-sec"><span className="td-ico t-info"><Icon name="list" size={18} /></span><h3>Plan</h3><ol>{t.plan.map((p) => <li key={p}>{p}</li>)}</ol></section>
@@ -51,8 +59,8 @@ export function Engineering() {
         <ol className="stepper">{["Build", "Tests", "Security", "Review", "Deploy"].map((s, i) => <li key={s} className={i < 3 ? "is-done" : ""}><i>{i < 3 && <Icon name="tick" size={12} stroke={3} />}</i><span>{s}</span></li>)}</ol></section>
       <section className="panel eng-usage"><h3><Icon name="db" size={24} /> Model Usage / Cost <Demo label="Demo" /></h3>
         <p className="big">$— <small className="muted">Live figures come from ccd's usage meter (AI spend, not revenue)</small></p>
-        <div className="bars">{[5, 7, 4, 8, 6, 9, 7, 5, 8, 10, 6, 9, 7, 8, 6, 9, 5, 7].map((h, i) => <i key={i} style={{ height: h * 4, background: i % 4 === 0 ? "#ffb020" : i % 3 === 0 ? "#a463ff" : "#4f7bff" }} />)}</div>
-        <p className="legend-row"><span><i style={{ background: "#4f7bff" }} />Claude</span><span><i style={{ background: "#a463ff" }} />Codex</span><span><i style={{ background: "#ffb020" }} />Other</span></p></section>
+        <div className="bars">{[5, 7, 4, 8, 6, 9, 7, 5, 8, 10, 6, 9, 7, 8, 6, 9, 5, 7].map((h, i) => <i key={i} style={{ height: h * 4, background: i % 4 === 0 ? "#4e5a78" : i % 3 === 0 ? "#6d5cff" : "#8fa2ff" }} />)}</div>
+        <p className="legend-row"><span><i style={{ background: "#8fa2ff" }} />Claude</span><span><i style={{ background: "#6d5cff" }} />Codex</span><span><i style={{ background: "#4e5a78" }} />Other</span></p></section>
     </div>
     <div className="eng-grid">
       <section className="panel workbench">
@@ -61,7 +69,7 @@ export function Engineering() {
             <button type="button" className="btn btn-primary" disabled title="Creating tasks needs the approved API (proposal in the plan)"><Icon name="plus" size={15} /> New Task</button><PopButton id={V} /></div></header>
         <table className="grid wb"><thead><tr><th><input type="checkbox" aria-label="Select all" /></th><th>Key</th><th>Title</th><th>Service</th><th>Status</th><th>Priority</th><th>Assignee</th><th>Updated</th></tr></thead>
           <tbody>{rows.map((t: Task) => <tr key={t.key} className={cx(sel === t.key && "is-sel")} onClick={() => setSel(t.key)} aria-selected={sel === t.key}>
-            <td><input type="checkbox" checked={sel === t.key} readOnly aria-label={`Select ${t.key}`} /></td><td className="mono b">{t.key}</td><td className="wb-title">{t.title}</td>
+            <td><input type="checkbox" checked={sel === t.key} readOnly aria-label={`Select ${t.key}`} /></td><td><TaskKey k={t.key} /></td><td className="wb-title">{t.title}</td>
             <td><span className="cell-pj"><ProjIcon k={t.project} size={22} />{project(t.project).name}</span></td><td><StagePill s={t.stage} /></td><td><Prio p={t.priority} /></td>
             <td><span className="cell-pj"><Avatar id={t.owner} size={24} />{agent(t.owner).name}</span></td><td className="muted">{t.updated}</td></tr>)}</tbody></table>
       </section>

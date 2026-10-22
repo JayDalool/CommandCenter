@@ -150,6 +150,25 @@ await test("live status updates reach the pop-out; a feed outage shows Stale, ne
   assert(await w.locator(".agent-card .pres.t-ok").count() === 0, "an agent still shows Working during an outage");
 });
 
+await test("agent inspector: pops out to its own window; agent clicks in the main window follow it there; drawers stay in their own window", async (ctx) => {
+  const m = await main(ctx, "teams/samvision");
+  await m.getByRole("button", { name: /^Atlas, / }).click();
+  const d = m.getByRole("dialog", { name: "Agent details" });
+  assert(await d.count() === 1, "drawer did not open");
+  assert((await d.textContent()).includes("gpt-5-codex"), "drawer has no model id");
+  const w = await pop(m, "pop-panel:agent");
+  assert(await until(async () => (await m.getByRole("dialog", { name: "Agent details" }).count()) === 0), "main still shows the drawer while popped out");
+  assert(await until(async () => (await w.locator(".agent-insp h2").textContent()) === "Atlas"), "pop-out does not show Atlas");
+  await m.getByRole("button", { name: /^Pixel, / }).click();
+  assert(await until(async () => (await w.locator(".agent-insp h2").textContent()) === "Pixel"), "pop-out did not follow the click in main");
+  assert(await m.getByRole("dialog", { name: "Agent details" }).count() === 0, "a drawer opened in main although the inspector is popped out");
+  assert((await w.locator(".agent-insp").textContent()).includes("MFE-014"), "Pixel's task missing");
+  const closed = w.waitForEvent("close");
+  await w.getByRole("button", { name: /Return to main window/ }).click(); await closed;
+  await m.getByRole("button", { name: /^Nova, / }).click();
+  assert(await until(async () => (await m.getByRole("dialog", { name: "Agent details" }).count()) === 1), "drawer did not come back after return");
+});
+
 await test("security: no credential in any window URL or shared storage; only same-origin windows", async (ctx) => {
   const m = await main(ctx, "messages/sv-lead");
   const w = await pop(m, "pop-dm:sv-lead");

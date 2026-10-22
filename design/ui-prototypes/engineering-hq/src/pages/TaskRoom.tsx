@@ -3,11 +3,10 @@
 // name (web/app/src/workspace/rooms.ts), so popping out or closing a window never starts or stops one.
 import { useEffect, useState } from "react";
 import { agent, project, task } from "../data/seed";
-import { feed } from "../data/live";
-import { useStore } from "../lib/store";
+import { AgentMeta, AgentStatus, useAgentView, useOpenAgent } from "../components/agent";
 import { useRoute } from "../lib/router";
 import { Icon } from "../components/Icon";
-import { Avatar, Demo, PresenceDot, ProdBanner, ProjIcon, StagePill } from "../components/ui";
+import { Avatar, Demo, ProdBanner, ProjIcon, StagePill } from "../components/ui";
 import { Detachable, PopButton } from "../windows/Detachable";
 import { Thread } from "./Messages";
 
@@ -24,16 +23,24 @@ export function Terminal({ k }: { k: string }) {
   </section>;
 }
 
+function OwnerChip({ id }: { id: string }) {
+  const v = useAgentView(id);
+  const open = useOpenAgent();
+  const a = agent(id);
+  return <button type="button" className="owner-chip" onClick={() => open(id)} aria-label={`${a.name} details`}>
+    <Avatar id={id} size={30} /><span><b>{a.name}</b> <small className="muted">{a.role}</small><br /><AgentStatus v={v} /></span>
+    <AgentMeta v={v} project={false} /></button>;
+}
+
 export function TaskRoom({ k: kp }: { k?: string }) {
   const route = useRoute();
   const k = kp ?? route.id ?? "SV-025";
   const t = task(k);
-  const f = useStore(feed);
   if (!t) return <div className="empty">Unknown task.</div>;
   const a = agent(t.owner);
   return <div className="page page-room">
     <header className="room-head"><ProjIcon k={t.project} size={40} /><div><h1><span className="mono">{t.key}</span> {t.title}</h1><p>{project(t.project).name} · Task Room <Demo /></p></div>
-      <StagePill s={t.stage} /><span className="sp" /><PresenceDot s={f.agents[t.owner]?.status ?? "unknown"} detail={`${a.name}: ${f.agents[t.owner]?.detail ?? ""}`} /><PopButton id={`task:${k}`} /></header>
+      <StagePill s={t.stage} /><span className="sp" /><OwnerChip id={t.owner} /><PopButton id={`task:${k}`} /></header>
     <ProdBanner compact />
     <div className="room-grid">
       <Detachable id={`dm:${t.project === "commandcenter" ? "cc-lead" : "sv-lead"}`}><Thread conv={t.project === "commandcenter" ? "cc-lead" : "sv-lead"} /></Detachable>

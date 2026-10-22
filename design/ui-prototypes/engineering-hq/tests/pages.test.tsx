@@ -108,7 +108,7 @@ describe("pages", () => {
     go("#/topology");
     render(<App />);
     const canvas = screen.getByTestId("topology-canvas");
-    expect(canvas.querySelectorAll(".k-project")).toHaveLength(5);
+    expect(canvas.querySelectorAll(".k-project")).toHaveLength(4);
     fireEvent.click(screen.getByRole("button", { name: /Filters/ }));
     fireEvent.click(screen.getByRole("button", { name: "GYST / LifeOps" }));
     expect(screen.getByTestId("topology-canvas").querySelectorAll(".k-project")).toHaveLength(1);

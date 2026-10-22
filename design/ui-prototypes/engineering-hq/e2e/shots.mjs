@@ -21,12 +21,23 @@ for (const [vw, vh, tag] of [[1920, 1080, ""], [1366, 768, "_1366"]]) {
   await page.goto(`${base}?nofeed#/revenue`); await page.getByLabel("Fictional demo").check(); await page.waitForTimeout(300);
   await page.screenshot({ path: `${out}/07_revenue_demo${tag}.png` });
   await page.getByLabel("Fictional demo").uncheck();
+  if (!tag) {
+    await page.goto(`${base}?nofeed#/teams/samvision`); await page.waitForTimeout(400);
+    await page.getByRole("button", { name: /^Atlas, / }).click(); await page.waitForTimeout(300);
+    await page.screenshot({ path: `${out}/09_agent_inspector.png` });
+    await page.getByRole("button", { name: "Close agent details" }).click();
+    await page.goto(`${base}?nofeed#/topology`); await page.waitForTimeout(500);
+    await page.locator('[data-node="s:build"]').click(); await page.waitForTimeout(300);
+    await page.screenshot({ path: `${out}/10_topology_stage_inspector.png` });
+    await page.goto(`${base}?nofeed#/topology`); await page.waitForTimeout(300);
+  }
   await ctx.close();
 }
 // Detached-window sizes.
 const ctx = await browser.newContext({ viewport: { width: 980, height: 820 } });
 const p = await ctx.newPage();
 await p.goto(`${base}?nofeed#/pop/dm:sv-lead`); await p.waitForTimeout(500); await p.screenshot({ path: `${out}/pop_dm_980x820.png` });
+await p.goto(`${base}?nofeed#/pop/panel:agent`); await p.setViewportSize({ width: 600, height: 900 }); await p.waitForTimeout(400); await p.screenshot({ path: `${out}/pop_agent_600x900.png` });
 await p.goto(`${base}?nofeed#/pop/panel:topology-inspector`); await p.setViewportSize({ width: 520, height: 860 }); await p.waitForTimeout(400); await p.screenshot({ path: `${out}/pop_inspector_520x860.png` });
 await browser.close();
 console.log("screenshots in", out);
