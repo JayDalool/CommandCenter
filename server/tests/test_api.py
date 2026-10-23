@@ -64,6 +64,12 @@ ALLOWED = {
     # v2 Phase 1: Project Operating Profiles, read-only
     ("GET", "/api/profiles"), ("GET", "/api/autonomy"), ("GET", "/api/decisions"), ("GET", "/api/inbox"), ("GET", "/api/audit"), ("GET", "/api/usage"), ("GET", "/api/actors"), ("POST", "/api/actors/issue"), ("POST", "/api/actors/revoke"), ("GET", "/api/workers"), ("POST", "/api/workers/enrol"),
     ("POST", "/api/workers/heartbeat"), ("POST", "/api/workers/approve"), ("POST", "/api/workers/revoke"),
+    # Onboarding groundwork (D-024 proposed): 404 unless config onboarding_groundwork is true; records only.
+    ("GET", "/api/onboarding"), ("GET", "/api/onboarding/agents"), ("GET", "/api/onboarding/agents/{id}"),
+    ("POST", "/api/onboarding/agents/{id}/retire"), ("GET", "/api/onboarding/drafts"), ("POST", "/api/onboarding/drafts"),
+    ("GET", "/api/onboarding/drafts/{id}"), ("PUT", "/api/onboarding/drafts/{id}"),
+    ("POST", "/api/onboarding/drafts/{id}/discard"), ("POST", "/api/onboarding/drafts/{id}/register"),
+    ("POST", "/api/onboarding/validate"), ("GET", "/api/onboarding/events"), ("GET", "/api/onboarding/budgets"),
 }
 JAY_PRESSES = {"/api/jay/merge", "/api/jay/go-live"}
 FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec", "push",

@@ -168,7 +168,11 @@ Issues/Projects. See [ADR 0001](adr/0001-ticket-system-source-of-truth.md).
 Rules enforced by SQLite triggers, not only code: tickets are never deleted
 (archive), a key never changes, the counter never goes back, the audit trail is
 append-only. Migrations are forward-only, one transaction each, `PRAGMA
-user_version`; a newer file than the code refuses to open.
+user_version`; a newer file than the code refuses to open. Migration 10 alone also
+has a tested way back (`tasks.downgrade`, run by `python -m ccd.migration_safety
+rollback` with ccd stopped): after a backup it drops only the empty tables v10
+added, in one transaction, and refuses while any of them holds a row
+(`docs/runbooks/tasks-db-v10-rollback.md`).
 
 **Workflow.** `INBOX → PROPOSED → RESEARCHING → READY_TO_IMPLEMENT → IN_PROGRESS
 → IN_REVIEW → READY_TO_MERGE → VERIFYING → DONE`; off-pipeline `BLOCKED`,
@@ -561,6 +565,28 @@ nodes are never deleted, `active` needs `approved_by = 'jay'`, revoked is final,
 change, and the event log is append-only; ccd writes each status change and its `worker_events` row in one
 transaction (heartbeats are not events). An agent cannot enrol a node (by its stated actor; since PR 7 an actor token can
 verify that statement, but it is recorded, not yet required); each node has a fingerprint Jay matches before approving. Settings → Workers.
+
+### Onboarding groundwork (D-024 proposed, off by default)
+
+`ccd/onboarding.py` keeps agent and project onboarding drafts, agent registration records with append-only
+configuration versions, and an append-only event log (tasks.db v10), and validates drafts with the Engineering HQ
+prototype's rules (`design/ui-prototypes/engineering-hq/src/data/validate.ts`). `ccd/budgets.py` is D-033's
+arithmetic (alert thresholds, hard-limit hold, overrides, the scope rule that one agent's hold never stops its
+project, safety work never held) and a shadow report from `usage_records`, in which missing data never lowers
+spend: a reply with no known price counts at the highest listed price and usage tied to no project counts toward
+the company. Both sit behind `config.json` `onboarding_groundwork` (default false). Nothing else in ccd reads these
+records: the Capability Broker, the pipeline and the scheduler are unchanged, so turning the flag on grants and
+enforces nothing.
+
+`python -m ccd.migration_safety drill --snapshot COPY.db --out DIR [--old-ccd OLD/server]` rehearses migration 10
+on copies of a v9 snapshot: backup, upgrade (only the four onboarding tables are added; every existing row, index
+and trigger unchanged; the audit chain still verifies), an older ccd refusing the v10 file, the in-place rollback,
+restoring the backup, and recovery from a migration interrupted or killed part-way. It writes `drill.json` and
+`drill.md` (exit 0 PASS, 1 FAIL, 2 cannot run); `--redact --label` makes a report with no paths, hosts or users and
+`--clean` removes the data copies. `export-onboarding` copies the onboarding records to JSON through a read-only
+connection. The daemon never imports it. The operational procedure is `docs/runbooks/tasks-db-v10-rollback.md`.
+The budget report also treats spend as Unknown when the meter has not read the logs for 15 minutes
+(`Daemon.meter_read_at`), and lists every data gap in `dataAlerts`.
 
 ### Needs You v2 (PR 6)
 

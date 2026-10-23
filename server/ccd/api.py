@@ -99,6 +99,26 @@
                                      401 wrong node token, 403 revoked.
     POST  /api/workers/approve       Jay AND Developer Unlock. {id}: pending → active
     POST  /api/workers/revoke        Jay AND Developer Unlock. {id, reason?}: final for that node and token
+
+  Onboarding GROUNDWORK (ccd/onboarding.py, ccd/budgets.py; D-024 proposed). Every route answers 404 unless config.json
+  sets "onboarding_groundwork": true. Records only: nothing here grants a permission, issues a credential, starts an
+  agent or enforces a policy. Writes need Jay AND Developer Unlock; agent actors are refused.
+    GET   /api/onboarding                     counts, the permission ceilings, what the groundwork does and does not do
+    GET   /api/onboarding/agents              registered and retired agents (status registered|retired; never active)
+    GET   /api/onboarding/agents/{id}         one agent (`nova` or `agent:nova`): configuration versions, events
+    POST  /api/onboarding/agents/{id}/retire  Jay AND Developer Unlock. {reason?}: final; the ID is never reused
+    GET   /api/onboarding/drafts              ?state=open|registered|discarded
+    POST  /api/onboarding/drafts              Jay AND Developer Unlock. {kind: agent|project, body} → the draft. A body
+                                              that looks like it holds a secret is refused whole (400)
+    GET   /api/onboarding/drafts/{id}         one draft with its current validation (errors, warnings)
+    PUT   /api/onboarding/drafts/{id}         Jay AND Developer Unlock. {body, revision}: 409 if the revision moved
+    POST  /api/onboarding/drafts/{id}/discard Jay AND Developer Unlock. {reason?}: final
+    POST  /api/onboarding/drafts/{id}/register Jay AND Developer Unlock. {revision, acknowledge: [warning codes]}: an
+                                              agent draft with no errors becomes a `registered` record + config v1
+    POST  /api/onboarding/validate            {kind, body} → {ok, errors, warnings}. Stores nothing; any token holder
+    GET   /api/onboarding/events              ?limit= the append-only onboarding events, newest first
+    GET   /api/onboarding/budgets             D-033 in SHADOW: each company/project/agent budget, its spend and
+                                              whether it would alert or hold. Holds nothing
     GET   /api/night-shift           every project's night shift: running?, coordinator, newest morning report
                                      (agent-written text, at most 64 KB), cutoff time, and `goLive`: the tickets a
                                      Go Live would approve and merged tickets that are unverified or wait on a UI review
@@ -527,6 +547,61 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
         return daemon.act_worker("revoke", str(body.get("id") or ""), request.state.actor, developer=dev,
                                  reason=str(body.get("reason") or ""))
+
+    # ---------- onboarding groundwork (D-024 proposed): 404 unless config onboarding_groundwork is true ----------
+
+    async def onboarding_state(request, _):
+        return daemon.onboarding_state()
+
+    async def onboarding_agents(request, _):
+        return daemon.onboarding_agents()
+
+    async def onboarding_agent(request, _):
+        return daemon.onboarding_agent(request.path_params["id"])
+
+    async def onboarding_retire(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.act_onboarding("retire", request.state.actor, developer=dev, id=request.path_params["id"],
+                                     reason=str(body.get("reason") or ""))
+
+    async def onboarding_drafts(request, _):
+        return daemon.onboarding_drafts(request.query_params.get("state") or None)
+
+    async def onboarding_draft(request, _):
+        return daemon.onboarding_draft(request.path_params["id"])
+
+    async def onboarding_draft_create(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.act_onboarding("create", request.state.actor, developer=dev, kind=body.get("kind"),
+                                     body=body.get("body"))
+
+    async def onboarding_draft_update(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.act_onboarding("update", request.state.actor, developer=dev, id=request.path_params["id"],
+                                     body=body.get("body"), revision=body.get("revision"))
+
+    async def onboarding_draft_discard(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.act_onboarding("discard", request.state.actor, developer=dev, id=request.path_params["id"],
+                                     reason=str(body.get("reason") or ""))
+
+    async def onboarding_draft_register(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.act_onboarding("register", request.state.actor, developer=dev, id=request.path_params["id"],
+                                     revision=body.get("revision"), acknowledge=body.get("acknowledge"))
+
+    async def onboarding_validate(request, body):
+        return daemon.onboarding_validate(body.get("kind"), body.get("body"))
+
+    async def onboarding_events(request, _):
+        try:
+            limit = int(request.query_params.get("limit", "100"))
+        except ValueError:
+            raise ActionError(400, "limit must be an integer") from None
+        return daemon.onboarding_events(limit)
+
+    async def onboarding_budgets(request, _):
+        return daemon.onboarding_budgets()
 
     async def decisions_state(request, _):
         q = request.query_params
@@ -1125,6 +1200,19 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/workers/heartbeat", guarded(worker_heartbeat), methods=["POST"]),
         Route("/api/workers/approve", guarded(worker_approve), methods=["POST"]),
         Route("/api/workers/revoke", guarded(worker_revoke), methods=["POST"]),
+        Route("/api/onboarding", guarded(onboarding_state), methods=["GET"]),
+        Route("/api/onboarding/agents", guarded(onboarding_agents), methods=["GET"]),
+        Route("/api/onboarding/agents/{id}", guarded(onboarding_agent), methods=["GET"]),
+        Route("/api/onboarding/agents/{id}/retire", guarded(onboarding_retire), methods=["POST"]),
+        Route("/api/onboarding/drafts", guarded(onboarding_drafts), methods=["GET"]),
+        Route("/api/onboarding/drafts", guarded(onboarding_draft_create), methods=["POST"]),
+        Route("/api/onboarding/drafts/{id}", guarded(onboarding_draft), methods=["GET"]),
+        Route("/api/onboarding/drafts/{id}", guarded(onboarding_draft_update), methods=["PUT"]),
+        Route("/api/onboarding/drafts/{id}/discard", guarded(onboarding_draft_discard), methods=["POST"]),
+        Route("/api/onboarding/drafts/{id}/register", guarded(onboarding_draft_register), methods=["POST"]),
+        Route("/api/onboarding/validate", guarded(onboarding_validate), methods=["POST"]),
+        Route("/api/onboarding/events", guarded(onboarding_events), methods=["GET"]),
+        Route("/api/onboarding/budgets", guarded(onboarding_budgets), methods=["GET"]),
         Route("/api/tasks/ui-test", guarded(ui_test), methods=["POST"]),
         Route("/api/ui-tests", guarded(ui_tests_state), methods=["GET"]),
         Route("/api/ui-tests/decide", guarded(ui_decide), methods=["POST"]),
