@@ -562,6 +562,16 @@ change, and the event log is append-only; ccd writes each status change and its 
 transaction (heartbeats are not events). An agent cannot enrol a node (by its stated actor; since PR 7 an actor token can
 verify that statement, but it is recorded, not yet required); each node has a fingerprint Jay matches before approving. Settings → Workers.
 
+### Onboarding groundwork (D-024 proposed, off by default)
+
+`ccd/onboarding.py` keeps agent and project onboarding drafts, agent registration records with append-only
+configuration versions, and an append-only event log (tasks.db v10), and validates drafts with the Engineering HQ
+prototype's rules (`design/ui-prototypes/engineering-hq/src/data/validate.ts`). `ccd/budgets.py` is D-033's
+arithmetic (alert thresholds, hard-limit hold, overrides, the scope rule that one agent's hold never stops its
+project, safety work never held) and a shadow report from `usage_records`. Both sit behind `config.json`
+`onboarding_groundwork` (default false). Nothing else in ccd reads these records: the Capability Broker, the
+pipeline and the scheduler are unchanged, so turning the flag on grants and enforces nothing.
+
 ### Needs You v2 (PR 6)
 
 One inbox over everything that waits on Jay (sidebar → Needs You, key `0`). The queue is unchanged: it is still

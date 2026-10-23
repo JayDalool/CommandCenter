@@ -30,6 +30,8 @@ from . import inbox as inbox_mod
 from . import audit as audit_mod
 from . import identity as identity_mod
 from . import meter as meter_mod
+from . import budgets as budgets_mod
+from . import onboarding as onboarding_mod
 from . import herdr as herdr_mod
 from . import importer
 from . import nightshift as nightshift_mod
@@ -317,6 +319,11 @@ class Daemon:
         meter_cfg = (cfg.get("meter") or {}) if isinstance(cfg, dict) else {}
         self.meter = meter_mod.Meter(tasks.db, roots=meter_cfg.get("roots"), attribute=self._meter_attribute) \
             if has_db and meter_cfg.get("enabled", True) else None
+        # Onboarding groundwork (D-024 proposed; Jay 2026-10-23): agent registration records, drafts, validation,
+        # reads and the shadow budget report (D-033). Off unless config.json says "onboarding_groundwork": true; read
+        # once, here. Records only: it grants no permission, issues no credential and starts no agent.
+        self.onboarding_on = isinstance(cfg, dict) and cfg.get("onboarding_groundwork") is True
+        self.onboarding = onboarding_mod.Onboarding(tasks.db, enabled=self.onboarding_on) if has_db else None
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
@@ -377,6 +384,7 @@ class Daemon:
         self._log_policy()
         self._ledger_start()
         self._workers_start()
+        self._log_onboarding()
         self._dirty.set()
 
     async def stop(self):
@@ -1872,6 +1880,83 @@ class Daemon:
                     f"Jay {'approved' if op == 'approve' else 'revoked'} worker node {node}", data={"node": node})
         return out
 
+    # ---------- onboarding groundwork (D-024 proposed) and shadow budgets (D-033) ----------
+
+    def _log_onboarding(self):
+        """Startup: say so when the groundwork is on. Off (the default) logs nothing, so ccd looks as it did."""
+        if self.onboarding is not None and self.onboarding_on:
+            self._event("security", "onboarding.groundwork",
+                        "onboarding groundwork is on: records, drafts and reads only; nothing is granted, started or "
+                        "enforced", data={"status": "on"})
+
+    def _need_onboarding(self):
+        if self.onboarding is None or not self.onboarding_on:
+            raise ActionError(404, onboarding_mod.OFF_MESSAGE)
+        return self.onboarding
+
+    def _onboarding_call(self, fn, *a):
+        try:
+            return fn(*a)
+        except onboarding_mod.OnboardingError as e:
+            raise ActionError(e.status, e.message) from None
+        except sqlite3.DatabaseError as e:        # a schema CHECK or trigger refused it: a clear 409, not a 500
+            log.warning(json.dumps({"msg": "onboarding change refused by the database", "error": repr(e)[:200]}))
+            raise ActionError(409, "the onboarding record refused that change; reload and try again") from None
+
+    def onboarding_state(self):
+        return self._onboarding_call(self._need_onboarding().summary)
+
+    def onboarding_agents(self):
+        return {"agents": self._onboarding_call(self._need_onboarding().agents)}
+
+    def onboarding_agent(self, agent_id):
+        return self._onboarding_call(self._need_onboarding().agent, agent_id)
+
+    def onboarding_drafts(self, state=None):
+        return {"drafts": self._onboarding_call(self._need_onboarding().drafts, state)}
+
+    def onboarding_draft(self, draft_id):
+        return self._onboarding_call(self._need_onboarding().draft, draft_id)
+
+    def onboarding_events(self, limit=100):
+        return {"events": self._onboarding_call(self._need_onboarding().events, None, limit)}
+
+    def onboarding_validate(self, kind, body):
+        """Read-only for anyone with ccd's token: what a draft's problems are. Stores nothing."""
+        return self._onboarding_call(self._need_onboarding().validate, kind, body)
+
+    def onboarding_budgets(self):
+        """D-033 in shadow: which budgets would alert or hold now. Holds nothing."""
+        o = self._need_onboarding()
+        company = (self.cfg.get("budgets") or {}).get("company") if isinstance(self.cfg.get("budgets"), dict) else None
+        return budgets_mod.report(self.tasks.db, time.time(), company, self._profile_budgets(),
+                                  self._onboarding_call(o.agent_budgets))
+
+    def act_onboarding(self, op, actor="jay", developer=False, **kw):
+        """Jay writes an onboarding record. Jay AND Developer Unlock, and only while the groundwork flag is on (404
+        otherwise, before anything else is looked at). Nothing written here grants, issues or starts anything."""
+        o = self._need_onboarding()
+        if actor != "jay" or not developer:
+            raise ActionError(403, f"Developer Unlock required: {op} an onboarding record")
+        if op == "create":
+            return self._onboarding_call(o.create_draft, kw.get("kind"), kw.get("body"), actor)
+        if op == "update":
+            return self._onboarding_call(o.update_draft, kw.get("id"), kw.get("body"), kw.get("revision"), actor)
+        if op == "discard":
+            return self._onboarding_call(o.discard_draft, kw.get("id"), actor, kw.get("reason") or "")
+        if op == "register":
+            out = self._onboarding_call(o.register_agent, kw.get("id"), kw.get("revision"), kw.get("acknowledge"), actor)
+            self._event("security", "onboarding.registered",
+                        f"Jay registered {out['id']}: a record only, with no credential and nothing started",
+                        data={"agent": out["id"]})
+            return out
+        if op == "retire":
+            out = self._onboarding_call(o.retire_agent, kw.get("id"), actor, kw.get("reason") or "")
+            self._event("security", "onboarding.retired", f"Jay retired {out['id']}; its ID is never reused",
+                        data={"agent": out["id"]})
+            return out
+        raise ActionError(400, f"unknown onboarding action {op}")
+
     # ---------- audit trail, actor identity, metering (PR 7) ----------
 
     def audit_write(self, method, path, status, claimed, body, developer, actor_token):
@@ -1997,14 +2082,19 @@ class Daemon:
                 log.warning(json.dumps({"msg": "usage scan failed", "error": repr(e)[:200]}))
             await asyncio.sleep(self.METER_EVERY)
 
-    def usage_state(self, days=14):
-        if self.meter is None:
-            return {"available": False}
+    def _profile_budgets(self):
+        """project key → its profile's [target.budget], for valid profiles that set one."""
         budgets = {}
         for key, rec in (getattr(self.policy, "profiles", None) or {}).items():
             b = ((rec.get("profile") or {}).get("target") or {}).get("budget") if rec.get("valid", True) else None
             if isinstance(b, dict) and b:
                 budgets[key] = b
+        return budgets
+
+    def usage_state(self, days=14):
+        if self.meter is None:
+            return {"available": False}
+        budgets = self._profile_budgets()
         return dict(self.meter.summary(days, budgets), available=True,
                     note="Estimate at Anthropic list prices; subscription plans are not billed per token. "
                          "Codex usage is counted in tokens only. Budgets are shown, not enforced.")

@@ -12,6 +12,7 @@ import { useOrg } from "../data/org";
 import { Popover, openMenu, setSlowDemo, slowDemo, useContextMenu, type MenuItem } from "./overlay";
 import { motionPref, setMotionPref } from "../lib/motion";
 import { Demo } from "./ui";
+import { gov } from "../data/governance";
 
 export const NAV = [
   { page: "office", label: "My Office", icon: "home", badge: 0 },
@@ -56,11 +57,15 @@ function NavItem({ n, current }: { n: (typeof NAV)[number]; current: boolean }) 
 export function Sidebar() {
   const route = useRoute();
   const cur = route.screen === "task" ? "engineering" : route.screen === "onboard" ? "agents" : route.screen === "newproject" ? "teams" : route.screen;
+  const g = useStore(gov);
+  const pending = g.requests.filter((r) => !g.decisions[r.id] && r.expires > Date.now()).length;
   return <aside className="side" aria-label="Navigation">
     <a className="brand" href="#/office"><Logo /><span><b>Command<em>Center</em></b><small>AI Engineering Company</small></span></a>
     <nav className="nav" aria-label="Pages">{NAV.map((n) => <NavItem key={n.page} n={n} current={cur === n.page} />)}</nav>
     <div className="side-fill" />
     <nav className="nav nav-low" aria-label="More">
+      <div className={cx("nav-item", cur === "approvals" && "is-current")}><a href="#/approvals" aria-current={cur === "approvals" ? "page" : undefined}><Icon name="check" size={21} /><span className="nav-label">Approvals</span>{pending > 0 && <span className="nav-badge">{pending}</span>}</a></div>
+      <div className={cx("nav-item", cur === "budgets" && "is-current")}><a href="#/budgets" aria-current={cur === "budgets" ? "page" : undefined}><Icon name="receipt" size={21} /><span className="nav-label">Budgets</span></a></div>
       <div className={cx("nav-item", cur === "more" && "is-current")}><a href="#/more"><Icon name="gear" size={21} /><span className="nav-label">Settings &amp; more</span></a></div>
       <div className="nav-item"><a href="#/more"><Icon name="help" size={21} /><span className="nav-label">Help &amp; Support</span></a></div>
     </nav>
@@ -85,6 +90,8 @@ function Palette({ onClose }: { onClose: () => void }) {
       ...CONVERSATIONS.filter((c) => !c.archived).map((c) => ({ id: c.id, label: `${c.title} — ${c.sub}`, sub: "Conversation", run: () => go("messages", c.id) })),
       { id: "more", label: "Releases, Fleet, Activity, AI Usage, Settings…", sub: "More", run: () => go("more") },
       { id: "design", label: "Design system", sub: "Reference", run: () => go("design") },
+      { id: "approvals", label: "Approvals (Slack requests, approval screen)", sub: "Governance", run: () => go("approvals") },
+      { id: "budgets", label: "Budgets (agent, project, company)", sub: "Governance", run: () => go("budgets") },
     ];
     const s = q.toLowerCase();
     return all.filter((i) => !s || i.label.toLowerCase().includes(s)).slice(0, 9);

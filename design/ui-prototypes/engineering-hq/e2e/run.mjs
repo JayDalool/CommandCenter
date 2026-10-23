@@ -318,6 +318,57 @@ await test("loading: simulated slow loading shows a skeleton, then the page; des
   assert(await w.getByRole("menu").isVisible(), "menu missing in pop-out design page");
 });
 
+console.log("Budgets (D-033) and approvals (D-032)");
+await test("budgets: an agent over its limit is held, its project is not; an override requested in a pop-out and approved in the main window lifts the hold", async (ctx) => {
+  const m = await main(ctx, "budgets");
+  assert(await m.locator('[data-testid="budget-agent-nova"]').getByText("Held").count() === 1, "Nova not held");
+  assert(await m.locator('[data-testid="budget-project-samvision"]').getByText("Held").count() === 0, "SamVision held by one agent");
+  assert(await m.locator('[data-testid="work-w2"]').getByText("Starts", { exact: true }).count() === 1, "Atlas blocked by Nova's hold");
+  await shot(m, "gov_budgets");
+  const w = await pop(m, "pop-page:budgets");
+  const nova = w.locator('[data-testid="budget-agent-nova"]');
+  await nova.getByRole("button", { name: /Request override/ }).click();
+  const dlg = w.getByRole("dialog");
+  assert(/Low risk/.test(await dlg.getByTestId("override-tier").textContent()), "default override not low risk");
+  await dlg.getByRole("button", { name: "Request override" }).click();
+  await m.goto(`${BASE}?nofeed#/approvals`); await m.waitForSelector(".page-approvals");
+  const item = m.locator('[data-testid^="req-r-ov"]').first();
+  assert(await until(async () => (await item.count()) === 1), "request from the pop-out did not reach the main window");
+  await item.click();
+  await m.getByTestId("approval-screen").getByRole("button", { name: "Approve" }).click();
+  assert(await until(async () => (await nova.getByText("Held").count()) === 0 && (await nova.getByText("Override active").count()) === 1), "hold not lifted in the pop-out");
+});
+
+await test("approvals: high risk needs Developer Unlock and the typed ID; safety work still starts at the company limit", async (ctx) => {
+  const m = await main(ctx, "approvals/r-b41e07");
+  const s = m.getByTestId("approval-screen");
+  const approve = s.getByRole("button", { name: "Approve" });
+  assert(await approve.isDisabled(), "approve enabled with no confirmation");
+  await s.getByLabel("Type agent:pixel to confirm").fill("agent:pixel");
+  assert(await approve.isDisabled(), "approve enabled without Developer Unlock");
+  await s.getByRole("button", { name: /Use Developer Unlock/ }).click();
+  assert(await approve.isEnabled(), "approve still disabled");
+  assert(await m.getByLabel("Slack message preview").getByRole("button", { name: "Approve" }).count() === 0, "high risk offered in Slack");
+  await shot(m, "gov_approvals_high");
+  await approve.click();
+  assert(await s.getByTestId("approval-recorded").count() === 1, "not recorded");
+  await m.goto(`${BASE}?nofeed#/budgets`); await m.waitForSelector(".page-budgets");
+  await m.getByRole("radio", { name: "Company over limit" }).click();
+  assert(await until(async () => (await m.locator('[data-testid="budget-company-*"]').getByText("Held").count()) === 1), "company not held");
+  for (const id of ["w1", "w2", "w3"]) assert(await m.locator(`[data-testid="work-${id}"]`).getByText("Waits", { exact: true }).count() === 1, `${id} not waiting`);
+  for (const id of ["w4", "w5"]) assert(await m.locator(`[data-testid="work-${id}"]`).getByText("Starts", { exact: true }).count() === 1, `${id} safety work held`);
+});
+
+await test("budgets and approvals fit a phone-width window with no sideways scroll", async (ctx) => {
+  const p = await ctx.newPage(); await p.setViewportSize({ width: 390, height: 844 });
+  for (const r of ["budgets", "approvals/r-7f3a91"]) {
+    await p.goto(`${BASE}?nofeed#/${r}`); await p.waitForSelector(".page h1");
+    const over = await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert(over <= 1, `${r}: ${over}px sideways scroll`);
+  }
+  await shot(p, "gov_approvals_phone");
+});
+
 await browser.close();
 const pass = results.filter((r) => r.ok).length;
 fs.writeFileSync(`${OUT}/e2e-results.json`, JSON.stringify({ when: new Date().toISOString(), base: BASE, pass, total: results.length, results }, null, 2));

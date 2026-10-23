@@ -62,6 +62,10 @@ DEFAULTS = {
     # ccd may merge low-risk reviewed PRs itself (CC-025). Off until Jay sets it true; read at start.
     # A project must also say pipeline merge "low-risk" in ccd/registry.py.
     "auto_merge": False,
+    # Onboarding groundwork (ccd/onboarding.py; D-024 proposed): agent registration records, drafts, validation,
+    # read-only APIs and the shadow budget report. Off until Jay sets it true; read at start. Records only: it grants
+    # nothing, issues no credential and starts no agent.
+    "onboarding_groundwork": False,
 }
 
 # The only project fields that may leave the server.

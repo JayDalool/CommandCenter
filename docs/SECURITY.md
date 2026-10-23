@@ -400,6 +400,28 @@ Approve only when the two match: that check is the real guard. Enrol refuses an 
 can wait for approval. Anyone holding ccd's token can enrol a name first and so use it up for good (revoking is
 final); that is within the boundary above, where ccd's token is already full power.
 
+## Onboarding groundwork (D-024 proposed; off by default)
+
+Jay (2026-10-23) allowed policy-independent groundwork behind a disabled flag and nothing more: no permission
+granted, no agent started, no proposed policy enforced. `ccd/onboarding.py` and tasks.db v10 hold it.
+
+- **Off unless `config.json` says `"onboarding_groundwork": true`** (the literal `true`, read at start). Off, every
+  `/api/onboarding` route answers 404 before looking at anything else, nothing goes to the activity log, and the
+  only difference from before is migration 10's empty tables (a refused write is still an audit row, like any write).
+- **Records, not power.** An agent record is `registered` or `retired`; the schema has no active state, no grant
+  table and no credential column. Registering issues no actor token and starts no session. Requested permissions are
+  stored for review and checked against each permission's hard ceiling (`repo.merge`, `data.prod`, `infra.*`,
+  `prod.browser_write` can never be more than `deny`); nothing reads them to allow anything.
+- **Who writes.** Every write needs Jay AND Developer Unlock (daemon), any non-`jay` actor is refused (module), and
+  the schema CHECKs `created_by`, `retired_by` and every event's actor to be `jay`. Because `X-CCD-Actor` is still
+  self-asserted, Developer Unlock is the real check, as for WorkerNode approval.
+- **No secrets.** A draft whose keys or values look like a token, key, password or credential URL is refused whole:
+  nothing is stored, not even a scrubbed copy, and the error names only where it was found.
+- **History.** Registrations, configuration versions, drafts and events are never deleted (triggers); a retired ID
+  is never reused; a closed draft is final; each record lands with its event in one transaction; each HTTP write is
+  also in the audit trail (body hash and keys only).
+- **Budgets in shadow.** `GET /api/onboarding/budgets` reports where a D-033 hold would apply. It stops nothing.
+
 ## Audit trail, actor identity and metering (v2 Phase 1, PR 7)
 
 **Audit trail** (`ccd/audit.py`, tasks.db v9 `audit_events`). One row for every write (`POST/PATCH/PUT/DELETE`)

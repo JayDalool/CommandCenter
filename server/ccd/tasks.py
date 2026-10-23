@@ -530,6 +530,81 @@ CREATE TABLE usage_cursor (
   context TEXT NOT NULL DEFAULT '{}'
 );
 """),
+    # 10: onboarding groundwork (D-024 proposed; Jay 2026-10-23: records, drafts, validation, audit and read-only APIs
+    # behind the disabled `onboarding_groundwork` flag; ccd/onboarding.py). Additive. RECORDS ONLY: an agent here is
+    # `registered` or `retired`; there is no active state, no grant column and no credential, so nothing in these
+    # tables can let an agent act. Every write is Jay's (CHECK), and each lands with its append-only event row.
+    (10, """
+CREATE TABLE agent_registrations (
+  id           TEXT PRIMARY KEY CHECK (id GLOB 'agent:[a-z]?*' AND substr(id, 7) NOT GLOB '*[^a-z0-9-]*'
+                                       AND length(id) BETWEEN 8 AND 38),
+  display_name TEXT NOT NULL CHECK (length(display_name) BETWEEN 1 AND 32),
+  status       TEXT NOT NULL CHECK (status IN ('registered', 'retired')),
+  created_at   REAL NOT NULL,
+  created_by   TEXT NOT NULL CHECK (created_by IS 'jay'),
+  from_draft   TEXT,
+  retired_at   REAL,
+  retired_by   TEXT CHECK (retired_by IS NULL OR retired_by = 'jay'),
+  CHECK (status != 'retired' OR (retired_at IS NOT NULL AND retired_by IS 'jay')),
+  CHECK (retired_at IS NULL OR status = 'retired')
+);
+CREATE TRIGGER agent_registrations_never_deleted BEFORE DELETE ON agent_registrations
+  BEGIN SELECT RAISE(ABORT, 'an agent registration is history; retire it instead'); END;
+CREATE TRIGGER agent_registrations_fixed BEFORE UPDATE ON agent_registrations
+  WHEN NEW.id IS NOT OLD.id OR NEW.display_name IS NOT OLD.display_name OR NEW.created_at IS NOT OLD.created_at
+    OR NEW.created_by IS NOT OLD.created_by OR NEW.from_draft IS NOT OLD.from_draft OR OLD.status = 'retired'
+  BEGIN SELECT RAISE(ABORT, 'an agent registration can only be retired, once; its ID is never reused'); END;
+CREATE TABLE agent_config_versions (
+  agent_id   TEXT NOT NULL REFERENCES agent_registrations(id),
+  version    INTEGER NOT NULL CHECK (version >= 1),
+  config     TEXT NOT NULL CHECK (json_valid(config)),
+  config_sha TEXT NOT NULL CHECK (length(config_sha) = 64),
+  created_at REAL NOT NULL,
+  created_by TEXT NOT NULL CHECK (created_by IS 'jay'),
+  note       TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (agent_id, version)
+);
+CREATE TRIGGER agent_config_versions_append_only_u BEFORE UPDATE ON agent_config_versions
+  BEGIN SELECT RAISE(ABORT, 'agent configuration versions are append-only'); END;
+CREATE TRIGGER agent_config_versions_append_only_d BEFORE DELETE ON agent_config_versions
+  BEGIN SELECT RAISE(ABORT, 'agent configuration versions are append-only'); END;
+CREATE TABLE onboarding_drafts (
+  id         TEXT PRIMARY KEY CHECK (id GLOB 'd-*' AND length(id) <= 40),
+  kind       TEXT NOT NULL CHECK (kind IN ('agent', 'project')),
+  state      TEXT NOT NULL CHECK (state IN ('open', 'registered', 'discarded')),
+  body       TEXT NOT NULL CHECK (json_valid(body) AND length(body) <= 65536),
+  body_sha   TEXT NOT NULL CHECK (length(body_sha) = 64),
+  revision   INTEGER NOT NULL CHECK (revision >= 1),
+  created_at REAL NOT NULL,
+  created_by TEXT NOT NULL CHECK (created_by IS 'jay'),
+  updated_at REAL NOT NULL,
+  closed_at  REAL,
+  result     TEXT,
+  CHECK ((state = 'open') = (closed_at IS NULL)),
+  CHECK ((state = 'registered') = (result IS NOT NULL)),
+  CHECK (state != 'registered' OR kind = 'agent')
+);
+CREATE TRIGGER onboarding_drafts_never_deleted BEFORE DELETE ON onboarding_drafts
+  BEGIN SELECT RAISE(ABORT, 'a draft is history; discard it instead'); END;
+CREATE TRIGGER onboarding_drafts_fixed BEFORE UPDATE ON onboarding_drafts
+  WHEN NEW.id IS NOT OLD.id OR NEW.kind IS NOT OLD.kind OR NEW.created_at IS NOT OLD.created_at
+    OR NEW.created_by IS NOT OLD.created_by OR OLD.state != 'open' OR NEW.revision < OLD.revision
+  BEGIN SELECT RAISE(ABORT, 'a closed draft is final; an open one keeps its identity'); END;
+CREATE TABLE onboarding_events (
+  id      INTEGER PRIMARY KEY,
+  subject TEXT NOT NULL CHECK (subject GLOB 'agent:?*' OR subject GLOB 'draft:d-?*'),
+  at      REAL NOT NULL,
+  kind    TEXT NOT NULL CHECK (kind IN ('draft_created', 'draft_updated', 'draft_discarded', 'registered',
+                                       'retired')),
+  actor   TEXT NOT NULL CHECK (actor IS 'jay'),
+  data    TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(data))
+);
+CREATE INDEX onboarding_events_subject ON onboarding_events(subject, id);
+CREATE TRIGGER onboarding_events_append_only_u BEFORE UPDATE ON onboarding_events
+  BEGIN SELECT RAISE(ABORT, 'onboarding events are append-only'); END;
+CREATE TRIGGER onboarding_events_append_only_d BEFORE DELETE ON onboarding_events
+  BEGIN SELECT RAISE(ABORT, 'onboarding events are append-only'); END;
+"""),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

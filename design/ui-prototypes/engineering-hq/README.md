@@ -32,7 +32,20 @@ Use a normal browser tab so pop-outs can open real windows you can drag to anoth
 
 Pages: `#/office` · `#/messages/sv-lead` · `#/decisions` · `#/teams/samvision` · `#/topology` ·
 `#/engineering` · `#/revenue` · `#/task/SV-025` · `#/agents` · `#/onboard` (New Agent) · `#/newproject` (New Project) ·
-`#/design` (design system) · `#/more` (demo controls: feed outage, slow loading, reset).
+`#/design` (design system) · `#/approvals` (Slack approvals, D-032) · `#/budgets` (budgets, D-033) ·
+`#/more` (demo controls: feed outage, slow loading, reset).
+
+## Approvals and budgets (Jay, 2026-10-23)
+
+Both are mock previews in the same look, and both pop out. Nothing connects to Slack or ccd.
+- **Approvals** (D-032): the request queue, a phone preview of the Slack message (an opaque link, never a credential),
+  and the approval screen. Low and standard requests are approved on that signed-in screen; high-risk ones (repository
+  access, policy, production, wider permissions) also need Developer Unlock and the exact ID typed. Each approval is bound
+  to the request's hash, so a changed request needs a new approval. Approving inside Slack is a later step and is off.
+- **Budgets** (D-033): company, project and agent budgets with alerts at 50/75/90%, four demo scenarios, which new work
+  would start, and a temporary-override dialog that files a request on Approvals. One agent over its limit never stops its
+  project; safety monitoring, rollback and recovery are never held. The rules match `server/ccd/budgets.py`, which only
+  reports where a hold would apply (shadow mode).
 
 ## Look and feel (round 4: macOS-inspired refinement)
 
@@ -61,9 +74,10 @@ Same layouts, palette, project colours and graphs. Added on top, with no new dep
 ## Tests
 
 ```bash
-npm test                              # 63 unit/component tests (jsdom)
+npm test                              # 84 unit/component tests (jsdom)
 npm run build && npm run preview &    # then, in another shell:
-node e2e/run.mjs                      # 21 real-browser tests: pop-out windows, menus, tooltips, popovers, motion, loading
+node e2e/run.mjs                      # 24 real-browser tests: pop-out windows, menus, tooltips, popovers, motion, loading,
+                                      # approvals and budgets (including phone width)
 node e2e/shots.mjs                    # screenshots at 1920×1080, 1366×768 and pop-out sizes → e2e/out
 python3 e2e/compare.py <references> e2e/out <out>   # reference-vs-prototype sheets (Pillow)
 ```
