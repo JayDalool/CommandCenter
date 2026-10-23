@@ -8,7 +8,7 @@
 import { SharedStore, isRecord } from "../lib/shared";
 
 // ---------------------------------------------------------------- budgets (server/ccd/budgets.py)
-export const DEFAULT_ALERTS = [50, 75, 90];
+export const DEFAULT_ALERTS = [50, 80, 95];   // D-033's proposed defaults; configurable per scope
 /** Work the engine tags as safety work by action type. Never held by a budget. An agent cannot tag its own work. */
 export const SAFETY_KINDS = ["health_check", "monitoring", "incident_response", "rollback", "restore", "backup_check", "recovery"] as const;
 export const SAFETY_LABEL: Record<(typeof SAFETY_KINDS)[number], string> = {

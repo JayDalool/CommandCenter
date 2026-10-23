@@ -27,8 +27,8 @@ describe("budget rules (same as server/ccd/budgets.py)", () => {
     const lim = { usd: 100, tokens: null };
     expect(assess(10, 0, lim).state).toBe("ok");
     expect(assess(50, 0, lim)).toMatchObject({ state: "alert", threshold: 50 });
-    expect(assess(76, 0, lim)).toMatchObject({ state: "alert", threshold: 75 });
-    expect(assess(95, 0, lim)).toMatchObject({ state: "alert", threshold: 90 });
+    expect(assess(81, 0, lim)).toMatchObject({ state: "alert", threshold: 80 });
+    expect(assess(96, 0, lim)).toMatchObject({ state: "alert", threshold: 95 });
     expect(assess(100, 0, lim).state).toBe("hold");
     expect(assess(5, 0, { usd: null, tokens: null }).state).toBe("none");
     expect(assess(0, 0, { usd: 0, tokens: null }).state).toBe("hold");              // a zero limit allows no billable work

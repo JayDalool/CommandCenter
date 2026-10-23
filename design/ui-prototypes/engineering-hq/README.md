@@ -42,7 +42,7 @@ Both are mock previews in the same look, and both pop out. Nothing connects to S
   and the approval screen. Low and standard requests are approved on that signed-in screen; high-risk ones (repository
   access, policy, production, wider permissions) also need Developer Unlock and the exact ID typed. Each approval is bound
   to the request's hash, so a changed request needs a new approval. Approving inside Slack is a later step and is off.
-- **Budgets** (D-033): company, project and agent budgets with alerts at 50/75/90%, four demo scenarios, which new work
+- **Budgets** (D-033): company, project and agent budgets with alerts at 50/80/95%, four demo scenarios, which new work
   would start, and a temporary-override dialog that files a request on Approvals. One agent over its limit never stops its
   project; safety monitoring, rollback and recovery are never held. The rules match `server/ccd/budgets.py`, which only
   reports where a hold would apply (shadow mode).

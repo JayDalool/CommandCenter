@@ -22,7 +22,7 @@ DEV = "d" * 43
 NOVA = {"id": "nova", "name": "Nova", "title": "Implementation Agent", "template": "implementer",
         "model": {"provider": "anthropic", "model": "claude-sonnet-5-5", "reasoning": "medium"},
         "requested": {"repo.read": "allow", "repo.push": "allow", "prod.deploy": "approval", "repo.merge": "deny"},
-        "budget": {"dailyUsd": 20, "monthlyUsd": 300, "alerts": [50, 75, 90]},
+        "budget": {"dailyUsd": 20, "monthlyUsd": 300, "alerts": [50, 80, 95]},
         "projects": ["commandcenter"], "reportsTo": "jay"}
 PROJECT = {"key": "atlas-app", "name": "Atlas App", "prefix": "ATL", "repo": "JayDalool/atlas-app", "type": "personal"}
 
@@ -240,11 +240,12 @@ class Budgets(unittest.TestCase):
         lim = {"usd": 100, "tokens": None}
         self.assertEqual(budgets.assess(10, 0, {"usd": None, "tokens": None})["state"], "none")
         self.assertEqual(budgets.assess(10, 0, lim)["state"], "ok")
-        a = budgets.assess(76, 0, lim)
-        self.assertEqual((a["state"], a["threshold"], a["pct"]), ("alert", 75, 76.0))
+        a = budgets.assess(81, 0, lim)
+        self.assertEqual((a["state"], a["threshold"], a["pct"]), ("alert", 80, 81.0))
+        self.assertEqual(budgets.DEFAULT_ALERTS, (50, 80, 95))                       # D-033's proposed defaults
         self.assertEqual(budgets.assess(100, 0, lim)["state"], "hold")
         self.assertEqual(budgets.assess(0, 0, {"usd": 0, "tokens": None})["state"], "hold")   # zero = no billable work
-        self.assertEqual(budgets.assess(1, 950, {"usd": 100, "tokens": 1000})["threshold"], 90)  # worst of the two
+        self.assertEqual(budgets.assess(1, 960, {"usd": 100, "tokens": 1000})["threshold"], 95)  # worst of the two
         self.assertTrue(budgets.assess(40, 0, lim, elapsed=0.25)["onCourseToHold"])
         self.assertFalse(budgets.assess(10, 0, lim, elapsed=0.5)["onCourseToHold"])
         self.assertEqual(budgets.assess(60, 0, lim, alerts=(60,))["threshold"], 60)
@@ -278,16 +279,26 @@ class Budgets(unittest.TestCase):
         start, _ = budgets.period_bounds(now, "month")
         rows = [("claude", "r1", "commandcenter", None, 60.0, 1000), ("claude", "r2", "gyst", None, 5.0, 100),
                 ("codex", "r3", "gyst", None, None, 500_000), ("reported", "r4", "commandcenter", "agent:nova", 25.0, 10),
-                ("claude", "old", "commandcenter", None, 999.0, 1)]
+                ("claude", "old", "commandcenter", None, 999.0, 1), ("claude", "r5", None, None, 3.0, 10),
+                ("codex", "r6", "mfe", None, None, 500_000)]
         for src, ref, project, actor, cost, tokens in rows:
             ts.db.execute("INSERT INTO usage_records (at, source, ref, project, actor, input, cost_usd) "
                           "VALUES (?,?,?,?,?,?,?)", (start - 10 if ref == "old" else now - 60, src, ref, project, actor,
                                                      tokens, cost))
         r = budgets.report(ts.db, now, company={"monthly_usd": 100, "daily_usd": 1000},
-                           projects={"commandcenter": {"monthly_usd": 50}, "gyst": {"monthly_tokens": 400_000}},
+                           projects={"commandcenter": {"monthly_usd": 50}, "gyst": {"monthly_tokens": 400_000},
+                                     "mfe": {"monthly_usd": 4}},
                            agents={"agent:nova": {"monthlyUsd": 100, "dailyUsd": 20}, "agent:atlas": {}})
         got = {(x["scope"], x["key"], x["period"]): (x["state"], x["spentUsd"], x["source"]) for x in r["lines"]}
-        self.assertEqual(got[("company", "*", "month")], ("alert", 65.0, "measured"))   # reported usage not added in
+        self.assertEqual(got[("company", "*", "month")], ("alert", 68.0, "measured"))  # reported usage not added in
+        company = next(x for x in r["lines"] if x["scope"] == "company" and x["period"] == "month")
+        # Two Codex replies of 500k input tokens each have no price: they count at the dearest listed input price.
+        self.assertEqual((company["unpricedUsdAtFallback"], company["assessedUsd"]), (10.0, 78.0))
+        self.assertEqual(company["unattributedUsd"], 3.0)
+        self.assertEqual(budgets.fallback_prices()[:2], (10.0, 50.0))
+        # A budget that only Codex used would look empty in dollars; the fallback holds it instead.
+        mfe = next(x for x in r["lines"] if x["key"] == "mfe")
+        self.assertEqual((mfe["spentUsd"], mfe["assessedUsd"], mfe["state"]), (0, 5.0, "hold"))
         self.assertEqual(got[("project", "commandcenter", "month")], ("hold", 60.0, "measured"))
         self.assertEqual(got[("project", "gyst", "month")][0], "hold")                   # Codex counted by tokens
         self.assertEqual(got[("agent", "agent:nova", "month")], ("ok", 25.0, "reported"))
@@ -295,7 +306,8 @@ class Budgets(unittest.TestCase):
         self.assertNotIn(("agent", "agent:atlas", "month"), got)
         self.assertEqual(r["wouldHold"], [{"scope": "agent", "key": "agent:nova"},
                                           {"scope": "project", "key": "commandcenter"},
-                                          {"scope": "project", "key": "gyst"}])
+                                          {"scope": "project", "key": "gyst"},
+                                          {"scope": "project", "key": "mfe"}])
         self.assertEqual((r["mode"], r["enforced"]), ("shadow", False))
         gyst = next(x for x in r["lines"] if x["key"] == "gyst")
         self.assertEqual(gyst["unpricedReplies"], 1)

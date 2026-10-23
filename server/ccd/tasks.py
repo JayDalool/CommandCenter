@@ -609,18 +609,87 @@ CREATE TRIGGER onboarding_events_append_only_d BEFORE DELETE ON onboarding_event
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
-def migrate(db):
-    """Apply every migration newer than the file's user_version. Returns the versions applied."""
+def migrate(db, migrations=None):
+    """Apply every migration newer than the file's user_version. Returns the versions applied.
+
+    `migrations` defaults to MIGRATIONS; the migration drill passes a prefix of it to act as an older ccd."""
+    migrations = MIGRATIONS if migrations is None else migrations
+    latest = migrations[-1][0]
     current = db.execute("PRAGMA user_version").fetchone()[0]
-    if current > SCHEMA_VERSION:
-        raise RuntimeError(f"tasks.db is schema v{current}, newer than this ccd (v{SCHEMA_VERSION}); refusing to run")
+    if current > latest:
+        raise RuntimeError(f"tasks.db is schema v{current}, newer than this ccd (v{latest}); refusing to run")
     applied = []
-    for version, sql in MIGRATIONS:
+    for version, sql in migrations:
         if version <= current:
             continue
         db.executescript(f"BEGIN;\n{sql}\nPRAGMA user_version = {version};\nCOMMIT;")
         applied.append(version)
     return applied
+
+
+# The way back for a migration that only ADDS tables: drop them, newest first, and set the older version. The daemon
+# never calls this; `python -m ccd.migration_safety rollback` does, with ccd stopped and a backup taken first.
+# A table that holds rows is history, so `downgrade` refuses and the backup taken before the upgrade is the way back.
+# A migration that is not listed here has no in-place way back.
+DOWNGRADES = {
+    10: ("onboarding_events", "onboarding_drafts", "agent_config_versions", "agent_registrations"),
+}
+
+
+def schema_objects(db):
+    """Every table, index, trigger and view as (type, name, table, sql). SQLite's own statistics are left out."""
+    return {tuple(r) for r in db.execute("SELECT type, name, tbl_name, sql FROM sqlite_master "
+                                         "WHERE name NOT LIKE 'sqlite_stat%'")}
+
+
+def reference_schema(version):
+    """The schema a fresh database has at `version`, built in memory from MIGRATIONS."""
+    ref = sqlite3.connect(":memory:", isolation_level=None)
+    try:
+        migrate(ref, [m for m in MIGRATIONS if m[0] <= version])
+        return schema_objects(ref)
+    finally:
+        ref.close()
+
+
+def downgrade(db, target):
+    """Undo additive migrations down to `target` in one transaction. Refuses (and changes nothing) when a step has
+    no entry in DOWNGRADES, when a table it would drop holds any row, or when the result is not exactly the schema
+    of `target`. Every other table and row is left as it is. Returns the versions undone, newest first."""
+    current = db.execute("PRAGMA user_version").fetchone()[0]
+    if current > SCHEMA_VERSION:
+        raise RuntimeError(f"tasks.db is schema v{current}, newer than this ccd (v{SCHEMA_VERSION})")
+    if not 1 <= target < current:
+        raise RuntimeError(f"tasks.db is schema v{current}; nothing to undo down to v{target}")
+    steps = list(range(current, target, -1))
+    missing = [v for v in steps if v not in DOWNGRADES]
+    if missing:
+        raise RuntimeError(f"migration v{missing[0]} has no in-place downgrade; restore the backup taken before it")
+    tables = [t for v in steps for t in DOWNGRADES[v]]
+    expected = reference_schema(target)
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        held = {}
+        for t in tables:
+            n = db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            if n:
+                held[t] = n
+        if held:
+            raise RuntimeError("these tables hold history, so they are not dropped: "
+                               + ", ".join(f"{t} ({n} row{'' if n == 1 else 's'})" for t, n in held.items())
+                               + "; restore the backup taken before the upgrade instead")
+        for t in tables:
+            db.execute(f"DROP TABLE {t}")           # its indexes and triggers go with it
+        db.execute(f"PRAGMA user_version = {target}")
+        if schema_objects(db) != expected:
+            raise RuntimeError(f"the schema after the downgrade is not exactly v{target}; nothing was changed")
+        if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok" or db.execute("PRAGMA foreign_key_check").fetchall():
+            raise RuntimeError("integrity or foreign-key check failed after the downgrade; nothing was changed")
+        db.execute("COMMIT")
+    except BaseException:
+        db.execute("ROLLBACK")
+        raise
+    return steps
 
 
 def _now():

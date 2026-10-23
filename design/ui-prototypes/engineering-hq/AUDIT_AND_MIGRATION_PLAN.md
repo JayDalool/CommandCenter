@@ -66,7 +66,7 @@ None needed so far. Possible later: `@playwright/test` as a dev dependency for C
 
 ## 7. Agent onboarding and project creation: backend proposal (not implemented)
 
-**Status: groundwork built, enforcement not.** Jay's decision of 2026-10-23 allows the policy-independent parts behind a disabled flag (§7.0). Everything that grants, activates or enforces stays a proposal until Jay makes D-024 final and approves each switch; the final proposal is the [D-024 final proposal](https://claude.ai/artifact/3QArYLzEbEnzBV1geGUxXN) doc. The prototype's wizards still write only to the local mock store (`src/data/org.ts`); they do not call ccd.
+**Status: groundwork built, enforcement not.** Jay's decision of 2026-10-23 allows the policy-independent parts behind a disabled flag (§7.0). Everything that grants, activates or enforces stays a proposal until Jay makes D-024 final and approves each switch; the final proposal is the [D-024 final proposal](https://claude.ai/artifact/3QArYLzEbEnzBV1geGUxXN) doc. Jay approved its direction on 2026-10-23 and asked for four refinements before making it final; they are clauses 14 to 17 there and §7.9 to §7.11 and §9.2 here. The prototype's wizards still write only to the local mock store (`src/data/org.ts`); they do not call ccd.
 
 ### 7.0 What exists now (off by default)
 
@@ -79,8 +79,9 @@ None needed so far. Possible later: `@playwright/test` as a dev dependency for C
 | Audit | `onboarding_events` + the existing audit chain | One event per change in the same transaction; every HTTP write audited | |
 | Reads | `GET /api/onboarding/*` (docs/API.md) | Lists, details, events, validation | |
 | Budgets | `ccd/budgets.py`, `GET /api/onboarding/budgets` | D-033 arithmetic and a shadow report (§9) | Hold or stop anything |
+| Migration safety | `ccd/migration_safety.py`, `tasks.downgrade` | Rehearses migration v10 on a copy; undoes it in place (§7.11) | Run by itself; the daemon never imports it |
 
-Writes need Jay and Developer Unlock; agents are refused in the daemon, the module and the schema. 21 server tests in `server/tests/test_onboarding.py`.
+Writes need Jay and Developer Unlock; agents are refused in the daemon, the module and the schema. 21 server tests in `server/tests/test_onboarding.py`, 10 in `server/tests/test_migration_safety.py`.
 
 ### 7.1 Principles
 
@@ -96,7 +97,7 @@ Writes need Jay and Developer Unlock; agents are refused in the daemon, the modu
 |---|---|---|
 | `agents` | `id` (immutable `agent:<slug>`), `display_name`, `glyph`, `color`, `created_at`, `created_by` (CHECK = `jay`), `life` (`draft`/`active`/`paused`/`offboarded`), `life_reason` | One row per identity. `id` UNIQUE, never deleted. Offboarded slugs stay reserved. |
 | `agent_config_versions` (append-only) | `agent_id`, `version`, `template`, `persona` (role, tone, instructions text), `model` (provider, model id, reasoning tier), `budgets` (daily/monthly caps, per-task cap), `config_sha`, `approved_by`, `approved_at`, `note` | Current config = highest approved version. Edits create a new version; old versions stay for attribution. |
-| `agent_memberships` | `agent_id`, `project_key`, `role` (lead/member), `reports_to` (agent id or `jay`), `since`, `until` | At most one open lead per project (partial UNIQUE index). Reporting must form a tree rooted at `jay` (checked on write). |
+| `agent_memberships` | `agent_id`, `project_key`, `role` (`project_lead`/`lead`/`member`), `specialization` (frontend, backend, security, qa, devops, …), `reports_to` (agent id or `jay`), `since`, `until` | One open Project Lead per project (partial UNIQUE index), reporting to `jay`. Specialization leads report to it; members to a specialization lead or the Project Lead. Three levels at most, no cycles (checked on write). Reporting lines carry work, never permission (§7.9). |
 | `agent_grants` (versioned with config) | `agent_id`, `capability`, `scope` (project/repo/worker), `level` (`allow`/`approval`/`deny`) | Capability names come from a fixed list in policy (the prototype's 25 `PERMISSIONS`). Hard-boundary capabilities have a `deny`-only ceiling that no grant can raise. |
 | `agent_repo_grants`, `agent_worker_grants` | `agent_id`, `repo` / `worker_id`, `level` | Repo must be bound to a project the agent belongs to; worker must be an approved, agent-eligible node. |
 | `agent_events` (append-only) | `agent_id`, `kind` (`created`, `activated`, `config_versioned`, `renamed`, `paused`, `resumed`, `reassigned`, `offboarded`, `grant_changed`), `actor`, `verified`, `detail_keys`, `at`, `audit_seq` | Links to the `audit_events` row that caused it. |
@@ -145,7 +146,7 @@ Errors are typed (`duplicate_id`, `reserved_id`, `confusable_name`, `ceiling_exc
 | System | How onboarding uses it |
 |---|---|
 | Project Operating Profiles (`profiles.py`, `policy/projects/*.toml`) | New project = proposed profile file in a PR. Default task mode and deploy rules come from it. Onboarding projects use the most restrictive profile until Jay merges theirs. |
-| D-024 | Project and agent onboarding. Still proposed; the final wording with its implications is the [D-024 final proposal](https://claude.ai/artifact/3QArYLzEbEnzBV1geGUxXN) (clauses 10 to 14 add agents, Slack and budgets). Once Jay makes it final, record it in `policy/decisions/` so profiles can cite it. |
+| D-024 | Project and agent onboarding. Direction approved, not yet final; the wording with its implications is the [D-024 final proposal](https://claude.ai/artifact/3QArYLzEbEnzBV1geGUxXN) (clauses 10 to 13 add agents, Slack and budgets; 14 to 17 the hierarchy, independent review, repository authority and incomplete budget data; 18 keeps it in shadow). Once Jay makes it final, record it in `policy/decisions/` so profiles can cite it. |
 | D-032 | Slack mobile approvals (§8). |
 | D-033 | Budgets at agent, project and company level (§9). |
 | WorkerNodes (`workers.py`) | Worker grants and project eligibility reference approved node IDs only. A pending or revoked node is never eligible. |
@@ -168,11 +169,56 @@ Errors are typed (`duplicate_id`, `reserved_id`, `confusable_name`, `ceiling_exc
 
 1. **Done, off:** groundwork behind `onboarding_groundwork` (§7.0). Routes live under `/api/onboarding`, not `/api/agents`, which already serves pane tails.
 2. Jay makes D-024 final; record it in `policy/decisions/` with a short ADR.
-3. Merge the groundwork (this draft PR or its own) with the flag still off in production; turn it on in a dev ccd first.
-4. Shadow: the onboarding engine path and the budget evaluator record what they would allow, refuse or hold.
-5. Slack requests with the secure link (§8, step 1), once the approval screen is reachable over Jay's private path.
-6. After Phase 2 actor-token enforcement: each switch on its own (engine `onboarding` mode, Broker credential withholding, agent activation and grants, budget holds).
-7. Last: low-risk approvals inside Slack (§8, step 2).
+3. Before the merge: run the migration drill (§7.11) on a copy of the live tasks.db and attach its report.
+4. Merge the groundwork (this draft PR or its own) with the flag still off in production; turn it on in a dev ccd first. Then, still behind the flag: the hierarchy checks (§7.9) and the additive migration that lets leads file staffing proposals, each with its own drill.
+5. Shadow: the onboarding engine path, reviewer independence and the budget evaluator record what they would allow, refuse or hold.
+6. Slack requests with the secure link (§8, step 1), once the approval screen is reachable over Jay's private path.
+7. After Phase 2 actor-token enforcement: each switch on its own (engine `onboarding` mode, Broker credential withholding, agent activation and grants, budget holds).
+8. Last: low-risk approvals inside Slack (§8, step 2).
+
+### 7.9 Engineering hierarchy and independent review (D-024 clauses 14 and 15; proposed, not built)
+
+- **Shape.** One Project Lead per project, answering to Jay. It may supervise specialization leads (Frontend, Backend, Security, QA, DevOps, others), who coordinate the agents that report to them. Three levels at most, no cycles; an agent can work in several projects, with a lead in each.
+- **Routine work without Jay.** Within the project profile and its current mode, a Project Lead writes task requirements, acceptance criteria and implementation plans, and splits, orders and assigns work. Plans the profile marks (production, data, security, D-007 paths) still go to Jay. In onboarding, routine means planning and proposals.
+- **Work, never authority.** An assignment runs with the assignee's own grant as the Broker computes it; a lead assigns only inside its own project and specialization, and only to agents that report to it.
+- **Staffing by proposal.** No agent approves its own activation, widens a permission, or creates, registers or activates an agent (the groundwork already refuses all of these from agents). Leads and agents may propose adding, changing or retiring an agent, with reason, role, reporting line, permissions and budget; it reaches Jay as an approval request (registration Low tier, activation Standard or High by its grants). Today's drafts table is written by Jay only, so proposals need one more additive migration after D-024 is final.
+- **Independent review.** The reviewer is not the implementer, a commit author, the plan's author or the lead who assigned the work; the engine picks it, never the implementer or its lead. It reviews in a fresh session from the diff, ticket, plan and acceptance criteria, binds to the commit it read, and only the reviewer or Jay closes a finding. High-risk changes and D-007 paths get a reviewer on a different model family. Until Phase 2 actor tokens, independence is recorded in shadow.
+
+### 7.10 Repository authority during onboarding (D-024 clause 16)
+
+The Broker refuses anything not listed; onboarding holds no credential for the rest.
+
+| Operation | Jay's own repositories | Employer and client repositories |
+|---|---|---|
+| Read and clone | Read-only token | Laptop only (D-002); a server clone needs Jay |
+| Edit, commit, branch locally | Allowed (D-025) | Laptop, directed style (D-022) |
+| Push a branch | Only its own `cc/onboarding/` proposal branches, through the Broker, after a clean push-safety check; never a force push | Never; patches stay local and are shown to Jay |
+| Open a pull request | Draft only, from a proposal branch, at most 5 open per project; never marked ready, no reviewers, no auto-merge | Never |
+| Comment | Only on its own draft PRs | Never |
+| CI configuration (`.github/workflows/**` and equivalents) | Never pushed without Jay's High-tier approval, per change | Never; their runners are observe-only (D-029) |
+| Start or re-run CI | Never by itself; reading results is allowed | Never |
+| Merge, rebase shared branches, delete others' branches, rewrite history; tags, releases, packages; settings, protection, webhooks, deploy keys, secrets, environments, collaborators; create, fork, rename, archive or delete a repository | Never | Never |
+
+A branch push can start the repository's CI, so a repository whose CI runs on our self-hosted runners (today CommandCenter, GYST, SamVision) always asks Jay first. A repository's class (own, employer, client) is set when it is added, and an unknown class is treated as client. For employer and client repositories, Slack requests carry identifiers and the risk summary only, and an agent session on one is never reused in another project.
+
+### 7.11 Migration v10 safety (Jay, 2026-10-23: demonstrate before the backend merges)
+
+`python -m ccd.migration_safety drill --snapshot COPY.db --out DIR [--old-ccd OLD_CHECKOUT/server]` rehearses migration v10 on copies of a v9 snapshot (opened read-only, never written) and writes `drill.json` and `drill.md` (exit 0 PASS, 1 FAIL, 2 cannot run: missing snapshot, unmerged write-ahead log, snapshot inside the output folder, or already newer than v9).
+
+| Area | What it proves |
+|---|---|
+| Backup | SQLite's online backup of the snapshot holds exactly the same rows in every table |
+| Upgrade | v9 → v10 adds only the four onboarding tables and their own indexes and triggers; every existing table, row, index and trigger is unchanged; integrity, foreign keys and the audit hash chain check; reopening applies nothing |
+| Backward compatibility | A v9 ccd refuses the v10 file and changes nothing (in process, and with `--old-ccd` a real older checkout in its own process) |
+| Rollback | `tasks.downgrade(db, 9)` after new work was written at v10: exactly the v9 schema again, the new work kept, a v9 ccd opens it; refused, changing nothing, while an onboarding table holds a row |
+| Restore | Copying the backup back gives the snapshot's rows exactly, and a v9 ccd opens it |
+| Recovery | Interrupted part-way, or its process killed part-way with uncommitted pages already in the write-ahead log, it leaves v9 exactly; killed straight after its commit it leaves v10 complete; either way the next start finishes the job |
+
+Results on this branch: a populated v9 fixture (22 tables, 77 rows) and a 5,009-ticket one (15,070 rows; upgrade 2 ms, whole drill about 1 s) both PASS, and the `origin/main` ccd run as the older checkout refused v10 and opened the rolled-back file. The tests run the drill in CI and show it fails a migration that changes existing rows or adds an index to an existing table.
+
+**The way back.** Stop ccd, then `python -m ccd.migration_safety rollback --db tasks.db --to 9 --backup-dir DIR`: it takes a backup first, then drops only the empty tables v10 added, in one transaction, and commits only if the result is exactly v9 with integrity and foreign keys intact. It refuses when any of those tables holds a row (history is never dropped; restore the backup taken before the upgrade instead), when the schema has an unknown change, and for any step without a downgrade.
+
+**Remaining before the merge:** run the drill on a copy of the live tasks.db (`sqlite3 ~/command-center/data/tasks.db ".backup /tmp/tasks-v9.db"`) and attach its report.
 
 ## 8. Slack mobile approvals (D-032)
 
@@ -218,7 +264,8 @@ The **Approvals** page (sidebar, `#/approvals`) shows the request queue, the app
 | Rule | Implementation |
 |---|---|
 | Three scopes, each with a period (day, month) and USD and/or token limits | `lines_for`: company from `config.json` `budgets.company`, project from the profile's `[target.budget]`, agent from its registered configuration |
-| Alerts before the limit | `assess`: default 50/75/90 %, per scope; plus `onCourseToHold` when the run rate reaches the limit before the period ends |
+| Alerts before the limit | `assess`: default 50/80/95 % (D-033), per scope; plus `onCourseToHold` when the run rate reaches the limit before the period ends |
+| Missing data never lowers spend | `report`: a reply with no known price counts at the highest listed price (`fallback_prices`: $10 input, $50 output per million tokens) as `unpricedUsdAtFallback`; usage tied to no project counts toward the company as `unattributedUsd`; each line is judged on `assessedUsd` |
 | Hard limit holds its own scope only | `would_start`: an agent hold stops that agent; a project hold that project; the company hold all billable work |
 | Safety is separate | `SAFETY_KINDS` (health checks, monitoring, incident response, rollback, restore, backup checks, recovery) always start; the engine tags them by action type, an agent cannot |
 | Running work checkpoints | A hold acts only at scheduling; running work finishes its step and checkpoints (D-027); deploys, migrations, rollbacks and pushes in flight are never cut |
@@ -226,10 +273,11 @@ The **Approvals** page (sidebar, `#/approvals`) shows the request queue, the app
 | Resume | After an override or the period reset, held work resumes from its checkpoints in queue order, re-verifying facts D-031 requires at use |
 | A hold is not a safety event | It never changes a project's mode, never triggers D-026 tightening, never opens a D-023 incident |
 
-### 9.2 Gaps
+### 9.2 Incomplete data, the 5% overrun and expensive steps (D-024 clause 17)
 
-- The meter prices Claude at list prices (an estimate) and has no Codex price, so token limits sit beside USD limits and unpriced replies are counted.
-- Measured usage is tied to projects and tickets, not agents. Agent lines count only usage a work step reported, and say so. Attributing sessions to registered agents is a Phase 2 item.
+- **Incomplete pricing or attribution brings a hold sooner.** Unpriced usage counts at the highest listed price and unattributed usage counts toward the company (built, shadow report). Proposed: an alert when the price list is older than 90 days or unattributed spend passes 10% of a period; with no fresh meter reading for 15 minutes a scope is Unknown and a new step starts only if last known spend, running reservations and its estimate stay under 80% of the limit. Agent lines count only what work steps report until Phase 2 ties sessions to registered agents, so project and company limits are the ones that hold.
+- **The 5% overrun** is room for steps already running at a hard limit to reach a checkpoint, nothing more: no new work starts on it; it is per scope and period and does not stack (the tightest cap wins); at the limit plus 5% running billable steps stop at the next tool-call boundary, and only a deploy, migration, rollback or push under way may finish past it. It is measured on the meter's estimate, which lags and uses list prices, and on a small limit it is small ($1 on $20).
+- **Expensive steps (proposed amounts):** each billable step reserves its estimate and starts only if it fits every budget around it; a per-step cap (25% of the agent's daily limit or $10, whichever is lower) stops it at a checkpoint and asks its lead; estimates above $10 need the Project Lead, above $25 Jay; a scope spending 25% of its daily limit within an hour waits and alerts Jay; a step repeating a failing action or making no progress for 10 turns stops; long steps checkpoint at least every 15 minutes. A critical operation declares its cost and starts only with that much room left.
 
 ### 9.3 Prototype
 

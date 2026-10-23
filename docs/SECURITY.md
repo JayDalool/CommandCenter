@@ -421,6 +421,13 @@ granted, no agent started, no proposed policy enforced. `ccd/onboarding.py` and 
   is never reused; a closed draft is final; each record lands with its event in one transaction; each HTTP write is
   also in the audit trail (body hash and keys only).
 - **Budgets in shadow.** `GET /api/onboarding/budgets` reports where a D-033 hold would apply. It stops nothing.
+  Missing data never makes spend look smaller: a reply with no known price counts at the highest listed price, and
+  usage tied to no project counts toward the company budget.
+- **Migration 10 and its way back.** v10 only adds four empty tables. `python -m ccd.migration_safety drill` proves
+  on a copy that existing rows, indexes, triggers and the audit chain are unchanged, that an older ccd refuses the
+  file, and that the rollback and the backup both return a file an older ccd opens. The rollback (ccd stopped) takes
+  a backup first and refuses, changing nothing, while any onboarding table holds a row, so history is never
+  dropped; after that point the way back is the backup taken before the upgrade.
 
 ## Audit trail, actor identity and metering (v2 Phase 1, PR 7)
 

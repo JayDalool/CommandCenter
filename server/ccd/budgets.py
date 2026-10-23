@@ -8,8 +8,9 @@ rollback and recovery are never held by a budget, and a budget hold is never a s
 
 This module is that arithmetic and the scope rule as pure functions, plus a read-only report from the usage meter
 (ccd/meter.py). Nothing calls `would_start` to decide anything: until Jay approves enforcement (after Phase 2) the
-report only says where a hold WOULD be. Spend is the meter's estimate at list prices; Codex has no price, so every
-budget may also set a token limit, and unpriced replies are counted on their own.
+report only says where a hold WOULD be. Spend is the meter's estimate at list prices. Where the data is incomplete the
+report errs toward holding: a reply with no known price (Codex has none) counts at the most expensive listed price,
+every budget may also set a token limit, and usage tied to no project counts toward the company.
 
 Where the numbers come from:
     company   config.json "budgets": {"company": {"monthly_usd", "monthly_tokens", "daily_usd", "alerts"}}
@@ -21,7 +22,7 @@ Where the numbers come from:
 import calendar
 import datetime
 
-DEFAULT_ALERTS = (50, 75, 90)
+DEFAULT_ALERTS = (50, 80, 95)          # D-033's proposed defaults; configurable per scope
 # Work the engine tags as safety work by its action type. Never held by a budget; its spend is still metered and
 # shown on its own line. An agent cannot tag its own work: the tag comes from the action, not from the request.
 SAFETY_KINDS = frozenset({"health_check", "monitoring", "incident_response", "rollback", "restore", "backup_check",
@@ -131,9 +132,22 @@ def lines_for(company=None, projects=None, agents=None):
     return [x for x in out if x[3]["usd"] is not None or x[3]["tokens"] is not None]
 
 
+def fallback_prices():
+    """USD per million tokens for usage with no known price: the most expensive listed price of each kind, so an
+    unpriced reply can only bring a hold sooner, never later. (input, output, cache read, cache write at 2 x input)."""
+    from .meter import PRICES
+    i = max(p[0] for p in PRICES.values())
+    return i, max(p[1] for p in PRICES.values()), max(p[2] for p in PRICES.values()), 2 * i
+
+
 def report(db, now, company=None, projects=None, agents=None):
-    """The shadow report: each budget line with its spend and what it would do. Reads usage_records; writes nothing."""
+    """The shadow report: each budget line with its spend and what it would do. Reads usage_records; writes nothing.
+
+    Conservative where the data is incomplete: a reply with no known price (Codex, an unknown model) is charged at
+    `fallback_prices()` and the line is judged on that figure (`assessedUsd`), never on the priced part alone. Usage
+    tied to no project counts toward the company and is listed as `unattributedUsd`."""
     measured = "source != 'reported'"
+    fi, fo, fr, fw = fallback_prices()
     lines, holds = [], set()
     for scope, key, period, limit, alerts in lines_for(company, projects, agents):
         start, end = period_bounds(now, period)
@@ -143,17 +157,26 @@ def report(db, now, company=None, projects=None, agents=None):
             where, args, source = f"{measured} AND project = ?", (key,), "measured"
         else:
             where, args, source = measured, (), "measured"
-        usd, tokens, unpriced = db.execute(
-            f"SELECT SUM(cost_usd), SUM(input + output + cache_read + cache_write), SUM(cost_usd IS NULL) "
-            f"FROM usage_records WHERE at >= ? AND at < ? AND {where}", (start, end, *args)).fetchone()
-        a = assess(usd or 0, tokens or 0, limit, alerts, (now - start) / (end - start))
+        usd, tokens, unpriced, fallback, unattributed = db.execute(
+            "SELECT SUM(cost_usd), SUM(input + output + cache_read + cache_write), SUM(cost_usd IS NULL), "
+            "SUM(CASE WHEN cost_usd IS NULL THEN (input * ? + output * ? + cache_read * ? + cache_write * ?) / 1e6 END), "
+            f"SUM(CASE WHEN project IS NULL THEN COALESCE(cost_usd, 0) END) "
+            f"FROM usage_records WHERE at >= ? AND at < ? AND {where}", (fi, fo, fr, fw, start, end, *args)).fetchone()
+        assessed = (usd or 0) + (fallback or 0)
+        a = assess(assessed, tokens or 0, limit, alerts, (now - start) / (end - start))
         if a["state"] == "hold":
             holds.add((scope, key))
-        lines.append({"scope": scope, "key": key, "period": period, "limitUsd": limit["usd"],
-                      "limitTokens": limit["tokens"], "spentUsd": round(usd or 0, 4), "spentTokens": tokens or 0,
-                      "unpricedReplies": unpriced or 0, "alerts": list(alerts), "source": source, **a})
+        line = {"scope": scope, "key": key, "period": period, "limitUsd": limit["usd"],
+                "limitTokens": limit["tokens"], "spentUsd": round(usd or 0, 4), "spentTokens": tokens or 0,
+                "unpricedReplies": unpriced or 0, "unpricedUsdAtFallback": round(fallback or 0, 4),
+                "assessedUsd": round(assessed, 4), "alerts": list(alerts), "source": source, **a}
+        if scope == "company":
+            line["unattributedUsd"] = round(unattributed or 0, 4)
+        lines.append(line)
     return {"mode": "shadow", "enforced": False, "at": now, "lines": lines,
             "wouldHold": [{"scope": s, "key": k} for s, k in sorted(holds)],
-            "safetyKinds": sorted(SAFETY_KINDS),
-            "note": "Shadow only: nothing is held or stopped. Spend is an estimate at list prices; Codex usage has no "
-                    "price, so use token limits for it. Agent lines count only usage their work steps reported."}
+            "safetyKinds": sorted(SAFETY_KINDS), "fallbackUsdPerMTok": dict(zip(("input", "output", "cacheRead",
+                                                                                  "cacheWrite"), (fi, fo, fr, fw))),
+            "note": "Shadow only: nothing is held or stopped. Spend is an estimate at list prices. A reply with no known "
+                    "price (Codex, an unknown model) counts at the most expensive listed price, so it can only bring a "
+                    "hold sooner. Agent lines count only usage their work steps reported."}
