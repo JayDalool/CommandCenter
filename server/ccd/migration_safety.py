@@ -4,6 +4,7 @@ daemon; it adds no route.
     python -m ccd.migration_safety drill --snapshot COPY.db --out DIR [--old-ccd OLD_CHECKOUT/server]
                                          [--redact --label "where the snapshot came from"] [--clean]
     python -m ccd.migration_safety rollback --db tasks.db --to 9 --backup-dir DIR        (stop ccd first)
+    python -m ccd.migration_safety export-onboarding --db tasks.db --out FILE.json       (read-only; ccd may run)
 
 drill     Works only on copies it makes inside DIR. The snapshot is opened read-only and never written; make it with
           `sqlite3 tasks.db ".backup COPY.db"`. Writes drill.json and drill.md, and exits 0 when every check passes,
@@ -25,6 +26,9 @@ drill     Works only on copies it makes inside DIR. The snapshot is opened read-
                     <older checkout> and ~, and each detail is cut to 300 characters. It never holds row contents.
           --clean   deletes the database copies in DIR after the run (they hold the snapshot's data); the
                     reports stay.
+export-onboarding  Writes every row of the four onboarding tables to a JSON file with its SHA-256, through a
+          read-only connection, so the records are kept outside the database before a backup is restored over them
+          (docs/runbooks/tasks-db-v10-rollback.md). It changes nothing.
 rollback  Takes a backup with SQLite's backup API, then runs tasks.downgrade(): it drops only tables a migration added,
           only when they are empty, in one transaction, and checks the result is exactly the older schema.
 """
@@ -521,6 +525,29 @@ def rollback(path, target, backup_dir, clock=time.time):
         db.close()
 
 
+def export_onboarding(path, out):
+    """Every onboarding row as JSON, read-only. Returns {table: rows} counts and the file's SHA-256."""
+    if not os.path.isfile(path):
+        raise RuntimeError(f"no tasks.db at {path}")
+    if os.path.exists(out):
+        raise RuntimeError(f"{out} exists; choose a new file")
+    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        if version(db) < TO:
+            raise RuntimeError(f"tasks.db is schema v{version(db)}; it has no onboarding tables")
+        data = {}
+        for t in reversed(tasks.DOWNGRADES[TO]):          # oldest table first
+            cur = db.execute(f'SELECT * FROM "{t}" ORDER BY rowid')
+            cols = [c[0] for c in cur.description]
+            data[t] = [dict(zip(cols, row)) for row in cur]
+    finally:
+        db.close()
+    body = json.dumps({"schema": TO, "tables": data}, indent=2, sort_keys=True).encode()
+    with open(out, "xb") as f:
+        f.write(body)
+    return {t: len(rows) for t, rows in data.items()}, hashlib.sha256(body).hexdigest()
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m ccd.migration_safety", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -535,7 +562,18 @@ def main(argv=None):
     r.add_argument("--db", required=True)
     r.add_argument("--to", type=int, required=True)
     r.add_argument("--backup-dir", required=True)
+    e = sub.add_parser("export-onboarding", help="copy the onboarding records to a JSON file (read-only)")
+    e.add_argument("--db", required=True)
+    e.add_argument("--out", required=True)
     a = ap.parse_args(argv)
+    if a.cmd == "export-onboarding":
+        try:
+            counts, sha = export_onboarding(a.db, a.out)
+        except RuntimeError as err:
+            print(f"export refused: {err}", file=sys.stderr)
+            return 1
+        print(f"exported: {', '.join(f'{t} {n}' for t, n in counts.items())}\nsha256: {sha}\nfile: {a.out}")
+        return 0
     if a.cmd == "drill":
         try:
             report = drill(a.snapshot, a.out, a.old_ccd, redact=a.redact, label=a.label, clean=a.clean)

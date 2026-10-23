@@ -3,6 +3,7 @@ compatibility and recovery testing"). The drill in ccd/migration_safety.py runs 
 database; these tests run it, show it catches a migration that touches existing data, and test the in-place
 rollback's refusals."""
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -218,6 +219,28 @@ class Downgrade(unittest.TestCase):
                 tasks.downgrade(db, target)
         self.assertEqual(ms.version(db), 10)
         db.close()
+
+    def test_export_copies_the_onboarding_records_without_changing_the_file(self):
+        path = self.v10()
+        db = ms.connect(path)
+        db.execute("INSERT INTO onboarding_events (subject, at, kind, actor) VALUES ('draft:d-1', 0, 'draft_created', "
+                   "'jay')")
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        before = ms.digests(db)
+        db.close()
+        out = tmp("onboarding.json")
+        code, text, _ = run("export-onboarding", "--db", path, "--out", out)
+        self.assertEqual(code, 0)
+        with open(out, "rb") as f:
+            body = f.read()
+        self.assertIn(f"sha256: {hashlib.sha256(body).hexdigest()}", text)
+        data = json.loads(body)
+        self.assertEqual(data["tables"]["onboarding_events"][0]["kind"], "draft_created")
+        self.assertEqual(sorted(data["tables"]), sorted(tasks.DOWNGRADES[10]))
+        db = ms.connect(path)
+        self.assertEqual(ms.digests(db), before)                                 # read-only
+        db.close()
+        self.assertEqual(run("export-onboarding", "--db", path, "--out", out)[0], 1)   # never overwrites
 
     def test_this_ccd_upgrades_a_rolled_back_file_again(self):
         path = self.v10()

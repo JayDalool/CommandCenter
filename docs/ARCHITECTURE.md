@@ -171,7 +171,8 @@ append-only. Migrations are forward-only, one transaction each, `PRAGMA
 user_version`; a newer file than the code refuses to open. Migration 10 alone also
 has a tested way back (`tasks.downgrade`, run by `python -m ccd.migration_safety
 rollback` with ccd stopped): after a backup it drops only the empty tables v10
-added, in one transaction, and refuses while any of them holds a row.
+added, in one transaction, and refuses while any of them holds a row
+(`docs/runbooks/tasks-db-v10-rollback.md`).
 
 **Workflow.** `INBOX → PROPOSED → RESEARCHING → READY_TO_IMPLEMENT → IN_PROGRESS
 → IN_REVIEW → READY_TO_MERGE → VERIFYING → DONE`; off-pipeline `BLOCKED`,
@@ -581,7 +582,11 @@ enforces nothing.
 on copies of a v9 snapshot: backup, upgrade (only the four onboarding tables are added; every existing row, index
 and trigger unchanged; the audit chain still verifies), an older ccd refusing the v10 file, the in-place rollback,
 restoring the backup, and recovery from a migration interrupted or killed part-way. It writes `drill.json` and
-`drill.md` (exit 0 PASS, 1 FAIL, 2 cannot run). The daemon never imports it.
+`drill.md` (exit 0 PASS, 1 FAIL, 2 cannot run); `--redact --label` makes a report with no paths, hosts or users and
+`--clean` removes the data copies. `export-onboarding` copies the onboarding records to JSON through a read-only
+connection. The daemon never imports it. The operational procedure is `docs/runbooks/tasks-db-v10-rollback.md`.
+The budget report also treats spend as Unknown when the meter has not read the logs for 15 minutes
+(`Daemon.meter_read_at`), and lists every data gap in `dataAlerts`.
 
 ### Needs You v2 (PR 6)
 

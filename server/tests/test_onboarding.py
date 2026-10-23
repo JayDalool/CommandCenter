@@ -9,7 +9,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from ccd import budgets, onboarding, security
+from ccd import budgets, meter, onboarding, security
 from ccd.config import task_projects
 from ccd.daemon import ActionError, Daemon
 from ccd.store import Store
@@ -288,7 +288,10 @@ class Budgets(unittest.TestCase):
         r = budgets.report(ts.db, now, company={"monthly_usd": 100, "daily_usd": 1000},
                            projects={"commandcenter": {"monthly_usd": 50}, "gyst": {"monthly_tokens": 400_000},
                                      "mfe": {"monthly_usd": 4}},
-                           agents={"agent:nova": {"monthlyUsd": 100, "dailyUsd": 20}, "agent:atlas": {}})
+                           agents={"agent:nova": {"monthlyUsd": 100, "dailyUsd": 20}, "agent:atlas": {}},
+                           meter_at=now - 60, prices_as_of="2027-01-01")
+        self.assertEqual([a["kind"] for a in r["dataAlerts"]], ["unpriced-usage"])     # fresh meter, 3.8% unattributed
+        self.assertEqual((r["dataAlerts"][0]["replies"], r["dataAlerts"][0]["usdAtFallback"]), (2, 10.0))
         got = {(x["scope"], x["key"], x["period"]): (x["state"], x["spentUsd"], x["source"]) for x in r["lines"]}
         self.assertEqual(got[("company", "*", "month")], ("alert", 68.0, "measured"))  # reported usage not added in
         company = next(x for x in r["lines"] if x["scope"] == "company" and x["period"] == "month")
@@ -311,6 +314,47 @@ class Budgets(unittest.TestCase):
         self.assertEqual((r["mode"], r["enforced"]), ("shadow", False))
         gyst = next(x for x in r["lines"] if x["key"] == "gyst")
         self.assertEqual(gyst["unpricedReplies"], 1)
+
+    def test_missing_or_stale_data_never_lets_spend_pass_unseen(self):
+        """D-024 clause 17: a stale meter makes spend Unknown and holds from 80%; an old price list, unattributed
+        usage and usage no budget covers are each named in dataAlerts."""
+        ts = tasks_db()
+        now = 1_800_000_000.0
+        for ref, project, cost in (("a", "commandcenter", 85.0), ("b", "gyst", 50.0), ("c", "mfe", 120.0),
+                                   ("d", None, 40.0)):
+            ts.db.execute("INSERT INTO usage_records (at, source, ref, project, input, cost_usd) VALUES (?,?,?,?,?,?)",
+                          (now - 60, "claude", ref, project, 10, cost))
+        projects = {"commandcenter": {"monthly_usd": 100}, "gyst": {"monthly_usd": 100}, "mfe": {"monthly_usd": 100}}
+
+        def lines(**kw):
+            r = budgets.report(ts.db, now, projects=projects, prices_as_of="2027-01-01", **kw)
+            return r, {x["key"]: (x["state"], x["holdReason"]) for x in r["lines"]}
+
+        fresh, got = lines(meter_at=now - 60)
+        self.assertEqual(got, {"commandcenter": ("alert", None), "gyst": ("alert", None), "mfe": ("hold", "limit")})
+        self.assertFalse(fresh["meter"]["stale"])
+        for meter_at in (None, now - budgets.STALE_METER_SECONDS - 1):            # never read, or not for 15 minutes
+            stale, got = lines(meter_at=meter_at)
+            self.assertEqual(got, {"commandcenter": ("hold", "stale-meter"), "gyst": ("unknown", None),
+                                   "mfe": ("hold", "limit")})
+            self.assertEqual(stale["wouldHold"], [{"scope": "project", "key": "commandcenter"},
+                                                  {"scope": "project", "key": "mfe"}])
+            self.assertTrue(stale["meter"]["stale"])
+            self.assertIn("meter-stale", [a["kind"] for a in stale["dataAlerts"]])
+        # $40 of $295 (13.6%) is tied to no project, and no company budget is set to count it.
+        kinds = {a["kind"]: a for a in fresh["dataAlerts"]}
+        self.assertEqual(kinds["unattributed-usage"]["pct"], 13.6)
+        self.assertEqual(kinds["unbudgeted-usage"]["usd"], 40.0)
+        self.assertNotIn("price-list-old", kinds)
+        old = budgets.report(ts.db, now, projects=projects, meter_at=now, prices_as_of="2026-01-01")
+        self.assertIn("price-list-old", [a["kind"] for a in old["dataAlerts"]])
+        # With a company budget, the unattributed $40 counts toward it.
+        withco = budgets.report(ts.db, now, company={"monthly_usd": 1000}, projects=projects, meter_at=now,
+                                prices_as_of="2027-01-01")
+        co = next(x for x in withco["lines"] if x["scope"] == "company")
+        self.assertEqual((co["assessedUsd"], co["unattributedUsd"]), (295.0, 40.0))
+        self.assertNotIn("unbudgeted-usage", [a["kind"] for a in withco["dataAlerts"]])
+        self.assertEqual(budgets.report(ts.db, now, meter_at=now)["prices"]["asOf"], meter.PRICES_AS_OF)
 
 
 class InTheDaemon(unittest.IsolatedAsyncioTestCase):

@@ -319,6 +319,7 @@ class Daemon:
         meter_cfg = (cfg.get("meter") or {}) if isinstance(cfg, dict) else {}
         self.meter = meter_mod.Meter(tasks.db, roots=meter_cfg.get("roots"), attribute=self._meter_attribute) \
             if has_db and meter_cfg.get("enabled", True) else None
+        self.meter_read_at = None   # last successful meter pass (time.time()); None until the first one
         # Onboarding groundwork (D-024 proposed; Jay 2026-10-23): agent registration records, drafts, validation,
         # reads and the shadow budget report (D-033). Off unless config.json says "onboarding_groundwork": true; read
         # once, here. Records only: it grants no permission, issues no credential and starts no agent.
@@ -1930,7 +1931,7 @@ class Daemon:
         o = self._need_onboarding()
         company = (self.cfg.get("budgets") or {}).get("company") if isinstance(self.cfg.get("budgets"), dict) else None
         return budgets_mod.report(self.tasks.db, time.time(), company, self._profile_budgets(),
-                                  self._onboarding_call(o.agent_budgets))
+                                  self._onboarding_call(o.agent_budgets), meter_at=self.meter_read_at)
 
     def act_onboarding(self, op, actor="jay", developer=False, **kw):
         """Jay writes an onboarding record. Jay AND Developer Unlock, and only while the groundwork flag is on (404
@@ -2076,6 +2077,7 @@ class Daemon:
                 plan = self.meter.plan()
                 results = await asyncio.to_thread(self.meter.read, plan)
                 n = self.meter.store(results)
+                self.meter_read_at = time.time()          # budgets treat spend as Unknown when this is old (D-024 cl. 17)
                 if n:
                     log.info(json.dumps({"msg": "usage metered", "rows": n}))
             except Exception as e:  # noqa: BLE001 — metering is a record; it never affects anything else

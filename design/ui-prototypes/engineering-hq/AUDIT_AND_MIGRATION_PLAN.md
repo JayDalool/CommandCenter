@@ -66,7 +66,7 @@ None needed so far. Possible later: `@playwright/test` as a dev dependency for C
 
 ## 7. Agent onboarding and project creation: backend proposal (not implemented)
 
-**Status: groundwork built, enforcement not.** Jay's decision of 2026-10-23 allows the policy-independent parts behind a disabled flag (§7.0). Everything that grants, activates or enforces stays a proposal until Jay makes D-024 final and approves each switch; the final proposal is the [D-024 final proposal](https://claude.ai/artifact/3QArYLzEbEnzBV1geGUxXN) doc. Jay approved its direction on 2026-10-23 and asked for four refinements before making it final; they are clauses 14 to 17 there and §7.9 to §7.11 and §9.2 here. The prototype's wizards still write only to the local mock store (`src/data/org.ts`); they do not call ccd.
+**Status: groundwork built, enforcement not.** Jay's decision of 2026-10-23 allows the policy-independent parts behind a disabled flag (§7.0). Everything that grants, activates or enforces stays a proposal until Jay makes D-024 final and approves each switch; the final proposal is the [D-024 final proposal](https://claude.ai/artifact/3QArYLzEbEnzBV1geGUxXN) doc. Jay approved its direction on 2026-10-23 and asked for four refinements before making it final; they are clauses 14 to 17 there and §7.9 to §7.11 and §9.2 here. **The text of record is `docs/decisions/D-024.md`** (version 1.0-rc.2, with Annexes A and B and the clause audit). The prototype's wizards still write only to the local mock store (`src/data/org.ts`); they do not call ccd.
 
 ### 7.0 What exists now (off by default)
 
@@ -81,7 +81,7 @@ None needed so far. Possible later: `@playwright/test` as a dev dependency for C
 | Budgets | `ccd/budgets.py`, `GET /api/onboarding/budgets` | D-033 arithmetic and a shadow report (§9) | Hold or stop anything |
 | Migration safety | `ccd/migration_safety.py`, `tasks.downgrade` | Rehearses migration v10 on a copy; undoes it in place (§7.11) | Run by itself; the daemon never imports it |
 
-Writes need Jay and Developer Unlock; agents are refused in the daemon, the module and the schema. 21 server tests in `server/tests/test_onboarding.py`, 10 in `server/tests/test_migration_safety.py`.
+Writes need Jay and Developer Unlock; agents are refused in the daemon, the module and the schema. 22 server tests in `server/tests/test_onboarding.py`, 12 in `server/tests/test_migration_safety.py`, 3 in `server/tests/test_d024_text.py`.
 
 ### 7.1 Principles
 
@@ -216,7 +216,7 @@ A branch push can start the repository's CI, so a repository whose CI runs on ou
 
 Results on this branch: a populated v9 fixture (22 tables, 77 rows) and a 5,009-ticket one (15,070 rows; upgrade 2 ms, whole drill about 1 s) both PASS, and the `origin/main` ccd run as the older checkout refused v10 and opened the rolled-back file. The tests run the drill in CI and show it fails a migration that changes existing rows or adds an index to an existing table.
 
-**The way back.** Stop ccd, then `python -m ccd.migration_safety rollback --db tasks.db --to 9 --backup-dir DIR`: it takes a backup first, then drops only the empty tables v10 added, in one transaction, and commits only if the result is exactly v9 with integrity and foreign keys intact. It refuses when any of those tables holds a row (history is never dropped; restore the backup taken before the upgrade instead), when the schema has an unknown change, and for any step without a downgrade.
+**The way back.** Stop ccd, then `python -m ccd.migration_safety rollback --db tasks.db --to 9 --backup-dir DIR`: it takes a backup first, then drops only the empty tables v10 added, in one transaction, and commits only if the result is exactly v9 with integrity and foreign keys intact. It refuses when any of those tables holds a row (history is never dropped), when the schema has an unknown change, and for any step without a downgrade. With records present the way back is rolling forward, or restoring the backup after `export-onboarding` has copied the records out read-only. The full procedure, including an older ccd that refuses a v10 file, is `docs/runbooks/tasks-db-v10-rollback.md`. The drill's `--redact --label` report names no path, host or user, and `--clean` removes the data copies.
 
 **Remaining before the merge:** run the drill on a copy of the live tasks.db (`sqlite3 ~/command-center/data/tasks.db ".backup /tmp/tasks-v9.db"`) and attach its report.
 
@@ -275,7 +275,7 @@ The **Approvals** page (sidebar, `#/approvals`) shows the request queue, the app
 
 ### 9.2 Incomplete data, the 5% overrun and expensive steps (D-024 clause 17)
 
-- **Incomplete pricing or attribution brings a hold sooner.** Unpriced usage counts at the highest listed price and unattributed usage counts toward the company (built, shadow report). Proposed: an alert when the price list is older than 90 days or unattributed spend passes 10% of a period; with no fresh meter reading for 15 minutes a scope is Unknown and a new step starts only if last known spend, running reservations and its estimate stay under 80% of the limit. Agent lines count only what work steps report until Phase 2 ties sessions to registered agents, so project and company limits are the ones that hold.
+- **Incomplete pricing or attribution brings a hold sooner** (built, shadow report). Unpriced usage counts at the highest listed price and unattributed usage counts toward the company; with no successful meter pass for 15 minutes a line is Unknown and one at 80% of its limit or more would hold; `dataAlerts` names a stale meter, a price list older than 90 days, unpriced usage, unattributed usage above 10% of the month, and unattributed usage with no company budget to count it. Agent lines count only what work steps report until Phase 2 ties sessions to registered agents, so project and company limits are the ones that hold.
 - **The 5% overrun** is room for steps already running at a hard limit to reach a checkpoint, nothing more: no new work starts on it; it is per scope and period and does not stack (the tightest cap wins); at the limit plus 5% running billable steps stop at the next tool-call boundary, and only a deploy, migration, rollback or push under way may finish past it. It is measured on the meter's estimate, which lags and uses list prices, and on a small limit it is small ($1 on $20).
 - **Expensive steps (proposed amounts):** each billable step reserves its estimate and starts only if it fits every budget around it; a per-step cap (25% of the agent's daily limit or $10, whichever is lower) stops it at a checkpoint and asks its lead; estimates above $10 need the Project Lead, above $25 Jay; a scope spending 25% of its daily limit within an hour waits and alerts Jay; a step repeating a failing action or making no progress for 10 turns stops; long steps checkpoint at least every 15 minutes. A critical operation declares its cost and starts only with that much room left.
 
