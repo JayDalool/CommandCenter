@@ -2,6 +2,7 @@
 daemon; it adds no route.
 
     python -m ccd.migration_safety drill --snapshot COPY.db --out DIR [--old-ccd OLD_CHECKOUT/server]
+                                         [--redact --label "where the snapshot came from"] [--clean]
     python -m ccd.migration_safety rollback --db tasks.db --to 9 --backup-dir DIR        (stop ccd first)
 
 drill     Works only on copies it makes inside DIR. The snapshot is opened read-only and never written; make it with
@@ -20,6 +21,10 @@ drill     Works only on copies it makes inside DIR. The snapshot is opened read-
             recovery  a migration interrupted part-way, or whose process is killed part-way (with uncommitted pages
                       already in the write-ahead log), leaves v9 exactly; killed straight after its commit leaves v10
                       complete; either way the next start finishes the job
+          --redact  the report names no path, host or user: the snapshot is shown by --label, folders as <out>,
+                    <older checkout> and ~, and each detail is cut to 300 characters. It never holds row contents.
+          --clean   deletes the database copies in DIR after the run (they hold the snapshot's data); the
+                    reports stay.
 rollback  Takes a backup with SQLite's backup API, then runs tasks.downgrade(): it drops only tables a migration added,
           only when they are empty, in one transaction, and checks the result is exactly the older schema.
 """
@@ -35,6 +40,10 @@ import time
 from . import tasks
 
 FROM, TO = 9, 10
+# The areas Jay asked to see (2026-10-23), in report order.
+AREAS = (("backup", "Backup"), ("upgrade", "v9 -> v10 migration and schema integrity"),
+         ("old ccd", "Backward compatibility"), ("rollback", "Rollback"), ("restore", "Restore"),
+         ("recovery", "Crash recovery"))
 SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Run in a child process with -I: open a tasks.db the way TaskStore does and migrate it, with a kill point.
@@ -408,25 +417,87 @@ class Drill:
             db.close()
 
 
+def _git_head(path):
+    """The commit a checkout is at, or None. Read-only."""
+    try:
+        r = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return r.stdout.strip()[:40] or None
+
+
+def redacted(report, out, old_server=None, label=None):
+    """The same report with no path, host or user in it, for sharing. Row contents are never in a report."""
+    names = []
+    for path, name in ((report["snapshot"]["path"], label or "<snapshot>"), (out, "<out>"),
+                       (old_server, "<older checkout>"), (SERVER_DIR, "<this checkout>")):
+        if path:
+            for p in {os.path.abspath(path), os.path.realpath(path)}:
+                names.append((p, name))
+    names.sort(key=lambda x: -len(x[0]))                 # longest first, so a folder never hides a file inside it
+    home = os.path.expanduser("~")
+
+    def clean(v):
+        if isinstance(v, str):
+            for p, name in names:
+                v = v.replace(p, name)
+            if home and home != "/":
+                v = v.replace(home, "~")
+            return v[:300]
+        if isinstance(v, dict):
+            return {k: clean(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [clean(x) for x in v]
+        return v
+    r = clean(json.loads(json.dumps(report)))
+    r["snapshot"]["path"] = label or "<snapshot>"
+    r["oldCcd"] = "<older checkout>" if old_server else None
+    r["redacted"] = True
+    return r
+
+
 def markdown(report):
     s = report["snapshot"]
     lines = [f"# Migration v{TO} drill: {report['result']}", "",
-             f"Snapshot schema v{s['schema']}" + (f" (lifted to v{FROM} on the copy: {s['liftedTo9']})" if s["liftedTo9"] else "")
+             f"Snapshot: {s['path']}. Schema v{s['schema']}"
+             + (f" (lifted to v{FROM} on the copy: {s['liftedTo9']})" if s["liftedTo9"] else "")
              + f", {s['tables']} tables, {s['rows']} rows, {s['tickets']} tickets. Upgrade took {report['upgradeMs']} ms. "
-             f"Older checkout: {report['oldCcd'] or 'not given'}.", "",
-             "| Area | Check | Result | Detail |", "|---|---|---|---|"]
+             f"Older checkout: {report['oldCcd'] or 'not given'}"
+             + (f" at {report['oldCcdCommit']}" if report.get("oldCcdCommit") else "") + ".",
+             "",
+             f"Drill code {report.get('codeCommit') or 'unknown'}; Python {report.get('python')}, "
+             f"SQLite {report.get('sqlite')}; {report['seconds']} s"
+             + ("; redacted: no paths, hosts, users or row contents" if report.get("redacted") else "") + ".", "",
+             "| Area | Result | Checks passed |", "|---|---|---|"]
+    for key, name in AREAS:
+        mine = [c for c in report["checks"] if c["area"] == key]
+        ok = mine and all(c["ok"] for c in mine)
+        lines.append(f"| {name} | {'PASS' if ok else '**FAIL**'} | {sum(c['ok'] for c in mine)} of {len(mine)} |")
+    lines += ["", "| Area | Check | Result | Detail |", "|---|---|---|---|"]
     for c in report["checks"]:
         detail = c["detail"] if isinstance(c["detail"], str) else json.dumps(c["detail"]) if c["detail"] is not None else ""
         lines.append(f"| {c['area']} | {c['check']} | {'pass' if c['ok'] else '**FAIL**'} | {detail.replace('|', '/')} |")
     return "\n".join(lines) + "\n"
 
 
-def drill(snapshot, out, old_server=None):
+def drill(snapshot, out, old_server=None, redact=False, label=None, clean=False):
     report = Drill(snapshot, out, old_server).run()
+    report.update(codeCommit=_git_head(SERVER_DIR), oldCcdCommit=_git_head(old_server) if old_server else None,
+                  python=sys.version.split()[0], sqlite=sqlite3.sqlite_version)
+    if redact:
+        report = redacted(report, out, old_server, label)
+    elif label:
+        report["snapshot"]["label"] = label
     with open(os.path.join(out, "drill.json"), "w") as f:
         json.dump(report, f, indent=2)
     with open(os.path.join(out, "drill.md"), "w") as f:
         f.write(markdown(report))
+    if clean:                                            # the copies hold the snapshot's data; the reports do not
+        for name in os.listdir(out):
+            if name.endswith((".db", ".db-wal", ".db-shm", ".db-journal")):
+                os.remove(os.path.join(out, name))
     return report
 
 
@@ -457,6 +528,9 @@ def main(argv=None):
     d.add_argument("--snapshot", required=True)
     d.add_argument("--out", required=True)
     d.add_argument("--old-ccd", help="an older checkout's server/ directory, to run its ccd against the files")
+    d.add_argument("--redact", action="store_true", help="no paths, hosts or users in the report")
+    d.add_argument("--label", help="how the report names the snapshot, e.g. 'live tasks.db, backup 2026-10-23T14:30Z'")
+    d.add_argument("--clean", action="store_true", help="delete the database copies after the run; keep the reports")
     r = sub.add_parser("rollback", help="undo migration v10 in place (stop ccd first)")
     r.add_argument("--db", required=True)
     r.add_argument("--to", type=int, required=True)
@@ -464,7 +538,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd == "drill":
         try:
-            report = drill(a.snapshot, a.out, a.old_ccd)
+            report = drill(a.snapshot, a.out, a.old_ccd, redact=a.redact, label=a.label, clean=a.clean)
         except DrillError as e:
             print(f"migration drill: {e}", file=sys.stderr)
             return 2

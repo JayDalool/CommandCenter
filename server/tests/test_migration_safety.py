@@ -112,6 +112,24 @@ class Drill(unittest.TestCase):
                 self.assertEqual(report["result"], "FAIL")
                 self.assertFalse(next(c for c in report["checks"] if c["check"] == check)["ok"])
 
+    def test_a_redacted_report_names_no_path_and_the_copies_can_be_removed(self):
+        out = tmp("drill")
+        label = "live tasks.db, backup 2026-10-23T14:30Z"
+        code, md, _ = run("drill", "--snapshot", self.snapshot, "--out", out, "--redact", "--label", label, "--clean")
+        self.assertEqual(code, 0, md)
+        with open(os.path.join(out, "drill.json")) as f:
+            text = f.read()
+        report = json.loads(text)
+        for secret in (self.snapshot, os.path.dirname(self.snapshot), out, ms.SERVER_DIR, os.path.expanduser("~")):
+            self.assertNotIn(secret, text)
+            self.assertNotIn(secret, md)
+        self.assertEqual((report["redacted"], report["snapshot"]["path"]), (True, label))
+        self.assertIn(f"Snapshot: {label}.", md)
+        for name in ("Backup", "v9 -> v10 migration and schema integrity", "Backward compatibility", "Rollback",
+                     "Restore", "Crash recovery"):
+            self.assertRegex(md, rf"\| {name} \| PASS \| (\d+) of \1 \|")
+        self.assertEqual(sorted(os.listdir(out)), ["drill.json", "drill.md"])      # no copy of the data is left
+
     def test_it_will_not_run_on_unsafe_input(self):
         live = tmp("live.db")
         build_v9(live)
