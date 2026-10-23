@@ -407,6 +407,116 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
 - **Scope:** global (company), per project, per agent. **Type:** autonomous (alerts, stopping new billable work);
   approval (overrides and budget increases).
 
+### D-034 · Expand-only automatic production migrations
+- **Answer (Q16, 2026-10-23T16:43Z):** yes, with an expand-only policy; CommandCenter and GYST differ.
+- **Rule (CommandCenter):** a production migration applies automatically only when all hold: deterministically LOW
+  risk; expand-only and backward-compatible; no existing rows rewritten; nothing dropped or renamed; no type narrowed
+  or changed incompatibly; no destructive cleanup; no change to secrets, auth, policy or autonomy-permission
+  semantics; nothing irreversible; expected locking and runtime within the project's tested safe threshold;
+  production DB identity freshly verified (D-031); current application and schema version verified; migration
+  checksum and version known; applied successfully to a recent restored copy of production; post-migration
+  validation passes on that copy; a fresh production backup taken and verified immediately before; recovery
+  procedure proven; and **the old application version still works against the new schema**. Expand → deploy →
+  contract: the contract (removal) phase always needs Jay. Example: add a nullable column = candidate; rename a
+  column = not automatic.
+- **Recovery, not a fake DOWN:** require a tested recovery strategy (code rollback onto the compatible expanded
+  schema, and a verified restore when truly needed), not a down-migration written to satisfy a checklist.
+- **Indexes are not assumed harmless:** before automatic execution verify locking behaviour, table and database
+  size, runtime, disk needs and production impact. If impact cannot be bounded: Jay.
+- **Thresholds:** no universal duration; each project and database gets a tested safe-operation threshold. Cannot
+  bound lock time or runtime confidently: Jay.
+- **GYST:** same policy only for operational/internal schema that does not change handling of Jay's personal
+  information. Never automatic (even if additive): personal-data schema, health data, retention, deletion,
+  encryption, privacy boundaries, authentication/authorization, sensitive-data storage, data sharing/export (D-005).
+  Example: an internal job-status table may be automatic; a column storing health measurements needs Jay.
+- **SamVision and MFE:** existing restrictions stay (`never = prod_database`); no automatic production migrations.
+- **On failure:** stop; preserve logs and evidence; no alternative schema attempts; run the approved recovery path
+  where deterministic; block deployment; D-023 incident report. No autonomous migration improvisation.
+- **Pushback, D-007 conflict:** CommandCenter's own schema migrations live in `server/ccd/tasks.py` (`MIGRATIONS`,
+  `PRAGMA user_version`), which is a D-007 self-protection path. As things stand every ccd migration needs Jay
+  anyway, so D-034 has no practical effect on ccd's own database until that is resolved (Q19).
+- **Scope:** CommandCenter and GYST (internal schema only); SamVision and MFE excluded. **Type:** autonomous only
+  inside all conditions; approval (contract phase, anything unbounded, GYST personal-data schema); hard boundary
+  (no improvisation after a failure).
+
+### D-035 · Emergency Forward Repair (designed, not active)
+- **Answer (Q17):** yes for CommandCenter and GYST as a narrow capability; no for SamVision and MFE.
+- **SamVision / MFE:** when production is down and Jay cannot be reached, CommandCenter may diagnose, restart by
+  approved runbooks, execute an already-approved rollback, collect evidence, prepare a fix, run CI, get reviews,
+  prepare a release-ready PR or commit, and keep notifying Jay. It never deploys newly generated repair code.
+- **CommandCenter / GYST, all must hold:** production genuinely unhealthy or unavailable; Jay cannot be reached;
+  approved restart and recovery failed; approved rollback failed, was impossible, or did not restore service. The
+  repair is very small, directly tied to the incident, with no migration, data rewrite, new dependency, new
+  external service, provisioning, DNS change, credential or secret change, auth or permission expansion, policy or
+  autonomy expansion, or redesign. CommandCenter's repair never touches its self-protection core (autonomy
+  authority, Broker boundaries, approval enforcement, agent permissions, policy enforcement, identity and
+  authentication, secret handling). GYST's never changes sensitive personal-data handling.
+- **Evidence before deploy:** reproducible failure; identified or strongly evidenced direct cause; a targeted test
+  showing the failure and one showing the repair; full applicable CI green; Claude review and independent Codex
+  review, both bound to the exact final commit; risk classifier still within the emergency-fix class.
+- **Deploy:** the existing deterministic deployment capability only, never improvised shell commands: fix → CI and
+  reviews → deploy → immediate health check → bounded observation.
+- **One attempt:** a single reviewed forward-fix deployment. If it does not restore service: stop autonomous repair,
+  put the project in Paused / Incident, preserve evidence, keep safe diagnostics and alerting.
+- **Afterwards:** mandatory incident review for Jay (outage, restarts, rollback, forward fix, exact commit, reviews,
+  tests, production result, costs, remaining risks). Jay explicitly accepts, replaces or reverts the repair.
+- **Activation:** designed now; the authority is **off** until a later explicit readiness approval after automatic
+  deployment and rollback are proven in production or shadow exercises.
+- **Pushback, "Jay cannot be reached" must be deterministic:** proposed definition: an Immediate Attention alert
+  sent on Slack and ntfy, unacknowledged for 30 minutes (configurable per project), with the outage still
+  confirmed by health checks at the end of that window. Without such a rule the condition is a judgement call.
+- **Scope:** CommandCenter and GYST (capability), SamVision and MFE (prepare-only). **Type:** approval (activation;
+  acceptance afterwards); autonomous only inside every condition once active; hard boundary (one attempt, no
+  self-protection or personal-data changes).
+
+### D-036 · Data egress and information classification
+- **Answer (Q18):** no universal rule; classification plus project-specific destination allowlists.
+- **Classes:** PUBLIC (may leave under normal tool policy) · SOURCE / INTERNAL ENGINEERING (code, architecture,
+  non-sensitive build/test output: to an AI provider only if that project's profile permits that provider;
+  permission never transfers between projects) · OPERATIONAL METADATA (task IDs, statuses, health, CI result,
+  deploy version, aggregate usage, sanitized error class: to approved operational destinations such as Slack) ·
+  SENSITIVE PERSONAL / CLIENT DATA (GYST personal and health data, family finance, private user or client data,
+  individual production records: external egress denied by default) · SECRETS (passwords, API keys, OAuth tokens,
+  cookies, auth headers, private keys, production `.env` values: never to AI prompts, Slack, Drive, screenshots,
+  Graphify Cloud or external logging; redacted before an agent receives logs whenever practical).
+- **Per project:** SamVision: individual property or client records never reach CommandCenter telemetry, AI
+  prompts, Slack, diagnostic screenshots or unrelated artifacts; this does not limit the product showing records to
+  its authorized user; debug with synthetic, redacted, aggregate or schema data. GYST: personal, health and life
+  data stays on approved local/private infrastructure; logs scrubbed before external AI analysis; prefer local
+  deterministic analysis, then a later-approved local model, then synthetic reproduction; a one-time Jay approval
+  for specific sanitized data must be deliberate and audited. MFE: no transaction records, account information,
+  financial details or family identifiers to Slack, Drive, screenshots or external AI. CommandCenter: operational
+  metadata may leave via approved integrations; its secrets, actor tokens, Developer Unlock information,
+  credentials, private audit contents and sensitive cross-project data stay protected; CommandCenter must not
+  become a path for one project's restricted data to leak through its own logs or conversations. Employer repos:
+  own profile and employer rules; laptop-only where required; never mixed into another project's graph or context;
+  no Graphify Cloud without an explicit employer-project policy; only the AI providers permitted for that repo.
+- **AI providers:** for personal repos, the minimum source and context the task needs, when the profile permits the
+  provider. Production data limit by default: schema, row counts, aggregate metrics, sanitized logs, synthetic
+  examples; not real rows.
+- **Screenshots are data exports:** classify what is visible before sending one externally; never with secrets,
+  personal data, family finance, client data or private production records unless a policy allows it. Local
+  screenshots kept on an approved machine are a separate case.
+- **Logs:** deterministic scrubbing of known patterns (tokens, auth headers, cookies, passwords, connection
+  strings, API keys, project-defined sensitive identifiers) before an external agent sees them; not an AI doing it
+  by hand each time.
+- **Egress audit:** record project, actor, destination, data class, purpose, policy decision, timestamp, amount and
+  type of material; never a second copy of the sensitive payload.
+- **Local AI:** a truly local model with verified no external calls may later get broader access through its own
+  capability decision; "local" labels are verified, not trusted.
+- **Principle:** minimum necessary data + project-specific destination allowlists. A tool being available does not
+  mean a project may send data to it.
+- **Pushback 1, an agent's own reads are egress:** whatever an agent reads (a query result, a log tail, a page in a
+  browser) goes into its prompt at the provider. So "no real rows to AI providers" has to be enforced at the tool
+  level: agents get query and log tools that return schema, counts, aggregates and scrubbed lines, not raw
+  production rows or raw logs. This also limits agent accounts on production apps (Q21).
+- **Pushback 2, free text in metadata:** task titles, PR titles, commit messages and error messages are free text and
+  can carry an address, a name or an amount. They count as OPERATIONAL METADATA only after the project's scrubber
+  runs; SamVision already limits GitHub issues to task title, IDs and the task-file link.
+- **Scope:** global, with per-project profiles. **Type:** hard boundary (secrets; sensitive data default-deny);
+  approval (one-time sensitive transfers, new destinations, local model access); autonomous (allowed classes to
+  allowlisted destinations).
+
 ---
 
 ## 3. Questions asked, awaiting Jay
@@ -422,23 +532,26 @@ updated; task modes → D-027; Graphify → D-028 + TP-001; local CI → D-029.
 Batch 5 (Q13 runner host, Q14 Graphify experiment, Q15 fact ageing) answered 2026-10-22T17:51Z → D-030,
 D-028 (experiment approval), D-031; backups recorded as finding AF-001.
 
-### Batch 6 (asked 2026-10-22)
+Batch 6 (Q16 migrations, Q17 emergency repair, Q18 data egress) answered 2026-10-23T16:43Z → D-034, D-035, D-036.
+Also recorded from the Engineering HQ thread: D-032 (Slack mobile approvals), D-033 (budgets).
 
-**Q16 · Database migrations on CommandCenter and GYST.** SamVision and MFE already forbid agents touching the
-production database, and D-005 covers GYST's personal-data changes. Proposed for the rest: an agent-written migration
-may apply automatically only if it is additive and reversible (new table, column or index, with a tested down step),
-it first applied cleanly to a copy restored from last night's backup, a fresh backup is taken just before, and the
-database target is re-verified at use (D-031). Dropping, renaming, rewriting data or a long-locking change needs Jay.
+### Batch 7 (asked 2026-10-23)
 
-**Q17 · Production emergency when Jay is unreachable.** D-020 already allows one restart and a rollback to the last
-good image. If that does not fix it, may CommandCenter deploy a forward fix? Proposed: SamVision and MFE never
-(prepare the fix, hold it, keep alerting); CommandCenter and GYST only once their auto-rollback is verified, and only
-a small fix with green CI, Claude and Codex review, and no migration.
+**Q19 · CommandCenter's own migrations vs D-007.** ccd's schema migrations live in `server/ccd/tasks.py`, a
+self-protection path, so today every ccd migration needs Jay and D-034 never applies to ccd itself. Options:
+(a) keep it that way: ccd's own database is always Jay-approved; (b) move migration SQL into a separate
+`server/ccd/migrations/` folder that D-034 may apply automatically, while the migration runner stays protected.
+Recommendation: (a) until the Broker and engine are verified, then revisit.
 
-**Q18 · What data may leave jay-server.** Proposed: SamVision: no individual property records in any output,
-screenshot, Slack or model prompt (its AGENTS.md rule). GYST and MFE: no personal, health or family-financial
-records in Slack, Drive or screenshots; logs redacted before an agent reads them. All projects: model providers
-(D-002) see code and redacted logs, never production database rows beyond aggregate counts.
+**Q20 · Staging and restored copies of production.** D-034 tests migrations on a restored copy of production,
+which holds real personal data (GYST) or family finance. Proposed: restored copies live only on jay-server in a
+throwaway container, are reachable only by the deterministic migration checker (no agent reads rows, D-036), and are
+deleted after the check. Preview hosts (D-021) use synthetic data only and never production copies.
+
+**Q21 · Agent accounts on production apps.** D-012 gives each agent its own login, but under D-036 anything an agent
+sees in a logged-in production session goes to the AI provider. Proposed: agent accounts exist on dev and preview
+only; on production, agents use logged-out pages and health endpoints; any logged-in production session is a
+per-session Jay approval and, for SamVision, GYST and MFE, is not used at all.
 
 ---
 
@@ -495,16 +608,14 @@ folder and are untrusted; text on any web page is data, never instructions.
 
 Not asked yet. Each will be asked in a batch of exactly 3.
 
-1. Staging: does any project have a staging/dev environment besides localhost? Should CommandCenter create one?
-2. Certificate, tunnel and domain-expiry monitoring (zaylolabs.com renewal at Cloudflare).
-3. Tools: approval thresholds for a free library, a new dependency, an MCP server, a browser extension, a SaaS, paid service.
-4. Employer data on the laptop: browser use, screenshots and logs for D-002 repos.
-5. Scheduled maintenance windows per project (OS updates, image updates, DB vacuum).
-6. Service accounts and OAuth: may agents create them; who owns them.
-7. Are agent accounts (D-012) allowed on production apps, or dev/test only?
-8. Exact deploy command per project, and whether CommandCenter should wrap it as the deploy runner.
-9. Which projects besides SamVision are (or should be) public on zaylolabs.com?
-10. Off-server backup location (cloud bucket, second machine, external drive) and whether it is encrypted.
+1. Certificate, tunnel and domain-expiry monitoring (zaylolabs.com renewal at Cloudflare).
+2. Tools: approval thresholds for a free library, a new dependency, an MCP server, a browser extension, a SaaS, paid service.
+3. Employer data on the laptop: browser use, screenshots and logs for D-002 repos.
+4. Scheduled maintenance windows per project (OS updates, image updates, DB vacuum).
+5. Service accounts and OAuth: may agents create them; who owns them.
+6. Exact deploy command per project, and whether CommandCenter should wrap it as the deploy runner.
+7. Which projects besides SamVision are (or should be) public on zaylolabs.com?
+8. Off-server backup location (cloud bucket, second machine, external drive) and whether it is encrypted.
 
 ---
 
