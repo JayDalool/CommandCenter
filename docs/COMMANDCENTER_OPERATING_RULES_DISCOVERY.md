@@ -240,6 +240,10 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
   unknown; old facts keep their original date until rechecked. Order after Phase 1 is deployed: CommandCenter,
   GYST, SamVision, MyFamilyExpenses; GauzeMate only when resumed. CommandCenter's own admission also gets a Codex
   second opinion, and every finding on a D-007 path goes to Jay.
+- **Groundwork allowed (Jay, 2026-10-23T02:54Z):** policy-independent backend infrastructure may be built behind a
+  disabled feature flag (agent registration records, onboarding drafts, validation, audit trails, read-only APIs).
+  Before any policy-dependent function is activated, D-024 is shown to Jay as a final proposal with its
+  implications and approved. No permissions granted, no agents started, no proposed policy enforced as if approved.
 - **Scope:** global. **Type:** hard boundary (authority actions during onboarding), approval (graduation),
   autonomous (observe, inspect, sandbox, audit, safe draft PRs).
 
@@ -373,6 +377,35 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
   Design doc, Fingerprint section).
 - **Scope:** global. **Type:** autonomous (re-checks); per-action block (dependent operations only).
 - **Effect on D-024:** all onboarding questions are answered; D-024 stays proposed until Jay confirms it final.
+
+### D-032 · Mobile approvals through Slack
+- **Answer (Jay, 2026-10-23T02:54Z, Engineering HQ thread):** yes to mobile agent approvals; Jay wants to run the
+  company from his phone as well as his desktop.
+- **Rule:** extends D-006. Phase one: Slack sends a detailed request (for example an onboarding request) with a
+  secure link to an authenticated CommandCenter approval screen; the approval happens there. Later, suitable
+  low-risk requests may be approved directly inside Slack, only with verified identity (Slack user bound to Jay),
+  authorization checked by CommandCenter, short-lived single-use approval actions bound to the request hash, and a
+  full audit record. High-risk permissions, repository access, policy changes and production capabilities always
+  need stronger confirmation inside CommandCenter, never a Slack button alone. The local ccd API is never exposed
+  publicly to make Slack work (Socket Mode, outbound only; the mobile link needs the separately designed secure
+  remote access from D-006).
+- **Open:** how the phone reaches the authenticated approval screen without exposing ccd (D-006's later secure
+  tunnel design); which request classes count as Slack-approvable low risk.
+- **Scope:** global. **Type:** approval (all approvals stay Jay's; only the channel changes); hard boundary (no
+  public ccd API; high-risk approvals never in Slack alone).
+
+### D-033 · Budgets: alerts and automatic pausing
+- **Answer (Jay, 2026-10-23T02:54Z):** configurable budgets with advance alerts and automatic pausing.
+- **Rule:** budgets at agent, project and company level. Advance alerts as spend approaches each limit (proposed
+  defaults 50%, 80%, 95%, configurable). At a hard limit: stop scheduling new billable work in that budget's scope
+  only; let in-progress work reach a safe checkpoint instead of being cut off mid-operation; notify Jay and the
+  project lead; allow an authorized budget increase or temporary override; resume safely after authorization or a
+  budget reset. One agent over its limit does not stop its whole project. Budget pausing is kept separate from
+  safety: monitoring, rollback and incident recovery (D-020, D-023, D-026) are never blocked by a spending limit.
+- **Controls:** per-execution cost metering (V2 discovery §6.9, §24) feeds a budget ledger; the scheduler checks the
+  budget before claiming billable work; overrides are Jay approvals with an expiry and an audit record.
+- **Scope:** global (company), per project, per agent. **Type:** autonomous (alerts, stopping new billable work);
+  approval (overrides and budget increases).
 
 ---
 
