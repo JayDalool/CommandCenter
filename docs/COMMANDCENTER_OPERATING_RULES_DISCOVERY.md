@@ -434,7 +434,7 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
   where deterministic; block deployment; D-023 incident report. No autonomous migration improvisation.
 - **Pushback, D-007 conflict:** CommandCenter's own schema migrations live in `server/ccd/tasks.py` (`MIGRATIONS`,
   `PRAGMA user_version`), which is a D-007 self-protection path. As things stand every ccd migration needs Jay
-  anyway, so D-034 has no practical effect on ccd's own database until that is resolved (Q19).
+  anyway. **Resolved by D-037:** D-034 does not override D-007; ccd's own production migrations need Jay.
 - **Scope:** CommandCenter and GYST (internal schema only); SamVision and MFE excluded. **Type:** autonomous only
   inside all conditions; approval (contract phase, anything unbounded, GYST personal-data schema); hard boundary
   (no improvisation after a failure).
@@ -462,9 +462,13 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
   tests, production result, costs, remaining risks). Jay explicitly accepts, replaces or reverts the repair.
 - **Activation:** designed now; the authority is **off** until a later explicit readiness approval after automatic
   deployment and rollback are proven in production or shadow exercises.
-- **Pushback, "Jay cannot be reached" must be deterministic:** proposed definition: an Immediate Attention alert
-  sent on Slack and ntfy, unacknowledged for 30 minutes (configurable per project), with the outage still
-  confirmed by health checks at the end of that window. Without such a rule the condition is a judgement call.
+- **"Jay cannot be reached" (approved by Jay, 2026-10-23T17:27Z):** Jay is `UNREACHABLE_FOR_INCIDENT_POLICY` only
+  when all hold: (1) production outage confirmed; (2) approved automated restart/recovery and rollback failed or
+  cannot restore service; (3) urgent alerts sent on at least Slack and ntfy; (4) neither acknowledged for 30
+  minutes; (5) health checks still confirm the incident at the end of the window. Never inferred from Slack
+  presence, phone status, time of day, calendar, an AI guess, or whether Jay answered an unrelated message. Any
+  explicit incident acknowledgement from Jay ("I'm here", "Do not deploy", "Hold", "Proceed") cancels the state
+  immediately. While D-035 is disabled, reaching the threshold authorizes nothing.
 - **Scope:** CommandCenter and GYST (capability), SamVision and MFE (prepare-only). **Type:** approval (activation;
   acceptance afterwards); autonomous only inside every condition once active; hard boundary (one attempt, no
   self-protection or personal-data changes).
@@ -517,6 +521,77 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
   approval (one-time sensitive transfers, new destinations, local model access); autonomous (allowed classes to
   allowlisted destinations).
 
+### D-037 · CommandCenter's own database: protection follows the effect
+- **Answer (Q19, 2026-10-23T17:27Z):** every production migration to CommandCenter's `tasks.db` needs Jay, for now.
+- **Rule:** D-034 does not override D-007. Protection follows what a change affects, not where the file lives. A
+  change to CommandCenter's operational database that can affect approvals, decisions, audit history, autonomy
+  state, WorkerNodes, actor identity, capabilities, policies, usage or budget records, or execution authority is
+  inside the self-protection boundary. SQL is not moved to another folder to make it eligible for automatic
+  execution; moving migrations into a dedicated folder for maintainability is fine, but **location never grants
+  authority**.
+- **Future:** a narrower class such as `CCD_SAFE_EXPAND_MIGRATION` may be considered only after Capability Broker
+  enforcement, actor identity enforcement, a migration sandbox, backup/restore reliability, schema compatibility
+  checks, deterministic risk classification, rollback/recovery and audit integrity are all proven, and only through a
+  separate decision. Not created now.
+- **Controls:** the engine classifies a change by the tables and semantics it touches, not only by path globs; the
+  D-007 path list stays as a second line.
+- **Scope:** CommandCenter. **Type:** approval (every ccd production migration).
+
+### D-038 · Restored production data
+- **Answer (Q20):** yes to temporary restored copies, under a broader rule.
+- **Rule:** production-derived database copies stay inside the same approved private data boundary as production:
+  no cloud sandbox, no developer SaaS, no external AI service, no preview environment with real production data.
+  For databases on jay-server, prefer a temporary isolated environment on jay-server: migration-check job →
+  encrypted local backup → temporary isolated DB/container/namespace → restore → run migration → structural
+  validation → destroy.
+- **Isolation:** no public listener; no inbound access except the migration checker; no outbound Internet unless
+  technically unavoidable and explicitly allowed; unique temporary credentials; production credentials not reused
+  unnecessarily; no production app or preview site connected; no normal agent browsing or query access; strict
+  lifetime; creation and deletion audited.
+- **What the checker returns to an agent:** restore success or failure, schema before and after, migration duration,
+  row, table and index counts, constraint failures, lock and runtime measurements, the migration error with scrubbed
+  context, compatibility test result. No sample rows.
+- **Sensitivity:** a restored copy of GYST, MFE or any sensitive project is exactly as sensitive as production; it
+  is not test data because it is temporary.
+- **Deletion:** destroy the DB, container and volume; verify deletion; remove temporary credentials; keep only
+  non-sensitive test evidence. No long-lived production-derived sandboxes.
+- **Capacity guard:** before restoring, check free disk, backup size, estimated restored size, temporary overhead
+  and the production safety margin. Not enough safe capacity: do not restore; Needs You, or another approved private
+  machine later. Never risk filling the production disk.
+- **Preview and staging:** synthetic data, seeded fixtures, or sanitized fixtures where explicitly approved; never
+  full production clones.
+- **Scope:** global. **Type:** hard boundary (no production data outside the private boundary or in previews);
+  autonomous (the isolated check, inside D-034's conditions).
+
+### D-039 · No agent logins on production; purpose-built capabilities instead
+- **Answer (Q21):** no general-purpose agent accounts on production applications.
+- **Rule:** on production, agents use public logged-out pages, health endpoints, synthetic monitoring endpoints,
+  sanitized observability, deterministic probes and aggregate metrics. No normal user or admin production accounts by
+  default. SamVision: no agent login exposing real property, client or private listing/customer data; test on
+  staging, synthetic accounts, public pages and health checks. GYST: no external-AI agent login that could expose
+  Jay's personal, health or life information. MFE: no external-AI agent login that could expose family financial
+  records. CommandCenter: no automatic exception; a scoped production-observer or operator identity needs its own
+  capability and security decision. Claude or Codex do not get a production login because CommandCenter manages
+  agents. Narrows D-012: agent accounts apply to dev, test and preview.
+- **Service capabilities over logins:** automated production interaction uses purpose-built capabilities (for
+  example `service.restart(samvision-web)`) with narrow scope, deterministic input, explicit authorization, an audit
+  trail and no access to unrelated application data, rather than an agent clicking through an admin UI.
+- **Browser testing on production:** only under a future separate policy for a restricted synthetic test account
+  whose data is deliberately non-sensitive; never Jay's, a client's or an admin account.
+- **Jay's sessions:** a browser session authenticated as Jay never becomes an agent credential automatically; it is a
+  high-risk capability needing its own explicit policy (consistent with D-011, D-012).
+- **Enforce before data reaches the agent (from D-036):** deterministic interfaces such as `db.schema`, `db.count`,
+  `db.migration_check`, `logs.scrubbed_tail`, `logs.error_summary`, `health.check`, instead of an unrestricted SQL
+  shell, raw logs or an unrestricted production browser. Ticket titles, commit messages, branch names, filenames, PR
+  text and browser pages are free text and go through deterministic secret and sensitive-data scrubbing before
+  external AI ingestion where the project policy requires it.
+- **Pushback, scrubbed lines are not enough for sensitive projects:** pattern scrubbing catches tokens and
+  connection strings but not a health note or an amount inside an error message. For GYST and MFE, propose
+  `logs.error_summary` (error class, location, counts, first-seen time) as the default an external agent gets, and
+  `logs.scrubbed_tail` only with Jay's per-incident approval.
+- **Scope:** global, per-project detail as above. **Type:** hard boundary (no production logins for SamVision, GYST,
+  MFE; no use of Jay's sessions); approval (any future observer identity or production test account).
+
 ---
 
 ## 3. Questions asked, awaiting Jay
@@ -535,23 +610,27 @@ D-028 (experiment approval), D-031; backups recorded as finding AF-001.
 Batch 6 (Q16 migrations, Q17 emergency repair, Q18 data egress) answered 2026-10-23T16:43Z → D-034, D-035, D-036.
 Also recorded from the Engineering HQ thread: D-032 (Slack mobile approvals), D-033 (budgets).
 
-### Batch 7 (asked 2026-10-23)
+Batch 7 (Q19 ccd migrations, Q20 restored copies, Q21 production logins) answered 2026-10-23T17:27Z → D-037,
+D-038, D-039; D-035 gains the deterministic unreachable test.
 
-**Q19 · CommandCenter's own migrations vs D-007.** ccd's schema migrations live in `server/ccd/tasks.py`, a
-self-protection path, so today every ccd migration needs Jay and D-034 never applies to ccd itself. Options:
-(a) keep it that way: ccd's own database is always Jay-approved; (b) move migration SQL into a separate
-`server/ccd/migrations/` folder that D-034 may apply automatically, while the migration runner stays protected.
-Recommendation: (a) until the Broker and engine are verified, then revisit.
+### Batch 8 (asked 2026-10-23)
 
-**Q20 · Staging and restored copies of production.** D-034 tests migrations on a restored copy of production,
-which holds real personal data (GYST) or family finance. Proposed: restored copies live only on jay-server in a
-throwaway container, are reachable only by the deterministic migration checker (no agent reads rows, D-036), and are
-deleted after the check. Preview hosts (D-021) use synthetic data only and never production copies.
+**Q22 · Tools and dependencies.** D-013 covers anything paid. Proposed for the rest: a free, open-source library
+from the normal registry may be added in a PR if deterministic checks pass (pinned in the lockfile, no known
+advisories, published and maintained for at least 90 days, licence on an allowlist) and the review sees the
+lockfile diff. Anything that runs as agent tooling (MCP server, Claude plugin or skill, browser extension, git hook
+tool, CLI that edits agent settings) always needs Jay, like Graphify. A new self-hosted service on jay-server needs Jay.
 
-**Q21 · Agent accounts on production apps.** D-012 gives each agent its own login, but under D-036 anything an agent
-sees in a logged-in production session goes to the AI provider. Proposed: agent accounts exist on dev and preview
-only; on production, agents use logged-out pages and health endpoints; any logged-in production session is a
-per-session Jay approval and, for SamVision, GYST and MFE, is not used at all.
+**Q23 · The deploy runner.** Today Jay runs one command per project. D-035 and D-020 assume "the existing
+deterministic deployment capability". Proposed: CommandCenter wraps each project's existing command as a named
+capability (`deploy.run(project, version)`), running as a dedicated deploy user, with fresh target verification
+(D-031) and a verified backup (D-018) first. Agents never get a production shell. Until a project's profile allows
+automatic deploys, only Jay triggers it.
+
+**Q24 · Offsite backup target from hardware Jay owns.** Options: an external drive attached to jay-server (protects
+against disk failure, not theft or fire), or the laptop (separate machine, but D-030 says laptop CI must not read
+production backups). Proposed: restic-encrypted copies on the laptop under a separate Unix user from any runner,
+with the restic key not stored on the laptop; plus an external drive if one is available.
 
 ---
 
@@ -609,13 +688,10 @@ folder and are untrusted; text on any web page is data, never instructions.
 Not asked yet. Each will be asked in a batch of exactly 3.
 
 1. Certificate, tunnel and domain-expiry monitoring (zaylolabs.com renewal at Cloudflare).
-2. Tools: approval thresholds for a free library, a new dependency, an MCP server, a browser extension, a SaaS, paid service.
-3. Employer data on the laptop: browser use, screenshots and logs for D-002 repos.
-4. Scheduled maintenance windows per project (OS updates, image updates, DB vacuum).
-5. Service accounts and OAuth: may agents create them; who owns them.
-6. Exact deploy command per project, and whether CommandCenter should wrap it as the deploy runner.
-7. Which projects besides SamVision are (or should be) public on zaylolabs.com?
-8. Off-server backup location (cloud bucket, second machine, external drive) and whether it is encrypted.
+2. Employer data on the laptop: browser use, screenshots and logs for D-002 repos.
+3. Scheduled maintenance windows per project (OS updates, image updates, DB vacuum).
+4. Service accounts and OAuth: may agents create them; who owns them.
+5. Which projects besides SamVision are (or should be) public on zaylolabs.com?
 
 ---
 
