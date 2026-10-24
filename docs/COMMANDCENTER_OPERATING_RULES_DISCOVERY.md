@@ -228,7 +228,14 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
 - **Scope:** global.
 - **Type:** autonomous (pausing and halting are always allowed); approval (resuming after a full stop).
 
-### D-024 · New project onboarding (proposed, Jay agreed with the design)
+### D-024 · New project onboarding (final)
+- **Final (Jay, 2026-10-24T06:51Z); text of record `docs/decisions/D-024.md`** (with `policy/decisions/D-024.toml`,
+  written in the Engineering HQ thread, PR #66). Final as policy and design only: it does not authorize production
+  enforcement, agent activation, credential issuance, Broker grants, budget holds, Slack approval buttons, autonomous
+  onboarding authority, Phase 2 enforcement or production deployment. Production activation stays NO-GO until Phase
+  2 actor-token enforcement, shadow-mode validation, D-030/D-045 laptop runner verification and the private
+  authenticated approval path exist; each enforcement switch is a separate explicit approval. The history below is
+  kept for context.
 - **Status:** Jay agreed with the design and the pushback (2026-10-21T21:15Z): pushes and PRs are not automatically low
   risk; discovery never runs code with the project's normal environment or secrets; evidence grades instead of AI
   confidence numbers; boundaries enforced by missing credentials wherever possible. Stays **proposed** until Q15
@@ -367,16 +374,19 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
   (the check could not run: block only dependent actions, e.g. deployment blocked while coding, tests and review
   continue), FAILED VERIFICATION and CHANGED (recalculate risk; D-026 may tighten). A successful re-check refreshes
   evidence, timestamp and fact version. Facts belong to classes with their own TTLs, configurable in policy.
-  Proposed defaults: architecture 90 days; hosting/network 14 days; data 14 days; backup status 1 day, restore test
-  30 days; runner privileges 7 days; identity 30 days; release target 7 days; worker liveness 2 minutes; secrets not
-  aged (capability check at use, value never exposed).
+  Approved starting defaults (Jay, 2026-10-24T06:51Z), configurable, not hardcoded: architecture/framework about
+  90 days unless code changes invalidate them sooner; hosting/DNS/deployment configuration about 30 days; backup
+  success/state verified every backup cycle; restore capability by periodic drill per project policy; worker online
+  state live/short TTL; secrets not aged (capability check at use, value never exposed). Classes Jay did not name
+  (data, runner privileges, identity, release target) keep the earlier proposed values until tuned.
 - **Verify at the point of dangerous use:** a fresh deterministic check right before production deployment
   (target), migration (database target), credential use (account identity), DNS write (DNS target), privileged
-  execution (worker identity), and push or merge (repository identity), even if verified yesterday.
+  execution (worker identity), and push or merge (repository identity), even if verified yesterday. Approved
+  (2026-10-24): dangerous actions always run their point-of-use check even when the stored fact is not stale.
 - **Controls:** Project Fingerprint fields `state`, `fact_class`, `verified_at`, `version` (Project Onboarding
   Design doc, Fingerprint section).
 - **Scope:** global. **Type:** autonomous (re-checks); per-action block (dependent operations only).
-- **Effect on D-024:** all onboarding questions are answered; D-024 stays proposed until Jay confirms it final.
+- **Effect on D-024:** D-024 is final (2026-10-24).
 
 ### D-032 · Mobile approvals through Slack
 - **Answer (Jay, 2026-10-23T02:54Z, Engineering HQ thread):** yes to mobile agent approvals; Jay wants to run the
@@ -389,8 +399,14 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
   need stronger confirmation inside CommandCenter, never a Slack button alone. The local ccd API is never exposed
   publicly to make Slack work (Socket Mode, outbound only; the mobile link needs the separately designed secure
   remote access from D-006).
-- **Open:** how the phone reaches the authenticated approval screen without exposing ccd (D-006's later secure
-  tunnel design); which request classes count as Slack-approvable low risk.
+- **Initial design approved (Jay, 2026-10-24T06:51Z):** Slack is a notification, approval-request and secure-link
+  surface only; CommandCenter stays the approval authority. A private CommandCenter Slack integration posts to a
+  private channel or DM with the risk tier, agent ID, project, a concise request and an opaque link back to
+  CommandCenter. The link is not an approval credential. Standard and High-risk approvals happen inside
+  authenticated CommandCenter; High-risk also needs Developer Unlock and the existing stronger confirmation. Direct
+  Low-risk Slack buttons are a later, separately approved capability and stay disabled (Q32 asks what they may
+  cover when that time comes).
+- **Open:** how the phone reaches the authenticated approval screen without exposing ccd (Q30).
 - **Scope:** global. **Type:** approval (all approvals stay Jay's; only the channel changes); hard boundary (no
   public ccd API; high-risk approvals never in Slack alone).
 
@@ -402,6 +418,15 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
   project lead; allow an authorized budget increase or temporary override; resume safely after authorization or a
   budget reset. One agent over its limit does not stop its whole project. Budget pausing is kept separate from
   safety: monitoring, rollback and incident recovery (D-020, D-023, D-026) are never blocked by a spending limit.
+- **Approved defaults (Jay, 2026-10-24T06:51Z), configurable per scope later:** alerts at 50% informational, 80%
+  warning, 95% urgent, 100% hard hold. Up to 5% past the hard limit only for work already running to reach a safe
+  checkpoint; no new work starts on it; deploy, migration, rollback and push already executing follow their own
+  atomic safety rules. Per-step cap: the lower of 25% of the agent's daily budget or $10; a step reaching it
+  checkpoints instead of continuing. Estimated cost over $10 needs Project Lead approval (D-046), over $25 needs Jay.
+  Burn-rate breaker: more than 25% of a scope's daily allocation in one hour stops new billable steps in that scope,
+  lets running work checkpoint, alerts Jay and starts a runaway investigation. **No permanent dollar budgets yet:**
+  the evaluator runs in shadow/soft-warning mode first; agent, project and company limits are proposed later from
+  real usage evidence.
 - **Controls:** per-execution cost metering (V2 discovery §6.9, §24) feeds a budget ledger; the scheduler checks the
   budget before claiming billable work; overrides are Jay approvals with an expiry and an audit record.
 - **Scope:** global (company), per project, per agent. **Type:** autonomous (alerts, stopping new billable work);
@@ -670,9 +695,9 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
   or decryption access (D-030).
 - **Encryption and keys:** encrypted before or during transfer. The only recovery key is never kept solely on the
   laptop, nor solely on jay-server. Recovery material needs a user-controlled path independent of the backed-up
-  machine; keys are never exposed to agents. Key policy designed separately (Q25).
+  machine; keys are never exposed to agents. Key policy: D-043.
 - **Runbook, no LLM in routine execution:** `backup.create` → `backup.verify` → `backup.encrypt` →
-  `backup.replicate(laptop)` → `backup.verify_remote` → `backup.prune`. CommandCenter receives structured status only
+  `backup.replicate(laptop)` → `backup.verify_remote`; laptop copies are deleted only laptop-side (D-044). CommandCenter receives structured status only
   (result, source, created, local verification, second-machine copy, encrypted, age, last restore test).
 - **Laptop offline:** the production backup does not fail; record local PASS and second-machine PENDING; run the
   pending replication when the laptop reconnects; alert Jay only when the second copy is older than the configured
@@ -687,6 +712,53 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
 - **Scope:** global; SamVision and MFE first (they have backups today), GYST and CommandCenter once their backups are
   known. **Type:** autonomous (the runbook once approved and installed); approval (installing it, any new tool or
   service); hard boundary (CI and agents never reach backups or keys).
+
+### D-043 · Backup classes and encryption keys
+- **Answer (Q25, Jay, 2026-10-24T06:51Z, Engineering HQ thread):** "APPROVED: HYBRID MODEL."
+- **Rule:** two backup classes. (1) **Operational backup:** short-term, inside the approved production/private
+  environment; CommandCenter may use it automatically for rollback, migration verification, automated restore tests
+  and recovery from routine mistakes. (2) **SECOND_MACHINE disaster copy:** a separate copy on Jay's laptop,
+  encrypted with `age` public-key encryption. jay-server may hold the public key only. The private key never exists
+  on jay-server, Jay's laptop, CI runners, WorkerNodes, Claude or Codex; Jay holds it separately with an independent
+  recovery copy.
+- **Not yet:** installing `age` is a system-tool change and goes through the Tool/Infrastructure process (D-040).
+  Not installed.
+- **Scope:** global. **Type:** autonomous (operational backup use); hard boundary (private key location);
+  approval (installing `age`).
+
+### D-044 · Laptop copies are append-only from the server
+- **Answer (Q26, Jay, 2026-10-24T06:51Z, Engineering HQ thread):** "APPROVED: APPEND-ONLY FROM THE SERVER."
+- **Rule:** jay-server may create a new encrypted backup object on the laptop and verify the upload succeeded. It may
+  not delete or overwrite earlier laptop copies, change laptop retention, or decrypt laptop copies. Retention and
+  deletion run from a separate laptop-side backup identity and runbook, so a compromised jay-server cannot erase the
+  second-machine history.
+- **Runbooks (deterministic scripts, not recurring LLM tasks):** server side `backup.create` → `backup.verify` →
+  `backup.encrypt` → `backup.replicate` → `backup.verify_remote`; laptop side `backup.retention`, which deletes only
+  copies expired under the approved retention policy. Replaces the server-side `backup.prune` step in D-042.
+- **Controls (proposed):** an SSH key limited to a forced command that only writes new files.
+- **Scope:** global. **Type:** hard boundary (server cannot delete, overwrite or decrypt); autonomous (the approved
+  runbooks once installed).
+
+### D-045 · Personal CI is isolated from employer code on the laptop
+- **Answer (Q27, Jay, 2026-10-24T06:51Z, Engineering HQ thread):** "APPROVED: STRICT OS/FILESYSTEM/CREDENTIAL
+  SEPARATION."
+- **Rule:** personal CI on the laptop runs under a dedicated locked-down identity that cannot read employer
+  repository directories, employer credentials, SSH keys, tokens or environment files, Jay's general Windows profile,
+  production backups, or unrelated personal secrets. Employer work uses a separate Linux/WSL user or environment.
+- **Verification:** checked on the actual laptop before Phase 2 execution authority is enabled, with recorded
+  evidence; isolation is never assumed. If it cannot be proven, personal CI and autonomous execution stay restricted
+  until it is fixed. Extends D-030.
+- **Scope:** global (laptop). **Type:** hard boundary; prerequisite for Phase 2 authority.
+
+### D-046 · Initial Project Leads
+- **Answer (Jay, 2026-10-24T06:51Z, Engineering HQ thread):** approved initial structure.
+- **Rule:** CommandCenter, GYST, SamVision and MyFamilyExpenses each have a Claude Project Lead; GauzeMate has no
+  active lead while it is Paused. "Claude Project Lead" is a stable agent role, not tied to one model version: the
+  backing model may change while the agent identity and work history stay intact. Each project's assignment and
+  history stay separate even when the same lead persona is used. Dedicated leads may be onboarded later.
+- **Relation:** the Project Lead approves estimated costs over $10 (D-033); Jay above $25. Naming the leads
+  activates nothing.
+- **Scope:** per project. **Type:** structure (grants no authority by itself).
 
 ---
 
@@ -712,7 +784,11 @@ D-038, D-039; D-035 gains the deterministic unreachable test.
 Batch 8 (Q22 tools, Q23 deploy runner, Q24 backup target) answered 2026-10-23T17:38Z → D-040, D-041, D-042;
 GYST/MFE log refinement folded into D-039.
 
-### Batch 9 (asked 2026-10-23)
+Batch 9 (Q25 encryption, Q26 laptop deletion, Q27 employer isolation) answered 2026-10-24T06:51Z in the
+Engineering HQ thread → D-043, D-044, D-045; also D-046 (Project Leads), D-024 final, and updates to D-031, D-032,
+D-033.
+
+### Batch 9 (answered, kept for reference)
 
 **Q25 · Backup encryption and the recovery key.** restic needs its password on the machine that writes the backup,
 so jay-server would hold a key that can also read every old backup. Alternative: encrypt each dump with a public key
@@ -783,10 +859,10 @@ folder and are untrusted; text on any web page is data, never instructions.
 
 ## 5. All open questions (full list, 2026-10-24)
 
-Jay asked for every remaining question at once (2026-10-24). Q25 to Q27 were already asked in Batch 9. Each
+Jay asked for every remaining question at once (2026-10-24). Q25 to Q27 are answered (D-043 to D-045); Q28 to Q43 are open. Each
 question has a proposed default; an answer of "agree" accepts it. Nothing here is decided until Jay answers.
 
-### 5.1 Backups and the laptop (asked, awaiting answer)
+### 5.1 Backups and the laptop (answered 2026-10-24 → D-043, D-044, D-045)
 
 - **Q25 · Backup encryption key.** Proposed: encrypt with an `age` public key; jay-server can encrypt but never
   decrypt; the private key stays with Jay (password manager plus paper or USB), never on jay-server or the laptop.
