@@ -173,6 +173,10 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
 - **Update (repo evidence, not rechecked):** SamVision `docs/backups.md` says backups run nightly at 04:00 with read-back
   verification, 14-day retention and a restore check, but no offsite copy; MFE is backed up nightly at 03:30 by
   `/srv/server/scripts/backup-postgres.sh`. So SamVision already meets the daily rule; the gap is offsite.
+- **Restore drill schedule (accepted, recorded 2026-10-24T21:03Z), configurable defaults:** CommandCenter weekly,
+  SamVision weekly, MyFamilyExpenses monthly, GYST monthly, GauzeMate none while Paused. Any change to a backup system
+  triggers an extra restore test. A successful backup is not proven recovery until a restore has been verified.
+  Replaces the single "weekly for all" line above.
 
 ### D-019 · Operations page: backups, restores, health checks, schedule
 - **Answer (Q4):** "We also need an indicator page for our backups and restores, health check and schedule."
@@ -317,7 +321,12 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
 - **Controls:** extends the existing writer/checkpoint fields in `ccd/pipeline.py`.
 - **Scope:** global. **Type:** hard boundary (one writer; task never above project).
 
-### D-028 · Derived code intelligence is evidence, not authority (proposed)
+### D-028 · Derived code intelligence is evidence, not authority (accepted 2026-10-24)
+- **Accepted (Jay, 2026-10-24T21:03Z):** Git remains source-code truth; CommandCenter SQLite remains operational,
+  policy and audit truth; graph or index data is derived evidence only; graph intelligence may raise risk but never
+  lower deterministic risk; it never authorizes merge or deploy and never bypasses approval; CommandCenter must work
+  without it. The local Graphify sandbox experiment is approved under the constraints below. **Still undecided:**
+  Graphify adoption after the experiment (ADOPT LOCAL, WATCH or REJECT). Experiment approval is not adoption approval.
 - **Source:** Jay's Graphify brief. Full evaluation: Graphify Tool Proposal doc
   (https://claude.ai/artifact/M881qmRtEeRxRwuDohAP5B).
 - **Rule:** Git is source-code truth; CommandCenter SQLite is operational, task, policy, approval, decision,
@@ -399,7 +408,7 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
   evidence, timestamp and fact version. Facts belong to classes with their own TTLs, configurable in policy.
   Approved starting defaults (Jay, 2026-10-24T06:51Z), configurable, not hardcoded: architecture/framework about
   90 days unless code changes invalidate them sooner; hosting/DNS/deployment configuration about 30 days; backup
-  success/state verified every backup cycle; restore capability by periodic drill per project policy; worker online
+  success/state verified every backup cycle; restore capability by periodic drill (schedule in D-018); worker online
   state live/short TTL; secrets not aged (capability check at use, value never exposed). Classes Jay did not name
   (data, runner privileges, identity, release target) keep the earlier proposed values until tuned.
 - **Verify at the point of dangerous use:** a fresh deterministic check right before production deployment
@@ -885,6 +894,26 @@ Status of every row: **proposed from Jay's answers (2026-10-21T17:37Z), not yet 
   keeping raw transcripts forever.
 - **Scope:** global, with per-project shorter limits allowed. **Type:** retention policy.
 
+### D-057 · Temporary remote laptop access (proposed, 2026-10-24)
+- **Source:** Jay's brief (2026-10-24T21:03Z). Full design: D-057 Temporary Remote Laptop Access doc
+  (https://claude.ai/artifact/9La3jFrBBtLhyooBrJUEXm).
+- **Proposed rule:** Jay may grant one named agent (Claude Code or Codex) a signed, time-limited lease on one approved
+  personal worktree on `jay-laptop-wsl`, in Inspect, Assisted or Interactive mode. The lease only narrows authority
+  (agent grant ∩ profile ∩ task mode ∩ WorkerNode ∩ lease ∩ egress ∩ safety state) and never grants production,
+  secrets, deploy, DNS, GitHub settings, credential management, Jay's browser profile or employer repositories. The
+  boundary is the outbound WorkerNode connection, the lease, the Capability Broker and OS isolation (a separate
+  `cc-agent` WSL distribution with interop and Windows mounts off), never a vendor remote-control feature or a
+  prompt. Agents work in their own clone, not Jay's checkout. Leases expire at an absolute time with an idle timeout;
+  the worker freezes the session after 5 minutes without ccd; REVOKE ALL is always available.
+- **Open (asked 2026-10-24):** Q44 isolation shape (separate distribution recommended), Q45 provider credential
+  (dedicated capped API keys recommended), Q46 package downloads in Assisted (lockfile install before the session
+  recommended).
+- **Prerequisites:** Phase 2 actor tokens, the private network path (D-032, which also changes D-010's loopback rule
+  for the worker endpoint), D-045 laptop evidence, an approved `jay-laptop-wsl` WorkerNode. Phases: shadow leases →
+  Inspect (no AI process on the laptop) → Assisted → Interactive, each separately approved.
+- **Scope:** global (laptop). **Type:** approval (every lease); hard boundary (no production, no employer repos in v1).
+  Nothing implemented, enabled, installed or exposed.
+
 ---
 
 ## 3. Questions asked and answered
@@ -915,6 +944,8 @@ D-033.
 
 Full list (Q28 to Q43, sent 2026-10-24T06:53Z) answered 2026-10-24T06:57Z → D-047 to D-056 new; D-015, D-019,
 D-032, D-035 amended; D-029 accepted; AF-002 experiment approved. Mapping in section 5. No question is open.
+
+D-057 (2026-10-24): Q44 to Q46 asked about temporary remote laptop access; see D-057.
 
 ### Batch 9 (answered, kept for reference)
 
@@ -1021,8 +1052,7 @@ decides policy only; nothing below is implemented, installed or enabled.
 
 Still undecided, not discovery questions: D-016 password manager (intent only; which product, and the migration
 plan); a geographically separate offsite target (D-042 later, AF-001 open); the Graphify adoption verdict (D-028,
-after the experiment); actual budget amounts (D-033, after shadow-mode usage); per-project restore-drill schedule
-(D-031 refers to project policy); which specific credentials get a `credential.rotate` or revoke capability
+after the experiment); actual budget amounts (D-033, after shadow-mode usage); which specific credentials get a `credential.rotate` or revoke capability
 (D-015, D-055).
 
 ---
