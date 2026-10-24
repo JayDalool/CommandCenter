@@ -1,0 +1,28 @@
+id = "D-024"
+schema = 1
+date = "2026-10-24"
+decided_by = "jay"
+source = "Jay, CommandCenter project thread: design 2026-10-21T21:15Z; 2026-10-23T02:54Z, 04:06Z, 14:12Z; final with defaults 2026-10-24T06:51Z. Full text docs/decisions/D-024.md v1.0"
+projects = ["all"]
+question = "How are new projects and agents onboarded, and what may CommandCenter and its agents do while they are?"
+decision = "Adding a repository or an agent starts a formal onboarding workflow. In onboarding CommandCenter may observe, inspect, sandbox-test, analyze and propose, and holds no credential that crosses an authority boundary. Repository operations are limited to Annex A; employer and client repositories keep their stricter rules. Each project has one Project Lead (initially Claude Project Lead, a stable role not tied to a model version; none for paused GauzeMate), who may supervise specialization leads; leads delegate work, never authority. Reviews are independent of the change. No agent creates, registers, activates or re-permissions an agent or itself. Slack carries requests and secure links; approvals happen in authenticated CommandCenter. Budgets count missing data conservatively; alerts at 50/80/95% and a hard hold at 100%; no dollar limits until measured usage supports them. Making this final switches nothing on: shadow mode and each enforcement switch need Jay's separate approval, after Phase 2, shadow validation, the D-030 runner isolation check and the private approval path. Full text: docs/decisions/D-024.md."
+rationale = "Authority is earned with evidence and granted only by Jay; the missing credential is the control, and missing data never makes spend or risk look smaller."
+rules = [
+  "onboarding holds no merge, production, database, secret-store, DNS, deploy or payment credential",
+  "discovery never runs a project's code with its normal environment or secrets",
+  "repository operations during onboarding: Annex A only; employer and client repositories: no push, PR, comment or CI change",
+  "CI configuration is never pushed or opened as a PR during onboarding without Jay's approval",
+  "no agent creates, registers, approves, activates, re-permissions or promotes itself, another agent or a project",
+  "leads delegate work, never authority; profile, D-005 and D-007 approvals still go to Jay",
+  "a review counts only when the reviewer had no part in the change; it adds to the profile's reviews",
+  "Slack link is never an approval credential; Standard and High approvals happen in authenticated CommandCenter; no Slack buttons yet",
+  "unpriced usage at the highest listed price; unattributed usage counts toward the company; a stale meter holds from 80%",
+  "alerts 50% info, 80% warning, 95% urgent; 100% hard hold; the 5% overrun only lets running work reach a checkpoint",
+  "step cap: 25% of the agent's daily budget or $10, lower wins; estimate over $10 needs the Project Lead, over $25 Jay",
+  "burn-rate breaker: over 25% of a scope's daily allocation in one hour stops new billable steps and alerts Jay",
+  "no permanent dollar budgets until shadow usage supports a proposal with evidence",
+  "fact re-verification uses per-class defaults (Annex C); dangerous actions always verify at the point of use",
+  "graduation needs evidence and a hash-bound Admission Review approval by Jay",
+  "shadow mode and each enforcement switch need Jay's separate explicit approval, after the clause 18 prerequisites",
+]
+reconsider = "after a month of shadow data, before any enforcement switch, and when the first dollar limits are proposed"
