@@ -176,8 +176,8 @@ Errors are typed (`duplicate_id`, `reserved_id`, `confusable_name`, `ceiling_exc
 
 1. **Done, off:** groundwork behind `onboarding_groundwork` (§7.0). Routes live under `/api/onboarding`, not `/api/agents`, which already serves pane tails.
 2. Jay makes D-024 final; record it in `policy/decisions/` with a short ADR.
-3. Before the merge: run the migration drill (§7.11) on a copy of the live tasks.db and attach its report.
-4. Merge the groundwork (this draft PR or its own) with the flag still off in production; turn it on in a dev ccd first. Then, still behind the flag: the hierarchy checks (§7.9) and the additive migration that lets leads file staffing proposals, each with its own drill.
+3. **Done:** the migration drill (§7.11) passed on a copy of the live tasks.db (2026-10-24, 28 of 28 checks), and its redacted report is attached to the project thread.
+4. Merge the groundwork (draft PR #65) with the flag still off in production; turn it on in a dev ccd first. Then, still behind the flag: the hierarchy checks (§7.9) and the additive migration that lets leads file staffing proposals, each with its own drill.
 5. Shadow: the onboarding engine path, reviewer independence and the budget evaluator record what they would allow, refuse or hold.
 6. Slack requests with the secure link (§8, step 1), once the approval screen is reachable over Jay's private path.
 7. After Phase 2 actor-token enforcement: each switch on its own (engine `onboarding` mode, Broker credential withholding, agent activation and grants, budget holds).
@@ -225,7 +225,7 @@ Results on this branch: a populated v9 fixture (22 tables, 77 rows) and a 5,009-
 
 **The way back.** Stop ccd, then `python -m ccd.migration_safety rollback --db tasks.db --to 9 --backup-dir DIR`: it takes a backup first, then drops only the empty tables v10 added, in one transaction, and commits only if the result is exactly v9 with integrity and foreign keys intact. It refuses when any of those tables holds a row (history is never dropped), when the schema has an unknown change, and for any step without a downgrade. With records present the way back is rolling forward, or restoring the backup after `export-onboarding` has copied the records out read-only. The full procedure, including an older ccd that refuses a v10 file, is `docs/runbooks/tasks-db-v10-rollback.md` (draft PR #65). The drill's `--redact --label` report names no path, host or user, and `--clean` removes the data copies.
 
-**Remaining before the merge:** run the drill on a copy of the live tasks.db (`sqlite3 ~/command-center/data/tasks.db ".backup /tmp/tasks-v9.db"`) and attach its report.
+**On the live database (2026-10-24): PASS, 28 of 28 checks.** The backup was taken at 05:39:31Z from the live v9 tasks.db (22 tables, 53,113 rows, 335 tickets) through one read-only connection with SQLite's backup API. The drill ran on that copy in a private temporary folder, with drill code e2c2ee8 and the deployed ccd (693a556) as the older ccd. The upgrade took 0.7 ms. The copy was deleted afterwards, and the live database, checkout and service were unchanged. Take any later backup the same way, never with `cp` or the `sqlite3` command line on the live file.
 
 ## 8. Slack mobile approvals (D-032)
 
