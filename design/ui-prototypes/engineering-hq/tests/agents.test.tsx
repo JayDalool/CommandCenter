@@ -5,7 +5,7 @@ import { App } from "../src/App";
 import { owners } from "../src/windows/manager";
 import { org, seedOrg } from "../src/data/org";
 import { chat, feed, setOutage, viewState } from "../src/data/live";
-import { AGENTS, INITIAL_AGENT_STATE, PROJECTS, SEED_CHAT, modelLabel, project } from "../src/data/seed";
+import { AGENTS, INITIAL_AGENT_STATE, PROJECTS, SEED_CHAT, leadOf, modelLabel, project } from "../src/data/seed";
 
 const go = (h: string) => act(() => { location.hash = h; window.dispatchEvent(new HashChangeEvent("hashchange")); });
 
@@ -51,11 +51,21 @@ describe("agent identity", () => {
     expect(nova).not.toHaveTextContent("Working");
   });
 
-  it("a paused project's team shows Paused", () => {
+  it("paused GauzeMate has no active Project Lead and no agents (D-024 Annex C2)", () => {
     go("#/teams/gauzemate");
     render(<App />);
-    expect(screen.getByRole("button", { name: /^Nova, / })).toHaveTextContent("Paused");
-    expect(screen.getByRole("button", { name: /^Nova, / })).not.toHaveTextContent("Working");
+    const graph = document.querySelector(".team-graph")!;
+    expect(graph).toHaveTextContent("No active Project Lead");
+    expect(graph).toHaveTextContent("GauzeMate is paused");
+    expect(screen.queryByRole("button", { name: /No project lead\. Plan one/ })).toBeNull();   // nothing to click while paused
+    expect(screen.queryByRole("button", { name: /^Nova, / })).toBeNull();
+  });
+
+  it("the four active projects are led by the Claude Project Lead", () => {
+    for (const key of ["commandcenter", "gyst", "samvision", "mfe"]) {
+      expect(leadOf(PROJECTS.find((p) => p.key === key)!)).toBe("claude");
+    }
+    expect(leadOf(PROJECTS.find((p) => p.key === "gauzemate")!)).toBeNull();
   });
 
   it("clicking an agent opens its inspector with model ID, session and earlier sessions", () => {

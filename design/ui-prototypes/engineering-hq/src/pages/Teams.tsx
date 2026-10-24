@@ -73,8 +73,11 @@ function teamGraph(p: ReturnType<typeof project>, paused: boolean, open: (id: st
   const nodes: FNode[] = [lead
     ? { id: lead, x: W / 2 - 310, y: 4, w: 620, h: 150, color: "#ff8a3d", className: "k-lead", label: `${agent(lead).name}, Project Lead. Open details`, onClick: () => open(lead),
       body: <LeadBody id={lead} paused={paused} version={p.version} name={p.name} onboarding={p.health === "onboarding"} /> }
-    : { id: "nolead", x: W / 2 - 310, y: 4, w: 620, h: 150, color: "#5d6a85", className: "k-lead is-empty", label: "No project lead. Plan one", onClick: () => startNewAgent(p.key, "lead"),
-      body: <><span className="gn-ico is-lg"><Icon name="plus" size={28} /></span><span className="gn-body"><b className="lg">No project lead yet</b><small>Nobody coordinates {p.name} or brings you its decisions. Click to onboard a Project Lead.</small></span></> }];
+    : paused
+      ? { id: "nolead", x: W / 2 - 310, y: 4, w: 620, h: 150, color: "#5d6a85", className: "k-lead is-empty", label: `No active Project Lead while ${p.name} is paused`,
+          body: <><span className="gn-ico is-lg"><Icon name="clock" size={28} /></span><span className="gn-body"><b className="lg">No active Project Lead</b><small>{p.name} is paused, so nobody leads it (D-024). A lead is assigned when you resume it.</small></span></> }
+      : { id: "nolead", x: W / 2 - 310, y: 4, w: 620, h: 150, color: "#5d6a85", className: "k-lead is-empty", label: "No project lead. Plan one", onClick: () => startNewAgent(p.key, "lead"),
+          body: <><span className="gn-ico is-lg"><Icon name="plus" size={28} /></span><span className="gn-body"><b className="lg">No project lead yet</b><small>Nobody coordinates {p.name} or brings you its decisions. Click to onboard a Project Lead.</small></span></> }];
   const edges: FEdge[] = [];
   levels.forEach((row, li) => {
     const y = 214 + li * (sh + 64);

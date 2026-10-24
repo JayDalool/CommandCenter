@@ -156,7 +156,7 @@ function EnvStep({ d, set }: { d: ProjectDraft; set: (p: Partial<ProjectDraft>) 
   const r = validateProject(d, useOrg());
   return <>
     <label className="toggle-row"><input type="checkbox" checked={d.discover} onChange={(e) => set({ discover: e.target.checked })} />
-      <span><b>Let CommandCenter discover the rest during onboarding</b><small className="muted">Proposed in D-024: the fingerprint and first audit fill in hosting, domains and health checks, read-only. You confirm them in the admission review.</small></span></label>
+      <span><b>Let CommandCenter discover the rest during onboarding</b><small className="muted">Per D-024: the fingerprint and first audit fill in hosting, domains and health checks, read-only. You confirm them in the admission review.</small></span></label>
     <div className="env-list">{ENVIRONMENTS.map((e) => { const c = d.envs[e]; const isOpen = open.includes(e); const err = r.errors.find((x) => x.step === "environments" && x.field === e)?.msg;
       return <section key={e} className={cx("env", c.on && "is-on", err && "has-err")}>
         <header><label><input type="checkbox" checked={c.on} onChange={(ev) => set({ envs: { ...d.envs, [e]: { ...c, on: ev.target.checked } } })} /><b>{e}</b></label>

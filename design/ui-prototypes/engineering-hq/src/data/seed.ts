@@ -45,7 +45,10 @@ export const PROJECTS: Project[] = [
     blurb: "Paused by Jay until designs and files are added. No agent works on it.",
     mode: "paused", modeLabel: "Paused", merge: "Jay merges every PR", health: "paused", env: "—", version: "v0.1.5",
     pausedReason: "Jay paused GauzeMate until he adds designs and files",
-    repo: "JayDalool/GauzeMate", repoState: "connected", envs: ["Development"], machines: ["server"], budget: { monthlyUsd: 0, perTaskUsd: 0, alertPct: 80 }, team: T(["claude", "jay"], ["nova", "claude"]) },
+    repo: "JayDalool/GauzeMate", repoState: "connected", envs: ["Development"], machines: ["server"], budget: { monthlyUsd: 0, perTaskUsd: 0, alertPct: 80 },
+    // D-024 Annex C2 (Jay, 2026-10-24): no active Project Lead while GauzeMate is paused. The other four projects are led
+    // by the Claude Project Lead, a stable role whose backing model may change; each project's history stays separate.
+    team: [] },
   { key: "commandcenter", name: "CommandCenter", prefix: "CC", color: "#4f8bff", icon: "cc",
     blurb: "This control plane. Experimental autonomy is evaluated in shadow mode only (D-008).",
     mode: "experimental_autonomy", modeLabel: "Experimental autonomy (shadow only)", merge: "Auto-merge for low-risk docs/tests only",

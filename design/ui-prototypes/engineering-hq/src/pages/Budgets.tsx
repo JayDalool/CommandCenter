@@ -1,6 +1,8 @@
 // BUDGETS (D-033) — agent, project and company budgets with alerts before the limit. At a hard limit only new
 // billable work in that scope waits; running work checkpoints; one agent over its limit never stops its project;
-// safety work is never held. MOCK DATA: the server's shadow report (GET /api/onboarding/budgets) holds nothing yet.
+// safety work is never held. The thresholds and step rules are Jay's approved starting defaults (D-024 Annex B,
+// 2026-10-24). MOCK DATA: the limits are examples, and the server's shadow report (GET /api/onboarding/budgets) holds
+// nothing.
 import { useState } from "react";
 import { Icon } from "../components/Icon";
 import { Avatar, Demo, Pill, ProjIcon, cx } from "../components/ui";
@@ -11,7 +13,7 @@ import { useStore } from "../lib/store";
 import { go } from "../lib/router";
 import { AGENTS } from "../data/seed";
 import {
-  LOW_OVERRIDE_HOURS, LOW_OVERRIDE_SHARE, SAFETY_KINDS, SAFETY_LABEL, SAMPLE_WORK, SCENARIOS, TIER_LABEL, TIER_TONE, assess, budgetLines,
+  BURN_RATE_SHARE, HARD_HOLD_PCT, JAY_APPROVAL_USD, LEAD_APPROVAL_USD, LOW_OVERRIDE_HOURS, LOW_OVERRIDE_SHARE, OVERRUN_PCT, STEP_CAP_SHARE, STEP_CAP_USD, SAFETY_KINDS, alertLevel, stepCap, SAFETY_LABEL, SAMPLE_WORK, SCENARIOS, TIER_LABEL, TIER_TONE, assess, budgetLines,
   effectiveLimit, gov, holdKey, requestOverride, setScenario, tierOf, wouldStart, type BudgetLine,
 } from "../data/governance";
 
@@ -36,7 +38,7 @@ function StatePill({ s }: { s: LineState }) {
   const { state, threshold } = s.a;
   if (state === "none") return <Pill>No limit</Pill>;
   if (state === "hold") return <Pill tone="bad" dot>Held</Pill>;
-  if (state === "alert") return <Pill tone="warn" dot>Alert · {threshold}%</Pill>;
+  if (state === "alert") return <Pill tone={threshold != null && threshold >= 95 ? "bad" : threshold != null && threshold >= 80 ? "warn" : "info"} dot>{alertLevel(threshold ?? 0)} · {threshold}%</Pill>;
   return <Pill tone="ok" dot>{s.a.onCourseToHold ? "On course to limit" : "Within budget"}</Pill>;
 }
 
@@ -44,7 +46,7 @@ function Bar({ s }: { s: LineState }) {
   const pct = Math.min(100, s.a.pct ?? 0);
   const tone = s.a.state === "hold" ? "bad" : s.a.state === "alert" ? "warn" : "ok";
   return <div className={cx("bud-bar", `t-${tone}`)} role="meter" aria-label={`${s.line.label} spend`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(s.a.pct ?? 0)}>
-    <i style={{ width: `${pct}%` }} />{s.line.alerts.map((a) => <b key={a} style={{ left: `${a}%` }} title={`Alert at ${a}%`} />)}
+    <i style={{ width: `${pct}%` }} />{s.line.alerts.map((a) => <b key={a} style={{ left: `${a}%` }} title={`${alertLevel(a)} at ${a}%`} />)}
   </div>;
 }
 
@@ -59,7 +61,8 @@ function Row({ s, onOverride }: { s: LineState; onOverride?: (l: BudgetLine) => 
       <div className="bud-top"><b>{l.label}</b><small className="muted">{l.period === "day" ? "today" : "this month"}</small><span className="sp" /><StatePill s={s} /></div>
       {s.a.state === "none" ? <p className="muted small">No limit set. Spend is still metered: {money(l.spentUsd)}.</p> : <>
         <Bar s={s} />
-        <div className="bud-meta"><span>{spent} of {limit}</span>{s.overridden && <Pill tone="violet">Override active</Pill>}{l.note && <small className="muted">{l.note}</small>}</div>
+        <div className="bud-meta"><span>{spent} of {limit}</span>{s.overridden && <Pill tone="violet">Override active</Pill>}{l.note && <small className="muted">{l.note}</small>}
+          {l.scope === "agent" && l.period === "day" && <small className="muted" data-testid={`stepcap-${l.key}`}>Step cap {money(stepCap(l.limit.usd))}</small>}</div>
       </>}
       {s.a.state === "hold" && <p className="bud-held"><Icon name="clock" size={14} /><span>New billable work for {l.scope === "company" ? "every project" : l.label} waits. Work in progress finishes its current step and checkpoints.</span>
         {onOverride && <button type="button" className="btn btn-sm" onClick={() => onOverride(l)}>Request override…</button>}</p>}
@@ -85,7 +88,7 @@ function OverrideDialog({ line, onClose }: { line: BudgetLine; onClose: () => vo
       <Field label="Expires after">{() => <Seg label="Expires after" value={hours} onChange={setHours} options={[{ id: "4", label: "4 h" }, { id: "24", label: "24 h" }, { id: "72", label: "72 h" }]} />}</Field>
     </div>
     <div className={cx("tier-note", `t-${TIER_TONE[tier]}`)} data-testid="override-tier"><Pill tone={TIER_TONE[tier]} dot>{TIER_LABEL[tier]}</Pill>
-      <span>{tier === "low" ? `Within the low-risk ceiling (up to ${LOW_OVERRIDE_SHARE * 100}% of the limit for up to ${LOW_OVERRIDE_HOURS} h): approve from the secure link; later also inside Slack.`
+      <span>{tier === "low" ? `Within the low-risk ceiling (up to ${LOW_OVERRIDE_SHARE * 100}% of the limit for up to ${LOW_OVERRIDE_HOURS} h): approve on the signed-in CommandCenter screen the secure link opens. Slack buttons are a later, separate step.`
         : "Above the low-risk ceiling: approve in CommandCenter with Developer Unlock and a typed confirmation."}</span></div>
   </Modal>;
 }
@@ -99,7 +102,8 @@ export function Budgets() {
     <div className="page-head"><div><h1>Budgets</h1><p>Alerts before each limit. At a hard limit, only new billable work in that scope waits, and one agent over its limit never stops its project.</p></div>
       <div className="row-gap"><Demo /><PopButton id="page:budgets" /></div></div>
     <div className="shadow-note" role="note"><Icon name="info" size={18} /><div><b>Shadow mode: nothing is held yet</b>
-      <p>ccd reports where a hold would apply (budget report, D-033). Holding work waits for your approval after Phase 2. Spend is the usage meter’s estimate at list prices; Codex counts in tokens.</p></div></div>
+      <p>ccd reports where a hold would apply (budget report, D-033). Holding work waits for your approval after Phase 2. Spend is the usage meter’s estimate at list prices; Codex counts in tokens.</p>
+      <p data-testid="example-limits"><b>The limits are examples.</b> No real dollar limits are set yet: the evaluator runs in shadow first, and agent, project and company limits are then proposed to you from measured usage (D-024 B5).</p></div></div>
     <div className="bud-scn"><span className="muted small">Demo scenario</span>
       <Seg label="Demo scenario" value={g.scenario} onChange={setScenario} options={SCENARIOS.map((s) => ({ id: s.id, label: s.label, title: s.hint }))} />
       <small className="muted">{sc.hint}</small></div>
@@ -119,6 +123,15 @@ export function Budgets() {
         <h2><Icon name="shield" size={18} /> Never held by a budget</h2>
         <div className="chips">{SAFETY_KINDS.map((k) => <span key={k} className="chip">{SAFETY_LABEL[k]}</span>)}</div>
         <p className="muted small">The engine tags safety work by what it does; an agent cannot label its own work as safety. Its spend still shows on its own line. A budget hold is never a safety event: it does not change a project’s mode or open an incident.</p>
+        <h2><Icon name="receipt" size={18} /> Approved defaults</h2>
+        <dl className="kv bud-rules" data-testid="budget-rules">
+          <dt>Alerts</dt><dd>50% information · 80% warning · 95% urgent · {HARD_HOLD_PCT}% hard hold</dd>
+          <dt>Overrun</dt><dd>Up to {OVERRUN_PCT}% past a limit, only for running work to reach a checkpoint; no new work starts on it</dd>
+          <dt>Step cap</dt><dd>{STEP_CAP_SHARE * 100}% of the agent’s daily budget or ${STEP_CAP_USD}, whichever is lower; the step checkpoints</dd>
+          <dt>Large steps</dt><dd>Estimate over ${LEAD_APPROVAL_USD}: the Project Lead approves. Over ${JAY_APPROVAL_USD}: you approve. A go-ahead never raises a limit</dd>
+          <dt>Burn rate</dt><dd>Over {BURN_RATE_SHARE * 100}% of a scope’s daily allocation in one hour: no new billable steps there, running work checkpoints, you get an alert</dd>
+        </dl>
+        <p className="muted small">Starting defaults from D-024 Annex B, tuned later with real usage. Reservations, step caps and the breaker are not built yet; this page shows what they would do.</p>
         <h2><Icon name="list" size={18} /> At the hard limit</h2>
         <ol className="bud-steps"><li>New billable work in that scope stops being scheduled.</li><li>Work in progress finishes its step and checkpoints; deploys, migrations, rollbacks and pushes already under way finish.</li>
           <li>You and the project’s lead are notified (Needs You; Slack once approved).</li><li>You raise the limit or grant a temporary override.</li><li>Held work resumes from its checkpoints, one task at a time.</li></ol>

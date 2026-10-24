@@ -2,13 +2,41 @@
 //
 // The budget rules are a TypeScript copy of server/ccd/budgets.py (assess, wouldStart, effectiveLimit) so the page
 // shows exactly what the server's shadow report would say. The approval rules are the tiers in the D-024 final
-// proposal: Slack carries the request and a secure link; Jay approves on an authenticated CommandCenter screen;
-// high-risk items need Developer Unlock and a typed confirmation there; in-Slack approval is a later, separate step.
+// final text (D-024 clause 12): Slack carries the request and a secure link; Jay approves on an authenticated CommandCenter
+// screen; high-risk items need Developer Unlock and a typed confirmation there; Slack buttons are a later, separate step.
 // Nothing here talks to Slack or ccd.
 import { SharedStore, isRecord } from "../lib/shared";
 
 // ---------------------------------------------------------------- budgets (server/ccd/budgets.py)
-export const DEFAULT_ALERTS = [50, 80, 95];   // D-033's proposed defaults; configurable per scope
+/** Alert thresholds (Jay, 2026-10-24; D-024 Annex B4). Starting defaults, configurable per scope later. */
+export const DEFAULT_ALERTS = [50, 80, 95];
+export const ALERT_LEVEL: Record<number, string> = { 50: "Information", 80: "Warning", 95: "Urgent" };
+export const alertLevel = (pct: number) => ALERT_LEVEL[pct] ?? "Alert";
+/** 100% of a limit is the hard hold. Running work may go up to 5% past it only to reach a safe checkpoint (B2). */
+export const HARD_HOLD_PCT = 100;
+export const OVERRUN_PCT = 5;
+
+// ---------------------------------------------------------------- expensive steps (D-024 Annex B3; approved, not built)
+/** Per-step cap: 25% of the agent's daily budget or $10, whichever is lower. At the cap a step checkpoints. */
+export const STEP_CAP_SHARE = 0.25;
+export const STEP_CAP_USD = 10;
+export function stepCap(agentDailyUsd: number | null | undefined): number {
+  const share = agentDailyUsd != null && agentDailyUsd > 0 ? STEP_CAP_SHARE * agentDailyUsd : Infinity;
+  return Math.round(Math.min(STEP_CAP_USD, share) * 100) / 100;
+}
+/** Who must approve a step from its estimated cost: above $10 the Project Lead, above $25 Jay. */
+export const LEAD_APPROVAL_USD = 10;
+export const JAY_APPROVAL_USD = 25;
+export type StepApprover = "none" | "lead" | "jay";
+export function stepApprover(estimateUsd: number): StepApprover {
+  if (!Number.isFinite(estimateUsd) || estimateUsd > JAY_APPROVAL_USD) return "jay";   // an unknown estimate is treated as the largest
+  return estimateUsd > LEAD_APPROVAL_USD ? "lead" : "none";
+}
+/** Burn-rate breaker: more than 25% of a scope's daily allocation within one hour stops new billable steps there. */
+export const BURN_RATE_SHARE = 0.25;
+export function burnRateTripped(spentLastHourUsd: number, dailyAllocationUsd: number | null | undefined): boolean {
+  return dailyAllocationUsd != null && dailyAllocationUsd > 0 && spentLastHourUsd > BURN_RATE_SHARE * dailyAllocationUsd;
+}
 /** Work the engine tags as safety work by action type. Never held by a budget. An agent cannot tag its own work. */
 export const SAFETY_KINDS = ["health_check", "monitoring", "incident_response", "rollback", "restore", "backup_check", "recovery"] as const;
 export const SAFETY_LABEL: Record<(typeof SAFETY_KINDS)[number], string> = {
@@ -63,7 +91,8 @@ export const SCENARIOS: { id: Scenario; label: string; hint: string }[] = [
   { id: "project", label: "Project over limit", hint: "GYST is held; other projects keep running." },
   { id: "company", label: "Company over limit", hint: "All billable work waits; safety work still runs." },
 ];
-/** Demo spend for a scenario. Month 72% elapsed. Numbers are mock, not metered. */
+/** Demo spend for a scenario. Month 72% elapsed. Numbers are mock, not metered, and the limits are examples:
+ *  no real dollar limits exist until they are proposed from measured usage (D-024 Annex B5). */
 export function budgetLines(s: Scenario): BudgetLine[] {
   const company: BudgetLine = { scope: "company", key: "*", label: "CommandCenter (company)", period: "month", limit: { usd: 1500, tokens: null }, spentUsd: s === "company" ? 1512 : 1046, spentTokens: 0, alerts: DEFAULT_ALERTS };
   const projects: BudgetLine[] = [

@@ -3,6 +3,7 @@
 import type { Agent, Project } from "./seed";
 import { GRANT_LABEL, GRANT_RANK, PERMISSIONS, PROVIDERS, RESERVED_IDS, TASK_MODES, TOOLS, WORKERS, effective, perm, projectRules, worker, type Grant, type TargetMode, type TaskMode } from "./catalog";
 import { projectProfile, type AgentDraft, type Org, type ProjectDraft } from "./org";
+import { JAY_APPROVAL_USD } from "./governance";
 
 export interface Issue { step: string; field?: string; msg: string; fix?: { label: string; apply: <T extends AgentDraft | ProjectDraft>(d: T) => T } }
 export interface Result { errors: Issue[]; warnings: Issue[] }
@@ -136,6 +137,8 @@ export function validateAgent(d: AgentDraft, o: Org, draftProject?: DraftProject
   if (b.dailyWarnUsd > b.weeklyWarnUsd) E("budget", "The daily warning can't be higher than the weekly warning.", "daily");
   if (b.perTaskWarnUsd > b.dailyWarnUsd && b.dailyWarnUsd > 0) W("budget", "A single task could pass the daily warning on its own.", "perTask");
   if (!(Number.isInteger(b.maxParallel) && b.maxParallel >= 1 && b.maxParallel <= 8)) E("budget", "Parallel work must be between 1 and 8.", "maxParallel");
+  if (Number.isFinite(b.expensiveApprovalUsd) && b.expensiveApprovalUsd > JAY_APPROVAL_USD)
+    W("budget", `Above the approved default: a step estimated over $${JAY_APPROVAL_USD} needs Jay (D-024 Annex B3). A higher threshold would need his policy change.`, "approval threshold");
 
   return { errors, warnings };
 }

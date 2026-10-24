@@ -282,7 +282,7 @@ export const TARGET_MODES: { id: TargetMode; label: string; hint: string }[] = [
   { id: "experimental_autonomy", label: "Experimental autonomy", hint: "Low-risk work may complete on its own. Shadow-evaluated first." },
   { id: "paused", label: "Paused", hint: "No agent works on it." },
 ];
-/** The steps every new project goes through (proposed D-024). Its target mode only applies at the end. */
+/** The steps every new project goes through (D-024, final 2026-10-24; not enforced). Its target mode only applies at the end. */
 export const ONBOARDING_STAGES = ["Created", "Onboarding / Observation", "Project fingerprint", "First audit", "Draft operating profile", "Admission review", "Jay approves the mode"];
 
 export interface DeployRules {

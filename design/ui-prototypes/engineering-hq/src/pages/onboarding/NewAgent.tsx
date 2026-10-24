@@ -11,6 +11,7 @@ import {
   type AgentTemplate, type Grant, type Grants, type TaskMode,
 } from "../../data/catalog";
 import { validateAgent, capabilitySentences, scrubSecrets, type DraftProjectCtx, type Issue } from "../../data/validate";
+import { BURN_RATE_SHARE, JAY_APPROVAL_USD, LEAD_APPROVAL_USD, STEP_CAP_SHARE, STEP_CAP_USD, stepCap } from "../../data/governance";
 import { MODELS, modelLabel, type IconName } from "../../data/seed";
 import { Icon } from "../../components/Icon";
 import { Chips, Field, GrantBadge, GrantPick, Modal, Money, Seg } from "../../components/form";
@@ -389,6 +390,12 @@ function BudgetStep({ d, set }: { d: AgentDraft; set: (p: Partial<AgentDraft>) =
       <Field label="Escalating to a stronger model">{() => <Seg label="Escalation" value={b.escalation} options={[{ id: "never", label: "Never" }, { id: "approval", label: "With approval" }, { id: "allowed", label: "Allowed" }]} onChange={(v) => sb({ escalation: v })} />}</Field>
       <Field label="Ask Jay before a task expected to cost more than">{(id) => <Money id={id} label="Expensive-model approval threshold" v={b.expensiveApprovalUsd} onChange={(v) => sb({ expensiveApprovalUsd: v })} />}</Field>
     </div>
+    <dl className="kv" data-testid="agent-step-rules" aria-label="Step rules for this agent">
+      <dt>Step cap</dt><dd>${stepCap(b.dailyWarnUsd).toFixed(2)}: {STEP_CAP_SHARE * 100}% of its daily budget or ${STEP_CAP_USD}, whichever is lower. A step that reaches it checkpoints.</dd>
+      <dt>Large steps</dt><dd>Estimated over ${LEAD_APPROVAL_USD}: its Project Lead approves. Over ${JAY_APPROVAL_USD}: you approve.</dd>
+      <dt>Burn rate</dt><dd>Spending over ${(BURN_RATE_SHARE * b.dailyWarnUsd).toFixed(2)} ({BURN_RATE_SHARE * 100}% of the day) within an hour stops its new steps and alerts you.</dd>
+    </dl>
+    <p className="muted small">Approved starting defaults (D-024 Annex B). The amounts above are examples; real limits are proposed from measured usage.</p>
   </>;
 }
 

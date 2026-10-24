@@ -8,7 +8,7 @@ import { viewState } from "../src/data/live";
 import { viewById } from "../src/windows/views";
 import {
   SAFETY_KINDS, SAMPLE_WORK, amendRequest, approvableIn, assess, budgetLines, canApprove, decide, effectiveLimit, gov, holdKey, reqHash, requestOverride,
-  seedGov, tierOf, wouldStart,
+  seedGov, tierOf, wouldStart, alertLevel, burnRateTripped, stepApprover, stepCap,
 } from "../src/data/governance";
 
 const go = (h: string) => act(() => { location.hash = h; window.dispatchEvent(new HashChangeEvent("hashchange")); });
@@ -67,6 +67,23 @@ describe("budget rules (same as server/ccd/budgets.py)", () => {
   });
 });
 
+describe("approved step and alert defaults (D-024 Annex B, Jay 2026-10-24)", () => {
+  it("names each alert level and caps a step at 25% of the daily budget or $10, whichever is lower", () => {
+    expect([50, 80, 95].map(alertLevel)).toEqual(["Information", "Warning", "Urgent"]);
+    expect(stepCap(20)).toBe(5);
+    expect(stepCap(60)).toBe(10);
+    expect(stepCap(null)).toBe(10);       // no daily budget: the $10 cap still applies
+  });
+  it("sends a step over $10 to the Project Lead and over $25 to Jay; an unknown estimate goes to Jay", () => {
+    expect([5, 10, 10.01, 25, 25.01, Number.NaN].map(stepApprover)).toEqual(["none", "none", "lead", "lead", "jay", "jay"]);
+  });
+  it("trips the burn-rate breaker above 25% of the daily allocation within an hour", () => {
+    expect(burnRateTripped(5, 20)).toBe(false);
+    expect(burnRateTripped(5.01, 20)).toBe(true);
+    expect(burnRateTripped(50, null)).toBe(false);
+  });
+});
+
 describe("approval tiers (D-032)", () => {
   it("registration is low, read-only activation standard, repository, policy and production high", () => {
     expect(tierOf({ kind: "register_agent" })).toBe("low");
@@ -121,7 +138,10 @@ describe("Budgets page", () => {
     expect(screen.getByText(/Shadow mode: nothing is held yet/)).toBeInTheDocument();
     expect(within(screen.getByTestId("budget-agent-nova")).getByText("Held")).toBeInTheDocument();
     expect(within(screen.getByTestId("budget-project-samvision")).queryByText("Held")).toBeNull();
-    expect(within(screen.getByTestId("budget-project-samvision")).getByText(/Alert/)).toBeInTheDocument();
+    expect(within(screen.getByTestId("budget-project-samvision")).getByText(/Warning · 80%/)).toBeInTheDocument();
+    expect(screen.getByTestId("example-limits")).toHaveTextContent("No real dollar limits are set yet");
+    expect(screen.getByTestId("budget-rules")).toHaveTextContent("95% urgent · 100% hard hold");
+    expect(screen.getByTestId("stepcap-nova")).toHaveTextContent("Step cap $5.00");     // 25% of $20 is lower than $10
     expect(within(screen.getByTestId("budget-agent-iris")).getByText("No limit")).toBeInTheDocument();
     expect(within(screen.getByTestId("work-w1")).getByText("Waits")).toBeInTheDocument();
     expect(within(screen.getByTestId("work-w2")).getByText("Starts")).toBeInTheDocument();

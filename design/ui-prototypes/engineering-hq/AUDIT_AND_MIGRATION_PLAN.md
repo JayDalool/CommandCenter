@@ -1,16 +1,17 @@
 # Engineering HQ — audit and migration plan
 
 Status: **Stage A + B + C (prototype)**, plus the onboarding groundwork Jay allowed on 2026-10-23 (§7.0). Nothing is
-merged or deployed, and no policy file, credential or deploy was touched. At Jay's request (2026-10-23) the work is in
-three draft PRs so each gets its own approval:
+deployed, and no credential was issued. **D-024 is final** (Jay, 2026-10-24T06:51Z). At Jay's request (2026-10-23) the
+work is in three PRs, each with its own approval:
 
-| Draft PR | Branch | Holds |
-|---|---|---|
-| #64 | `claude/project-thread-gs2u2h` | This prototype only (`design/ui-prototypes/engineering-hq/`) |
-| #65 | `claude/d024-backend` | The groundwork: new server modules behind a flag that is off (`server/ccd/onboarding.py`, `server/ccd/budgets.py`, tasks.db migration 10, `server/ccd/migration_safety.py`), the rollback runbook and the docs |
-| #66 | `claude/d024-policy` | The D-024 text of record, `docs/decisions/D-024.md`, and its test |
+| PR | Branch | Holds | State |
+|---|---|---|---|
+| #64 | `claude/project-thread-gs2u2h` | This prototype only (`design/ui-prototypes/engineering-hq/`) | Draft; not to be merged |
+| #65 | `claude/d024-backend` | The groundwork: new server modules behind a flag that is off (`server/ccd/onboarding.py`, `server/ccd/budgets.py`, tasks.db migration 10, `server/ccd/migration_safety.py`), the rollback runbook and the docs | **Merged** 2026-10-24 with Jay's approval; flag off; not deployed |
+| #66 | `claude/d024-policy` | D-024 v1.0 final: `docs/decisions/D-024.md`, `policy/decisions/D-024.toml`, ADR 0009 and the text test | Final text; the decision of record |
 
-Paths under `server/` and `docs/` below refer to those branches.
+Making D-024 final approves the policy and design only. Production enforcement, agent activation, credentials,
+Broker grants, budget holds, Slack buttons, Phase 2 enforcement and deployment each still need Jay's own approval.
 
 ## 1. What exists today (audit of `main` @ 693a556)
 
@@ -73,7 +74,7 @@ None needed so far. Possible later: `@playwright/test` as a dev dependency for C
 
 ## 7. Agent onboarding and project creation: backend proposal (not implemented)
 
-**Status: groundwork built, enforcement not.** Jay's decision of 2026-10-23 allows the policy-independent parts behind a disabled flag (§7.0). Everything that grants, activates or enforces stays a proposal until Jay makes D-024 final and approves each switch; the final proposal is the [D-024 final proposal](https://claude.ai/artifact/3QArYLzEbEnzBV1geGUxXN) doc. Jay approved its direction on 2026-10-23 and asked for four refinements before making it final; they are clauses 14 to 17 there and §7.9 to §7.11 and §9.2 here. **The text of record is `docs/decisions/D-024.md`** (version 1.0-rc.2, with Annexes A and B and the clause audit), in draft PR #66; the groundwork is in draft PR #65. The prototype's wizards still write only to the local mock store (`src/data/org.ts`); they do not call ccd.
+**Status: D-024 final, groundwork merged with its flag off, enforcement not built or enabled.** Jay made D-024 final on 2026-10-24T06:51Z. **The text of record is `docs/decisions/D-024.md` version 1.0** (#66), with Annexes A to C, the clause audit and the decision of record `policy/decisions/D-024.toml`. The [D-024 final proposal](https://claude.ai/artifact/3QArYLzEbEnzBV1geGUxXN) doc explains it. The groundwork merged in #65 behind the off flag (§7.0). Everything that grants, activates or enforces still needs Jay's approval for each switch, after the prerequisites in clause 18. The prototype's wizards still write only to the local mock store (`src/data/org.ts`); they do not call ccd.
 
 ### 7.0 What exists now (off by default)
 
@@ -88,7 +89,7 @@ None needed so far. Possible later: `@playwright/test` as a dev dependency for C
 | Budgets | `ccd/budgets.py`, `GET /api/onboarding/budgets` | D-033 arithmetic and a shadow report (§9) | Hold or stop anything |
 | Migration safety | `ccd/migration_safety.py`, `tasks.downgrade` | Rehearses migration v10 on a copy; undoes it in place (§7.11) | Run by itself; the daemon never imports it |
 
-Writes need Jay and Developer Unlock; agents are refused in the daemon, the module and the schema. 22 server tests in `server/tests/test_onboarding.py` and 12 in `server/tests/test_migration_safety.py` (#65), and 3 in `server/tests/test_d024_text.py` (#66).
+Writes need Jay and Developer Unlock; agents are refused in the daemon, the module and the schema. 22 server tests in `server/tests/test_onboarding.py` and 12 in `server/tests/test_migration_safety.py` (#65), and 5 in `server/tests/test_d024_text.py` (#66).
 
 ### 7.1 Principles
 
@@ -153,7 +154,7 @@ Errors are typed (`duplicate_id`, `reserved_id`, `confusable_name`, `ceiling_exc
 | System | How onboarding uses it |
 |---|---|
 | Project Operating Profiles (`profiles.py`, `policy/projects/*.toml`) | New project = proposed profile file in a PR. Default task mode and deploy rules come from it. Onboarding projects use the most restrictive profile until Jay merges theirs. |
-| D-024 | Project and agent onboarding. Direction approved, not yet final; the wording with its implications is the [D-024 final proposal](https://claude.ai/artifact/3QArYLzEbEnzBV1geGUxXN) (clauses 10 to 13 add agents, Slack and budgets; 14 to 17 the hierarchy, independent review, repository authority and incomplete budget data; 18 keeps it in shadow). Once Jay makes it final, record it in `policy/decisions/` so profiles can cite it. |
+| D-024 | Project and agent onboarding. **Final** (Jay, 2026-10-24T06:51Z): `docs/decisions/D-024.md` v1.0 and `policy/decisions/D-024.toml`, so profiles can cite it. Clauses 10 to 13 add agents, Slack and budgets; 14 to 17 the hierarchy, independent review, repository authority and incomplete budget data; 18 keeps everything off until each switch is approved. |
 | D-032 | Slack mobile approvals (§8). |
 | D-033 | Budgets at agent, project and company level (§9). |
 | WorkerNodes (`workers.py`) | Worker grants and project eligibility reference approved node IDs only. A pending or revoked node is never eligible. |
@@ -175,12 +176,12 @@ Errors are typed (`duplicate_id`, `reserved_id`, `confusable_name`, `ceiling_exc
 ### 7.8 Order (each step its own approval; nothing turns on by itself)
 
 1. **Done, off:** groundwork behind `onboarding_groundwork` (§7.0). Routes live under `/api/onboarding`, not `/api/agents`, which already serves pane tails.
-2. Jay makes D-024 final; record it in `policy/decisions/` with a short ADR.
+2. **Done:** Jay made D-024 final (2026-10-24T06:51Z); recorded in `policy/decisions/D-024.toml` with ADR 0009 (#66).
 3. **Done:** the migration drill (§7.11) passed on a copy of the live tasks.db (2026-10-24, 28 of 28 checks), and its redacted report is attached to the project thread.
-4. Merge the groundwork (draft PR #65) with the flag still off in production; turn it on in a dev ccd first. Then, still behind the flag: the hierarchy checks (§7.9) and the additive migration that lets leads file staffing proposals, each with its own drill.
+4. **Done:** the groundwork merged (#65, 2026-10-24) with the flag still off in production. Next, turning it on in a dev ccd first; then, still behind the flag: the hierarchy checks (§7.9) and the additive migration that lets leads file staffing proposals, each with its own drill.
 5. Shadow: the onboarding engine path, reviewer independence and the budget evaluator record what they would allow, refuse or hold.
 6. Slack requests with the secure link (§8, step 1), once the approval screen is reachable over Jay's private path.
-7. After Phase 2 actor-token enforcement: each switch on its own (engine `onboarding` mode, Broker credential withholding, agent activation and grants, budget holds).
+7. Each switch on its own (engine `onboarding` mode, Broker credential withholding, agent activation and grants, budget holds), and none asked for before all four prerequisites of D-024 clause 18 hold: Phase 2 actor-token enforcement, a shadow-mode validation, the D-030 laptop runner isolation check (D-045), and the private authenticated approval path.
 8. Last: low-risk approvals inside Slack (§8, step 2).
 
 ### 7.9 Engineering hierarchy and independent review (D-024 clauses 14 and 15; proposed, not built)
@@ -223,7 +224,7 @@ A branch push can start the repository's CI, so a repository whose CI runs on ou
 
 Results on this branch: a populated v9 fixture (22 tables, 77 rows) and a 5,009-ticket one (15,070 rows; upgrade 2 ms, whole drill about 1 s) both PASS, and the `origin/main` ccd run as the older checkout refused v10 and opened the rolled-back file. The tests run the drill in CI and show it fails a migration that changes existing rows or adds an index to an existing table.
 
-**The way back.** Stop ccd, then `python -m ccd.migration_safety rollback --db tasks.db --to 9 --backup-dir DIR`: it takes a backup first, then drops only the empty tables v10 added, in one transaction, and commits only if the result is exactly v9 with integrity and foreign keys intact. It refuses when any of those tables holds a row (history is never dropped), when the schema has an unknown change, and for any step without a downgrade. With records present the way back is rolling forward, or restoring the backup after `export-onboarding` has copied the records out read-only. The full procedure, including an older ccd that refuses a v10 file, is `docs/runbooks/tasks-db-v10-rollback.md` (draft PR #65). The drill's `--redact --label` report names no path, host or user, and `--clean` removes the data copies.
+**The way back.** Stop ccd, then `python -m ccd.migration_safety rollback --db tasks.db --to 9 --backup-dir DIR`: it takes a backup first, then drops only the empty tables v10 added, in one transaction, and commits only if the result is exactly v9 with integrity and foreign keys intact. It refuses when any of those tables holds a row (history is never dropped), when the schema has an unknown change, and for any step without a downgrade. With records present the way back is rolling forward, or restoring the backup after `export-onboarding` has copied the records out read-only. The full procedure, including an older ccd that refuses a v10 file, is `docs/runbooks/tasks-db-v10-rollback.md` (merged in #65). The drill's `--redact --label` report names no path, host or user, and `--clean` removes the data copies.
 
 **On the live database (2026-10-24): PASS, 28 of 28 checks.** The backup was taken at 05:39:31Z from the live v9 tasks.db (22 tables, 53,113 rows, 335 tickets) through one read-only connection with SQLite's backup API. The drill ran on that copy in a private temporary folder, with drill code e2c2ee8 and the deployed ccd (693a556) as the older ccd. The upgrade took 0.7 ms. The copy was deleted afterwards, and the live database, checkout and service were unchanged. Take any later backup the same way, never with `cp` or the `sqlite3` command line on the live file.
 
@@ -271,7 +272,7 @@ The **Approvals** page (sidebar, `#/approvals`) shows the request queue, the app
 | Rule | Implementation |
 |---|---|
 | Three scopes, each with a period (day, month) and USD and/or token limits | `lines_for`: company from `config.json` `budgets.company`, project from the profile's `[target.budget]`, agent from its registered configuration |
-| Alerts before the limit | `assess`: default 50/80/95 % (D-033), per scope; plus `onCourseToHold` when the run rate reaches the limit before the period ends |
+| Alerts before the limit | `assess`: 50% information, 80% warning, 95% urgent, 100% the hard hold (approved defaults, D-024 B4), per scope; plus `onCourseToHold` when the run rate reaches the limit before the period ends |
 | Missing data never lowers spend | `report`: a reply with no known price counts at the highest listed price (`fallback_prices`: $10 input, $50 output per million tokens) as `unpricedUsdAtFallback`; usage tied to no project counts toward the company as `unattributedUsd`; each line is judged on `assessedUsd` |
 | Hard limit holds its own scope only | `would_start`: an agent hold stops that agent; a project hold that project; the company hold all billable work |
 | Safety is separate | `SAFETY_KINDS` (health checks, monitoring, incident response, rollback, restore, backup checks, recovery) always start; the engine tags them by action type, an agent cannot |
@@ -284,8 +285,9 @@ The **Approvals** page (sidebar, `#/approvals`) shows the request queue, the app
 
 - **Incomplete pricing or attribution brings a hold sooner** (built, shadow report). Unpriced usage counts at the highest listed price and unattributed usage counts toward the company; with no successful meter pass for 15 minutes a line is Unknown and one at 80% of its limit or more would hold; `dataAlerts` names a stale meter, a price list older than 90 days, unpriced usage, unattributed usage above 10% of the month, and unattributed usage with no company budget to count it. Agent lines count only what work steps report until Phase 2 ties sessions to registered agents, so project and company limits are the ones that hold.
 - **The 5% overrun** is room for steps already running at a hard limit to reach a checkpoint, nothing more: no new work starts on it; it is per scope and period and does not stack (the tightest cap wins); at the limit plus 5% running billable steps stop at the next tool-call boundary, and only a deploy, migration, rollback or push under way may finish past it. It is measured on the meter's estimate, which lags and uses list prices, and on a small limit it is small ($1 on $20).
-- **Expensive steps (proposed amounts):** each billable step reserves its estimate and starts only if it fits every budget around it; a per-step cap (25% of the agent's daily limit or $10, whichever is lower) stops it at a checkpoint and asks its lead; estimates above $10 need the Project Lead, above $25 Jay; a scope spending 25% of its daily limit within an hour waits and alerts Jay; a step repeating a failing action or making no progress for 10 turns stops; long steps checkpoint at least every 15 minutes. A critical operation declares its cost and starts only with that much room left.
+- **No dollar limits yet** (D-024 B5): the evaluator runs in shadow or soft-warning mode first; agent, project and company limits are then proposed to Jay from measured usage, with evidence.
+- **Expensive steps (approved defaults, not built):** each billable step reserves its estimate and starts only if it fits every budget around it; a per-step cap (25% of the agent's daily limit or $10, whichever is lower) stops it at a checkpoint and asks its lead; estimates above $10 need the Project Lead, above $25 Jay; a scope spending more than 25% of its daily limit within an hour trips the burn-rate breaker: no new billable step starts, running work reaches a checkpoint, Jay is alerted and the cause is investigated; a step repeating a failing action or making no progress for 10 turns stops; long steps checkpoint at least every 15 minutes. A critical operation declares its cost and starts only with that much room left.
 
 ### 9.3 Prototype
 
-The **Budgets** page (sidebar, `#/budgets`) shows company, project and agent budgets with alert thresholds, four demo scenarios (a held agent beside its still-running project, a held project, a held company), which new work would start, the safety exemption, and an override dialog that files a request on the Approvals page, all as mock data. The page uses a TypeScript copy of the server rules (`src/data/governance.ts`), and the same tests cover both: an agent hold leaves its project running, safety work starts at the company limit, and an approved override lifts only its own line.
+The **Budgets** page (sidebar, `#/budgets`) shows company, project and agent budgets with alert thresholds, four demo scenarios (a held agent beside its still-running project, a held project, a held company), which new work would start, the safety exemption, and an override dialog that files a request on the Approvals page, all as mock data. The page uses a TypeScript copy of the server rules (`src/data/governance.ts`), and the same tests cover both: an agent hold leaves its project running, safety work starts at the company limit, and an approved override lifts only its own line. An **Approved defaults** panel lists Jay's 2026-10-24 defaults (alert levels, the checkpoint-only overrun, the per-step cap, who approves large steps, the burn-rate breaker), each agent row shows its step cap, and the page says the dollar limits are examples, since none are set yet. The New Agent flow's budget step shows the same rules. In **Teams**, CommandCenter, GYST, SamVision and MFE are led by the Claude Project Lead, and paused GauzeMate shows no active Project Lead.
