@@ -1,7 +1,9 @@
 # Engineering HQ design changes
 
 Jay approved the overall direction on 2026-10-25 (macOS-inspired style, Operations Topology, agent hierarchy,
-onboarding, multi-monitor). The design is not frozen: this log tracks each requested or proposed change.
+onboarding, multi-monitor), and on 2026-10-25 signed off V7 to V10 and named the prototype at commit `4b72f3f` the
+**approved visual reference**. Integration builds to that reference. Visual sign-off is not Gate 0: integration starts
+only with Jay's separate approval. The design is not frozen: this log tracks each requested or proposed change.
 
 **How a request is handled**
 
@@ -37,11 +39,12 @@ Jay confirmed these on 2026-10-25. They are settled: integration builds them as 
 | V3 | 2026-10-22 | macOS-inspired refinement layer | All | Jay | Approved 2026-10-25 (overall direction) |
 | V4 | 2026-10-25 | Needs My Attention queue at `#/decisions`; decision room at `#/decisions/sv-025`; My Office KPI renamed "Needs You" | Decisions, My Office, Topology, sidebar | Claude (audit) | Approved 2026-10-25 |
 | V5 | 2026-10-25 | Full Settings page in the macOS System Settings layout | Settings | Claude (Jay listed Settings) | Approved 2026-10-25 |
-| V6 | 2026-10-25 | Phone layout fixes: wrapping rows, scrolling tab rows, stacked queue rows; Messages as one scrolling column; Teams hierarchy at half size, scrolling sideways | All at 390 px (Messages below 1200 px) | Claude (audit) | **Proposed** (now under the V8 tab bar) |
-| V7 | 2026-10-25 | Optional macOS-inspired light theme, plus System (follows Windows or macOS). Dark stays the default. Picker in Settings › Appearance and in Jay's menu; every open window follows | All | Jay | **Proposed** |
-| V8 | 2026-10-25 | Phone navigation: bottom tab bar (Office, Messages, Decisions, Approvals, More) with a More sheet; Settings opens as a list with a back link; My Office KPIs as 2×2 tiles. Desktop keeps the sidebar | All at 760 px and below | Jay | **Proposed** |
-| V9 | 2026-10-25 | Vertical balance at 1920×1080: My Office columns end level, topology centred, three latest updates, agent strip on screen; Settings as one full-height window | My Office, Settings | Jay | **Proposed** |
-| V10 | 2026-10-25 | Review fixes: decision stage labels no longer touch, Messages search keeps its height and icons, directory status wraps between parts | Decisions, Messages, Agents | Claude (audit) | **Proposed** |
+| V6 | 2026-10-25 | Phone layout fixes: wrapping rows, scrolling tab rows, stacked queue rows; Messages as one scrolling column; Teams hierarchy at half size, scrolling sideways | All at 390 px (Messages below 1200 px) | Claude (audit) | Approved 2026-10-25 as part of the approved visual reference (under the V8 tab bar) |
+| V7 | 2026-10-25 | Optional macOS-inspired light theme, plus System (follows Windows or macOS). Dark stays the default. Picker in Settings › Appearance and in Jay's menu; every open window follows | All | Jay | Approved 2026-10-25 |
+| V8 | 2026-10-25 | Phone navigation: bottom tab bar (Office, Messages, Decisions, Approvals, More) with a More sheet; Settings opens as a list with a back link; My Office KPIs as 2×2 tiles. Desktop keeps the sidebar | All at 760 px and below | Jay | Approved 2026-10-25 |
+| V9 | 2026-10-25 | Vertical balance at 1920×1080: My Office columns end level, topology centred, three latest updates, agent strip on screen; Settings as one full-height window | My Office, Settings | Jay | Approved 2026-10-25 |
+| V10 | 2026-10-25 | Review fixes: decision stage labels no longer touch, Messages search keeps its height and icons, directory status wraps between parts | Decisions, Messages, Agents | Claude (audit) | Approved 2026-10-25 |
+| V11 | 2026-10-25 | Light theme only: graph connections slightly deeper (own colour with 22% navy ink) and about 0.3 to 0.4 px thicker, glow unchanged at 14%. Dark is unchanged | Topology, My Office preview, Teams hierarchy (light) | Jay (optional) | **Proposed** |
 
 ## Open design questions
 

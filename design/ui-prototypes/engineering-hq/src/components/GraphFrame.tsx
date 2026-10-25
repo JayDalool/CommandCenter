@@ -45,7 +45,7 @@ export function GraphFrame({ w, h, nodes, edges, className, fitWidth, minScale =
         {edges.map((e, i) => {
           const a = byId.get(e.from) as unknown as GNode, b = byId.get(e.to) as unknown as GNode; if (!a || !b) return null;
           const d = e.bus != null ? busPath(a, b, e.ao ?? 0, e.bo ?? 0, e.bus) : curve(a, b, e.ao ?? 0, e.bo ?? 0);
-          return <g key={i} className={cx("edge", e.dashed && "is-paused")}>
+          return <g key={i} className={cx("edge", e.dashed && "is-paused")} style={{ ["--c" as string]: e.color }}>
             {!e.dashed && <path d={d} stroke={e.color} className="edge-glow" filter="url(#glow2)" />}
             <path d={d} stroke={e.color} className="edge-line" />
             <circle cx={a.x + a.w / 2 + (e.ao ?? 0)} cy={a.y + a.h} r="3.6" fill={e.color} /><circle cx={b.x + b.w / 2 + (e.bo ?? 0)} cy={b.y} r="3.6" fill={e.color} />

@@ -3,7 +3,17 @@
 Each version is a commit on the draft branch `claude/project-thread-gs2u2h` (PR #64). Every gallery and package
 names the commit it was captured from. Visual requests and their approval state are tracked in `DESIGN_CHANGES.md`.
 
-## 2026-10-25 · Final design refinements
+## 2026-10-25 · Visual sign-off and clearer light-mode graph lines
+
+Jay approved V7 to V10 (light theme, phone tab bar and More sheet, 1920×1080 layouts, spacing and readability
+fixes) and named the prototype at `4b72f3f` the approved visual reference. `DESIGN_CHANGES.md` records it. This is
+visual sign-off only, not Gate 0.
+
+**Light-mode graph connections (V11, proposed).** At Jay's optional request, lines in the Operations Topology, the
+My Office preview and the Teams hierarchy are a little deeper in Light (each project colour mixed with 22% navy
+ink) and about 0.3 to 0.4 px thicker; the glow stays faint. Dark mode is pixel-for-pixel unchanged.
+
+## 2026-10-25 · Final design refinements (4b72f3f)
 
 Jay's confirmed decisions are recorded in `DESIGN_CHANGES.md`: dark default, project colours, agent persona names,
 Needs My Attention and the full Settings window. Everything else approved (design system, Operations Topology,

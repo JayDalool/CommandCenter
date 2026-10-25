@@ -168,7 +168,7 @@ function Canvas({ sel, setSel, filters, layers, expanded, setExpanded }: {
           const d = curve(a, b, o.a, o.b);
           const dim = linked && !(linked.has(e.from) && linked.has(e.to));
           const col = e.blocked ? "#ff4f6d" : e.paused ? "#6b7690" : e.color;
-          return <g key={e.id} className={cx("edge", `ek-${e.kind}`, dim && "is-dim", e.blocked && "is-blocked", e.paused && "is-paused")} data-edge={e.id}>
+          return <g key={e.id} className={cx("edge", `ek-${e.kind}`, dim && "is-dim", e.blocked && "is-blocked", e.paused && "is-paused")} style={{ ["--c" as string]: col }} data-edge={e.id}>
             {e.kind !== "host" && !e.paused && <path d={d} stroke={col} className="edge-glow" filter="url(#glow)" />}
             <path d={d} stroke={col} className="edge-line" />
             <circle cx={a.x + a.w / 2 + o.a} cy={a.y + a.h} r="3.4" fill={col} /><circle cx={b.x + b.w / 2 + o.b} cy={b.y} r="3.4" fill={col} />

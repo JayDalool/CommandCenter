@@ -66,6 +66,10 @@ Every other colour in `hq.css` is a token too (119 of them), grouped in the `:ro
 | Inks | `--text-strong`, `--link`, `--violet-ink*`, `--bad-ink*`, `--warn-ink*`, `--info-ink*` | Text and icon colours on tinted backgrounds |
 | Washes and shadows | `--wash` (RGB triple: white in dark, navy in light), `--shade-k` (1 in dark, .32 in light) | `rgb(var(--wash) / .04)` tints; shadow strength |
 
+Graph connections keep their project colour in both themes. In light, each line is drawn in its colour mixed
+with 22% navy ink (`color-mix(in oklab, var(--c) 78%, #10142c)`), about 0.3 to 0.4 px thicker, with the glow
+at 14% (V11). Each edge passes its colour to CSS as `--c`.
+
 ### Projects (concept-art palette, approved 2026-10-22, confirmed 2026-10-25)
 
 | Project | Prefix | Colour |
