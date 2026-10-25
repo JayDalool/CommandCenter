@@ -90,9 +90,10 @@ def server_caps():
 
 
 class Workers:
-    def __init__(self, db, clock=time.time, version="unknown"):
+    def __init__(self, db, clock=time.time, version="unknown", keys=None):
         self.db = db
         self.clock = clock
+        self.keys = keys          # ccd/nodekeys.NodeKeys (Phase 2 shadow): a node's key follows its approval
         self._last_beat = 0.0
         self._version = version
 
@@ -126,6 +127,11 @@ class Workers:
             text = json.dumps({"truncated": True, "bytes": len(text)})
         self.db.execute("INSERT INTO worker_events (node_id, at, kind, actor, data) VALUES (?,?,?,?,?)",
                         (node, self.clock(), kind, actor, text))
+
+    def state(self, node):
+        """The stored status of a node (pending|active|revoked), or None. For the Phase 2 shadow check."""
+        row = self._row(node) if isinstance(node, str) else None
+        return row[1] if row else None
 
     def _row(self, node):
         return self.db.execute("SELECT id, status, token_sha FROM worker_nodes WHERE id=?", (node,)).fetchone()
@@ -223,6 +229,8 @@ class Workers:
             # wants approved_at >= enrolled_at).
             self.db.execute("UPDATE worker_nodes SET status='active', approved_by='jay', "
                             "approved_at=MAX(?, enrolled_at) WHERE id=?", (self.clock(), node))
+            if self.keys is not None:
+                self.keys.approve(node)           # the key Jay compared is approved with the node (no-op without one)
             self._event(node, "approved", "jay")
         return self.node(node)
 
@@ -239,6 +247,8 @@ class Workers:
         reason = re.sub(r"[\x00-\x1f\x7f]+", " ", str(reason or ""))[:200]
         with self._tx():
             self.db.execute("UPDATE worker_nodes SET status='revoked', revoked_at=? WHERE id=?", (self.clock(), node))
+            if self.keys is not None:
+                self.keys.revoke(node)
             self._event(node, "revoked", "jay", {"reason": reason})
         return self.node(node)
 

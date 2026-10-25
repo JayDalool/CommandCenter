@@ -20,6 +20,7 @@ from .helpers import PROJECTS
 
 V9 = [m for m in tasks.MIGRATIONS if m[0] <= 9]
 V10 = [m for m in tasks.MIGRATIONS if m[0] <= 10]
+V11 = [m for m in tasks.MIGRATIONS if m[0] <= 11]
 TO = tasks.SCHEMA_VERSION
 
 
@@ -263,7 +264,13 @@ class Downgrade(unittest.TestCase):
 
 
 class DowngradeV11(unittest.TestCase):
-    """Migration 11 (identity tokens and observations) and its way back."""
+    """Migration 11 (identity tokens and observations) and its way back, as a v11 ccd runs it."""
+    def setUp(self):
+        for name, value in (("MIGRATIONS", V11), ("SCHEMA_VERSION", 11)):
+            p = mock.patch.object(tasks, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
     def v11(self):
         path = tmp("tasks.db")
         build_v9(path)
@@ -315,6 +322,54 @@ class DowngradeV11(unittest.TestCase):
                 db = ms.connect(path)
                 self.assertEqual((ms.version(db), ms.digests(db)), (11, before))
                 db.close()
+
+
+class DowngradeV12(unittest.TestCase):
+    """Migration 12 (node keys, node observations, nonces) and its way back."""
+    def v12(self):
+        path = tmp("tasks.db")
+        build_v9(path)
+        ts = tasks.TaskStore(path, PROJECTS)
+        self.assertEqual(ts.applied, [10, 11, 12])
+        ts.close()
+        return path
+
+    def test_the_downgrade_list_names_exactly_the_tables_migration_12_adds(self):
+        added = {o[1] for o in tasks.reference_schema(12) - tasks.reference_schema(11) if o[0] == "table"}
+        self.assertEqual(added, set(tasks.DOWNGRADES[12]))
+
+    def test_rollback_to_v11_keeps_every_row(self):
+        path = self.v12()
+        db = ms.connect(path)
+        before = ms.digests(db)
+        db.close()
+        code, out, _ = run("rollback", "--db", path, "--to", "11", "--backup-dir", tmp("backups"))
+        self.assertEqual(code, 0, out)
+        db = ms.connect(path)
+        self.assertEqual(ms.version(db), 11)
+        self.assertEqual(tasks.schema_objects(db), tasks.reference_schema(11))
+        self.assertEqual(ms.digests(db), {t: v for t, v in before.items() if t not in tasks.DOWNGRADES[12]})
+        self.assertEqual(tasks.migrate(db, V11), [])
+        db.close()
+
+    def test_it_refuses_when_a_node_key_observation_or_nonce_exists(self):
+        from ccd import nodekeys
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        for table in tasks.DOWNGRADES[12]:
+            with self.subTest(table=table):
+                path = self.v12()
+                ts = tasks.TaskStore(path, PROJECTS)
+                k = nodekeys.NodeKeys(ts.db)
+                if table == "node_keys":
+                    k.add("laptop-1", nodekeys.public_text(Ed25519PrivateKey.generate()), "jay")
+                elif table == "node_observations":
+                    k.observe("laptop-1", "heartbeat", 200, {"reasons": ["unsigned"]})
+                else:
+                    ts.db.execute("INSERT INTO node_nonces VALUES ('laptop-1', 'nnnnnnnnnnnnnnnn', 0)")
+                ts.close()
+                code, _, err = run("rollback", "--db", path, "--to", "11", "--backup-dir", tmp("backups"))
+                self.assertEqual(code, 1)
+                self.assertIn(f"{table} (1 row)", err)
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ from . import workers as workers_mod
 from . import inbox as inbox_mod
 from . import audit as audit_mod
 from . import identity as identity_mod
+from . import nodekeys as nodekeys_mod
 from . import meter as meter_mod
 from . import budgets as budgets_mod
 from . import onboarding as onboarding_mod
@@ -310,7 +311,12 @@ class Daemon:
         # Decision + Approval records (PR 4): a mirror of today's gates and answered questions. Gates still decide.
         self.ledger = ledger.Ledger(tasks.db) if getattr(tasks, "db", None) is not None else None
         # Worker nodes (PR 5): the model and enrolment only. Nothing is scheduled on a node yet (Phase 2).
-        self.workers = workers_mod.Workers(tasks.db, version=__version__) if getattr(tasks, "db", None) is not None else None
+        # Phase 2 shadow step 2 (Jay 2026-10-25): node keys and signed heartbeats, recorded only. Off unless config.json
+        # says "phase2_node_shadow": true; read once, here. A node's existing key still follows its approval.
+        self.node_shadow_on = isinstance(cfg, dict) and cfg.get("phase2_node_shadow") is True
+        self.node_keys = nodekeys_mod.NodeKeys(tasks.db) if getattr(tasks, "db", None) is not None else None
+        self.workers = workers_mod.Workers(tasks.db, version=__version__, keys=self.node_keys) \
+            if getattr(tasks, "db", None) is not None else None
         # Needs You v2 (PR 6): what v2 knows about each queue item. Read-only.
         self.inbox = inbox_mod.Inbox(tasks.db) if getattr(tasks, "db", None) is not None else None
         # PR 7: who did what (audit trail + per-agent actor tokens) and what it used (token metering). All three
@@ -1860,20 +1866,59 @@ class Daemon:
     def workers_state(self):
         if self.workers is None:
             return {"available": False, "nodes": [], "events": []}
-        return {"available": True, "nodes": self.workers.list(), "events": self.workers.events(),
-                "onlineFor": workers_mod.ONLINE_FOR}
+        nodes = self.workers.list()
+        keys = self.node_keys.keys() if self.node_keys is not None else {}
+        for n in nodes:
+            k = keys.get(n["id"])
+            n["key"] = {"fingerprint": k["fingerprint"], "approved": k["approved"]} if k else None
+        out = {"available": True, "nodes": nodes, "events": self.workers.events(), "onlineFor": workers_mod.ONLINE_FOR,
+               "nodeShadow": self.node_shadow_on}
+        if self.node_shadow_on and self.node_keys is not None:
+            out["shadow"] = dict(self.node_keys.summary(), chain=self.node_keys.verify(), errors=self.node_keys.errors)
+        return out
 
     def worker_enrol(self, body, actor):
         w = self._need_workers()
         out = self._worker_call(w.enrol, body.get("id"), body.get("kind"), body.get("capabilities"),
                                 body.get("version"), actor)
+        if self.node_shadow_on and self.node_keys is not None:
+            out.update(self._node_enrol_shadow(out["id"], body.get("publicKey"), actor))
         self._event("security", "worker.enrolled", f"worker node {out['id']} asked to join; waiting for Jay",
                     severity="action", data={"node": out["id"]})
         return out
 
-    def worker_heartbeat(self, node, token, body):
-        return self._worker_call(self._need_workers().heartbeat, node, token, body.get("capabilities"),
-                                 body.get("version"))
+    def worker_heartbeat(self, node, token, body, signature=None, method="POST", path="/api/workers/heartbeat"):
+        """A node's heartbeat. With phase2_node_shadow on, its signature is also checked and recorded; the answer is
+        exactly what it would be without the check."""
+        w = self._need_workers()
+        status = 500
+        try:
+            out = self._worker_call(w.heartbeat, node, token, body.get("capabilities"), body.get("version"))
+            status = 200
+            return out
+        except ActionError as e:
+            status = e.status
+            raise
+        finally:
+            if self.node_shadow_on and self.node_keys is not None:
+                try:
+                    result = self.node_keys.check(node, method, path, signature, body, w.state(node),
+                                                  token_ok=status not in (401,))
+                    self.node_keys.observe(node, "heartbeat", status, result)
+                except Exception:  # noqa: BLE001 — the shadow check never touches the heartbeat
+                    self.node_keys.errors += 1
+
+    def _node_enrol_shadow(self, node, public_key, actor):
+        """Record the key a new node sent (Phase 2 shadow). Never refuses the enrolment."""
+        try:
+            fp = self.node_keys.add(node, public_key, actor) if public_key is not None else None
+            reasons = [] if fp else ["bad_key" if public_key is not None else "no_key"]
+            self.node_keys.observe(node, "enrol", 200, {"signed": False, "verified": False, "keyFingerprint": fp,
+                                                        "reasons": reasons})
+            return {"keyFingerprint": fp} if fp else {}
+        except Exception:  # noqa: BLE001
+            self.node_keys.errors += 1
+            return {}
 
     def act_worker(self, op, node, actor="jay", developer=False, reason=""):
         """Jay approves or revokes a worker node. Jay AND Developer Unlock: a node will later run agent work."""
