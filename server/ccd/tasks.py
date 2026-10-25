@@ -659,7 +659,7 @@ CREATE TRIGGER identity_observations_no_replace BEFORE INSERT ON identity_observ
   BEGIN SELECT RAISE(ABORT, 'identity observations are append-only'); END;
 """),
     # 12: Phase 2 shadow step 2 (Jay 2026-10-25): worker node keys and signed requests, RECORDED ONLY
-    # (ccd/nodekeys.py). A node may send an Ed25519 public key when it enrols; approving the node approves that key.
+    # (ccd/nodekeys.py). A node may send an Ed25519 public key when it enrols; the key waits for its own approval.
     # Each enrol and heartbeat is checked (signature, timestamp, nonce, node state) and an observation is kept with
     # the reasons Phase 2 would refuse it. Nothing is refused: `enforced` is always 0. Written only when config
     # phase2_node_shadow is true. Additive.

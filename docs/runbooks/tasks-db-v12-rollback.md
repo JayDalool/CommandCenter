@@ -9,8 +9,8 @@ first. This page lists only what is different for v12.
 Migration v12 (Phase 2 shadow step 2, Jay 2026-10-25) only **adds** three tables with their own indexes and triggers:
 
 - `node_keys`: a worker node's Ed25519 public key, sent at enrolment. Rows appear only while `config.json` sets
-  `"phase2_node_shadow": true` (default false). Approving or revoking a node also approves or revokes its key, but
-  only a key that exists.
+  `"phase2_node_shadow": true` (default false). Revoking a node also revokes its key; approving a node does
+  **not** approve its key (no screen shows the fingerprint yet).
 - `node_observations`: one row per enrolment and heartbeat with the reasons Phase 2 would refuse it. Only with the
   flag on.
 - `node_nonces`: nonces of verified signatures, kept 10 minutes to see a replay. Only with the flag on.

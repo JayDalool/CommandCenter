@@ -80,7 +80,7 @@ class Model(unittest.TestCase):
         self.w = workers.Workers(self.ts.db, self.clock, keys=self.k)
         self.key = Ed25519PrivateKey.generate()
         self.tok = self.w.enrol("laptop", "laptop", {}, "1", "jay")["token"]
-        self.fp = self.k.add("laptop", nodekeys.public_text(self.key), "jay")
+        self.fp, _ = self.k.add("laptop", nodekeys.public_text(self.key), "jay")
 
     def check(self, header, body=None, token_ok=True, node="laptop"):
         return self.k.check(node, "POST", PATH, header, body or {}, self.w.state(node), token_ok)["reasons"]
@@ -91,7 +91,9 @@ class Model(unittest.TestCase):
     def test_each_reason(self):
         self.assertEqual(self.check(None), ["node_pending", "unsigned", "key_not_approved"])
         self.w.approve("laptop", "jay")
-        self.assertTrue(self.k.key("laptop")["approved"])                    # the key follows the node's approval
+        self.assertFalse(self.k.key("laptop")["approved"])                   # approving the node does not approve it
+        self.assertEqual(self.check(self.signed()), ["key_not_approved"])
+        self.k.approve("laptop")                                              # (a later UI step, after comparing)
         self.assertEqual(self.check(self.signed()), [])
         self.assertEqual(self.check(None), ["unsigned"])
         self.assertEqual(self.check("v1 nonsense"), ["malformed"])
@@ -114,26 +116,33 @@ class Model(unittest.TestCase):
 
     def test_a_bad_signature_never_burns_a_nonce(self):
         self.w.approve("laptop", "jay")
+        self.k.approve("laptop")
         forged = nodekeys.sign_header(Ed25519PrivateKey.generate(), "POST", PATH, "laptop", {}, ts=self.clock(),
                                       nonce="z" * 20)
         self.check(forged)
         self.assertEqual(self.check(self.signed(nonce="z" * 20)), [])
 
     def test_schema_keeps_keys_as_history(self):
-        self.w.approve("laptop", "jay")
+        self.k.approve("laptop")
         for sql in ("DELETE FROM node_keys", "UPDATE node_keys SET public_key='" + "A" * 43 + "'",
                     "UPDATE node_keys SET approved_at=NULL, approved_by=NULL", "UPDATE node_keys SET added_by='x'"):
             with self.assertRaises(sqlite3.DatabaseError, msg=sql):
                 self.ts.db.execute(sql)
-        with self.assertRaises(sqlite3.IntegrityError):                      # one live key per node
-            self.k.add("laptop", nodekeys.public_text(Ed25519PrivateKey.generate()), "jay")
+        self.assertEqual(self.k.add("laptop", nodekeys.public_text(Ed25519PrivateKey.generate()), "jay"),
+                         (None, "node_has_key"))                             # one live key per node
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.ts.db.execute("INSERT INTO node_keys (node_id, public_key, key_fp, added_at, added_by) VALUES "
+                               "('laptop', ?, '1111-1111-1111-1111', 0, 'jay')", ("C" * 43,))
         with self.assertRaises(sqlite3.DatabaseError):
             self.ts.db.execute("INSERT OR REPLACE INTO node_keys (id, node_id, public_key, key_fp, added_at, added_by) "
                                "SELECT id, node_id, public_key, key_fp, added_at, added_by FROM node_keys")
         with self.assertRaises(sqlite3.IntegrityError):                      # an agent never adds a key
             self.ts.db.execute("INSERT INTO node_keys (node_id, public_key, key_fp, added_at, added_by) VALUES "
                                "('laptop', ?, '0000-0000-0000-0000', 0, 'agent:x')", ("B" * 43,))
-        self.assertIsNone(self.k.add("laptop", "not a key", "jay"))
+        self.assertEqual(self.k.add("laptop", "not a key", "jay"), (None, "bad_key"))
+        self.w.revoke("laptop", "jay")
+        tok = self.w.enrol("laptop-2", "laptop", {}, "1", "jay")
+        self.assertEqual(self.k.add("laptop-2", nodekeys.public_text(self.key), "jay"), (None, "duplicate_key"))
 
     def test_observations_are_a_chain_that_refuses_enforced_and_edits(self):
         self.k.observe("laptop", "heartbeat", 200, self.k.check("laptop", "POST", PATH, None, {}, "pending"))
@@ -176,17 +185,25 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
 
     async def test_enrol_records_the_key_and_answers_as_before(self):
         out = self.d.worker_enrol({"id": "laptop", "kind": "laptop", "publicKey": nodekeys.public_text(self.key)}, "jay")
-        self.assertEqual(out["keyFingerprint"], self.d.workers_state()["nodes"][0]["key"]["fingerprint"])
+        self.assertEqual(out["keyFingerprint"], self.d.node_keys.key("laptop")["fingerprint"])
         bad = self.d.worker_enrol({"id": "gpu-1", "kind": "gpu", "publicKey": "nope"}, "jay")   # still enrolled
         self.assertEqual((bad["status"], "keyFingerprint" in bad), ("pending", False))
         self.d.worker_enrol({"id": "cloud-1", "kind": "cloud"}, "jay")
-        self.assertEqual(self.obs(), [("enrol", 200, []), ("enrol", 200, ["bad_key"]), ("enrol", 200, ["no_key"])])
+        dup = self.d.worker_enrol({"id": "cloud-2", "kind": "cloud", "publicKey": nodekeys.public_text(self.key)}, "jay")
+        self.assertNotIn("keyFingerprint", dup)
+        self.assertEqual(self.obs(), [("enrol", 200, []), ("enrol", 200, ["bad_key"]), ("enrol", 200, ["no_key"]),
+                                      ("enrol", 200, ["duplicate_key"])])
+        self.assertEqual(self.d.node_keys.errors, 0)
+        self.d.act_worker("approve", "laptop", "jay", developer=True)
+        nodes = {n["id"]: n for n in self.d.workers_state()["nodes"]}
+        self.assertFalse(nodes["laptop"]["key"]["approved"])
 
     async def test_heartbeats_that_would_be_refused_still_answer_exactly_as_before(self):
         out = self.d.worker_enrol({"id": "laptop", "kind": "laptop", "publicKey": nodekeys.public_text(self.key)}, "jay")
         tok = out["token"]
         self.assertEqual(self.d.worker_heartbeat("laptop", tok, {})["status"], "pending")      # unsigned, pending
         self.d.act_worker("approve", "laptop", "jay", developer=True)
+        self.d.node_keys.approve("laptop")
         sig = nodekeys.sign_header(self.key, "POST", PATH, "laptop", {"version": "2"})
         self.assertEqual(self.d.worker_heartbeat("laptop", tok, {"version": "2"}, signature=sig)["status"], "active")
         with self.assertRaises(ActionError) as e:                            # wrong token: refused as before
@@ -204,6 +221,16 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(self.d.node_keys, "check", side_effect=RuntimeError("boom")):
             self.assertEqual(self.d.worker_heartbeat("laptop", tok, {})["status"], "pending")
         self.assertEqual(self.d.node_keys.errors, 1)
+
+    async def test_without_cryptography_ccd_starts_with_the_check_off(self):
+        with mock.patch.object(nodekeys, "AVAILABLE", False):
+            d = Daemon(cfg(phase2_node_shadow=True), self.store, None, tasks=self.ts)
+            self.assertFalse(d.node_shadow_on)
+            out = d.worker_enrol({"id": "laptop", "kind": "laptop"}, "jay")
+            self.assertEqual(d.worker_heartbeat("laptop", out["token"], {})["status"], "pending")
+            self.assertIsNone(nodekeys.public_key("A" * 43))
+            with self.assertRaises(RuntimeError):
+                nodekeys.init(tempfile.mkdtemp(prefix="nkx-") + "/k")
 
     async def test_with_the_switch_off_nothing_is_recorded_and_a_key_is_ignored(self):
         d = Daemon(cfg(), self.store, None, tasks=self.ts)
@@ -235,6 +262,7 @@ class OverHttp(unittest.IsolatedAsyncioTestCase):
         out = self.c.post("/api/workers/enrol", headers=self.h,
                           json={"id": "laptop", "kind": "laptop", "publicKey": nodekeys.public_text(key)}).json()
         self.d.act_worker("approve", "laptop", "jay", developer=True)
+        self.d.node_keys.approve("laptop")
         body = {"version": "3", "capabilities": {"os": "linux"}}
         sig = nodekeys.sign_header(key, "POST", PATH, "laptop", body)
         h = dict(self.h, **{"x-ccd-node": f"laptop {out['token']}", "x-ccd-node-signature": sig})

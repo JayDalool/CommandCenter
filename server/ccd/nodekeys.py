@@ -1,8 +1,10 @@
 """Worker node keys and signed requests — Phase 2 shadow step 2 (Jay, 2026-10-25). RECORDED ONLY.
 
 Today a worker node proves itself with a bearer token (ccd/workers.py). Phase 2 adds a key that never leaves the node:
-the node makes an Ed25519 keypair, sends the public key when it enrols, and signs each heartbeat. Jay compares the
-key's fingerprint on the machine and in Settings → Workers before approving; approving the node approves that key.
+the node makes an Ed25519 keypair, sends the public key when it enrols, and signs each heartbeat. The key's
+fingerprint is returned by enrol and by GET /api/workers only; Settings → Workers does not show it yet. So approving a
+node does NOT approve its key: a key stays "not approved" (and every heartbeat says key_not_approved) until a later
+change lets Jay compare the fingerprint in the UI and approve the key itself. Revoking a node revokes its key.
 
 Every enrol and heartbeat is then checked and an observation is kept (`node_observations`, a hash chain of its own)
 with the reasons Phase 2 enforcement would refuse it:
@@ -18,6 +20,8 @@ with the reasons Phase 2 enforcement would refuse it:
     node_revoked      a revoked node sent a heartbeat
     bad_node_token    the node token was wrong (the request was already refused for that, as before)
     bad_key           an enrolment sent a public key that is not an Ed25519 key
+    duplicate_key     an enrolment sent a key already recorded for a node (keys are never reused)
+    node_has_key      an enrolment sent a new key for a node that still has a live one (the old key stays)
 
 Nothing here refuses a request or changes its answer: `enforced` is always 0 (the table refuses anything else). It
 runs only when config.json says "phase2_node_shadow": true.
@@ -36,12 +40,18 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import sys
 import time
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+try:        # only the shadow check needs it; ccd starts without it, with the check off (daemon.py)
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+    AVAILABLE = True
+except ImportError:  # pragma: no cover — exercised by a test that hides the module
+    InvalidSignature = serialization = Ed25519PrivateKey = Ed25519PublicKey = None
+    AVAILABLE = False
 
 VERSION = "ccd-node-v1"
 HEADER = "x-ccd-node-signature"
@@ -52,7 +62,8 @@ SIG_RE = re.compile(r"v1 ts=(\d{1,12}) nonce=([A-Za-z0-9_-]{16,64}) sig=([A-Za-z
 PUB_RE = re.compile(r"[A-Za-z0-9_-]{43}")
 GENESIS = "0" * 64
 REASONS = ("unsigned", "malformed", "no_key", "key_not_approved", "bad_signature", "stale_timestamp",
-           "replayed_nonce", "node_pending", "node_revoked", "bad_node_token", "bad_key")
+           "replayed_nonce", "node_pending", "node_revoked", "bad_node_token", "bad_key", "duplicate_key",
+           "node_has_key")
 OBS_COLUMNS = ("at", "node_id", "kind", "outcome", "key_fp", "signed", "verified", "skew", "would_refuse", "reasons",
                "enforced")
 
@@ -76,7 +87,7 @@ def message(method, path, node, ts, nonce, body):
 
 def public_key(text):
     """An Ed25519 public key from its 43-character base64url form, or None."""
-    if not isinstance(text, str) or not PUB_RE.fullmatch(text):
+    if not AVAILABLE or not isinstance(text, str) or not PUB_RE.fullmatch(text):
         return None
     try:
         return Ed25519PublicKey.from_public_bytes(_b64d(text))
@@ -126,16 +137,23 @@ class NodeKeys:
     # ---------- keys ----------
 
     def add(self, node, text, by):
-        """Record a node's public key at enrolment, waiting for Jay. Returns its fingerprint, or None for a bad key."""
+        """Record a node's public key at enrolment, not approved. Returns (fingerprint, None), or (None, reason) for
+        a bad key, a key already recorded (keys are never reused, revoked ones included), or a node that still has a
+        live key."""
         if public_key(text) is None:
-            return None
+            return None, "bad_key"
         fp = key_fingerprint(text)
-        self.db.execute("INSERT INTO node_keys (node_id, public_key, key_fp, added_at, added_by) VALUES (?,?,?,?,?)",
-                        (node, text, fp, self.clock(), by))
-        return fp
+        if self.key(node) is not None:
+            return None, "node_has_key"
+        try:
+            self.db.execute("INSERT INTO node_keys (node_id, public_key, key_fp, added_at, added_by) VALUES (?,?,?,?,?)",
+                            (node, text, fp, self.clock(), by))
+        except sqlite3.IntegrityError:
+            return None, "duplicate_key"
+        return fp, None
 
     def approve(self, node):
-        """Jay approved the node: approve its waiting key, if it has one. Called inside workers' transaction."""
+        """Approve a node's waiting key. Not called yet: it needs a UI where Jay compares the fingerprint first."""
         self.db.execute("UPDATE node_keys SET approved_at=?, approved_by='jay' WHERE node_id=? AND revoked_at IS NULL "
                         "AND approved_at IS NULL", (self.clock(), node))
 
@@ -270,6 +288,8 @@ def _canon(row):
 def init(directory):
     """Make an Ed25519 keypair in `directory` (created 0700): node.key (PKCS#8 PEM, 0600) and node.pub. Refuses to
     overwrite. Returns (public key text, fingerprint)."""
+    if not AVAILABLE:
+        raise RuntimeError("the cryptography package is not installed")
     os.makedirs(directory, mode=0o700, exist_ok=True)
     priv_path, pub_path = os.path.join(directory, "node.key"), os.path.join(directory, "node.pub")
     if os.path.exists(priv_path) or os.path.exists(pub_path):
@@ -287,6 +307,8 @@ def init(directory):
 
 
 def load(directory):
+    if not AVAILABLE:
+        raise RuntimeError("the cryptography package is not installed")
     with open(os.path.join(directory, "node.key"), "rb") as f:
         return serialization.load_pem_private_key(f.read(), password=None)
 
@@ -305,7 +327,7 @@ def main(argv=None):
         else:
             text = public_text(load(a.dir))
             fp = key_fingerprint(text)
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, RuntimeError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     print(f"publicKey: {text}\nfingerprint: {fp}")

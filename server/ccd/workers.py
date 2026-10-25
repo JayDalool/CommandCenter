@@ -93,7 +93,7 @@ class Workers:
     def __init__(self, db, clock=time.time, version="unknown", keys=None):
         self.db = db
         self.clock = clock
-        self.keys = keys          # ccd/nodekeys.NodeKeys (Phase 2 shadow): a node's key follows its approval
+        self.keys = keys          # ccd/nodekeys.NodeKeys (Phase 2 shadow): revoking a node revokes its key
         self._last_beat = 0.0
         self._version = version
 
@@ -229,8 +229,6 @@ class Workers:
             # wants approved_at >= enrolled_at).
             self.db.execute("UPDATE worker_nodes SET status='active', approved_by='jay', "
                             "approved_at=MAX(?, enrolled_at) WHERE id=?", (self.clock(), node))
-            if self.keys is not None:
-                self.keys.approve(node)           # the key Jay compared is approved with the node (no-op without one)
             self._event(node, "approved", "jay")
         return self.node(node)
 

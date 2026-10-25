@@ -312,8 +312,13 @@ class Daemon:
         self.ledger = ledger.Ledger(tasks.db) if getattr(tasks, "db", None) is not None else None
         # Worker nodes (PR 5): the model and enrolment only. Nothing is scheduled on a node yet (Phase 2).
         # Phase 2 shadow step 2 (Jay 2026-10-25): node keys and signed heartbeats, recorded only. Off unless config.json
-        # says "phase2_node_shadow": true; read once, here. A node's existing key still follows its approval.
+        # says "phase2_node_shadow": true; read once, here. Revoking a node revokes its key; approving does not
+        # approve it (the UI does not show the key fingerprint yet).
         self.node_shadow_on = isinstance(cfg, dict) and cfg.get("phase2_node_shadow") is True
+        if self.node_shadow_on and not nodekeys_mod.AVAILABLE:
+            log.warning(json.dumps({"msg": "phase2_node_shadow is on but the cryptography package is missing; "
+                                           "the node shadow check stays off"}))
+            self.node_shadow_on = False
         self.node_keys = nodekeys_mod.NodeKeys(tasks.db) if getattr(tasks, "db", None) is not None else None
         self.workers = workers_mod.Workers(tasks.db, version=__version__, keys=self.node_keys) \
             if getattr(tasks, "db", None) is not None else None
@@ -1911,8 +1916,8 @@ class Daemon:
     def _node_enrol_shadow(self, node, public_key, actor):
         """Record the key a new node sent (Phase 2 shadow). Never refuses the enrolment."""
         try:
-            fp = self.node_keys.add(node, public_key, actor) if public_key is not None else None
-            reasons = [] if fp else ["bad_key" if public_key is not None else "no_key"]
+            fp, problem = self.node_keys.add(node, public_key, actor) if public_key is not None else (None, "no_key")
+            reasons = [problem] if problem else []
             self.node_keys.observe(node, "enrol", 200, {"signed": False, "verified": False, "keyFingerprint": fp,
                                                         "reasons": reasons})
             return {"keyFingerprint": fp} if fp else {}
