@@ -1872,14 +1872,19 @@ class Daemon:
         if self.workers is None:
             return {"available": False, "nodes": [], "events": []}
         nodes = self.workers.list()
-        keys = self.node_keys.keys() if self.node_keys is not None else {}
-        for n in nodes:
-            k = keys.get(n["id"])
-            n["key"] = {"fingerprint": k["fingerprint"], "approved": k["approved"]} if k else None
-        out = {"available": True, "nodes": nodes, "events": self.workers.events(), "onlineFor": workers_mod.ONLINE_FOR,
-               "nodeShadow": self.node_shadow_on}
-        if self.node_shadow_on and self.node_keys is not None:
+        out = {"available": True, "nodes": nodes, "events": self.workers.events(), "onlineFor": workers_mod.ONLINE_FOR}
+        if not (self.node_shadow_on and self.node_keys is not None):
+            return out                                       # with the switch off, exactly the answer from before v12
+        out["nodeShadow"] = True
+        try:
+            keys = self.node_keys.keys()
+            for n in nodes:
+                k = keys.get(n["id"])
+                n["key"] = {"fingerprint": k["fingerprint"], "approved": k["approved"]} if k else None
             out["shadow"] = dict(self.node_keys.summary(), chain=self.node_keys.verify(), errors=self.node_keys.errors)
+        except Exception as e:  # noqa: BLE001 — the shadow record is an overlay; the node list never depends on it
+            log.warning(json.dumps({"msg": "node shadow summary failed", "error": repr(e)[:200]}))
+            out["shadow"] = {"error": "the node shadow record could not be read", "enforced": False}
         return out
 
     def worker_enrol(self, body, actor):

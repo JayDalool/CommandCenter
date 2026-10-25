@@ -240,7 +240,14 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         d.worker_heartbeat("laptop", out["token"], {})
         for t in ("node_keys", "node_observations", "node_nonces"):
             self.assertEqual(self.ts.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0], 0)
-        self.assertNotIn("shadow", d.workers_state())
+        st = d.workers_state()
+        self.assertEqual(sorted(st), ["available", "events", "nodes", "onlineFor"])    # the answer from before v12
+        self.assertNotIn("key", st["nodes"][0])
+        on = self.d.workers_state()
+        self.assertTrue(on["nodeShadow"])
+        with mock.patch.object(self.d.node_keys, "verify", side_effect=sqlite3.OperationalError("locked")):
+            broken = self.d.workers_state()                                           # the list still answers
+        self.assertEqual((len(broken["nodes"]), broken["shadow"]["enforced"]), (len(on["nodes"]), False))
 
 
 class OverHttp(unittest.IsolatedAsyncioTestCase):

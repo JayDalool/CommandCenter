@@ -492,12 +492,12 @@ with the reasons Phase 2 would refuse it: `unsigned`, `malformed`, `no_key`, `ke
 `stale_timestamp` (more than 60 s off), `replayed_nonce` (seen in the last 10 minutes; only a verified signature
 records a nonce, so forgeries cannot burn one), `node_pending`, `node_revoked`, `bad_node_token`, `bad_key`,
 `duplicate_key`, `node_has_key`. The canonical body is Python's `json.dumps(sort_keys=True, separators=(",", ":"),
-ensure_ascii=False)`; a non-Python node must match it exactly. The signed path is the path ccd sees, so a proxy that
+ensure_ascii=True)` (non-ASCII text as `\uXXXX` escapes); a non-Python node must match it exactly. The signed path is the path ccd sees, so a proxy that
 rewrites a path prefix would make every signature fail (none does today).
 **It refuses nothing**: every heartbeat and enrolment answers exactly as before, `enforced` is 0 (CHECK), and a check
 that fails is counted (`shadow.errors`), never raised. Not covered yet: the server node (ccd's own host heartbeats
 in-process), capability claims beyond what Jay approved, job claims and key rotation; existing nodes must re-enrol to
-get a key. Observations are kept for good, like the audit trail (about 200 bytes each; a retention rule comes with
+get a key, under a new name (revoked names are never reused). Observations are kept for good, like the audit trail (about 200 bytes each; a retention rule comes with
 enforcement). Verification uses PyCA `cryptography` (pinned in requirements.txt); if it is missing, ccd still starts and
 logs a warning with the check off.
 
