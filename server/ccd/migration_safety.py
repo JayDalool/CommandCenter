@@ -1,34 +1,36 @@
-"""Migration safety for tasks.db: a rehearsal of migration v10 on a copy, and the way back. Never imported by the
+"""Migration safety for tasks.db: a rehearsal of the newest migration (v11) on a copy, and the way back. Never imported by the
 daemon; it adds no route.
 
     python -m ccd.migration_safety drill --snapshot COPY.db --out DIR [--old-ccd OLD_CHECKOUT/server]
                                          [--redact --label "where the snapshot came from"] [--clean]
-    python -m ccd.migration_safety rollback --db tasks.db --to 9 --backup-dir DIR        (stop ccd first)
+    python -m ccd.migration_safety rollback --db tasks.db --to 10 --backup-dir DIR       (stop ccd first)
     python -m ccd.migration_safety export-onboarding --db tasks.db --out FILE.json       (read-only; ccd may run)
 
 drill     Works only on copies it makes inside DIR. The snapshot is opened read-only and never written; make it with
           `sqlite3 tasks.db ".backup COPY.db"`. Writes drill.json and drill.md, and exits 0 when every check passes,
           1 when one fails, 2 when it cannot run. The checks:
             backup    SQLite's online backup of the snapshot holds exactly the same rows in every table
-            upgrade   v9 -> v10 adds exactly the four onboarding tables and their indexes and triggers; every existing
+            upgrade   v10 -> v11 adds exactly the tables migration 11 adds (identity_tokens, identity_observations)
+                      and their indexes and triggers; every existing
                       table, row, index and trigger is unchanged; integrity, foreign keys and the audit hash chain
                       still check; reopening applies nothing; ccd reads the upgraded file
-            old ccd   a v9 ccd refuses the v10 file and changes nothing (in process; with --old-ccd, also a real
+            old ccd   a v10 ccd refuses the v11 file and changes nothing (in process; with --old-ccd, also a real
                       older checkout in its own process)
-            rollback  v10 -> v9 in place, after new work was written at v10: the schema is exactly v9 again, the new
-                      work is kept, and a v9 ccd opens it; it refuses, changing nothing, when an onboarding table holds
-                      a row
-            restore   copying the backup back gives the snapshot's rows exactly, and a v9 ccd opens it
+            rollback  v11 -> v10 in place, after new work was written at v11: the schema is exactly v10 again, the new
+                      work is kept, and a v10 ccd opens it; it refuses, changing nothing, when a table migration 11
+                      added holds a row
+            restore   copying the backup back gives the snapshot's rows exactly, and a v10 ccd opens it
             recovery  a migration interrupted part-way, or whose process is killed part-way (with uncommitted pages
-                      already in the write-ahead log), leaves v9 exactly; killed straight after its commit leaves v10
+                      already in the write-ahead log), leaves v10 exactly; killed straight after its commit leaves v11
                       complete; either way the next start finishes the job
           --redact  the report names no path, host or user: the snapshot is shown by --label, folders as <out>,
                     <older checkout> and ~, and each detail is cut to 300 characters. It never holds row contents.
           --clean   deletes the database copies in DIR after the run (they hold the snapshot's data); the
                     reports stay.
-export-onboarding  Writes every row of the four onboarding tables to a JSON file with its SHA-256, through a
+          An older snapshot is lifted to the drill's starting version on the copy first, and the report says so.
+export-onboarding  Writes every row of the four onboarding tables (migration 10) to a JSON file with its SHA-256, through a
           read-only connection, so the records are kept outside the database before a backup is restored over them
-          (docs/runbooks/tasks-db-v10-rollback.md). It changes nothing.
+          (docs/runbooks/tasks-db-v10-rollback.md, docs/runbooks/tasks-db-v11-rollback.md). It changes nothing.
 rollback  Takes a backup with SQLite's backup API, then runs tasks.downgrade(): it drops only tables a migration added,
           only when they are empty, in one transaction, and checks the result is exactly the older schema.
 """
@@ -43,9 +45,20 @@ import time
 
 from . import tasks
 
-FROM, TO = 9, 10
+# The drill rehearses the newest migration, one step. v10's drill (onboarding tables) passed on 2026-10-24.
+TO = tasks.SCHEMA_VERSION
+FROM = TO - 1
+ONBOARDING = 10                     # the migration whose tables export-onboarding copies
+# A row in a table migration TO adds, to show the rollback refuses to drop history. A new migration adds its own
+# entry here (the drill fails loudly with a KeyError until it does).
+HISTORY_ROW = {
+    10: ("INSERT INTO onboarding_drafts (id, kind, state, body, body_sha, revision, created_at, created_by, updated_at) "
+         "VALUES ('d-000000000001', 'agent', 'open', '{}', ?, 1, 0, 'jay', 0)", ("0" * 64,)),
+    11: ("INSERT INTO identity_tokens (kind, subject, token_sha, issued_at, issued_by, expires_at) "
+         "VALUES ('agent', 'agent:drill', ?, 0, 'jay', 1)", ("0" * 64,)),
+}
 # The areas Jay asked to see (2026-10-23), in report order.
-AREAS = (("backup", "Backup"), ("upgrade", "v9 -> v10 migration and schema integrity"),
+AREAS = (("backup", "Backup"), ("upgrade", f"v{FROM} -> v{TO} migration and schema integrity"),
          ("old ccd", "Backward compatibility"), ("rollback", "Rollback"), ("restore", "Restore"),
          ("recovery", "Crash recovery"))
 SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -235,7 +248,7 @@ class Drill:
                 self.check(area, "the area ran to the end", False, f"{type(e).__name__}: {e}")
         ok = all(c["ok"] for c in self.checks)
         return {"result": "PASS" if ok else "FAIL", "at": started, "seconds": round(time.time() - started, 2),
-                "snapshot": {"path": self.snapshot, "schema": snap_version, "liftedTo9": lifted, "tables": len(self.d0),
+                "snapshot": {"path": self.snapshot, "schema": snap_version, "lifted": lifted, "liftedTo": FROM, "tables": len(self.d0),
                              "rows": rows, "tickets": self.tickets, "auditChain": self.a0},
                 "upgradeMs": self.ms, "oldCcd": self.old_server, "checks": self.checks}
 
@@ -260,7 +273,7 @@ class Drill:
         now = tasks.schema_objects(db)
         self.check("upgrade", "every existing table, index and trigger is unchanged", self.s0 <= now)
         own = set(tasks.DOWNGRADES[TO])
-        self.check("upgrade", "it adds only the onboarding tables and their own indexes and triggers",
+        self.check("upgrade", f"it adds only migration {TO}'s tables and their own indexes and triggers",
                    now - self.s0 == self.added and all(o[2] in own for o in now - self.s0),
                    sorted(f"{o[0]} {o[1]}" for o in now - self.s0 if o[2] not in own)
                    or sorted(o[1] for o in now - self.s0 if o[0] == "table"))
@@ -281,8 +294,8 @@ class Drill:
             first = ts.db.execute("SELECT key FROM tickets ORDER BY id LIMIT 1").fetchone()
             self.check("upgrade", "this ccd opens the upgraded file and reads every ticket",
                        ts.applied == [] and n == self.tickets, f"{n} tickets")
-            if first:                                    # new work done at v10, which a rollback must keep
-                ts.comment(first[0], "migration drill: written at v10, kept by the rollback", "jay")
+            if first:                                    # new work done after the upgrade, which a rollback must keep
+                ts.comment(first[0], f"migration drill: written at v{TO}, kept by the rollback", "jay")
                 self.first = first[0]
         finally:
             ts.close()
@@ -296,7 +309,7 @@ class Drill:
         db.close()
         if self.old_server:
             r = old_ccd(self.old_server, self.path("upgraded.db"))
-            self.check("old ccd", "the older checkout, in its own process, refuses the v10 file",
+            self.check("old ccd", f"the older checkout, in its own process, refuses the v{TO} file",
                        r.get("opened") is False and r.get("schema") == FROM, r)
 
     def rollback(self):
@@ -308,9 +321,9 @@ class Drill:
         d2 = digests(db)
         self.check("rollback", f"v{TO} -> v{FROM} in place leaves exactly the v{FROM} schema",
                    not refused and version(db) == FROM and tasks.schema_objects(db) == self.s0, refused or None)
-        self.check("rollback", "every row is kept, including work written at v10",
+        self.check("rollback", f"every row is kept, including work written at v{TO}",
                    d2 == {t: after_work[t] for t in self.d0} and (not self.first or d2 != self.d0),
-                   "one comment written at v10 is still there" if self.first else "no ticket to write to")
+                   f"one comment written at v{TO} is still there" if self.first else "no ticket to write to")
         self.check("rollback", "integrity and the audit hash chain check",
                    checked(db) and audit(db)["ok"] == self.a0["ok"])
         self.check("rollback", f"a v{FROM} ccd opens it", not _refusal(lambda: tasks.migrate(db, self.older)))
@@ -328,11 +341,10 @@ class Drill:
         held = self.path("held.db")
         copy(self.path("upgraded.db"), held)
         db = connect(held)
-        db.execute("INSERT INTO onboarding_drafts (id, kind, state, body, body_sha, revision, created_at, created_by, "
-                   "updated_at) VALUES ('d-000000000001', 'agent', 'open', '{}', ?, 1, 0, 'jay', 0)", ("0" * 64,))
+        db.execute(*HISTORY_ROW[TO])
         before = digests(db)
         refused = _refusal(lambda: tasks.downgrade(db, FROM))
-        self.check("rollback", "it refuses when an onboarding table holds a row, and changes nothing",
+        self.check("rollback", f"it refuses when a table migration {TO} added holds a row, and changes nothing",
                    refused and digests(db) == before and version(db) == TO, refused or "it dropped history")
         db.close()
 
@@ -363,7 +375,7 @@ class Drill:
         db.set_progress_handler(stop, 1)
         interrupted = _refusal(lambda: tasks.migrate(db), sqlite3.DatabaseError)
         db.close()                                       # ccd stops when its start fails
-        self.check("recovery", "a migration interrupted part-way leaves v9 exactly",
+        self.check("recovery", f"a migration interrupted part-way leaves v{FROM} exactly",
                    interrupted and self._is_base(cut), interrupted or "it was not interrupted")
         self.check("recovery", "and the next start finishes it", self._finishes(cut))
 
@@ -371,7 +383,7 @@ class Drill:
         copy(base, killed)
         r = _child(_CHILD, SERVER_DIR, killed, "mid", str(ticks // 2))
         wal = os.path.getsize(killed + "-wal") if os.path.exists(killed + "-wal") else 0
-        self.check("recovery", "its process killed part-way, with uncommitted pages in the WAL, leaves v9 exactly",
+        self.check("recovery", f"its process killed part-way, with uncommitted pages in the WAL, leaves v{FROM} exactly",
                    r.returncode == 137 and self._is_base(killed), f"exit {r.returncode}, WAL {wal} bytes")
         self.check("recovery", "and the next start finishes it", self._finishes(killed))
 
@@ -379,7 +391,7 @@ class Drill:
         copy(base, done)
         r = _child(_CHILD, SERVER_DIR, done, "after")
         db = connect(done)
-        self.check("recovery", "killed straight after its commit leaves v10 complete",
+        self.check("recovery", f"killed straight after its commit leaves v{TO} complete",
                    r.returncode == 137 and version(db) == TO and tasks.schema_objects(db) == self.s0 | self.added
                    and {t: v for t, v in digests(db).items() if t in self.d0} == self.d0 and checked(db),
                    f"exit {r.returncode}")
@@ -387,7 +399,7 @@ class Drill:
         db.close()
 
     def _ticks(self, base):
-        """How many progress callbacks migration v10 makes inside its transaction, on a scratch copy."""
+        """How many progress callbacks the migration makes inside its transaction, on a scratch copy."""
         scratch = self.path("scratch.db")
         copy(base, scratch)
         db = connect(scratch)
@@ -466,7 +478,7 @@ def markdown(report):
     s = report["snapshot"]
     lines = [f"# Migration v{TO} drill: {report['result']}", "",
              f"Snapshot: {s['path']}. Schema v{s['schema']}"
-             + (f" (lifted to v{FROM} on the copy: {s['liftedTo9']})" if s["liftedTo9"] else "")
+             + (f" (lifted to v{FROM} on the copy: {s['lifted']})" if s["lifted"] else "")
              + f", {s['tables']} tables, {s['rows']} rows, {s['tickets']} tickets. Upgrade took {report['upgradeMs']} ms. "
              f"Older checkout: {report['oldCcd'] or 'not given'}"
              + (f" at {report['oldCcdCommit']}" if report.get("oldCcdCommit") else "") + ".",
@@ -533,16 +545,16 @@ def export_onboarding(path, out):
         raise RuntimeError(f"{out} exists; choose a new file")
     db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
-        if version(db) < TO:
+        if version(db) < ONBOARDING:
             raise RuntimeError(f"tasks.db is schema v{version(db)}; it has no onboarding tables")
         data = {}
-        for t in reversed(tasks.DOWNGRADES[TO]):          # oldest table first
+        for t in reversed(tasks.DOWNGRADES[ONBOARDING]):  # oldest table first
             cur = db.execute(f'SELECT * FROM "{t}" ORDER BY rowid')
             cols = [c[0] for c in cur.description]
             data[t] = [dict(zip(cols, row)) for row in cur]
     finally:
         db.close()
-    body = json.dumps({"schema": TO, "tables": data}, indent=2, sort_keys=True).encode()
+    body = json.dumps({"schema": ONBOARDING, "tables": data}, indent=2, sort_keys=True).encode()
     with open(out, "xb") as f:
         f.write(body)
     return {t: len(rows) for t, rows in data.items()}, hashlib.sha256(body).hexdigest()
@@ -551,14 +563,14 @@ def export_onboarding(path, out):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m ccd.migration_safety", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    d = sub.add_parser("drill", help="rehearse migration v10 on a copy")
+    d = sub.add_parser("drill", help=f"rehearse migration v{TO} on a copy")
     d.add_argument("--snapshot", required=True)
     d.add_argument("--out", required=True)
     d.add_argument("--old-ccd", help="an older checkout's server/ directory, to run its ccd against the files")
     d.add_argument("--redact", action="store_true", help="no paths, hosts or users in the report")
     d.add_argument("--label", help="how the report names the snapshot, e.g. 'live tasks.db, backup 2026-10-23T14:30Z'")
     d.add_argument("--clean", action="store_true", help="delete the database copies after the run; keep the reports")
-    r = sub.add_parser("rollback", help="undo migration v10 in place (stop ccd first)")
+    r = sub.add_parser("rollback", help="undo additive migrations in place (stop ccd first)")
     r.add_argument("--db", required=True)
     r.add_argument("--to", type=int, required=True)
     r.add_argument("--backup-dir", required=True)

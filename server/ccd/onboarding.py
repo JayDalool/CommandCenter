@@ -397,10 +397,14 @@ class Onboarding:
             "SELECT body FROM onboarding_drafts WHERE kind=? AND state='open' AND id IS NOT ?", (kind, except_id))]
 
     def _token_actors(self):
-        try:
-            return {r[0] for r in self.db.execute("SELECT DISTINCT actor FROM actor_tokens")}
-        except Exception:  # noqa: BLE001 — a hint only
-            return set()
+        out = set()
+        for sql in ("SELECT DISTINCT actor FROM actor_tokens",
+                    "SELECT DISTINCT subject FROM identity_tokens WHERE kind='agent'"):      # v11 typed tokens
+            try:
+                out |= {r[0] for r in self.db.execute(sql)}
+            except Exception:  # noqa: BLE001 — a hint only (an older schema has no identity_tokens)
+                pass
+        return out
 
     def validate(self, kind, body, except_id=None):
         """Read-only: the errors and warnings a draft has now. Saving a draft never needs it to be valid."""

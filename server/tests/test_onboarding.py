@@ -115,7 +115,7 @@ class Records(unittest.TestCase):
         self.assertNotIn("id", v["config"])
         self.assertEqual(self.o.draft(d["id"])["state"], "registered")
         self.assertEqual(self.o.draft(d["id"])["result"], "agent:nova")
-        self.assertEqual(self.ts.db.execute("SELECT COUNT(*) FROM actor_tokens").fetchone()[0], 0)
+        self.assertEqual(self.ts.db.execute("SELECT (SELECT COUNT(*) FROM actor_tokens) + (SELECT COUNT(*) FROM identity_tokens)").fetchone()[0], 0)
         self.err(409, self.o.register_agent, d["id"], 1, [], "jay")        # a draft registers once
         self.assertEqual([e["kind"] for e in a["events"]], ["registered"])
         self.assertEqual(self.o.agent_budgets(), {"agent:nova": NOVA["budget"]})
@@ -481,7 +481,7 @@ class OverHttp(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("ghp_", secret.text)
         budget = self.c.get("/api/onboarding/budgets", headers=self.h).json()
         self.assertEqual((budget["mode"], budget["enforced"]), ("shadow", False))
-        self.assertEqual(self.ts.db.execute("SELECT COUNT(*) FROM actor_tokens").fetchone()[0], 0)
+        self.assertEqual(self.ts.db.execute("SELECT (SELECT COUNT(*) FROM actor_tokens) + (SELECT COUNT(*) FROM identity_tokens)").fetchone()[0], 0)
 
 
 if __name__ == "__main__":

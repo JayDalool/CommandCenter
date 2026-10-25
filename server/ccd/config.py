@@ -66,6 +66,10 @@ DEFAULTS = {
     # read-only APIs and the shadow budget report. Off until Jay sets it true; read at start. Records only: it grants
     # nothing, issues no credential and starts no agent.
     "onboarding_groundwork": False,
+    # Phase 2 shadow identity record (ccd/identity.py resolve(); Jay 2026-10-25): one identity_observations row per
+    # write saying who it proves to be and why Phase 2 would refuse it. Off until Jay sets it true; read at start.
+    # Records only: it refuses nothing, with or without this flag.
+    "phase2_identity_shadow": False,
 }
 
 # The only project fields that may leave the server.
