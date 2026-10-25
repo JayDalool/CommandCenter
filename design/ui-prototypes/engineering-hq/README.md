@@ -17,7 +17,15 @@ npm run review        # builds, serves on http://127.0.0.1:5181 and opens your b
 Use a normal browser tab so pop-outs can open real windows you can drag to another monitor.
 `npm run dev` (port 5180) is the live-reload version for editing.
 
-## Design decisions (Jay, 2026-10-22)
+## Design decisions (Jay, 2026-10-22, confirmed 2026-10-25)
+
+Confirmed on 2026-10-25 and not to be reopened: dark is the default theme, the project colours, the agent persona
+names, the Needs My Attention queue and the full macOS-style Settings. `DESIGN_CHANGES.md` lists them.
+
+- **Themes**: Dark (default), Light (optional macOS-inspired variant) or System, in Settings › Appearance or
+  Jay's menu. Every open window follows. `?theme=light` opens a review link in light.
+- **Phone**: a bottom tab bar (Office, Messages, Decisions, Approvals, More) replaces the sidebar at 760 px and
+  below; the desktop keeps the sidebar.
 
 - **Project colours**: the concept-art palette. One source (`src/data/seed.ts`), published as
   `--pj-<key>` CSS variables; a test fails if a project colour is hard-coded anywhere else. Task IDs
@@ -83,10 +91,10 @@ Same layouts, palette, project colours and graphs. Added on top, with no new dep
 ## Tests
 
 ```bash
-npm test                              # 96 unit/component tests (jsdom)
+npm test                              # 103 unit/component tests (jsdom)
 npm run build && npm run preview &    # then, in another shell:
-node e2e/run.mjs                      # 25 real-browser tests: pop-out windows, menus, tooltips, popovers, motion, loading,
-                                      # approvals and budgets (including phone width)
+node e2e/run.mjs                      # 27 real-browser tests: pop-out windows, menus, tooltips, popovers, motion, loading,
+                                      # approvals and budgets, the theme across windows, the phone tab bar
 node e2e/gallery.mjs http://127.0.0.1:5181/ e2e/out/gallery           # every page and state at 1920, 1366, 1280, 390 + pop-outs
 node e2e/gallery-page.mjs e2e/out/gallery e2e/out/gallery/index.html --ext png   # the visual gallery page
 node e2e/shots.mjs                    # older reference-comparison screenshots → e2e/out

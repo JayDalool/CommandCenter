@@ -1,0 +1,72 @@
+/* CommandCenter · Engineering HQ — optional light theme (design variant, 2026-10-25).
+ * Dark stays the default. This file only redefines tokens from hq.css, plus a few rules where a light surface needs a
+ * different treatment (fields, segmented track, warning icon, graph glow). Layout, radii, type and motion are unchanged.
+ * Chosen in Settings → Appearance (Dark, Light, or follow the system); <html data-hq-theme="light"> turns it on. */
+:root[data-hq-theme="light"] {
+  color-scheme: light;
+  --bg: #f2f3f8; --bg-2: #e9ebf3; --side: #e9ebf3;
+  --panel: #ffffff; --panel-2: #fdfdff; --raise: #f0f1f7; --hover: #eceef7; --sel: #e6e5fd;
+  --line: #e1e4ee; --line-2: #d0d4e2;
+  --text: #151a2d; --text-2: #434a63; --muted: #606881; --faint: #9aa0b4;
+  --accent: #5a48f5; --accent-2: #2f6bf0; --accent-soft: rgba(90, 72, 245, .1); --focus: #5b63f0;
+  --ok: #107a48; --warn: #a35f00; --bad: #d2273f; --info: #1c66d0; --violet: #7040dc; --pink: #c5246f; --idle: #6f7891;
+  --hl: inset 0 1px 0 rgba(255, 255, 255, .85);
+  --e1: 0 0 0 .5px rgba(22, 28, 64, .07), 0 1px 2px rgba(22, 28, 64, .06), 0 3px 10px rgba(22, 28, 64, .04);
+  --e2: 0 0 0 .5px rgba(22, 28, 64, .09), 0 2px 6px rgba(22, 28, 64, .08), 0 10px 28px rgba(22, 28, 64, .1);
+  --e3: 0 0 0 .5px rgba(22, 28, 64, .12), 0 8px 20px rgba(22, 28, 64, .1), 0 24px 64px rgba(22, 28, 64, .18);
+  --material: rgba(251, 251, 254, .9); --material-line: rgba(22, 28, 64, .12);
+  /* Surfaces */
+  --well: #f5f6fa; --field: #ffffff; --field-alt: #ffffff; --input: #ffffff;
+  --field-hover: #fafbfe; --tile: #ffffff; --tile-on: #f3f2ff; --node: #ffffff;
+  --btn-bg: #ffffff; --btn-hover: #f4f5fa; --chrome: #eceef5; --sunk: #eef0f6;
+  --kbd-bg: #f1f2f7; --tab-on: #ffffff; --tab-hover: #e4e7f0; --stripe-a: #eef0f6;
+  --float: #ffffff; --float-a: #ffffff; --float-b: #fbfbfe; --drawer-a: #ffffff;
+  --bubble: #ffffff; --bubble-me-a: #efedff; --bubble-me-b: #e9e6ff; --conv-sel-a: #efeeff;
+  --conv-sel-b: #e9e8ff; --nav-on-a: #e6e5fd; --nav-on-b: #e1e0fb; --side-a: #eef0f6;
+  --side-b: #e8eaf2; --thumb-a: #ffffff; --thumb-b: #fbfbfe; --seg-on: #ffffff;
+  --gn-ico-bg: #f2f3f9; --gn-x-bg: #ffffff; --gn-x-hover: #eef0f8; --life-dot: #e8eaf2;
+  --topbar: rgba(247, 248, 252, .78); --topbar-2: rgba(247, 248, 252, .82); --search-bg: #ffffff; --legend-bg: rgba(255, 255, 255, .92);
+  --tip-bg: rgba(250, 250, 253, .97); --veil: rgba(28, 32, 58, .22); --veil-2: rgba(28, 32, 58, .26); --veil-3: rgba(28, 32, 58, .22);
+  /* Lines, tracks and rings */
+  --panel-line: rgba(22, 28, 64, .09); --panel-line-2: rgba(22, 28, 64, .08); --seg-line: rgba(22, 28, 64, .1); --seg-on-line: rgba(22, 28, 64, .12);
+  --row-line: #eceef4; --row-line-2: #e8eaf1; --line-3: #d5d9e6; --line-4: #c9cde6;
+  --ring: #c3c8d9; --ring-2: #aab1c7; --ring-3: #c5cbdc; --node-line: #d3d7e4;
+  --node-line-hover: #a9b1cc; --node-neutral: #a3abc4; --gn-ico-line: #dde1ec; --gn-x-line: #c5cbe0;
+  --btn-line-hover: #c2c8db; --input-line-hover: #bcc3d8; --outline-line: #c8cbf2; --outline-hover: #9fa5ea;
+  --tile-line-hover: #b9bfe0; --card-line-hover: #b9bfe0; --dash-hover: #9aa2c8; --sel-line: #6a5ff5;
+  --accent-line: #5a5ef0; --conv-sel-line: #b3adff; --bubble-me-line: #cbc5ff; --step-line: #b3b8e8;
+  --detached-line: #c9c4ff; --track: #e3e6ef; --track-2: #d3d7e4; --switch-off: #d5d9e5;
+  --deny-bar: #c9cede; --legend-flow: #7d86a3; --dots: rgba(60, 70, 140, .16); --scroll: rgba(60, 70, 110, .22);
+  --scroll-hover: rgba(60, 70, 110, .36); --marker: rgba(22, 28, 64, .32);
+  /* Inks */
+  --text-strong: #0e1222; --link: #4450d6; --link-2: #4450d6; --link-hover: #3038b5;
+  --accent-icon: #5552e0; --accent-icon-2: #5552e0; --accent-em: #6a3fe6; --accent-em-2: #4f55e8;
+  --nav-ico-on: #4b4fe0; --violet-ink: #5a45e0; --violet-ink-2: #5a45e0; --violet-ink-3: #6c3fe0;
+  --violet-ink-4: #4f3fd0; --violet-ink-5: #6c3fe0; --violet-ink-6: #5a45e0; --bad-ink: #c8233f;
+  --bad-ink-2: #c0263f; --bad-ink-3: #c8233f; --bad-ink-4: #b8223c; --bad-ink-5: #b42039;
+  --warn-ink: #8a5300; --warn-ink-2: #915800; --info-ink: #1a4f9e; --info-ink-2: #1c5fc4;
+  --info-ink-3: #1c5fc4; --ico-ink-blue: #3f5bdc; --ico-ink-blue-2: #3f5bdc; --gn-ico-ink: #4a5375;
+  --gn-x-ink: #4a5375; --step-ink: #4a50c8; --bubble-ink: #1b2033; --code-ink: #2b3250;
+  --outline-ink: #3a3fc0; --sel-sub: #3f3a9c; --tip-ink: #1d2133; --knob: #ffffff;
+  --demo-mark: rgba(160, 100, 0, .6);
+  /* Washes tint toward navy instead of white; black shadows are softened */
+  --wash: 30 40 90; --shade-k: .32;
+}
+/* Light surfaces that need their own treatment */
+:root[data-hq-theme="light"] .fld input:not([type="checkbox"]), :root[data-hq-theme="light"] .fld select, :root[data-hq-theme="light"] .fld textarea,
+:root[data-hq-theme="light"] .modal input:not([type="checkbox"]), :root[data-hq-theme="light"] .modal select, :root[data-hq-theme="light"] select {
+  background-color: #fff; box-shadow: inset 0 1px 1px rgba(22, 28, 64, .05); }
+:root[data-hq-theme="light"] .seg:not(.seg-under) { background: #e8eaf1; box-shadow: inset 0 1px 1px rgba(22, 28, 64, .06); }
+:root[data-hq-theme="light"] .seg:not(.seg-under)::before { box-shadow: 0 0 0 .5px rgba(22, 28, 64, .12), 0 1px 3px rgba(22, 28, 64, .14); }
+:root[data-hq-theme="light"] .alert-card.t-warn .ac-ico { background: #ffb020; }
+:root[data-hq-theme="light"] .td-steps li.is-done i { color: var(--ok); }
+:root[data-hq-theme="light"] .edge-glow { opacity: .14; }
+:root[data-hq-theme="light"] .gnode { box-shadow: var(--hl), 0 1px 2px rgba(22, 28, 64, .08), 0 0 0 1px color-mix(in srgb, var(--c) 10%, transparent), 0 6px 18px color-mix(in srgb, var(--c) 14%, transparent); }
+:root[data-hq-theme="light"] .content { background: radial-gradient(1200px 600px at 60% -10%, rgba(90, 72, 245, .06), transparent 60%), var(--bg); }
+:root[data-hq-theme="light"] .nav-item.is-current > a { background: rgba(90, 72, 245, .12); box-shadow: inset 0 0 0 1px rgba(90, 72, 245, .14); }
+:root[data-hq-theme="light"] .tab.is-active { box-shadow: 0 0 0 .5px rgba(22, 28, 64, .1), 0 1px 2px rgba(22, 28, 64, .08); border-color: transparent; }
+:root[data-hq-theme="light"] .side-proto b { color: var(--warn); }
+:root[data-hq-theme="light"] .callout.t-warn, :root[data-hq-theme="light"] .demo-ribbon { color: var(--warn-ink); }
+:root[data-hq-theme="light"] ::selection { background: rgba(90, 72, 245, .22); }
+/* The dark islands (terminal, Slack phone preview) set their own text colour, since body text is dark in this theme. */
+:root[data-hq-theme="light"] .term, :root[data-hq-theme="light"] .slack-phone { color: var(--text); }

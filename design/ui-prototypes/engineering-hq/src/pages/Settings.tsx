@@ -8,6 +8,7 @@ import { Seg } from "../components/form";
 import { useRoute, go } from "../lib/router";
 import { useStore } from "../lib/store";
 import { motionPref, setMotionPref } from "../lib/motion";
+import { resolvedTheme, setThemePref, themePref, type ThemePref } from "../lib/theme";
 import { setSlowDemo, slowDemo } from "../components/overlay";
 import { feed, setOutage } from "../data/live";
 import { resetShared } from "../lib/shared";
@@ -20,7 +21,7 @@ import { DEST } from "./More";
 
 export const SETTINGS_SECTIONS: { id: string; label: string; icon: IconId; tint: string; sub: string }[] = [
   { id: "general", label: "General", icon: "gear", tint: "#8a95b0", sub: "Account and region" },
-  { id: "appearance", label: "Appearance", icon: "layers", tint: "#6d5cff", sub: "Look and motion" },
+  { id: "appearance", label: "Appearance", icon: "layers", tint: "#6d5cff", sub: "Dark, Light or System, colour and motion" },
   { id: "notifications", label: "Notifications", icon: "bell", tint: "#ff4f6d", sub: "What reaches you, and where" },
   { id: "windows", label: "Windows & monitors", icon: "popout", tint: "#3f7bff", sub: "Pop-out windows" },
   { id: "security", label: "Security", icon: "lock", tint: "#2fe08c", sub: "Developer Unlock and identity" },
@@ -58,13 +59,43 @@ function General() {
   </>;
 }
 
+const THEMES: { id: ThemePref; label: string; sub: string }[] = [
+  { id: "dark", label: "Dark", sub: "Default" },
+  { id: "light", label: "Light", sub: "Optional" },
+  { id: "system", label: "System", sub: "Follows your OS" },
+];
+const thumbWin = (cls: string) => <span className={`at-win ${cls}`}><i className="at-side" /><i className="at-top" /><i className="at-card" /><i className="at-card is-2" /><i className="at-acc" /></span>;
+/** macOS-style appearance picker: a small window in each theme. Arrow keys move between the three. */
+function ThemePicker() {
+  const pref = useStore(themePref);
+  const move = (e: React.KeyboardEvent, i: number) => {
+    const d = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+    if (!d) return;
+    e.preventDefault();
+    const n = THEMES[(i + d + THEMES.length) % THEMES.length];
+    setThemePref(n.id);
+    (e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role=radio]")[THEMES.indexOf(n)])?.focus();
+  };
+  return <div className="appear" role="radiogroup" aria-label="Appearance">
+    {THEMES.map((t, i) => <button key={t.id} type="button" role="radio" aria-checked={pref === t.id} tabIndex={pref === t.id ? 0 : -1}
+      className={cx("appear-i", pref === t.id && "is-on")} onClick={() => setThemePref(t.id)} onKeyDown={(e) => move(e, i)}>
+      <span className={`appear-thumb is-${t.id}`} aria-hidden="true">{t.id === "system" ? <>{thumbWin("is-dark")}{thumbWin("is-light is-half")}</> : thumbWin(t.id === "light" ? "is-light" : "is-dark")}</span>
+      <b>{t.label}</b><small>{t.sub}</small></button>)}
+  </div>;
+}
+
 function Appearance() {
   const motion = useStore(motionPref);
+  const pref = useStore(themePref);
   const { v } = useOrg();
   void v;
   return <>
-    <Group title="Look" foot="One approved look: deep navy surfaces with purple and blue accents. A light theme is not part of the approved design.">
-      <Row label="Theme" hint="Dark navy and purple"><span className="set-theme" aria-label="Dark navy theme preview"><i style={{ background: "var(--bg)" }} /><i style={{ background: "var(--panel)" }} /><i style={{ background: "var(--accent)" }} /><i style={{ background: "var(--accent-2)" }} /></span></Row>
+    <Group title="Appearance" foot={<>Dark navy and purple is the approved default. Light is an optional variant with the same layout, project colours, status colours and graphs. System follows the Windows or macOS setting and switches when it does. Every open window follows the choice.</>}>
+      <div className="set-row is-block"><ThemePicker /></div>
+      {pref === "system" && <Row label="Showing now" hint="From your operating system"><span>{resolvedTheme(pref) === "light" ? "Light" : "Dark"}</span></Row>}
+    </Group>
+    <Group title="Colour" foot="Project colours and agent personas are approved. They come from the project and agent records and look the same in both themes.">
+      <Row label="Accent" hint="Purple for focus and selection, blue for links and information"><span className="set-theme" aria-label="Accent colours"><i style={{ background: "var(--accent)" }} /><i style={{ background: "var(--accent-2)" }} /><i style={{ background: "var(--ok)" }} /><i style={{ background: "var(--warn)" }} /><i style={{ background: "var(--bad)" }} /></span></Row>
       <Row label="Project colours" hint="One source: the project records. Task IDs carry them everywhere.">
         <span className="set-swatches">{PROJECTS.map((p) => <span key={p.key} title={p.name}><i style={{ background: p.color }} />{p.prefix}</span>)}</span></Row>
     </Group>
@@ -199,12 +230,15 @@ export function Settings() {
   const route = useRoute();
   const cur = SETTINGS_SECTIONS.find((s) => s.id === route.id) ?? SETTINGS_SECTIONS[0];
   const Body = BODY[cur.id];
-  return <div className="page page-settings">
+  // Phones show the section list first, then one section with a back link (desktop always shows both).
+  const mode = route.id ? "is-detail" : "is-index";
+  return <div className={cx("page page-settings", mode)}>
     <div className="page-head"><div><h1>Settings</h1><p>Preferences, connections and the rules each project runs under. Mock data; nothing here connects anywhere.</p></div><Demo label="Prototype" /></div>
     <div className="set-wrap">
       <nav className="set-nav" aria-label="Settings sections">{SETTINGS_SECTIONS.map((s) => <a key={s.id} href={`#/settings/${s.id}`} className={cx("set-nav-i", s.id === cur.id && "is-current")} aria-current={s.id === cur.id ? "page" : undefined}>
         <span className="set-ico" style={{ ["--c" as string]: s.tint }}><Icon name={s.icon} size={15} /></span><span>{s.label}</span></a>)}</nav>
       <div className="set-body" key={cur.id}>
+        <a className="set-back" href="#/settings" aria-label="Back to Settings"><Icon name="chevl" size={16} /> Settings</a>
         <header className="set-h"><span className="set-ico is-lg" style={{ ["--c" as string]: cur.tint }}><Icon name={cur.icon} size={22} /></span><div><h2>{cur.label}</h2><p className="muted">{cur.sub}</p></div></header>
         <Body />
       </div>

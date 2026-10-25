@@ -12,6 +12,7 @@ import { AGENTS, CONVERSATIONS, PROJECTS, TASKS } from "../data/seed";
 import { useOrg } from "../data/org";
 import { Popover, openMenu, setSlowDemo, slowDemo, useContextMenu, type MenuItem } from "./overlay";
 import { motionPref, setMotionPref } from "../lib/motion";
+import { setThemePref, themePref } from "../lib/theme";
 import { Demo } from "./ui";
 import { gov } from "../data/governance";
 
@@ -57,9 +58,14 @@ function NavItem({ n, current }: { n: (typeof NAV)[number]; current: boolean }) 
   </div>;
 }
 
+/** The navigation section a route belongs to (a Task Room is part of Engineering, and so on). */
+export function sectionOf(screen: string): string {
+  return screen === "task" ? "engineering" : screen === "onboard" ? "agents" : screen === "newproject" ? "teams" : screen;
+}
+
 export function Sidebar() {
   const route = useRoute();
-  const cur = route.screen === "task" ? "engineering" : route.screen === "onboard" ? "agents" : route.screen === "newproject" ? "teams" : route.screen;
+  const cur = sectionOf(route.screen);
   const g = useStore(gov);
   const pending = g.requests.filter((r) => !g.decisions[r.id] && r.expires > Date.now()).length;
   return <aside className="side" aria-label="Navigation">
@@ -119,11 +125,15 @@ function Palette({ onClose }: { onClose: () => void }) {
 }
 
 function meMenu(): MenuItem[] {
-  const m = motionPref.get(), slow = slowDemo.get();
+  const m = motionPref.get(), slow = slowDemo.get(), t = themePref.get();
   return [
     { label: "Settings", icon: "gear", run: () => go("settings") },
     { label: "Help & shortcuts", icon: "help", run: () => go("settings", "help") },
     { label: "Design system", icon: "layers", run: () => go("design") },
+    { sep: true },
+    { label: "Dark (default)", checked: t === "dark", run: () => setThemePref("dark") },
+    { label: "Light", checked: t === "light", run: () => setThemePref("light") },
+    { label: "Follow system appearance", checked: t === "system", run: () => setThemePref("system") },
     { sep: true },
     { label: "Motion: follow system", checked: m === "system", run: () => setMotionPref("system") },
     { label: "Reduce motion", checked: m === "reduce", run: () => setMotionPref("reduce") },
@@ -131,6 +141,80 @@ function meMenu(): MenuItem[] {
     { sep: true },
     { label: "Sign out", icon: "lock", hint: "Prototype", disabled: true },
   ];
+}
+
+// ---------- phone: a native-style tab bar at the bottom, with everything else in a More sheet ----------
+const PHONE_TABS = [
+  { page: "office", label: "Office", icon: "home" },
+  { page: "messages", label: "Messages", icon: "message" },
+  { page: "decisions", label: "Decisions", icon: "shield" },
+  { page: "approvals", label: "Approvals", icon: "check" },
+] as const;
+const MORE_GROUPS: { title: string; items: { label: string; sub: string; icon: string; tint: string; go: () => void; page?: string }[] }[] = [
+  { title: "Company", items: [
+    { label: "Teams", sub: "Project Leads and their teams", icon: "users", tint: "#3f7bff", page: "teams", go: () => go("teams") },
+    { label: "Agents", sub: "Directory and management", icon: "spark", tint: "#a77bff", page: "agents", go: () => go("agents") },
+    { label: "Operations Topology", sub: "The whole company as a graph", icon: "cube", tint: "#6d5cff", page: "topology", go: () => go("topology") },
+    { label: "Engineering", sub: "Workbench and Task Rooms", icon: "wrench", tint: "#ff8a3d", page: "engineering", go: () => go("engineering") },
+    { label: "Revenue", sub: "Not connected", icon: "chart", tint: "#2fe08c", page: "revenue", go: () => go("revenue") },
+    { label: "Budgets", sub: "Agent, project and company limits", icon: "receipt", tint: "#ffb020", page: "budgets", go: () => go("budgets") },
+  ] },
+  { title: "Create", items: [
+    { label: "New Agent", sub: "Onboarding, mock only", icon: "plus", tint: "#5a4dff", page: "onboard", go: () => go("onboard") },
+    { label: "New Project", sub: "Onboarding, mock only", icon: "plus", tint: "#3f7bff", page: "newproject", go: () => go("newproject") },
+  ] },
+  { title: "", items: [
+    { label: "Settings", sub: "Appearance, notifications, security", icon: "gear", tint: "#8a95b0", page: "settings", go: () => go("settings") },
+    { label: "Help & shortcuts", sub: "Where things are", icon: "help", tint: "#8fa2ff", go: () => go("settings", "help") },
+    { label: "Design system", sub: "Tokens and components", icon: "layers", tint: "#ff4fa0", page: "design", go: () => go("design") },
+  ] },
+];
+
+function MoreSheet({ onClose, returnTo }: { onClose: () => void; returnTo: React.RefObject<HTMLButtonElement | null> }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const route = useRoute();
+  useEffect(() => {
+    ref.current?.focus();
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } };
+    window.addEventListener("keydown", k);
+    const back = returnTo.current;
+    return () => { window.removeEventListener("keydown", k); back?.focus(); };
+  }, [onClose, returnTo]);
+  const pick = (f: () => void) => { onClose(); f(); };
+  return <div className="sheet-veil" onClick={onClose}>
+    <div className="sheet" role="dialog" aria-modal="true" aria-label="More" tabIndex={-1} ref={ref} onClick={(e) => e.stopPropagation()}>
+      <span className="sheet-grab" aria-hidden="true" />
+      <header className="sheet-h"><b>More</b><button type="button" className="sheet-done" onClick={onClose}>Done</button></header>
+      {MORE_GROUPS.map((g, gi) => <section key={gi} className="sheet-group">{g.title && <h3>{g.title}</h3>}
+        <div className="set-rows">{g.items.map((i) => { const on = !!i.page && sectionOf(route.screen) === i.page;
+          return <button key={i.label} type="button" className={cx("sheet-row", on && "is-current")} aria-current={on ? "page" : undefined} onClick={() => pick(i.go)}>
+            <span className="set-ico" style={{ ["--c" as string]: i.tint }}><Icon name={i.icon} size={15} /></span>
+            <span className="sheet-row-t"><b>{i.label}</b><small>{i.sub}</small></span><Icon name="chevron" size={14} /></button>; })}</div></section>)}
+      <p className="sheet-foot">Design prototype · mock data · not connected to ccd</p>
+    </div>
+  </div>;
+}
+
+/** Shown instead of the sidebar on phones (≤ 760 px). The desktop sidebar is unchanged. */
+export function BottomNav() {
+  const route = useRoute();
+  const cur = sectionOf(route.screen);
+  const needs = useNeedsSummary().total;
+  const g = useStore(gov);
+  const pending = g.requests.filter((r) => !g.decisions[r.id] && r.expires > Date.now()).length;
+  const [more, setMore] = useState(false);
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const inTabs = PHONE_TABS.some((t) => t.page === cur);
+  const badge: Record<string, number> = { messages: 3, decisions: needs, approvals: pending };
+  return <>
+    <nav className="tabbar" aria-label="Tab bar">
+      {PHONE_TABS.map((t) => <a key={t.page} href={href(t.page)} className={cx("tabbar-i", cur === t.page && !more && "is-current")} aria-current={cur === t.page ? "page" : undefined}>
+        <span className="tabbar-ico"><Icon name={t.icon} size={23} />{badge[t.page] ? <em>{badge[t.page]}</em> : null}</span><span>{t.label}</span></a>)}
+      <button type="button" ref={moreRef} className={cx("tabbar-i", (more || !inTabs) && "is-current")} aria-haspopup="dialog" aria-expanded={more} onClick={() => setMore((m) => !m)}>
+        <span className="tabbar-ico"><Icon name="grid" size={23} /></span><span>More</span></button>
+    </nav>
+    {more && <MoreSheet onClose={() => setMore(false)} returnTo={moreRef} />}
+  </>;
 }
 
 export function TopBar({ status }: { status?: ReactNode }) {
@@ -143,6 +227,7 @@ export function TopBar({ status }: { status?: ReactNode }) {
     return () => window.removeEventListener("keydown", k);
   }, []);
   return <header className="top">
+    <a className="top-brand" href="#/office" aria-label="CommandCenter · My Office"><Logo size={30} /></a>
     <button type="button" className="search" onClick={() => setOpen(true)}><Icon name="search" size={19} />
       <span>Search projects, agents, decisions, people, or ask CommandCenter…</span><kbd>Ctrl</kbd><kbd>K</kbd></button>
     {status ?? <div className="sys-pill"><i /><div><b>Production · Untouched</b><small>Prototype · no live changes</small></div></div>}

@@ -39,11 +39,11 @@ export function DesignSystem() {
   const motion = useStore(motionPref);
   const ctx = useContextMenu(demoMenu, "Demo card");
   return <div className="page page-design">
-    <div className="page-head"><div><h1>Design System</h1><p>Tokens and components shared by every page and pop-out window. Dark navy and purple, refined with native-app detail.</p></div>
+    <div className="page-head"><div><h1>Design System</h1><p>Tokens and components shared by every page and pop-out window. Dark navy and purple by default, with an optional light variant built from the same tokens.</p></div>
       <div className="row-gap"><Demo label="Reference" /><PopButton id="page:design" /></div></div>
 
     <div className="ds-grid">
-      <Panel icon="layers" title="Colour" sub="Surfaces and accents (unchanged palette)">
+      <Panel icon="layers" title="Colour" sub="Surfaces and accents · values follow the chosen theme">
         <div className="ds-swatches">{COLORS.map((c) => <span key={c} className="ds-sw"><i style={{ background: `var(${c})` }} /><code>{c}</code></span>)}</div>
       </Panel>
       <Panel icon="doc" title="Type scale" sub="Inter, tight display tracking">

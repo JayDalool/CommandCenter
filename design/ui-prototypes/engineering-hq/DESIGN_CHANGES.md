@@ -15,23 +15,38 @@ onboarding, multi-monitor). The design is not frozen: this log tracks each reque
 Approved visual changes are carried into the matching integration PR (see the roadmap), so production matches
 the last approved prototype.
 
+## Confirmed design decisions
+
+Jay confirmed these on 2026-10-25. They are settled: integration builds them as shown and does not ask again.
+
+| Decision | What it means |
+|---|---|
+| Dark is the default theme | Dark navy and purple is what every user sees first. Light is an optional variant (V7). |
+| Project colours | SamVision green, GYST violet, MyFamilyExpenses orange, GauzeMate rose, CommandCenter blue, from the project records. |
+| Agent persona names | Claude, Iris, Nova, Atlas, Pixel and Orion, with their roles, avatars and colours. |
+| Needs My Attention queue | One queue for decisions, questions, reviews and approvals at `#/decisions` (V4). |
+| Full macOS-style Settings | One Settings window with a sidebar and 11 sections (V5). |
+| Kept as approved | Design system, Operations Topology, both onboarding wizards, agent hierarchy, detachable multi-monitor windows. |
+
 ## Visual changes
 
 | # | Date | Change | Pages | Asked by | State |
 |---|---|---|---|---|---|
-| V1 | 2026-10-22 | Concept-art project colours | All | Jay | Approved 2026-10-22 |
-| V2 | 2026-10-22 | Agent personas with role, status, task, model and project everywhere | All | Jay | Approved 2026-10-22 |
+| V1 | 2026-10-22 | Concept-art project colours | All | Jay | Approved 2026-10-22, confirmed 2026-10-25 |
+| V2 | 2026-10-22 | Agent personas with role, status, task, model and project everywhere | All | Jay | Approved 2026-10-22, confirmed 2026-10-25 |
 | V3 | 2026-10-22 | macOS-inspired refinement layer | All | Jay | Approved 2026-10-25 (overall direction) |
-| V4 | 2026-10-25 | Needs My Attention queue at `#/decisions`; decision room at `#/decisions/sv-025`; My Office KPI renamed "Needs You" | Decisions, My Office, Topology, sidebar | Claude (audit) | **Proposed** |
-| V5 | 2026-10-25 | Full Settings page in the macOS System Settings layout | Settings | Claude (Jay listed Settings) | **Proposed** |
-| V6 | 2026-10-25 | Phone layout fixes: wrapping rows, scrolling tab rows, stacked queue rows; Messages as one scrolling column; Teams hierarchy at half size, scrolling sideways | All at 390 px (Messages below 1200 px) | Claude (audit) | **Proposed** |
+| V4 | 2026-10-25 | Needs My Attention queue at `#/decisions`; decision room at `#/decisions/sv-025`; My Office KPI renamed "Needs You" | Decisions, My Office, Topology, sidebar | Claude (audit) | Approved 2026-10-25 |
+| V5 | 2026-10-25 | Full Settings page in the macOS System Settings layout | Settings | Claude (Jay listed Settings) | Approved 2026-10-25 |
+| V6 | 2026-10-25 | Phone layout fixes: wrapping rows, scrolling tab rows, stacked queue rows; Messages as one scrolling column; Teams hierarchy at half size, scrolling sideways | All at 390 px (Messages below 1200 px) | Claude (audit) | **Proposed** (now under the V8 tab bar) |
+| V7 | 2026-10-25 | Optional macOS-inspired light theme, plus System (follows Windows or macOS). Dark stays the default. Picker in Settings › Appearance and in Jay's menu; every open window follows | All | Jay | **Proposed** |
+| V8 | 2026-10-25 | Phone navigation: bottom tab bar (Office, Messages, Decisions, Approvals, More) with a More sheet; Settings opens as a list with a back link; My Office KPIs as 2×2 tiles. Desktop keeps the sidebar | All at 760 px and below | Jay | **Proposed** |
+| V9 | 2026-10-25 | Vertical balance at 1920×1080: My Office columns end level, topology centred, three latest updates, agent strip on screen; Settings as one full-height window | My Office, Settings | Jay | **Proposed** |
+| V10 | 2026-10-25 | Review fixes: decision stage labels no longer touch, Messages search keeps its height and icons, directory status wraps between parts | Decisions, Messages, Agents | Claude (audit) | **Proposed** |
 
 ## Open design questions
 
-| # | Question | Since | Options |
-|---|---|---|---|
-| Q1 | Light theme for HQ? Today's app has dark, light and system | 2026-10-25 | Design an HQ light theme, or keep HQ dark-only with Classic for light |
-| Q2 | Phone navigation | 2026-10-25 | Keep the icon rail, or a bottom tab bar (about 20% more width) |
+None open. Q1 (light theme) became V7: dark stays the default and light is optional. Q2 (phone navigation)
+became V8: a bottom tab bar.
 
 ## Behaviour requests (need a separate decision)
 

@@ -15,7 +15,7 @@ const m = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8"));
 const swap = (p) => p.replace(/\.png$/, `.${ext}`);
 const states = m.states.map((s) => ({ ...s, images: Object.fromEntries(Object.entries(s.images).map(([k, v]) => [k, swap(v)])) }));
 const ORDER = ["My Office", "Shell and navigation", "Messages", "Decisions", "Teams", "Agents", "Operations Topology", "Engineering", "Revenue", "Budgets and usage", "Approvals",
-  "New Agent onboarding", "New Project onboarding", "Settings", "Design system", "Pop-out windows"];
+  "New Agent onboarding", "New Project onboarding", "Settings", "Design system", "Light theme (optional)", "Pop-out windows"];
 const groups = [...new Set([...ORDER.filter((g) => states.some((s) => s.group === g)), ...states.map((s) => s.group)])];
 const count = states.reduce((a, s) => a + Object.keys(s.images).length, 0);
 const data = { groups, states, viewports: m.viewports, generated: m.generated, protoUrl, commit, count };

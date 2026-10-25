@@ -18,8 +18,10 @@ function busPath(a: GNode, b: GNode, ao: number, bo: number, bus: number) {
 
 /** `fitWidth`: scale to the box's width only (never above 1, never below `minScale`) and take the scaled height, so a
  *  narrow window shows no empty band; below `minScale` the graph scrolls sideways inside its frame instead of shrinking. */
-export function GraphFrame({ w, h, nodes, edges, className, fitWidth, minScale = 0 }: {
-  w: number; h: number; nodes: FNode[]; edges: FEdge[]; className?: string; fitWidth?: boolean; minScale?: number }) {
+/** `center`: with fitWidth, the frame may be taller than the graph (it grows to line up with the next column); the graph
+ *  then sits in the middle of it instead of at the top. */
+export function GraphFrame({ w, h, nodes, edges, className, fitWidth, minScale = 0, center }: {
+  w: number; h: number; nodes: FNode[]; edges: FEdge[]; className?: string; fitWidth?: boolean; minScale?: number; center?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const [k, setK] = useState(1);
   useEffect(() => {
@@ -58,7 +60,7 @@ export function GraphFrame({ w, h, nodes, edges, className, fitWidth, minScale =
           : <div key={n.id} className={cx("gnode", n.className)} style={st} aria-label={n.label}>{n.body}</div>;
       })}
     </div>;
-  if (fitWidth) return <div className={cx("gframe", "is-fit-width", className)} ref={box}>
+  if (fitWidth) return <div className={cx("gframe", "is-fit-width", center && "is-center", className)} ref={box}>
     <div className="gframe-sizer" style={{ width: Math.round(w * k), height: Math.round(h * k) }}>{world}</div>
   </div>;
   return <div className={cx("gframe", className)} ref={box}>{world}</div>;

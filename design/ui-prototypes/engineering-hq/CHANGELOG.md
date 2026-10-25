@@ -3,7 +3,42 @@
 Each version is a commit on the draft branch `claude/project-thread-gs2u2h` (PR #64). Every gallery and package
 names the commit it was captured from. Visual requests and their approval state are tracked in `DESIGN_CHANGES.md`.
 
-## 2026-10-25 · Complete prototype for review
+## 2026-10-25 · Final design refinements
+
+Jay's confirmed decisions are recorded in `DESIGN_CHANGES.md`: dark default, project colours, agent persona names,
+Needs My Attention and the full Settings window. Everything else approved (design system, Operations Topology,
+onboarding, agent hierarchy, detachable windows) is unchanged.
+
+**Optional light theme (V7).** A macOS-inspired light variant built from the same tokens: every colour in `hq.css`
+is now a token (119 new ones for surfaces, lines, inks and washes), and `src/styles/theme-light.css` redefines them
+under `:root[data-hq-theme="light"]`. Project, status and graph colours keep their meaning. The terminal and the Slack
+phone preview stay dark, as they are on a Mac. Choose Dark (default), Light or System in Settings › Appearance or
+in Jay's menu; System follows Windows or macOS and switches when it does. The choice is shared, so every pop-out
+window changes with it, and a small script in `index.html` applies it before the first paint (no dark flash).
+`?theme=light|dark|system` opens the prototype in a theme for review.
+
+**Phone navigation (V8).** At 760 px and below the sidebar gives way to a bottom tab bar: Office, Messages,
+Decisions, Approvals (with their badges) and More. More opens a sheet with every other page, grouped like a phone
+settings list (Company, Create, then Settings, Help and the design system). The logo sits in the top bar. Settings
+opens as a list, and each section opens on its own screen with a back link. My Office's four KPIs become compact
+2×2 tiles. The desktop sidebar and tab strip are unchanged.
+
+**Vertical space at 1920×1080 (V9).** My Office: both columns now end on the same line, the topology preview is
+centred in its panel, Recent Updates shows the three latest, and the Active Agents strip fits on the first screen
+without scrolling. Settings is one full-height window with its sidebar on the left and the section centred, like
+macOS System Settings. No cards were added.
+
+**Review fixes (V10).** The decision room's stage labels no longer run together at 1440 px; the Messages search keeps
+its height and icons; the agent directory's status wraps between parts, not inside "Waiting for Jay"; icons never
+shrink in tight rows. Frosted surfaces (tab bar, menus, popovers, notices, command palette) blur what is behind
+them again in the built app: the minifier had kept only the `-webkit-` form, which Chrome and Edge ignore.
+
+**Review tooling.** The gallery adds a Light theme group, the phone tab bar, the More sheet and the phone Settings
+list. New browser checks cover the theme across windows and the phone layout.
+
+Tests: 103 unit tests, 27 browser checks. No page scrolls sideways at 1920, 1366, 1280 or 390 px, in either theme.
+
+## 2026-10-25 · Complete prototype for review (95a6624)
 
 **Every control does something.** An automated click-through clicked all 1,303 visible controls on 29 routes,
 each in a fresh browser. What it found, and the fixes:

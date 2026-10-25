@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { useRoute } from "./lib/router";
-import { Notices, Sidebar, TabStrip, TopBar, useWindowKeys } from "./components/Shell";
+import { BottomNav, Notices, Sidebar, TabStrip, TopBar, useWindowKeys } from "./components/Shell";
 import { Detachable } from "./windows/Detachable";
 import { PopoutWindow } from "./windows/PopoutWindow";
 import { beatAsMain, startMainWindowDuties } from "./windows/manager";
@@ -72,6 +72,7 @@ function MainWindow() {
         {!ready ? <PageSkeleton label={`Loading ${view?.title ?? "page"}`} /> : view ? <Detachable id={view.id} className="page-placeholder"><Page /></Detachable> : <Page />}
       </main>
     </div>
+    <BottomNav />
   </div>;
 }
 

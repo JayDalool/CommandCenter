@@ -37,6 +37,8 @@ Opening `index.html` straight from the file system does not work, because browse
 | `#/settings/general` | Settings |
 | `?nofeed` | Freezes the demo feed, so nothing moves while you look |
 | `?slow` | Shows the loading skeletons on every navigation |
+| `?theme=light` | Opens in the optional light theme (`dark` is the default; `system` follows the OS) |
+| `#/settings/appearance` | Dark, Light or System |
 
 `docs/PAGE_MAP.md` lists every page, state and pop-out address.
 
@@ -49,6 +51,11 @@ rolls the view back and tells you when a window was blocked.
 The hosted preview on claude.ai runs inside a locked frame, so pop-out windows there are usually blocked. Everything
 else works the same.
 
+## Phone layout
+
+Narrow the window below 760 px (or use the browser's device toolbar at 390 × 844): the sidebar becomes a bottom tab
+bar with a More sheet. Widen it again and the sidebar comes back.
+
 ## Reset the demo
 
 Settings → Demo controls → Reset demo data, or clear the site data for 127.0.0.1:5181. The wizards and approvals write
@@ -57,9 +64,9 @@ only to this browser's storage.
 ## Tests
 
 ```bash
-npm test                                # 96 unit and component tests (jsdom)
+npm test                                # 103 unit and component tests (jsdom)
 npm run build && npm run preview &      # then, in another shell:
-node e2e/run.mjs                        # 25 real-browser checks (pop-outs, menus, approvals, budgets, phone width)
+node e2e/run.mjs                        # 27 real-browser checks (pop-outs, menus, approvals, budgets, theme, phone layout)
 ```
 
 The browser checks load Playwright from the global npm install, or from `PLAYWRIGHT_MODULE`, so the prototype does

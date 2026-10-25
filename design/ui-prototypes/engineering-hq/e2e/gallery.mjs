@@ -9,6 +9,8 @@ const { chromium } = loadPlaywright();
 const BASE = process.argv[2] ?? "http://127.0.0.1:5181/";
 const OUT = process.argv[3] ?? "e2e/out/gallery";
 const ONLY = process.argv[4] ? new Set(process.argv[4].split(",")) : null;
+// GALLERY_VP=phone (or 1920,1366) retakes only those sizes and keeps the others from the existing manifest.
+const ONLY_VP = process.env.GALLERY_VP ? new Set(process.env.GALLERY_VP.split(",")) : null;
 fs.mkdirSync(OUT, { recursive: true });
 
 export const VIEWPORTS = [
@@ -52,7 +54,8 @@ async function projectWizard(p, upTo) {
 
 // group, id, title, note, route, phone (also capture on a phone), full (also capture the whole scroll length at 1920), run (set-up)
 const S = [];
-const add = (group, id, title, route, o = {}) => S.push({ group, id, title, route, note: o.note ?? "", phone: o.phone ?? false, full: o.full ?? false, run: o.run, query: o.query });
+// `only` limits a state to some viewports (e.g. ["phone"] for the phone tab bar and More sheet).
+const add = (group, id, title, route, o = {}) => S.push({ group, id, title, route, note: o.note ?? "", phone: o.phone ?? false, full: o.full ?? false, run: o.run, query: o.query, only: o.only });
 
 // My Office
 add("My Office", "office", "My Office (executive dashboard)", "office", { phone: true, full: true, note: "Agents, Needs You, updates from Project Leads, system health." });
@@ -64,6 +67,9 @@ add("Shell and navigation", "shell-notifications", "Notifications", "office", { 
 add("Shell and navigation", "shell-jay-menu", "Jay's menu", "office", { run: async (p) => { await click(p, "button.me"); await wait(p, 350); } });
 add("Shell and navigation", "shell-tab-menu", "Tab context menu", "messages/sv-lead", { note: "Right-click any tab: pop out, close, close others.",
   run: async (p) => { await p.evaluate(() => { location.hash = "#/office"; }); await wait(p, 400); await p.locator('[data-testid="tab-page:messages"]').click({ button: "right" }); await wait(p, 350); } });
+add("Shell and navigation", "phone-tabbar", "Phone: bottom tab bar", "messages/sv-lead", { only: ["phone"], note: "Office, Messages, Decisions, Approvals and More. The desktop keeps the sidebar." });
+add("Shell and navigation", "phone-more", "Phone: More sheet", "office", { only: ["phone"], note: "Every other page, grouped like a phone settings list.",
+  run: async (p) => { await click(p, '.tabbar button[aria-haspopup="dialog"]'); await wait(p, 450); } });
 add("Shell and navigation", "shell-loading", "Loading skeletons", "office", { query: "?nofeed&slow", note: "Shown only when something loads; simulated here.",
   run: async (p) => { await p.evaluate(() => { location.hash = "#/teams/samvision"; }); await wait(p, 150); } });
 // Messages
@@ -133,12 +139,32 @@ add("New Project onboarding", "project-approve", "New Project: final approval", 
 // Settings
 for (const [id, t] of [["general", "General"], ["appearance", "Appearance"], ["notifications", "Notifications"], ["windows", "Windows & monitors"], ["security", "Security"], ["connections", "Connections"],
   ["projects", "Operating profiles"], ["workers", "Workers"], ["demo", "Demo controls"], ["more", "Other destinations"], ["help", "Help & shortcuts"]])
-  add("Settings", `settings-${id}`, `Settings: ${t}`, `settings/${id}`, { phone: id === "general" || id === "security" });
+  add("Settings", `settings-${id}`, `Settings: ${t}`, `settings/${id}`, { phone: id === "appearance" || id === "security" });
+add("Settings", "settings-list", "Phone: Settings opens as a list", "settings", { only: ["phone"], note: "Each section opens on its own screen with a back link." });
 // Design system
 add("Design system", "design", "Design system", "design", { phone: true, full: true });
 add("Design system", "design-menu", "Menu", "design", { run: async (p) => { await p.getByRole("button", { name: /^Actions/ }).click(); await wait(p, 350); } });
 add("Design system", "design-dialog", "Dialog", "design", { run: async (p) => { await p.getByRole("button", { name: "Open dialog" }).click(); await wait(p, 400); } });
 add("Design system", "design-popover", "Popover", "design", { run: async (p) => { await p.getByRole("button", { name: "Popover" }).click(); await wait(p, 350); } });
+
+// Light theme: the optional variant (dark stays the default). Same layouts, opened with ?theme=light.
+const LIGHT = "?nofeed&theme=light";
+const light = (id, title, route, o = {}) => add("Light theme (optional)", `light-${id}`, `Light: ${title}`, route, { query: LIGHT, ...o });
+light("office", "My Office", "office", { phone: true, note: "Optional variant. Dark navy and purple stays the default." });
+light("messages", "Project Lead conversation", "messages/sv-lead", { phone: true });
+light("decisions", "Needs My Attention", "decisions");
+light("decision-room", "Decision room", "decisions/sv-025");
+light("teams", "SamVision team", "teams/samvision");
+light("agents", "Agent directory", "agents");
+light("topology", "Operations Topology", "topology");
+light("engineering", "Engineering Workbench", "engineering");
+light("task-room", "Task Room (terminal stays dark)", "task/SV-025");
+light("budgets", "Budgets", "budgets");
+light("approvals", "High-risk approval", "approvals/r-b41e07", { phone: true });
+light("onboarding", "New Agent onboarding", "agents", { run: (p) => agentWizard(p, 0) });
+light("settings", "Settings: Appearance", "settings/appearance", { phone: true });
+light("design", "Design system", "design");
+light("more", "Phone: More sheet", "office", { only: ["phone"], run: async (p) => { await click(p, '.tabbar button[aria-haspopup="dialog"]'); await wait(p, 450); } });
 
 // Pop-out windows at their own sizes (same sizes as src/windows/manager.ts SIZE).
 const POPS = [
@@ -159,7 +185,7 @@ async function fresh(ctx, route, query = "?nofeed") {
   p.on("pageerror", (e) => errors.push(`${route}: ${e}`));
   await p.goto(`${BASE}${query}#/office`);
   await p.evaluate(() => { try { localStorage.clear(); sessionStorage.clear(); } catch { /* none */ } });
-  await p.goto(`${BASE}${query}#/${route}`); await p.reload(); await p.waitForSelector(".side, .pop-body", { timeout: 8000 }); await wait(p, 450);
+  await p.goto(`${BASE}${query}#/${route}`); await p.reload(); await p.waitForSelector(".app, .pop-body", { timeout: 8000 }); await wait(p, 450);
   return p;
 }
 const file = (group, id, vp) => `${group.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}/${id}__${vp}.png`;
@@ -169,7 +195,8 @@ for (const st of S) {
   if (ONLY && !ONLY.has(st.id)) continue;
   const entry = { id: st.id, group: st.group, title: st.title, note: st.note, route: `#/${st.route}`, images: {} };
   for (const vp of VIEWPORTS) {
-    if (vp.id === "phone" && !st.phone) continue;
+    if (st.only ? !st.only.includes(vp.id) : vp.id === "phone" && !st.phone) continue;
+    if (ONLY_VP && !ONLY_VP.has(vp.id)) continue;
     const ctx = await browser.newContext({ viewport: { width: vp.width, height: vp.height }, deviceScaleFactor: vp.scale });
     try {
       const p = await fresh(ctx, st.route, st.query);
@@ -192,7 +219,7 @@ for (const st of S) {
 }
 // Pop-out windows, plus the main window showing a popped tab as shaded with Focus window / Return here.
 for (const [id, title, view, w, h] of POPS) {
-  if (ONLY && !ONLY.has(id)) continue;
+  if ((ONLY && !ONLY.has(id)) || ONLY_VP) continue;
   const ctx = await browser.newContext({ viewport: { width: w, height: h } });
   try {
     if (view === "panel:agent") { const p0 = await fresh(ctx, "agents"); await p0.getByRole("button", { name: /^Nova, / }).first().click(); await wait(p0, 300); await p0.close(); }
@@ -204,7 +231,7 @@ for (const [id, title, view, w, h] of POPS) {
   } catch (e) { errors.push(`${id}: ${String(e.message).split("\n")[0]}`); }
   await ctx.close(); process.stdout.write(".");
 }
-if (!ONLY || ONLY.has("pop-main-shaded")) {
+if ((!ONLY || ONLY.has("pop-main-shaded")) && !ONLY_VP) {
   const entry = { id: "pop-main-shaded", group: "Pop-out windows", title: "Main window while Topology is popped out", note: "The tab stays, shaded with ↗; the page offers Focus window and Return here.", route: "#/topology", images: {} };
   for (const vp of VIEWPORTS.filter((v) => v.id !== "phone")) {
     const ctx = await browser.newContext({ viewport: { width: vp.width, height: vp.height } });
@@ -219,8 +246,13 @@ if (!ONLY || ONLY.has("pop-main-shaded")) {
   manifest.states.push(entry);
 }
 await browser.close();
-const prev = ONLY && fs.existsSync(path.join(OUT, "manifest.json")) ? JSON.parse(fs.readFileSync(path.join(OUT, "manifest.json"), "utf8")) : null;
-if (prev) { const ids = new Set(manifest.states.map((s) => s.id)); manifest.states = [...prev.states.filter((s) => !ids.has(s.id)), ...manifest.states]; }
+const prev = (ONLY || ONLY_VP) && fs.existsSync(path.join(OUT, "manifest.json")) ? JSON.parse(fs.readFileSync(path.join(OUT, "manifest.json"), "utf8")) : null;
+if (prev) {
+  const old = new Map(prev.states.map((s) => [s.id, s]));
+  // A partial run keeps the sizes it did not retake.
+  for (const s of manifest.states) { const o = old.get(s.id); if (o && ONLY_VP) s.images = { ...o.images, ...s.images }; }
+  const ids = new Set(manifest.states.map((s) => s.id)); manifest.states = [...prev.states.filter((s) => !ids.has(s.id)), ...manifest.states];
+}
 // Keep the order the states are defined in, however many partial re-runs merged into the manifest.
 const ORDER_IDS = [...S.map((s) => s.id), ...POPS.map((p) => p[0]), "pop-main-shaded"];
 const rank = (id) => { const i = ORDER_IDS.indexOf(id); return i < 0 ? ORDER_IDS.length : i; };

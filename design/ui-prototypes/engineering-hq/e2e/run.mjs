@@ -382,6 +382,44 @@ await test("full-screen topology fills the window with the graph, and the same b
   assert(await p.locator(".side").isVisible(), "sidebar did not come back");
 });
 
+console.log("Light theme and phone layout (round 7)");
+const bgLum = (page) => page.evaluate(() => { const m = getComputedStyle(document.body).backgroundColor.match(/\d+/g).map(Number); return (m[0] + m[1] + m[2]) / 3; });
+
+await test("theme: dark by default; choosing Light in Settings switches every open window live, and Dark switches it back", async (ctx) => {
+  const p = await main(ctx, "office");
+  assert(await p.evaluate(() => document.documentElement.dataset.hqTheme) === "dark", "default is not dark");
+  assert(await bgLum(p) < 60, "dark background is not dark");
+  const w = await pop(p, "pop-page:topology");
+  await p.evaluate(() => { location.hash = "#/settings/appearance"; }); await p.waitForSelector('[role="radiogroup"][aria-label="Appearance"]');
+  await p.locator('[role="radiogroup"][aria-label="Appearance"] [role="radio"]', { hasText: "Light" }).click();
+  assert(await until(async () => (await w.evaluate(() => document.documentElement.dataset.hqTheme)) === "light"), "pop-out did not follow Light");
+  assert(await bgLum(p) > 200 && await bgLum(w) > 200, "light background is not light");
+  await shot(p, "theme_light_settings");
+  await p.locator('[role="radiogroup"][aria-label="Appearance"] [role="radio"]', { hasText: "Dark" }).click();
+  assert(await until(async () => (await w.evaluate(() => document.documentElement.dataset.hqTheme)) === "dark"), "pop-out did not follow Dark");
+});
+
+await test("phone: a bottom tab bar replaces the sidebar, More opens a sheet, and Settings opens as a list with a way back", async (ctx) => {
+  const p = await ctx.newPage(); await p.setViewportSize({ width: 390, height: 844 });
+  await p.goto(`${BASE}?nofeed#/office`); await p.waitForSelector(".tabbar");
+  assert(await p.locator(".side").isHidden(), "sidebar shown on a phone");
+  const bar = await p.locator(".tabbar").boundingBox();
+  assert(bar && Math.abs(bar.y + bar.height - 844) <= 1 && bar.width >= 389, `tab bar not pinned to the bottom: ${JSON.stringify(bar)}`);
+  await p.locator('.tabbar button[aria-haspopup="dialog"]').click();
+  const sheet = p.getByRole("dialog", { name: "More" }); await sheet.waitFor();
+  await shot(p, "phone_more_sheet");
+  await sheet.getByRole("button", { name: /^Settings/ }).click();
+  await p.waitForSelector(".page-settings.is-index");
+  assert(await p.locator(".set-nav").isVisible() && await p.locator(".set-body").isHidden(), "settings did not open as a list");
+  await p.locator(".set-nav a", { hasText: "Security" }).click(); await p.waitForSelector(".page-settings.is-detail");
+  assert(await p.locator(".set-nav").isHidden() && await p.locator(".set-body").isVisible(), "section did not open on its own");
+  await p.getByRole("link", { name: "Back to Settings" }).click(); await p.waitForSelector(".page-settings.is-index");
+  const over = await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  assert(over <= 1, `${over}px sideways scroll`);
+  await p.setViewportSize({ width: 1600, height: 950 }); await p.waitForTimeout(150);
+  assert(await p.locator(".tabbar").isHidden() && await p.locator(".side").isVisible(), "desktop did not get the sidebar back");
+});
+
 await browser.close();
 const pass = results.filter((r) => r.ok).length;
 fs.writeFileSync(`${OUT}/e2e-results.json`, JSON.stringify({ when: new Date().toISOString(), base: BASE, pass, total: results.length, results }, null, 2));

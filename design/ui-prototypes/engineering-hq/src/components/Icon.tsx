@@ -1,3 +1,4 @@
+import { useId } from "react";
 // Stroke icons drawn for the prototype (no icon library). 24×24, currentColor.
 const P: Record<string, React.ReactNode> = {
   home: <><path d="M3.5 11 12 4l8.5 7" /><path d="M5.5 9.5V20h13V9.5" /><path d="M10 20v-5h4v5" /></>,
@@ -16,6 +17,7 @@ const P: Record<string, React.ReactNode> = {
   x: <><path d="M6 6l12 12M18 6 6 18" /></>,
   chevron: <><path d="m9 6 6 6-6 6" /></>,
   chevdown: <><path d="m6 9 6 6 6-6" /></>,
+  chevl: <><path d="m15 6-6 6 6 6" /></>,
   arrowr: <><path d="M5 12h14M13 6l6 6-6 6" /></>,
   arrowl: <><path d="M19 12H5M11 6l-6 6 6 6" /></>,
   plus: <><path d="M12 5v14M5 12h14" /></>,
@@ -25,6 +27,7 @@ const P: Record<string, React.ReactNode> = {
   video: <><rect x="3.5" y="6.5" width="12" height="11" rx="2" /><path d="m15.5 10.5 5-3v9l-5-3" /></>,
   phone: <><path d="M5 4.5h3.5l1.5 4-2 1.5a10 10 0 0 0 6 6l1.5-2 4 1.5V19a1.5 1.5 0 0 1-1.5 1.5A15.5 15.5 0 0 1 3.5 6 1.5 1.5 0 0 1 5 4.5z" /></>,
   info: <><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5.5M12 7.8v.1" /></>,
+  grid: <><rect x="4" y="4" width="6.5" height="6.5" rx="1.8" /><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8" /><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8" /><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8" /></>,
   more: <><circle cx="12" cy="5.5" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="12" cy="18.5" r="1" /></>,
   image: <><rect x="3.5" y="4.5" width="17" height="15" rx="2" /><circle cx="9" cy="10" r="1.8" /><path d="m4 18 5.5-5 3.5 3 3-2.5 4.5 4" /></>,
   layers: <><path d="M12 3.5 21 8l-9 4.5L3 8z" /><path d="m3 12 9 4.5 9-4.5M3 16l9 4.5 9-4.5" /></>,
@@ -76,11 +79,13 @@ export function Icon({ name, size = 18, className, stroke = 1.7, title }: { name
     {title && <title>{title}</title>}{P[name] ?? P.box}</svg>;
 }
 
-/** The CommandCenter mark: a hexagonal C, electric purple → blue. */
+/** The CommandCenter mark: a hexagonal C, electric purple → blue. Each copy has its own gradient id, so a hidden copy
+ *  (the sidebar on a phone) never takes the gradient away from a visible one. */
 export function Logo({ size = 34 }: { size?: number }) {
+  const id = `lg-cc-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   return <svg viewBox="0 0 40 40" width={size} height={size} aria-hidden>
-    <defs><linearGradient id="lg-cc" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#8b6bff" /><stop offset="1" stopColor="#3f7bff" /></linearGradient></defs>
-    <path d="M20 2.5 35 11v18L20 37.5 5 29V11z" fill="none" stroke="url(#lg-cc)" strokeWidth="3" strokeLinejoin="round" />
-    <path d="M26 14.5a8 8 0 1 0 0 11" fill="none" stroke="url(#lg-cc)" strokeWidth="3.4" strokeLinecap="round" />
+    <defs><linearGradient id={id} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#8b6bff" /><stop offset="1" stopColor="#3f7bff" /></linearGradient></defs>
+    <path d="M20 2.5 35 11v18L20 37.5 5 29V11z" fill="none" stroke={`url(#${id})`} strokeWidth="3" strokeLinejoin="round" />
+    <path d="M26 14.5a8 8 0 1 0 0 11" fill="none" stroke={`url(#${id})`} strokeWidth="3.4" strokeLinecap="round" />
   </svg>;
 }

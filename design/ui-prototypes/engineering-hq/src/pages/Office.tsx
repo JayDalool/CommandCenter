@@ -62,7 +62,7 @@ function OfficeGraph() {
     edges.push({ from: ps[i].key, to: t.id, color: ps[i].color, bo: -18 });
     if (i < TEAMS.length - 1) edges.push({ from: ps[i + 1].key, to: t.id, color: ps[i + 1].color, ao: -30, bo: 18 });
   });
-  return <GraphFrame w={W} h={H} nodes={nodes} edges={edges} className="office-graph" />;
+  return <GraphFrame w={W} h={H} nodes={nodes} edges={edges} className="office-graph" fitWidth center />;
 }
 
 const ATTN = [
@@ -113,7 +113,7 @@ export function Office() {
           <button type="button" className="kpi" onClick={() => go("topology")}><span className="kpi-ico t-info"><Icon name="layers" size={24} /></span><span><small>Projects</small><b>{PROJECTS.length}</b><em className="t-ok">↑ {PROJECTS.filter((p) => p.health === "healthy").length} active</em></span><Spark data={SPARK.a} color="#4f7bff" w={72} h={30} /></button>
           <button type="button" className="kpi" onClick={() => go("teams")}><span className="kpi-ico t-violet"><Icon name="users" size={24} /></span><span><small>Active Agents</small><b>{AGENTS.filter((a) => (a.life ?? "active") === "active").length}</b><em className="t-ok">↑ {counts("working")} working</em></span><Spark data={SPARK.b} color="#a77bff" w={72} h={30} /></button>
           <button type="button" className="kpi" onClick={() => go("decisions")}><span className="kpi-ico t-bad"><Icon name="doc" size={24} /></span><span><small>Needs You</small><b>{nd.total}</b><em className="t-bad">↑ {nd.urgent} urgent</em></span><Spark data={SPARK.d} color="#ff4f6d" w={72} h={30} /></button>
-          <div className="kpi"><span className="kpi-ico t-ok"><Icon name="pulse" size={24} /></span><span><small>Company Health</small><b className={stale ? "t-idle" : "t-ok"}>{stale ? "Unknown" : "Healthy"}</b><em>{stale ? <span className="t-warn">Status feed stale</span> : <>All monitored systems OK <Demo label="Demo" /></>}</em></span></div>
+          <div className="kpi"><span className="kpi-ico t-ok"><Icon name="pulse" size={24} /></span><span><small>Company Health {!stale && <Demo label="Demo" />}</small><b className={stale ? "t-idle" : "t-ok"}>{stale ? "Unknown" : "Healthy"}</b><em>{stale ? <span className="t-warn">Status feed stale</span> : "All monitored systems OK"}</em></span></div>
         </div>
         <Panel className="office-topo" icon="graph" title="Company Topology" sub="Projects, agents and teams across your organisation"
           action={<><button type="button" className="btn btn-sm" onClick={() => startNewProject()}><Icon name="plus" size={14} /> New Project</button><button type="button" className="btn btn-outline" onClick={() => go("topology")}>View Full Topology <Icon name="arrowr" size={15} /></button><PopButton id="page:topology" /></>}>
@@ -126,7 +126,7 @@ export function Office() {
             <span className="attn-body"><span className="ellip"><TaskKey k={a.k} /> {a.t}</span><small>{a.s}</small></span><Pill tone={a.pill[1]}>{a.pill[0]}</Pill><Icon name="chevron" size={16} /></button></li>)}</ul>
         </Panel>
         <Panel icon="message" iconTone="violet" title="Recent Updates from Leads" action={<ViewAll onClick={() => go("messages")} />}>
-          <ul className="updates">{UPDATES.map((u) => <li key={u.a + u.at}><Avatar id={u.a} size={40} /><div><p><b>{agent(u.a).name}</b><small>{u.role} · <span style={{ color: project(u.p).color }}>{project(u.p).name}</span></small><time>{u.at}</time></p><span>{u.t}</span></div></li>)}</ul>
+          <ul className="updates">{UPDATES.slice(0, 3).map((u) => <li key={u.a + u.at}><Avatar id={u.a} size={34} /><div><p><b>{agent(u.a).name}</b><small>{u.role} · <span style={{ color: project(u.p).color }}>{project(u.p).name}</span></small><time>{u.at}</time></p><span>{u.t}</span></div></li>)}</ul>
         </Panel>
       </div>
     </div>

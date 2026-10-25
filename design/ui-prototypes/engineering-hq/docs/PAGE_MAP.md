@@ -1,7 +1,8 @@
 # Engineering HQ page map
 
 Every screen in the prototype, how to reach it, and the states the gallery captures. Addresses are hash routes
-(`http://127.0.0.1:5181/#/office`). Add `?nofeed` to freeze the demo feed, `?slow` to show loading skeletons.
+(`http://127.0.0.1:5181/#/office`). Add `?nofeed` to freeze the demo feed, `?slow` to show loading skeletons,
+`?theme=light` (or `dark`, `system`) to open in a theme. Dark is the default; Light is optional.
 
 ## Sidebar
 
@@ -19,11 +20,17 @@ Every screen in the prototype, how to reach it, and the states the gallery captu
 | Revenue | `#/revenue` | Subscription analytics. Not connected by default | Fictional demo, clearly watermarked |
 | Approvals | `#/approvals/<request>` | D-032 approval queue, approval screen, Slack phone preview | High risk (Developer Unlock + typed ID), expired, approved |
 | Budgets | `#/budgets` | D-033 company, project and agent budgets (shadow) | Normal, agent over limit, project over limit, company over limit, override request |
-| Settings | `#/settings/<section>` | macOS-style settings in 11 sections | See below |
+| Settings | `#/settings/<section>` | macOS-style settings in 11 sections | See below. On a phone `#/settings` is the section list |
+
+## Phone (760 px and below)
+
+The sidebar and tab strip give way to a bottom tab bar: **Office**, **Messages**, **Decisions**, **Approvals** and
+**More**. More opens a sheet with Teams, Agents, Operations Topology, Engineering, Revenue, Budgets, New Agent,
+New Project, Settings, Help & shortcuts and the design system. Settings opens as a list; each section has a back link.
 
 ## Settings sections
 
-`general` · `appearance` · `notifications` · `windows` (monitors and pop-outs) · `security` (Developer Unlock, read-only) ·
+`general` · `appearance` (Dark, Light or System; accent and project colours; motion) · `notifications` · `windows` (monitors and pop-outs) · `security` (Developer Unlock, read-only) ·
 `connections` · `projects` (operating profiles) · `workers` · `demo` (feed outage, slow loading, reset) · `more`
 (Releases, Fleet, Activity, AI Usage and other destinations) · `help` (shortcuts and where things are).
 
@@ -45,7 +52,7 @@ Both end in a mock approval. Nothing is created anywhere.
 
 ## Shell
 
-Search (Ctrl+K), notifications bell, Jay's menu, tab strip with right-click menu, sidebar with right-click menu,
+Search (Ctrl+K), notifications bell, Jay's menu (with Dark, Light and System), tab strip with right-click menu, sidebar with right-click menu,
 toasts, tooltips, popovers, modals, loading skeletons.
 
 ## Pop-out windows

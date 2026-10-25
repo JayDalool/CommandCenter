@@ -5,37 +5,68 @@ The single source is the `:root` block at the top of `src/styles/hq.css`. Projec
 hard-coded anywhere else. The look is dark-first (navy and violet), macOS-inspired: rounded corners, circular
 avatars, soft layered shadows, restrained translucency and short, eased motion that honours Reduce Motion.
 
+## Themes
+
+Dark is the default (confirmed by Jay, 2026-10-25). Light is an optional variant: `src/styles/theme-light.css`
+redefines the same tokens under `:root[data-hq-theme="light"]`, so no component has its own light colours. Layout,
+radii, type, spacing and motion are identical in both themes.
+
+| Choice | Result |
+|---|---|
+| Dark (default) | `<html data-hq-theme="dark">` |
+| Light | `<html data-hq-theme="light">` |
+| System | Follows `prefers-color-scheme` and switches live when Windows or macOS does |
+
+HQ uses its own attribute, `data-hq-theme`, so a theme attribute set by a host page or by Classic can never switch it.
+
+The choice is a shared store (`hq.theme`), so every pop-out window follows it. An inline script in `index.html`
+applies it before the first paint. `?theme=light|dark|system` overrides it for a review link. The terminal and
+the Slack phone preview stay dark in both themes. Project, agent and status colours keep their hue in light; the
+status colours are darkened so text keeps at least 4.5:1 contrast on white panels and on the page background.
+
 ## Colour
 
-| Token | Value | Use |
-|---|---|---|
-| `--bg` | `#070b17` | Page background |
-| `--bg-2` | `#050812` | Deepest background (pop-out frame) |
-| `--side` | `#060a15` | Sidebar |
-| `--panel` | `#0b1224` | Cards and panels |
-| `--panel-2` | `#0e162c` | Raised panel, list rows |
-| `--raise` | `#121b35` | Hover-raised surface |
-| `--hover` | `#131d3a` | Hover fill |
-| `--sel` | `#151f45` | Selected row, current step |
-| `--line` | `#19233f` | Hairline borders |
-| `--line-2` | `#243154` | Stronger borders, inputs |
-| `--text` | `#e9edf8` | Primary text |
-| `--text-2` | `#b4bdd6` | Secondary text |
-| `--muted` | `#7c88a6` | Captions, metadata |
-| `--faint` | `#4e5a78` | Disabled, chart "other" |
-| `--accent` | `#6d5cff` | Primary actions, current item |
-| `--accent-2` | `#3f7bff` | Gradient partner of the accent |
-| `--accent-soft` | `rgba(109, 92, 255, .16)` | Selected backgrounds |
-| `--focus` | `#8fa2ff` | Focus ring |
-| `--ok` | `#2fe08c` | Healthy, passed, approved |
-| `--warn` | `#ffb020` | Warning, needs input |
-| `--bad` | `#ff4f6d` | Blocked, failed, high risk |
-| `--info` | `#58a6ff` | Information |
-| `--violet` | `#a77bff` | Review, design |
-| `--pink` | `#ff4fa0` | UI testing |
-| `--idle` | `#8a95b0` | Paused, unknown, not connected |
+| Token | Dark (default) | Light | Use |
+|---|---|---|---|
+| `--bg` | `#070b17` | `#f2f3f8` | Page background |
+| `--bg-2` | `#050812` | `#e9ebf3` | Deepest background (pop-out frame) |
+| `--side` | `#060a15` | `#e9ebf3` | Sidebar |
+| `--panel` | `#0b1224` | `#ffffff` | Cards and panels |
+| `--panel-2` | `#0e162c` | `#fdfdff` | Raised panel, list rows |
+| `--raise` | `#121b35` | `#f0f1f7` | Hover-raised surface |
+| `--hover` | `#131d3a` | `#eceef7` | Hover fill |
+| `--sel` | `#151f45` | `#e6e5fd` | Selected row, current step |
+| `--line` | `#19233f` | `#e1e4ee` | Hairline borders |
+| `--line-2` | `#243154` | `#d0d4e2` | Stronger borders, inputs |
+| `--text` | `#e9edf8` | `#151a2d` | Primary text |
+| `--text-2` | `#b4bdd6` | `#434a63` | Secondary text |
+| `--muted` | `#7c88a6` | `#606881` | Captions, metadata |
+| `--faint` | `#4e5a78` | `#9aa0b4` | Disabled, chart "other" |
+| `--accent` | `#6d5cff` | `#5a48f5` | Primary actions, current item |
+| `--accent-2` | `#3f7bff` | `#2f6bf0` | Gradient partner of the accent |
+| `--accent-soft` | `rgba(109, 92, 255, .16)` | `rgba(90, 72, 245, .1)` | Selected backgrounds |
+| `--focus` | `#8fa2ff` | `#5b63f0` | Focus ring |
+| `--ok` | `#2fe08c` | `#107a48` | Healthy, passed, approved |
+| `--warn` | `#ffb020` | `#a35f00` | Warning, needs input |
+| `--bad` | `#ff4f6d` | `#d2273f` | Blocked, failed, high risk |
+| `--info` | `#58a6ff` | `#1c66d0` | Information |
+| `--violet` | `#a77bff` | `#7040dc` | Review, design |
+| `--pink` | `#ff4fa0` | `#c5246f` | UI testing |
+| `--idle` | `#8a95b0` | `#6f7891` | Paused, unknown, not connected |
 
-### Projects (concept-art palette, Jay 2026-10-22)
+### Supporting tokens
+
+Every other colour in `hq.css` is a token too (119 of them), grouped in the `:root` block and redefined in
+`theme-light.css`:
+
+| Group | Examples | Use |
+|---|---|---|
+| Surfaces | `--well`, `--field`, `--tile`, `--node`, `--btn-bg`, `--chrome`, `--float`, `--bubble`, `--topbar`, `--veil` | Inputs, tiles, graph nodes, buttons, menus, chat bubbles, top bar, modal veils |
+| Lines, tracks and rings | `--panel-line`, `--row-line`, `--ring`, `--node-line`, `--track`, `--sel-line`, `--accent-line` | Borders, progress tracks, step rings, selection outlines |
+| Inks | `--text-strong`, `--link`, `--violet-ink*`, `--bad-ink*`, `--warn-ink*`, `--info-ink*` | Text and icon colours on tinted backgrounds |
+| Washes and shadows | `--wash` (RGB triple: white in dark, navy in light), `--shade-k` (1 in dark, .32 in light) | `rgb(var(--wash) / .04)` tints; shadow strength |
+
+### Projects (concept-art palette, approved 2026-10-22, confirmed 2026-10-25)
 
 | Project | Prefix | Colour |
 |---|---|---|
@@ -45,7 +76,7 @@ avatars, soft layered shadows, restrained translucency and short, eased motion t
 | GauzeMate | GZ | `#ff4f7b` |
 | CommandCenter | CC | `#4f8bff` |
 
-### Agent personas
+### Agent personas (approved 2026-10-22, confirmed 2026-10-25)
 
 | Agent | Role | Colour |
 |---|---|---|
@@ -108,4 +139,4 @@ animations off.
 | ≤ 1200 px | Office, Engineering, Decisions and Topology stack; Messages becomes one scrolling column (list, conversation, task context); Design System in one column |
 | ≤ 1100 px | Wizards in one column; Needs My Attention stacks its side panel |
 | ≤ 1000 px | Settings, Budgets and Approvals stack |
-| ≤ 760 px (phone) | One column everywhere; tab rows, segmented controls and wide tables scroll inside themselves; long rows and panel headers wrap; the Teams hierarchy keeps at least half size and scrolls sideways inside its frame. The page itself never scrolls sideways at 390 px |
+| ≤ 760 px (phone) | Bottom tab bar (Office, Messages, Decisions, Approvals, More) replaces the sidebar and tab strip; More opens a sheet; Settings opens as a list; My Office KPIs are 2×2 tiles. One column everywhere; tab rows, segmented controls and wide tables scroll inside themselves; long rows and panel headers wrap; the Teams hierarchy keeps at least half size and scrolls sideways inside its frame. The page itself never scrolls sideways at 390 px |
