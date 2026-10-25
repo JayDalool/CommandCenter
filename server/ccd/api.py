@@ -40,9 +40,10 @@
     GET   /api/usage                 token use and estimated cost from the agents' session logs (PR 7) by project,
                                      model, day and ticket, plus month-to-date against profile budgets. ?days=
     GET   /api/actors                per-agent actor tokens (fingerprints only; a token is shown once, on issue)
-    POST  /api/actors/issue          JAY + DEVELOPER UNLOCK. {actor: "agent:<name>", ttlDays?, note?} → the token,
-                                     once. An agent sends it as X-CCD-Actor-Token; recorded, not yet required
-    POST  /api/actors/revoke         JAY + DEVELOPER UNLOCK. {id}
+    POST  /api/actors/issue          JAY + DEVELOPER UNLOCK. {actor: "agent:<name>" | "svc:<name>", ttlDays?, note?,
+                                     project?} → a typed token (cca_a_… / cca_s_…), once. Sent as X-CCD-Actor-Token;
+                                     recorded (resolvedActor, would-refuse reasons), never required yet
+    POST  /api/actors/revoke         JAY + DEVELOPER UNLOCK. {id} (a negative id is a pre-Phase-2 token)
     GET   /api/developer             is this tab's developer session active?
     POST  /api/developer/unlock      developer token → a short-lived in-memory session id
     POST  /api/developer/lock        end that session
@@ -258,7 +259,7 @@ class AuditTrail:
             if not (path == REDEEM_PATH and not 200 <= status[0] < 300):
                 claimed = note.get("claimed") or headers.get("x-ccd-actor") or "jay"
                 self.daemon.audit_write(scope["method"], path, status[0] or 500, claimed, note.get("body"),
-                                        dev, headers.get("x-ccd-actor-token"))
+                                        dev, headers.get("x-ccd-actor-token"), asserted=headers.get("x-ccd-actor"))
 
 
 class Guard:

@@ -1,7 +1,7 @@
-"""Migration v10 safety (Jay, 2026-10-23: "Before backend merge, demonstrate migration v10 backup, restore, backward
-compatibility and recovery testing"). The drill in ccd/migration_safety.py runs every check on a populated v9
-database; these tests run it, show it catches a migration that touches existing data, and test the in-place
-rollback's refusals."""
+"""Migration safety (Jay, 2026-10-23: "Before backend merge, demonstrate migration v10 backup, restore, backward
+compatibility and recovery testing"). The drill in ccd/migration_safety.py rehearses the newest migration (v11) on a
+populated older database; these tests run it, show it catches a migration that touches existing data, and test the
+in-place rollback's refusals for v10 (Downgrade) and v11 (DowngradeV11)."""
 import contextlib
 import hashlib
 import io
@@ -19,6 +19,8 @@ from ccd.validation import fixtures
 from .helpers import PROJECTS
 
 V9 = [m for m in tasks.MIGRATIONS if m[0] <= 9]
+V10 = [m for m in tasks.MIGRATIONS if m[0] <= 10]
+TO = tasks.SCHEMA_VERSION
 
 
 def build_v9(path):
@@ -43,7 +45,8 @@ def build_v9(path):
         lg.add_decision(project="samvision", question="Use MLS comps?", decision="yes", decided_by="jay",
                         source="policy", source_ref="d1")
         lg.request(tid, "samvision", "merge", "PR #12", "needs Jay")
-        identity.ActorTokens(ts.db).issue("agent:nova", "jay")
+        ts.db.execute("INSERT INTO actor_tokens (actor, token_sha, issued_at, issued_by, expires_at) "    # a v9 token
+                      "VALUES ('agent:nova', ?, 0, 'jay', 4102444800)", (hashlib.sha256(b"nova").hexdigest(),))
         a = audit.Audit(ts.db)
         for i in range(4):
             a.record(actor="jay", verified=True, via="token", method="POST", path=f"/api/tasks/{k}/comment",
@@ -76,7 +79,7 @@ class Drill(unittest.TestCase):
         cls.snapshot = tmp("snapshot.db")
         build_v9(cls.snapshot)
 
-    def test_every_check_passes_on_a_populated_v9_database(self):
+    def test_every_check_passes_on_a_populated_older_database(self):
         out = tmp("drill")
         code, md, _ = run("drill", "--snapshot", self.snapshot, "--out", out)
         with open(os.path.join(out, "drill.json")) as f:
@@ -88,9 +91,10 @@ class Drill(unittest.TestCase):
                          {"backup", "upgrade", "old ccd", "rollback", "restore", "recovery"})
         self.assertGreaterEqual(sum(1 for c in report["checks"]), 26)
         self.assertGreaterEqual(report["snapshot"]["rows"], 60)
-        self.assertTrue(md.startswith("# Migration v10 drill: PASS"))
+        self.assertTrue(md.startswith(f"# Migration v{TO} drill: PASS"))
         with open(os.path.join(out, "drill.md")) as f:
-            self.assertTrue(f.read().startswith("# Migration v10 drill: PASS"))
+            self.assertTrue(f.read().startswith(f"# Migration v{TO} drill: PASS"))
+        self.assertEqual((report["snapshot"]["schema"], report["snapshot"]["liftedTo"]), (9, TO - 1))
         snap = sqlite3.connect(self.snapshot)
         self.assertEqual(snap.execute("PRAGMA user_version").fetchone()[0], 9)     # the snapshot is never written
         snap.close()
@@ -103,11 +107,12 @@ class Drill(unittest.TestCase):
         self.assertRegex(killed["detail"], r"^exit 137, WAL [1-9]\d* bytes$")   # recovery had something to ignore
 
     def test_it_fails_a_migration_that_changes_existing_rows_or_tables(self):
-        sql = dict(tasks.MIGRATIONS)[10]
+        sql = dict(tasks.MIGRATIONS)[TO]
+        older = [m for m in tasks.MIGRATIONS if m[0] < TO]
         for extra, check in (("UPDATE tickets SET title = title || '!';", "every existing row is unchanged"),
                              ("CREATE INDEX tickets_title ON tickets(title);",
-                              "it adds only the onboarding tables and their own indexes and triggers")):
-            bad = V9 + [(10, sql + extra)]
+                              f"it adds only migration {TO}'s tables and their own indexes and triggers")):
+            bad = older + [(TO, sql + extra)]
             with self.subTest(extra=extra), mock.patch.object(tasks, "MIGRATIONS", bad):
                 report = ms.drill(self.snapshot, tmp("drill"))
                 self.assertEqual(report["result"], "FAIL")
@@ -126,7 +131,7 @@ class Drill(unittest.TestCase):
             self.assertNotIn(secret, md)
         self.assertEqual((report["redacted"], report["snapshot"]["path"]), (True, label))
         self.assertIn(f"Snapshot: {label}.", md)
-        for name in ("Backup", "v9 -> v10 migration and schema integrity", "Backward compatibility", "Rollback",
+        for name in ("Backup", f"v{TO - 1} -> v{TO} migration and schema integrity", "Backward compatibility", "Rollback",
                      "Restore", "Crash recovery"):
             self.assertRegex(md, rf"\| {name} \| PASS \| (\d+) of \1 \|")
         self.assertEqual(sorted(os.listdir(out)), ["drill.json", "drill.md"])      # no copy of the data is left
@@ -136,13 +141,13 @@ class Drill(unittest.TestCase):
         build_v9(live)
         with open(live + "-wal", "wb") as f:                     # a file ccd still has open
             f.write(b"x" * 32)
-        v10 = tmp("v10.db")
-        tasks.TaskStore(v10, PROJECTS).close()
+        newest = tmp("newest.db")
+        tasks.TaskStore(newest, PROJECTS).close()
         out = tmp("out")
         inside = os.path.join(out, "snapshot.db")
         os.makedirs(out)
         build_v9(inside)
-        for snapshot, words in ((live, "write-ahead log"), (v10, "schema v10"), (inside, "inside the output folder"),
+        for snapshot, words in ((live, "write-ahead log"), (newest, f"schema v{TO}"), (inside, "inside the output folder"),
                                 (tmp("missing.db"), "no snapshot")):
             with self.subTest(words=words):
                 code, _, err = run("drill", "--snapshot", snapshot, "--out", out)
@@ -151,6 +156,13 @@ class Drill(unittest.TestCase):
 
 
 class Downgrade(unittest.TestCase):
+    """Migration 10's way back, as a v10 ccd runs it (v11's code is patched out)."""
+    def setUp(self):
+        for name, value in (("MIGRATIONS", V10), ("SCHEMA_VERSION", 10)):
+            p = mock.patch.object(tasks, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
     def v10(self):
         path = tmp("tasks.db")
         build_v9(path)
@@ -248,6 +260,61 @@ class Downgrade(unittest.TestCase):
         ts = tasks.TaskStore(path, PROJECTS)
         self.assertEqual(ts.applied, [10])
         ts.close()
+
+
+class DowngradeV11(unittest.TestCase):
+    """Migration 11 (identity tokens and observations) and its way back."""
+    def v11(self):
+        path = tmp("tasks.db")
+        build_v9(path)
+        ts = tasks.TaskStore(path, PROJECTS)
+        self.assertEqual(ts.applied, [10, 11])
+        ts.close()
+        return path
+
+    def test_the_downgrade_list_names_exactly_the_tables_migration_11_adds(self):
+        added = {o[1] for o in tasks.reference_schema(11) - tasks.reference_schema(10) if o[0] == "table"}
+        self.assertEqual(added, set(tasks.DOWNGRADES[11]))
+
+    def test_rollback_to_v10_keeps_every_row_and_the_legacy_token(self):
+        path = self.v11()
+        ts = tasks.TaskStore(path, PROJECTS)
+        key = ts.create("samvision", "written at v11")[0]["key"]
+        ts.close()
+        db = ms.connect(path)
+        before = ms.digests(db)
+        db.close()
+        code, out, _ = run("rollback", "--db", path, "--to", "10", "--backup-dir", tmp("backups"))
+        self.assertEqual(code, 0, out)
+        db = ms.connect(path)
+        self.assertEqual(ms.version(db), 10)
+        self.assertEqual(tasks.schema_objects(db), tasks.reference_schema(10))
+        self.assertEqual(ms.digests(db), {t: v for t, v in before.items() if t not in tasks.DOWNGRADES[11]})
+        self.assertEqual(tasks.migrate(db, V10), [])                          # a v10 ccd opens it
+        self.assertIsNotNone(db.execute("SELECT 1 FROM tickets WHERE key=?", (key,)).fetchone())
+        self.assertEqual(db.execute("SELECT actor FROM actor_tokens").fetchall(), [("agent:nova",)])
+        db.close()
+
+    def test_it_refuses_when_a_typed_token_or_an_observation_exists(self):
+        for table in ("identity_tokens", "identity_observations"):
+            with self.subTest(table=table):
+                path = self.v11()
+                ts = tasks.TaskStore(path, PROJECTS)
+                if table == "identity_tokens":
+                    identity.ActorTokens(ts.db).issue("agent:nova", "jay")
+                else:
+                    audit.Audit(ts.db).record(actor="jay", verified=True, via="token", method="POST", path="/api/x",
+                                              status=200, identity=identity.resolve("jay", True, None))
+                ts.close()
+                db = ms.connect(path)
+                before = ms.digests(db)
+                db.close()
+                code, _, err = run("rollback", "--db", path, "--to", "10", "--backup-dir", tmp("backups"))
+                self.assertEqual(code, 1)
+                self.assertIn(f"{table} (1 row)", err)
+                db = ms.connect(path)
+                self.assertEqual((ms.version(db), ms.digests(db)), (11, before))
+                db.close()
 
 
 if __name__ == "__main__":

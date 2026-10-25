@@ -324,6 +324,9 @@ class Daemon:
         # reads and the shadow budget report (D-033). Off unless config.json says "onboarding_groundwork": true; read
         # once, here. Records only: it grants no permission, issues no credential and starts no agent.
         self.onboarding_on = isinstance(cfg, dict) and cfg.get("onboarding_groundwork") is True
+        # Phase 2 shadow identity record (Jay 2026-10-25). Off unless config.json says "phase2_identity_shadow": true;
+        # read once, here. Records only: it never refuses a write.
+        self.identity_shadow_on = isinstance(cfg, dict) and cfg.get("phase2_identity_shadow") is True
         self.onboarding = onboarding_mod.Onboarding(tasks.db, enabled=self.onboarding_on) if has_db else None
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
@@ -1960,18 +1963,21 @@ class Daemon:
 
     # ---------- audit trail, actor identity, metering (PR 7) ----------
 
-    def audit_write(self, method, path, status, claimed, body, developer, actor_token):
+    def audit_write(self, method, path, status, claimed, body, developer, actor_token, asserted=None):
         """AuditTrail (api.py) after every write that passed Guard. `developer`: whether the request's Developer
-        Unlock session was live when it arrived (so a lock is still credited to it). Records; never raises."""
+        Unlock session was live when it arrived (so a lock is still credited to it). `asserted`: the raw X-CCD-Actor
+        header (None when missing), for the Phase 2 shadow record. Records; never raises, never refuses."""
         if self.audit is None:
             return
         try:
-            tok_actor = self.actor_tokens.verify(actor_token) if actor_token and self.actor_tokens else None
-            who = identity_mod.identify(claimed, bool(developer), tok_actor)
+            hit = self.actor_tokens.lookup(actor_token) if actor_token and self.actor_tokens else None
+            who = identity_mod.identify(claimed, bool(developer), hit["actor"] if hit else None)
+            project = body["project"][:40] if isinstance(body, dict) and isinstance(body.get("project"), str) else None
+            shadow = identity_mod.resolve(asserted, bool(developer), hit, project) if self.identity_shadow_on else None
             self.audit.record(actor=who["actor"], verified=who["verified"], via=who["via"],
                               token_actor=who["tokenActor"], method=method, path=path, status=status, body=body,
                               summary="actor token names a different actor" if who["mismatch"] else "",
-                              profile_hash=getattr(self.policy, "fingerprint", None))
+                              profile_hash=getattr(self.policy, "fingerprint", None), identity=shadow)
         except Exception as e:  # noqa: BLE001 — the audit trail is a record; it must never break a write
             log.warning(json.dumps({"msg": "audit write skipped", "path": str(path)[:100], "error": repr(e)[:200]}))
 
@@ -1991,7 +1997,9 @@ class Daemon:
         if self.audit is None:
             return {"available": False, "events": [], "summary": {}, "chain": {}}
         return {"available": True, "events": self.audit.list(actor, verified, limit), "summary": self.audit.summary(),
-                "chain": self.audit.verify(full=full)}
+                "chain": self.audit.verify(full=full), "identity": self.audit.identity_summary(),
+                "identityChain": self.audit.verify_identity(full=full),
+                "identityErrors": self.audit.identity_errors, "identityShadow": self.identity_shadow_on}
 
     def actors_state(self):
         if self.actor_tokens is None:
@@ -2006,9 +2014,11 @@ class Daemon:
             raise ActionError(503, "the task system is not enabled")
         try:
             if op == "issue":
-                out = self.actor_tokens.issue(body.get("actor"), actor, body.get("ttlDays"), body.get("note") or "")
-                self._event("security", "actor_token.issued", f"Jay issued an actor token for {out['actor']} "
-                            f"({out['fingerprint']})", data={"actor": out["actor"], "id": out["id"]})
+                out = self.actor_tokens.issue(body.get("actor"), actor, body.get("ttlDays"), body.get("note") or "",
+                                              project=body.get("project"))
+                self._event("security", "actor_token.issued", f"Jay issued a {out['kind']} token for {out['actor']} "
+                            f"({out['fingerprint']})", data={"actor": out["actor"], "id": out["id"],
+                                                             "kind": out["kind"], "project": out["project"]})
                 return out
             tid = body.get("id")
             if not isinstance(tid, int) or isinstance(tid, bool):

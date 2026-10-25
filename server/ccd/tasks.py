@@ -605,6 +605,53 @@ CREATE TRIGGER onboarding_events_append_only_u BEFORE UPDATE ON onboarding_event
 CREATE TRIGGER onboarding_events_append_only_d BEFORE DELETE ON onboarding_events
   BEGIN SELECT RAISE(ABORT, 'onboarding events are append-only'); END;
 """),
+    # 11: Phase 2 shadow step 1 (Jay, 2026-10-25): typed identity tokens and the per-write identity record
+    # (ccd/identity.py resolve(), ccd/audit.py). Additive. Recorded, never enforced: identity_observations.enforced
+    # can only be 0, so no row can claim a request was refused.
+    (11, """
+CREATE TABLE identity_tokens (
+  id         INTEGER PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('agent', 'service')),
+  subject    TEXT NOT NULL CHECK (length(subject) <= 70 AND subject NOT GLOB '*[^a-z0-9_:-]*'
+                                  AND ((kind = 'agent' AND subject GLOB 'agent:?*')
+                                       OR (kind = 'service' AND subject GLOB 'svc:?*'))),
+  project    TEXT CHECK (project IS NULL OR (length(project) BETWEEN 1 AND 40 AND project NOT GLOB '*[^a-z0-9-]*')),
+  token_sha  TEXT NOT NULL UNIQUE CHECK (length(token_sha) = 64),
+  issued_at  REAL NOT NULL,
+  issued_by  TEXT NOT NULL CHECK (issued_by IS 'jay'),
+  expires_at REAL NOT NULL,
+  revoked_at REAL,
+  note       TEXT NOT NULL DEFAULT ''
+);
+CREATE TRIGGER identity_tokens_never_deleted BEFORE DELETE ON identity_tokens
+  BEGIN SELECT RAISE(ABORT, 'an identity token is history; revoke it instead'); END;
+CREATE TRIGGER identity_tokens_fixed BEFORE UPDATE ON identity_tokens
+  WHEN NEW.id IS NOT OLD.id OR NEW.kind IS NOT OLD.kind OR NEW.subject IS NOT OLD.subject
+    OR NEW.project IS NOT OLD.project OR NEW.token_sha IS NOT OLD.token_sha OR NEW.issued_at IS NOT OLD.issued_at
+    OR NEW.issued_by IS NOT OLD.issued_by OR NEW.expires_at IS NOT OLD.expires_at OR NEW.note IS NOT OLD.note
+    OR OLD.revoked_at IS NOT NULL
+  BEGIN SELECT RAISE(ABORT, 'an identity token can only be revoked, once'); END;
+CREATE TABLE identity_observations (
+  audit_id       INTEGER PRIMARY KEY,
+  audit_sha      TEXT NOT NULL CHECK (length(audit_sha) = 64),
+  asserted_actor TEXT,
+  resolved_actor TEXT NOT NULL,
+  via            TEXT NOT NULL CHECK (via IN ('developer', 'token', 'none')),
+  token_kind     TEXT CHECK (token_kind IS NULL OR token_kind IN ('agent', 'service')),
+  token_fp       TEXT,
+  token_project  TEXT,
+  would_refuse   INTEGER NOT NULL CHECK (would_refuse IN (0, 1)),
+  reasons        TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(reasons)),
+  enforced       INTEGER NOT NULL DEFAULT 0 CHECK (enforced = 0),
+  prev_sha       TEXT NOT NULL,
+  sha            TEXT NOT NULL UNIQUE
+);
+CREATE INDEX identity_observations_refuse ON identity_observations(would_refuse, audit_id);
+CREATE TRIGGER identity_observations_append_only_u BEFORE UPDATE ON identity_observations
+  BEGIN SELECT RAISE(ABORT, 'identity observations are append-only'); END;
+CREATE TRIGGER identity_observations_append_only_d BEFORE DELETE ON identity_observations
+  BEGIN SELECT RAISE(ABORT, 'identity observations are append-only'); END;
+"""),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
@@ -633,6 +680,7 @@ def migrate(db, migrations=None):
 # A migration that is not listed here has no in-place way back.
 DOWNGRADES = {
     10: ("onboarding_events", "onboarding_drafts", "agent_config_versions", "agent_registrations"),
+    11: ("identity_observations", "identity_tokens"),
 }
 
 

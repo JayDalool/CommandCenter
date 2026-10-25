@@ -141,17 +141,27 @@ class Identity(unittest.TestCase):
             self.t.revoke(out["id"], "agent:coder")
 
     def test_schema_keeps_tokens_as_history(self):
-        out = self.t.issue("agent:coder", "jay")
-        for sql in ("DELETE FROM actor_tokens", "UPDATE actor_tokens SET actor='agent:root'",
-                    "UPDATE actor_tokens SET expires_at=expires_at+1e9", "UPDATE actor_tokens SET issued_by='agent:x'"):
+        out = self.t.issue("agent:coder", "jay", project="samvision")
+        for sql in ("DELETE FROM identity_tokens", "UPDATE identity_tokens SET subject='agent:root'",
+                    "UPDATE identity_tokens SET kind='service'", "UPDATE identity_tokens SET project=NULL",
+                    "UPDATE identity_tokens SET expires_at=expires_at+1e9",
+                    "UPDATE identity_tokens SET issued_by='agent:x'"):
             with self.assertRaises(sqlite3.DatabaseError, msg=sql):
                 self.ts.db.execute(sql)
         self.t.revoke(out["id"], "jay")
         with self.assertRaises(sqlite3.DatabaseError):                     # revoke is once
-            self.ts.db.execute("UPDATE actor_tokens SET revoked_at=NULL")
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.ts.db.execute("INSERT INTO actor_tokens (actor, token_sha, issued_at, issued_by, expires_at) "
-                               "VALUES ('agent:x', ?, 0, 'agent:x', 1)", ("a" * 64,))
+            self.ts.db.execute("UPDATE identity_tokens SET revoked_at=NULL")
+        for kind, subject, by in (("agent", "agent:x", "agent:x"), ("agent", "svc:x", "jay"),
+                                  ("service", "agent:x", "jay"), ("agent", "jay", "jay"), ("user", "agent:x", "jay")):
+            with self.subTest(kind=kind, subject=subject, by=by), self.assertRaises(sqlite3.IntegrityError):
+                self.ts.db.execute("INSERT INTO identity_tokens (kind, subject, token_sha, issued_at, issued_by, "
+                                   "expires_at) VALUES (?, ?, ?, 0, ?, 1)", (kind, subject, "a" * 64, by))
+        # the pre-Phase-2 table keeps its own guards
+        self.ts.db.execute("INSERT INTO actor_tokens (actor, token_sha, issued_at, issued_by, expires_at) "
+                           "VALUES ('agent:old', ?, 0, 'jay', 1)", ("b" * 64,))
+        for sql in ("DELETE FROM actor_tokens", "UPDATE actor_tokens SET actor='agent:root'"):
+            with self.assertRaises(sqlite3.DatabaseError, msg=sql):
+                self.ts.db.execute(sql)
 
     def test_identify(self):
         self.assertEqual(identity.identify("jay", True, None)["via"], "developer")

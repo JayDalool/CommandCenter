@@ -49,6 +49,9 @@ def call(method, path, body=None, actor=None, port=None, token=None):
     headers = {"Host": f"127.0.0.1:{port}", "X-CCD-Token": token, "Content-Type": "application/json"}
     if actor:
         headers["X-CCD-Actor"] = actor
+    actor_token = _actor_token()
+    if actor_token:
+        headers["X-CCD-Actor-Token"] = actor_token
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method, headers=headers,
                                  data=json.dumps(body).encode() if body is not None else None)
     try:
@@ -61,6 +64,19 @@ def call(method, path, body=None, actor=None, port=None, token=None):
             return 1, {"error": f"HTTP {e.code}"}
     except (urllib.error.URLError, OSError) as e:
         return 1, {"error": f"Command Center is not reachable on 127.0.0.1:{port} ({getattr(e, 'reason', e)})"}
+
+
+def _actor_token():
+    """This caller's identity token (Phase 2, recorded only): $CCD_ACTOR_TOKEN, else the file named by
+    $CCD_ACTOR_TOKEN_FILE. Missing or unreadable means none is sent; nothing is refused either way."""
+    tok = os.environ.get("CCD_ACTOR_TOKEN", "").strip()
+    if not tok and os.environ.get("CCD_ACTOR_TOKEN_FILE"):
+        try:
+            with open(os.environ["CCD_ACTOR_TOKEN_FILE"], encoding="utf-8") as f:
+                tok = f.read().strip()
+        except OSError:
+            tok = ""
+    return tok if tok and len(tok) <= 100 and tok.isascii() and tok.isprintable() else ""
 
 
 def _json_file(path):

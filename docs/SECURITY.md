@@ -459,6 +459,20 @@ an actor token lives wherever the agent keeps it, in the same Unix account as cc
 honest mistakes and makes a false claim visible, not impossible; per-job tokens on separate workers (Phase 2) are
 the stronger fix.
 
+**Typed identity tokens and the shadow identity record** (Phase 2 shadow step 1, tasks.db v11; Jay 2026-10-25).
+New tokens live in `identity_tokens` and are typed by prefix so a leaked one is recognisable: `cca_a_…` for an agent
+(`agent:<name>`), `cca_s_…` for a service (`svc:<name>`); Jay may bind one to a single project. The same rules hold:
+issued only by Jay with Developer Unlock, shown once, SHA-256 kept, expiry, never deleted, one revoke. Tokens from
+before v11 (`actor_tokens`) still verify and are revoked by their negative id. `X-CCD-Actor` itself is unchanged
+(`jay` or `agent:<name>`; a service token holder sends no actor header). With `config.json`
+`"phase2_identity_shadow": true` (default **false**) every recorded write also gets an `identity_observations` row,
+in the same transaction as its audit row and chained to it: the asserted actor (or none), the **resolved actor**
+(`jay` only with Developer Unlock, a token's subject with a valid token, else `unknown`), and the reasons Phase 2
+enforcement would refuse it (`missing_header`, `unverified`, `asserted_mismatch`, `jay_without_unlock`,
+`project_mismatch`). **It refuses nothing**: `enforced` is 0 and the table's CHECK refuses any other value, and a
+shadow row that cannot be written is skipped without losing the audit row (`identityErrors` counts them). Enforcing
+any of it is a separate decision for Jay.
+
 **Metering** (`ccd/meter.py`, `usage_records`). Every 5 minutes ccd reads what is new in the agents' own session logs
 on this machine (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`), off the event loop, at most 8 MB
 a pass. From each line it keeps only the model, token counts, time, session id, working directory and branch (to tie
