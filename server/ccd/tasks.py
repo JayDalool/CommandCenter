@@ -631,6 +631,9 @@ CREATE TRIGGER identity_tokens_fixed BEFORE UPDATE ON identity_tokens
     OR NEW.issued_by IS NOT OLD.issued_by OR NEW.expires_at IS NOT OLD.expires_at OR NEW.note IS NOT OLD.note
     OR OLD.revoked_at IS NOT NULL
   BEGIN SELECT RAISE(ABORT, 'an identity token can only be revoked, once'); END;
+CREATE TRIGGER identity_tokens_no_replace BEFORE INSERT ON identity_tokens
+  WHEN EXISTS (SELECT 1 FROM identity_tokens WHERE id = NEW.id OR token_sha = NEW.token_sha)
+  BEGIN SELECT RAISE(ABORT, 'an identity token is history; it is never replaced'); END;
 CREATE TABLE identity_observations (
   audit_id       INTEGER PRIMARY KEY,
   audit_sha      TEXT NOT NULL CHECK (length(audit_sha) = 64),
@@ -650,6 +653,9 @@ CREATE INDEX identity_observations_refuse ON identity_observations(would_refuse,
 CREATE TRIGGER identity_observations_append_only_u BEFORE UPDATE ON identity_observations
   BEGIN SELECT RAISE(ABORT, 'identity observations are append-only'); END;
 CREATE TRIGGER identity_observations_append_only_d BEFORE DELETE ON identity_observations
+  BEGIN SELECT RAISE(ABORT, 'identity observations are append-only'); END;
+CREATE TRIGGER identity_observations_no_replace BEFORE INSERT ON identity_observations
+  WHEN EXISTS (SELECT 1 FROM identity_observations WHERE audit_id = NEW.audit_id OR sha = NEW.sha)
   BEGIN SELECT RAISE(ABORT, 'identity observations are append-only'); END;
 """),
 ]

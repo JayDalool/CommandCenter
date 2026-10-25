@@ -160,11 +160,16 @@ class ActorTokens:
         return typed + legacy
 
 
-def identify(claimed, developer, token_actor):
+def identify(claimed, developer, token_actor, header_missing=False):
     """How far a write's actor claim can be trusted. `token_actor` is ActorTokens.verify(...) of the presented
-    header (None when absent or invalid). Never raises and never changes who the write is recorded as."""
+    header (None when absent or invalid). `header_missing`: no X-CCD-Actor was sent (so `claimed` is the default
+    `jay`). Never raises and never changes who the write is recorded as."""
     if developer and claimed == "jay":
         return {"actor": claimed, "verified": True, "via": "developer", "tokenActor": None, "mismatch": False}
+    if token_actor and header_missing and kind_of(token_actor) == "service":
+        # A service sends no X-CCD-Actor (it accepts only jay or agent:<name>); its token is its claim. The row's
+        # actor stays the default, and is not verified as `jay`.
+        return {"actor": claimed, "verified": False, "via": "token", "tokenActor": token_actor, "mismatch": False}
     if token_actor:
         return {"actor": claimed, "verified": token_actor == claimed, "via": "token", "tokenActor": token_actor,
                 "mismatch": token_actor != claimed}
@@ -177,7 +182,8 @@ REASONS = ("missing_header", "unverified", "asserted_mismatch", "jay_without_unl
 def resolve(asserted, developer, token_hit, project=None):
     """The Phase 2 shadow record for one write. `asserted`: the raw X-CCD-Actor header (None when missing).
     `developer`: a live Developer Unlock session. `token_hit`: ActorTokens.lookup(...) of the presented token (None
-    when absent or invalid). `project`: the project the write touches, when known.
+    when absent or invalid). `project`: the project the write touches: the body's `project`, else the project of the
+    ticket key in the path (daemon.audit_write); None when neither names one, and then no project_mismatch.
 
     Returns {assertedActor, resolvedActor, via, tokenKind, tokenFingerprint, tokenProject, wouldRefuse, reasons,
     enforced}. resolvedActor is "jay" only with Developer Unlock, a token's subject with a valid token, else
@@ -188,9 +194,13 @@ def resolve(asserted, developer, token_hit, project=None):
         resolved, via = token_hit["actor"], "token"
     else:
         resolved, via = "unknown", "none"
-    effective = asserted or "jay"          # what ccd records today when the header is missing
+    asserted = asserted or None            # an empty header is a missing one
+    service = via == "token" and token_hit.get("kind") == "service"
+    # What ccd records today when the header is missing is `jay`; a service sends none (X-CCD-Actor accepts only jay
+    # or agent:<name>), so for a service token the token itself is the claim.
+    effective = asserted or (resolved if service else "jay")
     reasons = []
-    if asserted is None and resolved != "jay":
+    if asserted is None and resolved != "jay" and not service:
         reasons.append("missing_header")
     if resolved == "unknown":
         reasons.append("unverified")

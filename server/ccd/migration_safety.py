@@ -49,7 +49,8 @@ from . import tasks
 TO = tasks.SCHEMA_VERSION
 FROM = TO - 1
 ONBOARDING = 10                     # the migration whose tables export-onboarding copies
-# A row in a table migration TO adds, to show the rollback refuses to drop history.
+# A row in a table migration TO adds, to show the rollback refuses to drop history. A new migration adds its own
+# entry here (the drill fails loudly with a KeyError until it does).
 HISTORY_ROW = {
     10: ("INSERT INTO onboarding_drafts (id, kind, state, body, body_sha, revision, created_at, created_by, updated_at) "
          "VALUES ('d-000000000001', 'agent', 'open', '{}', ?, 1, 0, 'jay', 0)", ("0" * 64,)),

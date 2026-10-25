@@ -462,14 +462,17 @@ the stronger fix.
 **Typed identity tokens and the shadow identity record** (Phase 2 shadow step 1, tasks.db v11; Jay 2026-10-25).
 New tokens live in `identity_tokens` and are typed by prefix so a leaked one is recognisable: `cca_a_…` for an agent
 (`agent:<name>`), `cca_s_…` for a service (`svc:<name>`); Jay may bind one to a single project. The same rules hold:
-issued only by Jay with Developer Unlock, shown once, SHA-256 kept, expiry, never deleted, one revoke. Tokens from
-before v11 (`actor_tokens`) still verify and are revoked by their negative id. `X-CCD-Actor` itself is unchanged
-(`jay` or `agent:<name>`; a service token holder sends no actor header). With `config.json`
+issued only by Jay with Developer Unlock, shown once, SHA-256 kept, expiry, never deleted, one revoke (triggers also refuse a replacing INSERT). Tokens from before v11 (`actor_tokens`) still verify and are
+revoked by their negative id. From v11 every newly issued token is typed and stored here, whatever the flag below
+says. `X-CCD-Actor` itself is unchanged (`jay` or `agent:<name>`): a service token holder sends no actor header, and
+its write is recorded as the default actor with `via: token`, not verified, "service token; no actor header". With `config.json`
 `"phase2_identity_shadow": true` (default **false**) every recorded write also gets an `identity_observations` row,
 in the same transaction as its audit row and chained to it: the asserted actor (or none), the **resolved actor**
 (`jay` only with Developer Unlock, a token's subject with a valid token, else `unknown`), and the reasons Phase 2
 enforcement would refuse it (`missing_header`, `unverified`, `asserted_mismatch`, `jay_without_unlock`,
-`project_mismatch`). **It refuses nothing**: `enforced` is 0 and the table's CHECK refuses any other value, and a
+`project_mismatch`, judged on the body's `project` or else the project of the ticket key in the path; a write that
+names neither is not checked). A service token with no actor header is judged by its own subject. **It refuses
+nothing**: `enforced` is 0 and the table's CHECK refuses any other value, and a
 shadow row that cannot be written is skipped without losing the audit row (`identityErrors` counts them). Enforcing
 any of it is a separate decision for Jay.
 

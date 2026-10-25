@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from ccd import audit, identity, pipeline_cli, security
+from ccd import audit, identity, onboarding, pipeline_cli, security
 from ccd.daemon import Daemon
 from ccd.store import Store
 
@@ -84,6 +84,37 @@ class TypedTokens(unittest.TestCase):
         self.assertIsNone(self.t.lookup(other["token"]))
 
 
+class SchemaAndHints(unittest.TestCase):
+    def setUp(self):
+        self.ts = tasks_db()
+        self.t = identity.ActorTokens(self.ts.db, Clock())
+
+    def test_insert_or_replace_cannot_rewrite_a_token_or_an_observation(self):
+        out = self.t.issue("agent:coder", "jay")
+        self.t.revoke(out["id"], "jay")
+        sha = self.ts.db.execute("SELECT token_sha FROM identity_tokens").fetchone()[0]
+        with self.assertRaises(sqlite3.DatabaseError):                       # un-revoking by replacement
+            self.ts.db.execute("INSERT OR REPLACE INTO identity_tokens (id, kind, subject, token_sha, issued_at, "
+                               "issued_by, expires_at) VALUES (?, 'agent', 'agent:coder', ?, 0, 'jay', 9e9)",
+                               (out["id"], sha))
+        self.assertEqual(self.t.get(out["id"])["status"], "revoked")
+        a = audit.Audit(self.ts.db, Clock())
+        a.record(actor="jay", verified=False, via="none", method="POST", path="/api/x", status=200,
+                 identity=identity.resolve(None, False, None))
+        row = self.ts.db.execute("SELECT audit_id, audit_sha, prev_sha, sha FROM identity_observations").fetchone()
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.ts.db.execute("INSERT OR REPLACE INTO identity_observations (audit_id, audit_sha, resolved_actor, via, "
+                               "would_refuse, prev_sha, sha) VALUES (?, ?, 'jay', 'developer', 0, ?, ?)", row)
+        self.assertTrue(a.verify_identity(full=True)["ok"])
+
+    def test_onboarding_sees_typed_agent_tokens(self):
+        self.t.issue("agent:nova", "jay")
+        self.t.issue("svc:ci", "jay")
+        add_legacy(self.ts.db)
+        o = onboarding.Onboarding(self.ts.db, enabled=True)
+        self.assertEqual(o._token_actors(), {"agent:nova", "agent:old"})
+
+
 class Resolve(unittest.TestCase):
     AGENT = {"actor": "agent:coder", "kind": "agent", "project": None, "fingerprint": "abcd-ef01", "legacy": False}
 
@@ -107,6 +138,12 @@ class Resolve(unittest.TestCase):
         self.assertEqual(self.reasons("jay", False, self.AGENT), ("agent:coder", ["asserted_mismatch",
                                                                                  "jay_without_unlock"]))
         self.assertEqual(self.reasons("agent:x", True, None), ("jay", ["asserted_mismatch"]))
+        svc = dict(self.AGENT, actor="svc:ci", kind="service")
+        self.assertEqual(self.reasons(None, False, svc), ("svc:ci", []))                # a service sends no header
+        self.assertEqual(self.reasons("", False, svc), ("svc:ci", []))
+        self.assertEqual(self.reasons("jay", False, svc), ("svc:ci", ["asserted_mismatch", "jay_without_unlock"]))
+        self.assertEqual(self.reasons("", False, None), ("unknown", ["missing_header", "unverified",
+                                                                     "jay_without_unlock"]))
 
     def test_project_binding(self):
         bound = dict(self.AGENT, project="gyst")
@@ -206,7 +243,8 @@ class OverHttp(unittest.IsolatedAsyncioTestCase):
             ({"x-ccd-actor": "agent:coder", "x-ccd-actor-token": agent["token"]}, []),
             ({"x-ccd-actor": "jay", "x-ccd-actor-token": agent["token"]}, ["asserted_mismatch", "jay_without_unlock"]),
             ({"x-ccd-actor": "agent:gyst-only", "x-ccd-actor-token": bound["token"]}, ["project_mismatch"]),
-            ({"x-ccd-actor-token": svc["token"]}, ["missing_header", "asserted_mismatch", "jay_without_unlock"]),
+            ({"x-ccd-actor-token": svc["token"]}, []),                         # a service sends no actor header
+            ({"x-ccd-actor": "", "x-ccd-actor-token": svc["token"]}, []),      # an empty header is a missing one
             ({"x-ccd-actor": "agent:coder", "x-ccd-actor-token": "cca_a_" + "x" * 43}, ["unverified"]),
         ]
         for extra, reasons in cases:
@@ -229,6 +267,24 @@ class OverHttp(unittest.IsolatedAsyncioTestCase):
         r = self.c.post("/api/tasks", headers=dict(self.h, **{"x-ccd-actor": "svc:ccd"}),
                         json={"project": "samvision", "title": "x"})
         self.assertEqual(r.status_code, 400)
+
+    def test_a_service_token_without_a_header_is_not_a_mismatch_in_the_audit_row(self):
+        svc = self.issue(actor="svc:ci")
+        self.c.post("/api/tasks", headers=dict(self.h, **{"x-ccd-actor-token": svc["token"]}),
+                    json={"project": "samvision", "title": "by ci"})
+        e = self.d.audit.list(limit=1)[0]
+        self.assertEqual((e["actor"], e["via"], e["verified"], e["tokenActor"]), ("jay", "token", False, "svc:ci"))
+        self.assertEqual(e["summary"], "service token; no actor header")
+        self.assertEqual((e["identity"]["resolvedActor"], e["identity"]["reasons"]), ("svc:ci", []))
+
+    def test_project_binding_is_checked_for_a_ticket_named_only_in_the_path(self):
+        bound = self.issue(actor="agent:gyst-only", project="gyst")
+        key = self.c.post("/api/tasks", headers=self.dev, json={"project": "samvision", "title": "x"}).json()["key"]
+        h = dict(self.h, **{"x-ccd-actor": "agent:gyst-only", "x-ccd-actor-token": bound["token"]})
+        r = self.c.post(f"/api/tasks/{key}/comments", headers=h, json={"body": "hi"})
+        self.assertIn(r.status_code, (200, 201))                               # never refused
+        self.assertEqual(self.d.audit.list(limit=1)[0]["identity"]["reasons"], ["project_mismatch"])
+        self.assertEqual(self.d._write_project("/api/tasks/NOPE-1/comments", None), None)
 
     def test_with_the_switch_off_nothing_is_observed(self):
         ts = tasks_db()

@@ -1971,12 +1971,15 @@ class Daemon:
             return
         try:
             hit = self.actor_tokens.lookup(actor_token) if actor_token and self.actor_tokens else None
-            who = identity_mod.identify(claimed, bool(developer), hit["actor"] if hit else None)
-            project = body["project"][:40] if isinstance(body, dict) and isinstance(body.get("project"), str) else None
-            shadow = identity_mod.resolve(asserted, bool(developer), hit, project) if self.identity_shadow_on else None
+            asserted = asserted or None
+            who = identity_mod.identify(claimed, bool(developer), hit["actor"] if hit else None,
+                                        header_missing=asserted is None)
+            shadow = identity_mod.resolve(asserted, bool(developer), hit, self._write_project(path, body)) \
+                if self.identity_shadow_on else None
             self.audit.record(actor=who["actor"], verified=who["verified"], via=who["via"],
                               token_actor=who["tokenActor"], method=method, path=path, status=status, body=body,
-                              summary="actor token names a different actor" if who["mismatch"] else "",
+                              summary="actor token names a different actor" if who["mismatch"] else
+                              "service token; no actor header" if who["via"] == "token" and not who["verified"] else "",
                               profile_hash=getattr(self.policy, "fingerprint", None), identity=shadow)
         except Exception as e:  # noqa: BLE001 — the audit trail is a record; it must never break a write
             log.warning(json.dumps({"msg": "audit write skipped", "path": str(path)[:100], "error": repr(e)[:200]}))
@@ -2000,6 +2003,17 @@ class Daemon:
                 "chain": self.audit.verify(full=full), "identity": self.audit.identity_summary(),
                 "identityChain": self.audit.verify_identity(full=full),
                 "identityErrors": self.audit.identity_errors, "identityShadow": self.identity_shadow_on}
+
+    def _write_project(self, path, body):
+        """The project a write touches, for the shadow record: the body's `project`, else the project of the ticket
+        key in the path. None when neither names one."""
+        if isinstance(body, dict) and isinstance(body.get("project"), str):
+            return body["project"][:40]
+        m = audit_mod.KEY_RE.search(path or "")
+        if m and self.tasks is not None:
+            row = self.tasks.db.execute("SELECT project FROM tickets WHERE key=?", (m.group(1),)).fetchone()
+            return row[0] if row else None
+        return None
 
     def actors_state(self):
         if self.actor_tokens is None:
