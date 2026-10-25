@@ -1,7 +1,7 @@
 # CommandCenter v2 — Discovery and Architecture Plan
 
-Date: 2026-10-21 · Status: **Phase 0 merged; Phase 1 built in shadow / record-only mode, nothing deployed — see the
-Phase 1 implementation record in §21.** · Audited: `main` @ `a0e90e5`
+Date: 2026-10-21 · Status: **Phase 0 merged; Phase 1 graduated 2026-10-25 (harness PASS, Jay's decision), still
+shadow / record-only — see the Phase 1 implementation record in §21.** · Audited: `main` @ `a0e90e5`
 (CC-052), plus every remote branch, with `claude/amazing-keller-fpy0qw` @ `e236ffa` and `p4b` read in detail.
 
 Revision 2 (2026-10-21): Jay answered the blocking questions. His answers are recorded as policy decisions
@@ -1039,10 +1039,35 @@ had a fresh independent review on its final head before merging.
 | 6 | Audit trail | PR 7 | `audit_events` (append-only, hash-chained) for every write + pipeline events; per-agent actor tokens issued by Jay; Settings → Audit | **Recorded, not enforced**: `X-CCD-Actor` is not yet required to match its token. The trail measures what enforcing would refuse; turning it on needs Jay (Phase 2) |
 | 7 | Cost metering | PR 7 | `usage_records` from Claude Code / Codex session logs (usage fields only) + optional reported usage; list-price estimates; profile `target.budget` shown; Settings → Usage | Budgets displayed, not enforced. Codex counted in tokens only (no price) |
 | 8 | Engine safety patch | #62 | Engine v2: merge readiness, deploy routing, boundary labels, fail-closed profile fields, folder-level self-protection, `risk_high` CommandCenter plan trigger (Q-01); regression + invariant suites | Validation finding, not new authority: v1 said "auto" in 8 cases the agreed policy sends to Jay (U-01 … U-08); still shadow only |
-| 9 | Phase 1 readiness harness | (this PR) | `python -m ccd.validation phase1-readiness`: fixtures, read-only replay, GET-only live checks, an independent oracle, the 15-row graduation gate | Validation only: reads, never writes; adds no route and no authority |
+| 9 | Phase 1 readiness harness | #63 | `python -m ccd.validation phase1-readiness`: fixtures, read-only replay, GET-only live checks, an independent oracle, the 15-row graduation gate | Validation only: reads, never writes; adds no route and no authority |
 
 tasks.db migrations in this phase: v6 (autonomy_shadow, #56), v7 (decisions/approvals, #57), v8 (worker nodes, #58), v9 (audit,
 actor tokens, usage; PR 7) — all additive, forward-only. Rollback for each PR is a revert; the new tables stay unused.
+
+#### Phase 1 graduation (2026-10-25)
+
+- **Live:** Phase 1 went live 2026-10-21 23:46 UTC (`4fa7b8b`). Engine v3 (#62 + #63, `693a556`) went live
+  2026-10-22 04:31:21 UTC.
+- **Evidence:** a restart drill and a rollback drill both passed. The rollback drill used scratch copies: `a0e90e5`
+  refuses the v9 tasks.db and boots on the pre-Phase-1 backup. The audit chain was intact on every walk. One
+  night shift did real work (gyst, 2026-10-22): it ended with its report and sent 0 reminders. ccd had three
+  restarts, all explained, and no unexplained exits.
+- **Harness:** `phase1-readiness` ran on jay-server at 2026-10-25 00:27 UTC with fixtures, replay and live, and
+  gave **PASS on all 15 rows**:
+  - 72.7 h runtime, 67.9 h on engine v3
+  - 0 unauthorized actions, 0 unsafe-permissive, 0 boundary-softened, 0 unexplained disagreements
+  - 35/35 sweep classes; 14/14 regressions guarded
+  - auto-merge off; enforced profiles = registry
+
+  The report is in `~/command-center/readiness-20261025T002704Z` and the evidence in
+  `~/command-center/evidence/phase1/`.
+- **Findings:** 147, all legacy-permissive and all from replay history. Each is a plan the old pipeline
+  auto-accepted that the target policy would send to Jay, mostly because the plan's risk was not known
+  (`target.plan_approval:unknown`): gyst 93, commandcenter 29, samvision 22, mfe 3. They are recorded for
+  Phase 2, not blockers.
+- **Decision:** Jay graduated Phase 1 on 2026-10-25.
+- **What did not change:** graduation changes no authority. The engine stays in shadow, nothing is enforced, and
+  auto-merge and auto-deploy stay off. Phase 2 needs its own decision from Jay.
 
 ### Phase 2 — Execution fabric and enforced boundaries
 
