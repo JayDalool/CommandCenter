@@ -31,6 +31,9 @@ side, the task detail's Answer Questions button covered its text, the wizards' f
 pickers were cut off, and the Teams hierarchy shrank to a quarter size over an empty band (it now keeps half size and
 scrolls sideways inside its frame, opening on the Project Lead).
 
+**Full-screen Topology.** The full-screen graph showed an empty page, because the page sat in a zero-height row once the
+top bar was hidden. It now fills the window, and a browser check fails if the graph is not visible.
+
 **Agent Inspector.** Edit, Change model, Change machines, Chat and Task Room now close the inspector drawer, so it no
 longer covers the page they open.
 
@@ -38,7 +41,7 @@ longer covers the page they open.
 on sideways scrolling; `e2e/gallery-page.mjs` builds the visual gallery. New docs: `docs/PAGE_MAP.md`,
 `docs/DESIGN_TOKENS.md`, `docs/COMPONENTS.md`, `docs/RUN_LOCALLY.md`.
 
-Tests: 96 unit tests, 24 browser checks.
+Tests: 96 unit tests, 25 browser checks.
 
 ## 2026-10-24 · D-024 defaults (5862c09)
 

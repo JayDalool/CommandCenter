@@ -369,6 +369,19 @@ await test("budgets and approvals fit a phone-width window with no sideways scro
   await shot(p, "gov_approvals_phone");
 });
 
+await test("full-screen topology fills the window with the graph, and the same button brings the shell back", async (ctx) => {
+  const p = await main(ctx, "topology");
+  await p.locator('button[aria-label="Full screen graph"]').first().click(); await p.waitForTimeout(300);
+  // Visible, not just laid out: the point at the graph's centre must hit the graph (a zero-height parent once hid it).
+  const box = await p.evaluate(() => { const cv = document.querySelector(".canvas"); const c = cv?.getBoundingClientRect(); if (!c) return null;
+    const hit = document.elementFromPoint(c.x + c.width / 2, c.y + Math.min(c.height / 2, 200)); return { h: c.height, vh: innerHeight, hit: !!hit && cv.contains(hit) }; });
+  assert(box && box.hit && box.h > box.vh * 0.6, `graph not visible in full screen: ${JSON.stringify(box)}`);
+  assert(await p.locator(".side").isHidden(), "sidebar still shown in full screen");
+  await shot(p, "topology_fullscreen");
+  await p.locator('button[aria-label="Full screen graph"]').first().click(); await p.waitForTimeout(200);
+  assert(await p.locator(".side").isVisible(), "sidebar did not come back");
+});
+
 await browser.close();
 const pass = results.filter((r) => r.ok).length;
 fs.writeFileSync(`${OUT}/e2e-results.json`, JSON.stringify({ when: new Date().toISOString(), base: BASE, pass, total: results.length, results }, null, 2));

@@ -59,7 +59,7 @@ only to this browser's storage.
 ```bash
 npm test                                # 96 unit and component tests (jsdom)
 npm run build && npm run preview &      # then, in another shell:
-node e2e/run.mjs                        # 24 real-browser checks (pop-outs, menus, approvals, budgets, phone width)
+node e2e/run.mjs                        # 25 real-browser checks (pop-outs, menus, approvals, budgets, phone width)
 ```
 
 The browser checks load Playwright from the global npm install, or from `PLAYWRIGHT_MODULE`, so the prototype does

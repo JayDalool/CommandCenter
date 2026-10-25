@@ -387,7 +387,7 @@ button.gnode:hover, .gnode.is-hot { box-shadow: 0 0 0 1px color-mix(in srgb, var
 .tl-bar.is-blocked { border-color: var(--bad); background: rgba(255, 79, 109, .15); } .tl-bar.is-paused { opacity: .5; border-style: dashed; }
 body.is-immersive .side, body.is-immersive .top, body.is-immersive .tabs { display: none; }
 body.is-immersive .app { grid-template-columns: 1fr; }
-body.is-immersive .main-col { grid-template-rows: 0 0 1fr; }
+body.is-immersive .main-col { grid-template-rows: minmax(0, 1fr); } /* top bar and tabs are hidden, so the page is the only row */
 .page-topology.is-immersive { padding: 10px; height: 100vh; }
 
 /* ---------------- Messages ---------------- */

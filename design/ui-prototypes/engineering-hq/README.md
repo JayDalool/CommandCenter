@@ -85,7 +85,7 @@ Same layouts, palette, project colours and graphs. Added on top, with no new dep
 ```bash
 npm test                              # 96 unit/component tests (jsdom)
 npm run build && npm run preview &    # then, in another shell:
-node e2e/run.mjs                      # 24 real-browser tests: pop-out windows, menus, tooltips, popovers, motion, loading,
+node e2e/run.mjs                      # 25 real-browser tests: pop-out windows, menus, tooltips, popovers, motion, loading,
                                       # approvals and budgets (including phone width)
 node e2e/gallery.mjs http://127.0.0.1:5181/ e2e/out/gallery           # every page and state at 1920, 1366, 1280, 390 + pop-outs
 node e2e/gallery-page.mjs e2e/out/gallery e2e/out/gallery/index.html --ext png   # the visual gallery page
