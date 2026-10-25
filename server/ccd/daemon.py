@@ -1725,6 +1725,9 @@ class Daemon:
           3. the worktree's writer is released; the worktree itself is never deleted here
           4. the final task.md / workflow.md are written
         The project coordinator is never touched."""
+        # Runs as its own task (_closed_soon), which copied the context of the request that closed the ticket: what
+        # it does later is ccd acting on its own, so the Broker record must not credit that request (task-local).
+        broker_mod.REQUEST.set(None)
         names, claude = [], None
         if not teardown:
             claude = "left running: closed without Developer Unlock"

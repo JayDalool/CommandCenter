@@ -1006,8 +1006,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         op = request.url.path.rsplit("/", 1)[-1]
         key = str(body.get("project") or "")
         sc = _need_scm()
-        if op in SCM_OPS:
-            daemon._broker("repo.write", key or None, f"scm {op}")
+        daemon._broker("repo.write", key or None, f"scm {op}")
         if op == "stage":
             out = await sc.stage(key, _paths(body))
         elif op == "unstage":

@@ -167,6 +167,25 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         st = d.broker_state()
         self.assertEqual((st["summary"]["total"], st["chain"]["ok"], st["errors"], st["enforced"]), (2, True, 0, False))
 
+    async def test_a_ticket_closed_by_a_request_tears_down_as_ccd_not_as_that_request(self):
+        import asyncio
+        d = Daemon(cfg(phase2_broker_shadow=True), self.store, None, tasks=self.ts)
+        key = self.ts.create("samvision", "done soon")[0]["key"]
+        seen = []
+
+        async def exit_when_idle(k):
+            seen.append(broker.REQUEST.get())
+            return None
+        ctx = broker.REQUEST.set({"developer": True, "token": None, "asserted": "jay"})
+        try:
+            with mock.patch.object(d, "_exit_when_idle", exit_when_idle):
+                d._closed_soon(key)
+                await asyncio.sleep(0.05)
+            self.assertEqual(broker.REQUEST.get()["asserted"], "jay")          # the request's own context is kept
+        finally:
+            broker.REQUEST.reset(ctx)
+        self.assertEqual(seen, [None])
+
     async def test_a_broken_record_never_reaches_the_caller(self):
         d = Daemon(cfg(phase2_broker_shadow=True), self.store, None, tasks=self.ts)
         with mock.patch.object(broker, "check", side_effect=RuntimeError("boom")):
@@ -187,7 +206,8 @@ class AutoMerge(AutoMergeBase):
         rows = self.tickets.db.execute("SELECT verb, project, actor, target, terms FROM broker_observations").fetchall()
         self.assertEqual([(r[0], r[1], r[2]) for r in rows], [("pr.merge", "commandcenter", "system:ccd")])
         self.assertIn(k, rows[0][3])
-        self.assertIn(json.loads(rows[0][4])["approval"]["result"], ("ok", "deny"))   # the engine's verdict was read
+        # this fixture has no CI checks, so the engine's target policy says "jay": the record says so; ccd merged anyway
+        self.assertEqual(json.loads(rows[0][4])["approval"], {"result": "deny", "reason": "engine_not_auto"})
 
     async def test_with_the_switch_off_nothing_is_recorded(self):
         self.ready()

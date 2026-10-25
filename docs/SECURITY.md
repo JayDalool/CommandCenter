@@ -522,7 +522,9 @@ merge), `go_live.approve`, `deploy.request` and `deploy.record` (pipeline steps)
 key from the UI, Task nudges, dispatch, coordinator messages, night-shift nudges and end), `repo.write` and
 `worktree.remove` (recorded after git removed it; the cleanup decides inside its own thread). Each row goes into
 `broker_observations`, which has its own hash chain, `enforced` fixed at 0 by a CHECK, and append-only triggers.
-`GET /api/broker` shows the summary and the newest rows. **It refuses nothing**: every action runs exactly as before,
+A row is an attempt as the Broker would see it, not proof the action completed: a few are written before a check
+that can still refuse the request (a pipeline step's own 400/403/409, or no idle coordinator for Merge and Go Live);
+the audit trail and events say what happened. `GET /api/broker` shows the summary and the newest rows. **It refuses nothing**: every action runs exactly as before,
 the record is written before the action and never raises (a failure is counted in `errors`), and with the switch off
 nothing is recorded. The API caller's identity reaches the record through a context variable set by `BrokerContext`
 in api.py, which reads only headers. Not covered yet: the terminal WebSocket, node job claims and writer claims (not
