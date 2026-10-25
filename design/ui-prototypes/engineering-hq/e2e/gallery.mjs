@@ -221,6 +221,10 @@ if (!ONLY || ONLY.has("pop-main-shaded")) {
 await browser.close();
 const prev = ONLY && fs.existsSync(path.join(OUT, "manifest.json")) ? JSON.parse(fs.readFileSync(path.join(OUT, "manifest.json"), "utf8")) : null;
 if (prev) { const ids = new Set(manifest.states.map((s) => s.id)); manifest.states = [...prev.states.filter((s) => !ids.has(s.id)), ...manifest.states]; }
+// Keep the order the states are defined in, however many partial re-runs merged into the manifest.
+const ORDER_IDS = [...S.map((s) => s.id), ...POPS.map((p) => p[0]), "pop-main-shaded"];
+const rank = (id) => { const i = ORDER_IDS.indexOf(id); return i < 0 ? ORDER_IDS.length : i; };
+manifest.states.sort((a, b) => rank(a.id) - rank(b.id));
 fs.writeFileSync(path.join(OUT, "manifest.json"), JSON.stringify(manifest, null, 1));
 const n = manifest.states.reduce((a, s) => a + Object.keys(s.images).length, 0);
 console.log(`\n${manifest.states.length} states, ${n} screenshots in ${OUT}`);

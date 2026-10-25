@@ -28,6 +28,7 @@ const body = `<title>Engineering HQ Gallery</title>
 <style>
 /* Layout: a sticky control bar over a page map of sections; each section is a grid of screenshot cards; a lightbox compares sizes.
    One deliberate look: the same deep navy and purple as Engineering HQ, so the screenshots sit on their own ground. */
+[hidden] { display: none !important; } /* the lightbox and buttons hide with the attribute, also when opened as a file */
 :root {
   color-scheme: dark;
   --bg: #070b17; --panel: #0b1224; --raise: #121b35; --line: #19233f; --line-2: #243154;
