@@ -470,8 +470,8 @@ its write is recorded as the default actor with `via: token`, not verified, "ser
 in the same transaction as its audit row and chained to it: the asserted actor (or none), the **resolved actor**
 (`jay` only with Developer Unlock, a token's subject with a valid token, else `unknown`), and the reasons Phase 2
 enforcement would refuse it (`missing_header`, `unverified`, `asserted_mismatch`, `jay_without_unlock`,
-`project_mismatch`, judged on the body's `project` or else the project of the ticket key in the path; a write that
-names neither is not checked). A service token with no actor header is judged by its own subject. **It refuses
+`project_mismatch`, judged on the project of the ticket the path names, in any case, or else, when the path names no
+ticket, the body's `project`; a write that names neither is not checked). A service token with no actor header is judged by its own subject. **It refuses
 nothing**: `enforced` is 0 and the table's CHECK refuses any other value, and a
 shadow row that cannot be written is skipped without losing the audit row (`identityErrors` counts them). Enforcing
 any of it is a separate decision for Jay.

@@ -75,6 +75,14 @@ class TypedTokens(unittest.TestCase):
             self.t.revoke(0, "jay")
         self.assertEqual(e.exception.status, 404)
 
+    def test_get_finds_a_token_older_than_the_listed_200(self):
+        first = self.t.issue("agent:first", "jay")
+        for i in range(201):
+            self.t.issue(f"agent:n{i}", "jay")
+        self.assertNotIn(first["id"], [r["id"] for r in self.t.list()])
+        self.assertEqual(self.t.revoke(first["id"], "jay")["status"], "revoked")
+        self.assertEqual(self.t.revoke(-add_legacy(self.ts.db), "jay")["legacy"], True)
+
     def test_expired_and_revoked_typed_tokens_prove_nothing(self):
         out = self.t.issue("svc:x", "jay", 1)
         self.clock.t += 86401
@@ -308,6 +316,13 @@ class OverHttp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.d._write_project("/api/tasks/NOPE-1/comments", None), None)
         self.assertEqual(self.d._write_project(f"/api/tasks/{key}/comments", {"project": ""}), "samvision")
         self.assertEqual(self.d._write_project(f"/api/tasks/{key}/comments", {"project": "Sam Vision"}), "samvision")
+        for path, body in ((f"/api/tasks/{key.lower()}/comments", {"body": "lower-case key"}),
+                           (f"/api/tasks/{key}/comments", {"body": "hide it", "project": "gyst"})):
+            with self.subTest(path=path, body=body):
+                r = self.c.post(path, headers=h, json=body)
+                self.assertIn(r.status_code, (200, 201))
+                self.assertEqual(self.d.audit.list(limit=1)[0]["identity"]["reasons"], ["project_mismatch"])
+        self.assertEqual(self.d._write_project("/api/tasks", {"project": "gyst"}), "gyst")
         self.assertEqual(self.c.post("/api/actors/revoke", headers=self.dev, json={"id": 2 ** 70}).status_code, 400)
 
     def test_with_the_switch_off_nothing_is_observed(self):

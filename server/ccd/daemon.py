@@ -34,6 +34,8 @@ from . import budgets as budgets_mod
 from . import onboarding as onboarding_mod
 from . import herdr as herdr_mod
 from . import importer
+# A ticket key in an /api/tasks path, in any case (tasks._id_of upper-cases it), for the shadow identity record.
+TICKET_PATH_RE = re.compile(r"/api/tasks/([A-Za-z][A-Za-z0-9-]{0,20}-\d{1,6})(?:/|$)")
 from . import nightshift as nightshift_mod
 from . import uitests as uitests_mod
 from . import records as records_mod
@@ -2009,19 +2011,22 @@ class Daemon:
                 "identityErrors": self.audit.identity_errors, "identityShadow": self.identity_shadow_on}
 
     def _write_project(self, path, body):
-        """The project a write touches, for the shadow record: the body's `project`, else the project of the ticket
-        key in the path. None when neither names one."""
-        if isinstance(body, dict) and isinstance(body.get("project"), str) \
-                and identity_mod.PROJECT_RE.fullmatch(body["project"]):
-            return body["project"]
-        m = audit_mod.KEY_RE.search(path or "")
-        if m and self.tasks is not None:
-            key = m.group(1)
+        """The project a write touches, for the shadow record: the project of the ticket the path names (any case, as
+        ccd accepts it), else the body's `project` when the path names no ticket. None when neither names one. A body
+        `project` never overrides the ticket actually written."""
+        m = TICKET_PATH_RE.search(path or "")
+        if m:
+            if self.tasks is None:
+                return None
+            key = m.group(1).upper()
             row = self.tasks.db.execute("SELECT project FROM tickets WHERE key=?", (key,)).fetchone()
             if row is None:          # a key minted under a retired prefix (GM-014 → its project)
                 row = self.tasks.db.execute("SELECT project FROM task_project_aliases WHERE prefix=?",
                                             (key.rsplit("-", 1)[0],)).fetchone()
             return row[0] if row else None
+        if isinstance(body, dict) and isinstance(body.get("project"), str) \
+                and identity_mod.PROJECT_RE.fullmatch(body["project"]):
+            return body["project"]
         return None
 
     def actors_state(self):

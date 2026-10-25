@@ -140,7 +140,25 @@ class ActorTokens:
         return hit["actor"] if hit else None
 
     def get(self, tid):
-        return next((t for t in self.list() if t["id"] == tid), None)
+        """One token as list() shows it, however old (list() keeps only the newest 200 of each table)."""
+        hit = next((t for t in self.list() if t["id"] == tid), None)
+        if hit is not None or not isinstance(tid, int) or tid == 0:
+            return hit
+        now = self.clock()
+        if tid < 0:
+            r = self.db.execute("SELECT id, actor, token_sha, issued_at, expires_at, revoked_at, note FROM actor_tokens "
+                                "WHERE id=?", (-tid,)).fetchone()
+            row = r and {"id": -r[0], "actor": r[1], "kind": "agent", "project": None, "fingerprint": fingerprint(r[2]),
+                         "issuedAt": r[3], "expiresAt": r[4], "revokedAt": r[5], "note": r[6], "legacy": True}
+        else:
+            r = self.db.execute("SELECT id, kind, subject, project, token_sha, issued_at, expires_at, revoked_at, note "
+                                "FROM identity_tokens WHERE id=?", (tid,)).fetchone()
+            row = r and {"id": r[0], "actor": r[2], "kind": r[1], "project": r[3], "fingerprint": fingerprint(r[4]),
+                         "issuedAt": r[5], "expiresAt": r[6], "revokedAt": r[7], "note": r[8], "legacy": False}
+        if not row:
+            return None
+        row["status"] = "revoked" if row["revokedAt"] is not None else "expired" if row["expiresAt"] <= now else "active"
+        return row
 
     def list(self):
         now = self.clock()
@@ -182,8 +200,8 @@ REASONS = ("missing_header", "unverified", "asserted_mismatch", "jay_without_unl
 def resolve(asserted, developer, token_hit, project=None):
     """The Phase 2 shadow record for one write. `asserted`: the raw X-CCD-Actor header (None when missing).
     `developer`: a live Developer Unlock session. `token_hit`: ActorTokens.lookup(...) of the presented token (None
-    when absent or invalid). `project`: the project the write touches: the body's `project`, else the project of the
-    ticket key in the path (daemon.audit_write); None when neither names one, and then no project_mismatch.
+    when absent or invalid). `project`: the project the write touches: the project of the ticket the path
+    names, else the body's `project` (daemon._write_project); None when neither names one, and then no project_mismatch.
 
     Returns {assertedActor, resolvedActor, via, tokenKind, tokenFingerprint, tokenProject, wouldRefuse, reasons,
     enforced}. resolvedActor is "jay" only with Developer Unlock, a token's subject with a valid token, else
