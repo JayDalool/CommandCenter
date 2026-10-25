@@ -62,7 +62,7 @@ through a new Decision that supersedes it, approved by Jay.
 | **D-003** | Buy a paid GitHub plan for branch protection? | **No, not now.** Use the CommandCenter gatekeeper, CI, review rules and whatever repository protections the current plan offers. If a paid tier would materially improve safety or reliability later, raise a **Tool Proposal** (cost, benefits, free/self-hosted alternatives, why it is worth paying) before asking. | Broker-side enforcement is the primary control (§10 T2). Agents get tokens without merge rights where the current plan allows it. `spend_money` stays human-only; a future GitHub upgrade enters as a ToolProposal. |
 | **D-004** | May SamVision deploy unattended at 01:00? | **Only safe, low-risk releases, and only after automatic health checks and rollback exist.** Meaningful downtime, migrations, high blast radius or client-facing workflow changes are prepared and **held for approval**. Until automatic rollback is ready, 01:00 means **release-ready, not auto-deploy**. | SamVision (and MFE) `release` block: `unattended_deploy: when [risk == low, no_migration, no_downtime, no_client_workflow_change] and capability [health_checks, auto_rollback]`; otherwise `hold_for: jay`. Capability flags start `false`, so today every window is release-ready only. |
 | **D-005** | How much autonomy for GYST around personal data? | **Routine work stays autonomous.** Changes that affect the data model, retention, privacy, encryption, deletion, health/personal-data handling, authentication, or an irreversible migration **need approval**. Normal UI/API fixes around existing personal data stay automatic if reversible and tested. | GYST `require_approval_for` list plus path/keyword risk triggers (schema/migration files, auth, crypto, retention/deletion code). Reversible + tested + none of the triggers → auto merge and deploy. |
-| **D-006** | Does Jay want to approve from his phone, and how? | **Yes.** **Slack is the first interface** for approvals, questions, "choose A/B", retry/pause and release notifications. **Do not weaken CommandCenter's local-access rule** to make mobile work. Later, design a secure mobile/remote access option (an authenticated secure tunnel or equivalent) without exposing CommandCenter publicly. | Slack via Socket Mode (outbound only, no public endpoint) moves forward to Phase 2 (§21). Approval classes by channel in §11/§18. Loopback-only stays a hard rule; remote access is a later, separately approved design. |
+| **D-006** | Does Jay want to approve from his phone, and how? | **Yes.** **Slack is the first interface** for approvals, questions, "choose A/B", retry/pause and release notifications. **Do not weaken CommandCenter's local-access rule** to make mobile work. Later, design a secure mobile/remote access option (an authenticated secure tunnel or equivalent) without exposing CommandCenter publicly. | Slack via Socket Mode (outbound only, no public endpoint) moves forward to Phase 2 (§21). Approval classes by channel in §11/§18 (refined by D-024). Loopback-only stays a hard rule; remote access is a later, separately approved design. |
 
 ---
 
@@ -277,7 +277,7 @@ Legend: ✅ exists and is reusable · 🟡 partial / seed exists · ❌ missing.
 | Worker fabric (server/laptop) | ❌ | WorkerNode + jobs/leases + worker agent. |
 | Decision memory | 🟡 questions/answers, findings | Decision record + retrieval into context packs. |
 | Jay Delegate | ❌ | Later; shadow mode first. |
-| Slack / email | ❌ (ntfy only) | Phase 2, Slack first for phone approvals (D-006); Socket Mode keeps loopback-only. |
+| Slack / email | ❌ (ntfy only) | Phase 2, Slack first for phone notifications and approval links (D-006, D-024); Socket Mode keeps loopback-only. |
 | Artifacts + Drive | 🟡 attachments, task records, reports | Artifact metadata table + storage policy + Drive mirror. |
 | Academy / Pulse | ❌ | Later phases, batch-generated. |
 | Cost control | ❌ | Metering in Phase 1; budgets in Phase 2. |
@@ -685,14 +685,16 @@ Slack message ──▶ secure link ──▶ authenticated CommandCenter Jay se
   approves inside CommandCenter, in a Jay session.
 - **Jay sessions** start from Developer Unlock, once host isolation makes `developer.token` unreadable by agents.
   WebAuthn passkeys follow as the preferred mechanism, before remote phone approvals are relied on heavily.
-  Developer Unlock stays as the recovery and local-console path.
+  Developer Unlock stays as the recovery and local-console path. High-risk approvals also need Developer Unlock and
+  the stronger confirmation rules (D-024 clause 12); passkeys do not replace that unless D-024 is amended.
 - Each approval is single-use and bound to the Approval id, the subject hash (plan hash, head SHA, release id) and
   an expiry. It records `via` (the Jay session and its device), never a Slack user id alone.
 - CommandCenter stays loopback-only. Slack reaches ccd through Socket Mode (an outbound connection), so nothing new
   is exposed.
 - **Future, separate approval (not Phase 2):** direct Slack buttons for explicitly Low-risk, reversible actions
   only (for example acknowledge, retry, pause). This stays a possible later design, gated by its own approval from
-  Jay; it never covers plans, merges, deploys, credentials, money, destructive data, policy or permissions.
+  Jay and only after the D-024 clause 18 preconditions hold; it never covers plans, merges, deploys, credentials,
+  money, destructive data, policy or permissions.
 
 ---
 
@@ -951,8 +953,8 @@ by explicit link (not only title-leading key) — a small change to the existing
 - **@agent chat** (later): a Slack message becomes a `question` record routed to a role job; the answer is posted
   back with a link. Canonical data stays in CommandCenter.
 - **Links work only where the tunnel exists.** Today CommandCenter is reachable only through SSH from Jay's
-  Windows machine, so Slack cards must carry enough to decide on the phone (summary, risk, what happens, key
-  screenshot thumbnails where the profile allows); the CommandCenter link is for the desk.
+  Windows machine, so Slack cards must carry enough to triage on the phone (summary, risk, what happens, key
+  screenshot thumbnails where the profile allows); approval still happens through the link, in an authenticated Jay session.
 - **Email**: a daily digest + release summaries via SMTP/Gmail; no inbound email commands.
 - **Restricted projects**: titles redacted or channel disabled per profile.
 
@@ -1109,7 +1111,7 @@ Broker enforcement, auto-merge, auto-deploy and onboarding enforcement stay off.
    approval. Direct Low-risk reversible buttons remain a separate future approval.
 4. **Jay proof:** Developer Unlock first (after host isolation makes `developer.token` unreadable by agents) to create
    authenticated Jay sessions; WebAuthn passkeys next, as the preferred mechanism; Developer Unlock stays the recovery
-   and local-console path.
+   and local-console path. High-risk approvals still need Developer Unlock and D-024's stronger confirmation rules.
 5. **GitHub authority:** a GitHub App owned by Jay for Broker-mediated repository actions, installed only on approved
    repositories, minimum permissions, short-lived installation tokens fetched by ccd only when needed, never given to
    agents, capabilities separated (push / PR / merge), every operation audited, employer and client repositories
