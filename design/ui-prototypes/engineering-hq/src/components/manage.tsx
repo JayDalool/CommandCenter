@@ -12,6 +12,7 @@ import { Field, GrantBadge, Modal } from "./form";
 import { Pill, TaskKey, cx, plural } from "./ui";
 import { ago } from "./agent";
 import { startAgentEdit } from "../pages/onboarding/NewAgent";
+import { closeAgentDrawer } from "./agent";
 import { CONVERSATIONS } from "../data/seed";
 import { go } from "../lib/router";
 import { popOut } from "../windows/manager";
@@ -29,7 +30,7 @@ export function agentMenu(a: Agent, open: (id: string) => void): MenuItem[] {
   ];
   if (life === "offboarded") return [...details, { sep: true }, { label: "Copy agent ID", icon: "doc", run: () => copy(a.id) }];
   return [...details,
-    { label: dm ? `Message ${a.name}` : "No conversation yet", icon: "message", disabled: !dm, run: () => dm && go("messages", dm.id) },
+    { label: dm ? `Message ${a.name}` : "No conversation yet", icon: "message", disabled: !dm, run: () => { if (dm) { closeAgentDrawer(); go("messages", dm.id); } } },
     { sep: true },
     { label: "Edit…", icon: "edit", run: () => startAgentEdit(a.id) },
     { label: "Change model…", icon: "cpu", run: () => startAgentEdit(a.id, "intelligence") },

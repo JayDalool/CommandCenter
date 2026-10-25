@@ -25,6 +25,7 @@ import { NewProject } from "./pages/onboarding/NewProject";
 import { DesignSystem } from "./pages/DesignSystem";
 import { Budgets } from "./pages/Budgets";
 import { Approvals } from "./pages/Approvals";
+import { Settings } from "./pages/Settings";
 import { MenuLayer, PageSkeleton, TipLayer, useSegThumbs, useSimulatedLoad } from "./components/overlay";
 
 // One source for project colours: the project records (seed.ts, plus projects created in the prototype). CSS reads them as --pj-<key>.
@@ -33,7 +34,7 @@ publishColours();
 
 const PAGES: Record<string, () => React.JSX.Element> = { office: Office, messages: Messages, decisions: Decisions, teams: Teams, topology: Topology,
   engineering: Engineering, revenue: Revenue, more: More, task: () => <TaskRoom />,
-  agents: Agents, onboard: Onboard, newproject: NewProject, design: DesignSystem, budgets: Budgets, approvals: Approvals };
+  agents: Agents, onboard: Onboard, newproject: NewProject, design: DesignSystem, budgets: Budgets, approvals: Approvals, settings: Settings };
 
 function MsgCtx() { const [conv] = useViewState("page:messages", "conv", "sv-lead"); return <TaskContext conv={conv} />; }
 

@@ -16,6 +16,9 @@ import { Store } from "../lib/store";
 
 /** The agent shown in THIS window's drawer. Local, so a click in one window never opens a drawer in another. */
 const drawerAgent = new Store<string | null>(null);
+/** Close this window's agent drawer, so it never covers the page an inspector action opens. */
+export const closeAgentDrawer = () => drawerAgent.set(null);
+const leave = (screen: string, id?: string) => { closeAgentDrawer(); go(screen, id); };
 
 export function ago(ms: number) {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -158,7 +161,7 @@ export function AgentInspector({ id: given, onClose, onPick }: { id?: string; on
       <AgentStatus v={v} size="lg" />
       {v.s.detail && !["unknown", "notstarted", "offboarded"].includes(v.status) && <p className="ai-detail">{v.s.detail}</p>}
       <dl className="kv ai-kv">
-        <dt>Task</dt><dd>{t ? <button type="button" className="link mono" onClick={() => go("task", t.key)}>{t.key}</button> : "—"}{t && <span className="muted"> · {t.title}</span>}</dd>
+        <dt>Task</dt><dd>{t ? <button type="button" className="link mono" onClick={() => leave("task", t.key)}>{t.key}</button> : "—"}{t && <span className="muted"> · {t.title}</span>}</dd>
         <dt>Project</dt><dd>{p ? <span className="am-proj"><i style={{ background: p.color }} />{p.name}</span> : "—"}</dd>
         <dt>Model</dt><dd>{modelLabel(v.s.model ?? v.configuredModel)}{(v.s.model ?? v.configuredModel) && <code className="ai-code">{v.s.model ?? v.configuredModel}</code>}{!v.s.model && v.configuredModel && <small className="muted"> configured</small>}</dd>
         <dt>Session</dt><dd>{v.s.session && !["notstarted", "offboarded"].includes(v.status) ? <code className="ai-code">{v.s.session}</code> : <span className="muted">No active session</span>}</dd>
@@ -177,8 +180,8 @@ export function AgentInspector({ id: given, onClose, onPick }: { id?: string; on
     <ManageSection a={a} />
     {expander("perm", "Permissions", "what it may do, per project", <PermissionsReview a={a} />)}
     {expander("hist", "Work history", "tasks, sessions, config versions, audit", <WorkHistory a={a} />)}
-    <footer className="row-gap">{conv && <button type="button" className="btn btn-primary" onClick={() => go("messages", conv.id)}><Icon name="message" size={16} /> Chat with {a.name}</button>}
-      {t && <button type="button" className="btn" onClick={() => go("task", t.key)}><Icon name="terminal" size={16} /> Task Room</button>}</footer>
+    <footer className="row-gap">{conv && <button type="button" className="btn btn-primary" onClick={() => leave("messages", conv.id)}><Icon name="message" size={16} /> Chat with {a.name}</button>}
+      {t && <button type="button" className="btn" onClick={() => leave("task", t.key)}><Icon name="terminal" size={16} /> Task Room</button>}</footer>
   </>;
   return <aside className={cx("agent-insp", standalone && "is-standalone")} aria-label={`${a.name} details`}>{body}</aside>;
 }

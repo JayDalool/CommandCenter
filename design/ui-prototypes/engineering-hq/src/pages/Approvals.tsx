@@ -143,6 +143,6 @@ function SlackSide({ r }: { r: Req }) {
   const tier = useTier(r);
   return <aside className="appr-slack" aria-label="On your phone">
     <h2 className="muted small">On your phone</h2>
-    <SlackPreview r={r} tier={tier} onOpen={() => { go("approvals", r.id); document.querySelector<HTMLElement>("[data-testid=approval-screen] h2")?.focus?.(); }} />
+    <SlackPreview r={r} tier={tier} onOpen={() => { go("approvals", r.id); const el = document.querySelector<HTMLElement>("[data-testid=approval-screen]"); el?.querySelector<HTMLElement>("h2")?.focus?.(); el?.scrollIntoView({ block: "nearest", behavior: "smooth" }); el?.classList.remove("is-flash"); void el?.offsetWidth; el?.classList.add("is-flash"); setTimeout(() => el?.classList.remove("is-flash"), 1200); }} />
   </aside>;
 }

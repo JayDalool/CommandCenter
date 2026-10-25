@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 
 export interface Route { screen: string; id: string | null; params: URLSearchParams; hash: string }
 
-export const PAGES = ["office", "messages", "decisions", "teams", "topology", "engineering", "revenue", "more", "agents", "onboard", "newproject", "design", "budgets", "approvals"] as const;
+export const PAGES = ["office", "messages", "decisions", "teams", "topology", "engineering", "revenue", "more", "agents", "onboard", "newproject", "design", "budgets", "approvals", "settings"] as const;
 export type Page = (typeof PAGES)[number];
 const OTHER = ["task", "pop"];
 

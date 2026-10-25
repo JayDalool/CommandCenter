@@ -16,14 +16,16 @@ import { Avatar, AvatarStack, Demo, Panel, Pill, ProjIcon, Spark, StagePill, Tas
 import { AgentDot, AgentRow, AgentStatus, useAgentView, useOpenAgent } from "../components/agent";
 import { Detachable, PopButton } from "../windows/Detachable";
 import { SPARK } from "../data/seed";
+import { useNeedsSummary } from "../data/needs";
 
 const V = "page:topology";
 /** Who is on each project's team (from the organisation store). Their live status comes from the feed. */
 const roster = (key: string) => project(key).team.map((m) => m.id);
 
 export function AlertStrip() {
+  const nd = useNeedsSummary();
   const cards = [
-    { tone: "bad", icon: "info", t: "3 items need Jay", s: "2 approvals · 1 blocked task", to: () => go("decisions") },
+    { tone: "bad", icon: "info", t: `${nd.total} items need Jay`, s: `${plural(nd.approvals, "approval")} · ${plural(nd.blockers, "blocked task")}`, to: () => go("decisions") },
     { tone: "ok", icon: "rocket", t: "1 release ready", s: "SamVision v0.4.2 · waits for a window", to: () => go("engineering") },
     { tone: "warn", icon: "info", t: "1 blocked task", s: "MFE-014 · release window undecided", to: () => go("engineering") },
     { tone: "info", icon: "chart", t: `${PROJECTS.filter((p) => p.health !== "paused" && p.health !== "onboarding").length} active · ${PROJECTS.filter((p) => p.health === "paused").length} paused${PROJECTS.some((p) => p.health === "onboarding") ? ` · ${PROJECTS.filter((p) => p.health === "onboarding").length} onboarding` : ""}`,
@@ -294,17 +296,18 @@ export function TopologyInspector() {
   } else {
     body = <><div className="insp-head"><span className="av av-jay" style={{ width: 46, height: 46, fontSize: 20 }}>J</span><div><h2>Jay</h2><p>Engineering Director · Senior Technical Lead</p></div></div>
       <h3 className="insp-h">Needs you</h3>
-      <ul className="mini-list"><li><button type="button" onClick={() => go("decisions")}><b className="mono">SV-025</b><span className="ellip">Choose comparison workflow</span><Pill tone="bad">Decide</Pill></button></li>
+      <ul className="mini-list"><li><button type="button" onClick={() => go("decisions", "sv-025")}><b className="mono">SV-025</b><span className="ellip">Choose comparison workflow</span><Pill tone="bad">Decide</Pill></button></li>
         <li><button type="button" onClick={() => go("task", "MFE-014")}><b className="mono">MFE-014</b><span className="ellip">Pick a release window</span><Pill tone="warn">Blocked</Pill></button></li></ul></>;
   }
   return <aside className="inspector" aria-label="Inspector">
     <div className="insp-tools"><Demo /><span className="sp" /><PopButton id="panel:topology-inspector" compact />
-      <button type="button" className="icon-btn" aria-label="Back to SamVision" onClick={() => setSel("p:samvision")}><Icon name="x" size={16} /></button></div>
+      {sel !== "p:samvision" && <button type="button" className="icon-btn" aria-label="Back to SamVision" onClick={() => setSel("p:samvision")}><Icon name="x" size={16} /></button>}</div>
     {body}
   </aside>;
 }
 
 export function Topology() {
+  const nd = useNeedsSummary();
   const [mode, setMode] = useViewState(V, "mode", "Topology");
   const [sel, setSel] = useViewState(V, "sel", "p:samvision");
   const [projects, setProjects] = useViewState<ProjectKey[]>(V, "projects", []);
@@ -350,7 +353,7 @@ export function Topology() {
       <Detachable id="panel:topology-inspector" className="inspector"><TopologyInspector /></Detachable>
     </div>
     {!immersive && <div className="topo-bottom">
-      <Panel title={<>Needs You <span className="count t-bad">3</span></>} action={<ViewAll onClick={() => go("decisions")} />}>
+      <Panel title={<>Needs You <span className="count t-bad">{nd.total}</span></>} action={<ViewAll onClick={() => go("decisions")} />}>
         <ul className="need-list">{[["SV-025", "Choose the comparison workflow (Option A / B)", "22m"], ["MFE-014", "Pick a release window for MyFamilyExpenses", "47m"], ["GYST-019", "Personal-data trigger: memory retention", "2h"]].map(([k, t, a]) =>
           <li key={k}><i /><TaskKey k={k} /><span className="ellip">{t}</span><small>{a}</small></li>)}</ul></Panel>
       <Panel title={<>Release Gates <span className="count t-bad">1</span></>} action={<ViewAll onClick={() => go("engineering")} />}>

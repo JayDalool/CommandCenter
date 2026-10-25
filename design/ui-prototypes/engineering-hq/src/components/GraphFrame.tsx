@@ -16,19 +16,28 @@ function busPath(a: GNode, b: GNode, ao: number, bo: number, bus: number) {
   return `M${px},${py} V${bus - r} Q${px},${bus} ${px + dir * r},${bus} H${qx - dir * r} Q${qx},${bus} ${qx},${bus + r} V${qy}`;
 }
 
-export function GraphFrame({ w, h, nodes, edges, className }: { w: number; h: number; nodes: FNode[]; edges: FEdge[]; className?: string }) {
+/** `fitWidth`: scale to the box's width only (never above 1, never below `minScale`) and take the scaled height, so a
+ *  narrow window shows no empty band; below `minScale` the graph scrolls sideways inside its frame instead of shrinking. */
+export function GraphFrame({ w, h, nodes, edges, className, fitWidth, minScale = 0 }: {
+  w: number; h: number; nodes: FNode[]; edges: FEdge[]; className?: string; fitWidth?: boolean; minScale?: number }) {
   const box = useRef<HTMLDivElement>(null);
   const [k, setK] = useState(1);
   useEffect(() => {
     const el = box.current; if (!el) return;
-    const fit = () => { const r = el.getBoundingClientRect(); if (r.width) setK(Math.min(r.width / w, r.height ? r.height / h : 9)); };
+    let centred = false;
+    const fit = () => {
+      const r = el.getBoundingClientRect(); if (!r.width) return;
+      if (!fitWidth) { setK(Math.min(r.width / w, r.height ? r.height / h : 9)); return; }
+      const k2 = Math.max(minScale, Math.min(1, r.width / w)); setK(k2);
+      // When the graph is wider than its frame, open on its centre (the lead sits there), once.
+      if (!centred && w * k2 > r.width + 1) { centred = true; requestAnimationFrame(() => { el.scrollLeft = (w * k2 - r.width) / 2; }); }
+    };
     fit();
     if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(fit); ro.observe(el); return () => ro.disconnect();
-  }, [w, h]);
+  }, [w, h, fitWidth, minScale]);
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  return <div className={cx("gframe", className)} ref={box}>
-    <div className="gframe-world" style={{ width: w, height: h, transform: `scale(${k})` }}>
+  const world = <div className="gframe-world" style={{ width: w, height: h, transform: `scale(${k})` }}>
       <svg className="edges" width={w} height={h} aria-hidden>
         <defs><filter id="glow2" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="3" /></filter></defs>
         {edges.map((e, i) => {
@@ -48,6 +57,9 @@ export function GraphFrame({ w, h, nodes, edges, className }: { w: number; h: nu
           onKeyDown={n.menu ? (e) => { if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) { e.preventDefault(); openMenu(e.currentTarget, n.menu!(), n.label); } } : undefined}>{n.body}</button>
           : <div key={n.id} className={cx("gnode", n.className)} style={st} aria-label={n.label}>{n.body}</div>;
       })}
-    </div>
+    </div>;
+  if (fitWidth) return <div className={cx("gframe", "is-fit-width", className)} ref={box}>
+    <div className="gframe-sizer" style={{ width: Math.round(w * k), height: Math.round(h * k) }}>{world}</div>
   </div>;
+  return <div className={cx("gframe", className)} ref={box}>{world}</div>;
 }

@@ -16,7 +16,7 @@ import { MODELS, modelLabel, type IconName } from "../../data/seed";
 import { Icon } from "../../components/Icon";
 import { Chips, Field, GrantBadge, GrantPick, Modal, Money, Seg } from "../../components/form";
 import { Pill, cx, plural } from "../../components/ui";
-import { useOpenAgent } from "../../components/agent";
+import { closeAgentDrawer, useOpenAgent } from "../../components/agent";
 import { notify } from "../../windows/manager";
 import { go } from "../../lib/router";
 import { Hierarchy, IssueList, Wizard, leavePopout, peekView, putView, showPage, type StepDef } from "./Wizard";
@@ -50,6 +50,7 @@ export function startNewAgent(project?: string, template?: string) {
 }
 /** Edit an existing agent, optionally at one step (Change model → Intelligence). */
 export function startAgentEdit(id: string, stepId?: string) {
+  closeAgentDrawer();
   keepUnfinished();
   const d = agentDraftOf(id);
   putView(AGENT_VIEW, "draft", { ...d, step: Math.max(1, STEPS.findIndex((s) => s.id === stepId)) });

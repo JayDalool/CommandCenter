@@ -28,6 +28,7 @@ export function projectMenu(key: string): MenuItem[] {
     { label: "Show in Company topology", icon: "graph", run: () => go("topology") },
   ];
 }
+import { useNeedsSummary } from "../data/needs";
 import { useNow } from "../lib/time";
 
 const TEAMS = [
@@ -65,7 +66,7 @@ function OfficeGraph() {
 }
 
 const ATTN = [
-  { icon: "doc", tone: "info", k: "SV-025", t: "Rental comparison redesign", s: "Awaiting your decision · 2h ago", pill: ["High", "bad"], to: () => go("decisions") },
+  { icon: "doc", tone: "info", k: "SV-025", t: "Rental comparison redesign", s: "Awaiting your decision · 2h ago", pill: ["High", "bad"], to: () => go("decisions", "sv-025") },
   { icon: "lock", tone: "warn", k: "MFE-014", t: "Release window undecided", s: "Blocks mobile settings · 3h ago", pill: ["Blocker", "bad"], to: () => go("task", "MFE-014") },
   { icon: "code", tone: "violet", k: "GYST-019", t: "Personal-data trigger", s: "Memory retention needs Jay · 6h ago", pill: ["Needs input", "warn"], to: () => go("task", "GYST-019") },
   { icon: "shield", tone: "ok", k: "CC-058", t: "Autonomy v3 shadow report", s: "Read-only comparison ready · 1d ago", pill: ["Review", "violet"], to: () => go("task", "CC-058") },
@@ -92,6 +93,7 @@ function AgentCard({ id }: { id: string }) {
 
 export function Office() {
   useOrg();
+  const nd = useNeedsSummary();
   const AGENTS = rosterAgents();
   const f = useStore(feed);
   const now = useNow(5000);
@@ -110,7 +112,7 @@ export function Office() {
         <div className="kpis">
           <button type="button" className="kpi" onClick={() => go("topology")}><span className="kpi-ico t-info"><Icon name="layers" size={24} /></span><span><small>Projects</small><b>{PROJECTS.length}</b><em className="t-ok">↑ {PROJECTS.filter((p) => p.health === "healthy").length} active</em></span><Spark data={SPARK.a} color="#4f7bff" w={72} h={30} /></button>
           <button type="button" className="kpi" onClick={() => go("teams")}><span className="kpi-ico t-violet"><Icon name="users" size={24} /></span><span><small>Active Agents</small><b>{AGENTS.filter((a) => (a.life ?? "active") === "active").length}</b><em className="t-ok">↑ {counts("working")} working</em></span><Spark data={SPARK.b} color="#a77bff" w={72} h={30} /></button>
-          <button type="button" className="kpi" onClick={() => go("decisions")}><span className="kpi-ico t-bad"><Icon name="doc" size={24} /></span><span><small>Decisions</small><b>2</b><em className="t-bad">↑ 1 high priority</em></span><Spark data={SPARK.d} color="#ff4f6d" w={72} h={30} /></button>
+          <button type="button" className="kpi" onClick={() => go("decisions")}><span className="kpi-ico t-bad"><Icon name="doc" size={24} /></span><span><small>Needs You</small><b>{nd.total}</b><em className="t-bad">↑ {nd.urgent} urgent</em></span><Spark data={SPARK.d} color="#ff4f6d" w={72} h={30} /></button>
           <div className="kpi"><span className="kpi-ico t-ok"><Icon name="pulse" size={24} /></span><span><small>Company Health</small><b className={stale ? "t-idle" : "t-ok"}>{stale ? "Unknown" : "Healthy"}</b><em>{stale ? <span className="t-warn">Status feed stale</span> : <>All monitored systems OK <Demo label="Demo" /></>}</em></span></div>
         </div>
         <Panel className="office-topo" icon="graph" title="Company Topology" sub="Projects, agents and teams across your organisation"

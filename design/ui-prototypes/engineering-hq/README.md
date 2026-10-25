@@ -30,10 +30,19 @@ Use a normal browser tab so pop-outs can open real windows you can drag to anoth
   shows Unknown with the last-seen time; a paused project shows Paused. Never Working by default.
   In a live build the model comes from ccd's usage meter (`server/ccd/meter.py` records it per session).
 
-Pages: `#/office` · `#/messages/sv-lead` · `#/decisions` · `#/teams/samvision` · `#/topology` ·
-`#/engineering` · `#/revenue` · `#/task/SV-025` · `#/agents` · `#/onboard` (New Agent) · `#/newproject` (New Project) ·
-`#/design` (design system) · `#/approvals` (Slack approvals, D-032) · `#/budgets` (budgets, D-033) ·
-`#/more` (demo controls: feed outage, slow loading, reset).
+Pages: `#/office` · `#/messages/sv-lead` · `#/decisions` (Needs My Attention) · `#/decisions/sv-025` (decision room) ·
+`#/teams/samvision` · `#/topology` · `#/engineering` · `#/revenue` · `#/task/SV-025` · `#/agents` · `#/onboard` (New Agent) ·
+`#/newproject` (New Project) · `#/design` (design system) · `#/approvals` (Slack approvals, D-032) · `#/budgets` (budgets, D-033) ·
+`#/settings/<section>` (Settings, including demo controls: feed outage, slow loading, reset). `#/more` still works.
+
+## Review package and docs
+
+- `docs/RUN_LOCALLY.md`: how to run it, useful addresses, pop-outs, tests and the gallery.
+- `docs/PAGE_MAP.md`: every page, state and pop-out window.
+- `docs/DESIGN_TOKENS.md` and `docs/COMPONENTS.md`: the design system.
+- `CHANGELOG.md`: what changed in each version. `DESIGN_CHANGES.md`: Jay's visual requests and their approval state,
+  kept apart from anything that would change security, backend behaviour or autonomy.
+- Integration roadmap (Claude Doc): https://claude.ai/artifact/3SUAvgfk4Dy63JiFebrkQi
 
 ## Approvals and budgets (Jay, 2026-10-23)
 
@@ -74,15 +83,18 @@ Same layouts, palette, project colours and graphs. Added on top, with no new dep
 ## Tests
 
 ```bash
-npm test                              # 84 unit/component tests (jsdom)
+npm test                              # 96 unit/component tests (jsdom)
 npm run build && npm run preview &    # then, in another shell:
 node e2e/run.mjs                      # 24 real-browser tests: pop-out windows, menus, tooltips, popovers, motion, loading,
                                       # approvals and budgets (including phone width)
-node e2e/shots.mjs                    # screenshots at 1920×1080, 1366×768 and pop-out sizes → e2e/out
+node e2e/gallery.mjs http://127.0.0.1:5181/ e2e/out/gallery           # every page and state at 1920, 1366, 1280, 390 + pop-outs
+node e2e/gallery-page.mjs e2e/out/gallery e2e/out/gallery/index.html --ext png   # the visual gallery page
+node e2e/shots.mjs                    # older reference-comparison screenshots → e2e/out
 python3 e2e/compare.py <references> e2e/out <out>   # reference-vs-prototype sheets (Pillow)
 ```
 
 The browser tests load Playwright from the global npm install (or `PLAYWRIGHT_MODULE`) so the
 prototype does not add it as a dependency.
 
-See `AUDIT_AND_MIGRATION_PLAN.md` for the audit, the architecture and the gated migration plan.
+See `AUDIT_AND_MIGRATION_PLAN.md` for the first audit and architecture, and the integration roadmap doc above for the
+current phased plan (small PRs, approval gates). Production migration has not started.

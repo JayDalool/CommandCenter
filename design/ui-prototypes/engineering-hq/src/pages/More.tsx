@@ -7,7 +7,7 @@ import { resetShared } from "../lib/shared";
 import { go } from "../lib/router";
 import { setSlowDemo, slowDemo } from "../components/overlay";
 
-const DEST = [
+export const DEST = [
   ["needs", "Needs You", "Everything waiting for Jay: questions, approvals, blockers.", "info"], ["workspace", "Workspace / Task Rooms", "The terminal wall: rooms, panes, pop-outs (rooms.ts).", "terminal"],
   ["tasks", "Task Manager", "All tickets with filters and the ticket pipeline.", "list"], ["activity", "Activity / Audit", "Audit log, alerts, AI usage and cost.", "pulse"],
   ["files", "Files", "Project files, editor and source control.", "doc"], ["settings", "Settings · Project Operating Profiles", "Policies, autonomy shadow, night shift, workers, Developer Unlock.", "gear"],

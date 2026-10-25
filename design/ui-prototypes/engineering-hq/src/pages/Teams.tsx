@@ -134,7 +134,7 @@ export function Teams() {
     <section className="panel team-lead">
       <header className="panel-h"><span className="panel-ico t-info"><Icon name="users" size={20} /></span><div className="panel-t"><h2>Team Leadership</h2><p>Project lead and team for {p.name} <Demo label="Demo status" /></p></div></header>
       <div className="team-lead-grid">
-        <GraphFrame w={W} h={H} nodes={nodes} edges={edges} className="team-graph" />
+        <GraphFrame w={W} h={H} nodes={nodes} edges={edges} className="team-graph" fitWidth minScale={0.5} />
         <aside className="glance"><h3>{p.name} at a Glance <span className="sp" /><ViewAll label="View Project" onClick={() => go("topology")} /></h3>
           <dl><dt>Status</dt><dd className={`t-${h.tone}`}><Icon name="heart" size={15} /> {h.label}</dd><dt>Environment</dt><dd><Icon name="branch" size={15} /> {p.env} ({p.version})</dd>
             <dt>Team</dt><dd><Icon name="users" size={15} /> {paused ? `0 / ${p.team.length} working` : `${working} / ${p.team.length} active`}</dd><dt>Open tasks</dt><dd className="t-bad"><Icon name="list" size={15} /> {TASKS.filter((t) => t.project === p.key).length} ({TASKS.filter((t) => t.project === p.key && t.stage === "Blocked").length} blocked)</dd>

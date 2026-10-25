@@ -25,7 +25,7 @@ describe("navigation", () => {
     render(<App />);
     const nav = screen.getByRole("navigation", { name: "Pages" });
     for (const l of ["My Office", "Messages", "Decisions", "Teams", "Company", "Engineering", "Revenue"]) expect(within(nav).getByText(l)).toBeInTheDocument();
-    const heads: Record<string, RegExp> = { office: /Good (morning|afternoon|evening)/, messages: /^Messages$/, decisions: /Rental comparison redesign/, teams: /SamVision/,
+    const heads: Record<string, RegExp> = { office: /Good (morning|afternoon|evening)/, messages: /^Messages$/, decisions: /Needs My Attention/, teams: /SamVision/,
       topology: /Operations Topology/, engineering: /Engineering/, revenue: /^Revenue$/ };
     for (const [r, h] of Object.entries(heads)) { go(`#/${r}`); expect(screen.getAllByRole("heading", { level: 1 }).some((e) => h.test(e.textContent ?? ""))).toBe(true); }
   });
@@ -94,8 +94,24 @@ describe("pages", () => {
     vi.useRealTimers();
   });
 
-  it("a decision is recorded only through the confirm step, with actor and policy shown", () => {
+  it("Needs My Attention lists decisions, questions, reviews and approvals, and opens the decision room", async () => {
     go("#/decisions");
+    render(<App />);
+    const list = screen.getByRole("heading", { level: 1, name: "Needs My Attention" }).closest(".page")!;
+    for (const t of [/Choose the rental comparison workflow/, /Pick a release window/, /Personal-data trigger/, /Let Pixel push branches/]) expect(within(list as HTMLElement).getAllByText(t).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("tab", { name: "Approvals" }));
+    expect(screen.queryByText(/Pick a release window/)).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: /^All/ }));
+    fireEvent.click(screen.getByText(/Choose the rental comparison workflow/).closest("button")!);
+    expect(location.hash).toBe("#/decisions/sv-025");
+    expect(await screen.findByRole("heading", { level: 1, name: /Rental comparison redesign/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Back to Needs My Attention/ }));
+    expect(location.hash).toBe("#/decisions");
+    expect(await screen.findByRole("heading", { level: 1, name: "Needs My Attention" })).toBeInTheDocument();
+  });
+
+  it("a decision is recorded only through the confirm step, with actor and policy shown", () => {
+    go("#/decisions/sv-025");
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: /Record decision: Option A/ }));
     const dlg = screen.getByRole("dialog", { name: "Confirm decision" });

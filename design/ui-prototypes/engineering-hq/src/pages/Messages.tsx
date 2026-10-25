@@ -1,6 +1,6 @@
 // MESSAGES — a full communication workspace (references 02 and 13): conversations, the project-lead
 import { openMenu, type MenuItem } from "../components/overlay";
-import { popOut } from "../windows/manager";
+import { notify, popOut } from "../windows/manager";
 // DM thread, and a collapsible / resizable task-context inspector. Every conversation can be popped
 // out on its own (dm:<id>), and so can the inspector (panel:task-context).
 import { useEffect, useRef, useState } from "react";
@@ -14,6 +14,25 @@ import { go, useRoute } from "../lib/router";
 import { Icon } from "../components/Icon";
 import { Avatar, Demo, Pill, ProdBanner, ProjIcon, cx } from "../components/ui";
 import { Detachable, PopButton, useElsewhere } from "../windows/Detachable";
+
+/** Start a conversation: Project Leads first, then agents, then team channels. Opens the existing thread with that person. */
+function newMessageMenu(): MenuItem[] {
+  const dm = CONVERSATIONS.filter((c) => c.kind === "dm" && !c.archived);
+  const leads = dm.filter((c) => /Project Lead/.test(c.sub)), others = dm.filter((c) => !/Project Lead/.test(c.sub));
+  const teams = CONVERSATIONS.filter((c) => c.kind === "team" && !c.archived);
+  const item = (c: (typeof CONVERSATIONS)[number]): MenuItem => ({ label: `${c.title} · ${c.sub}`, icon: c.kind === "team" ? "users" : "message", run: () => go("messages", c.id) });
+  return [...leads.map(item), { sep: true }, ...others.map(item), ...(teams.length ? [{ sep: true } as MenuItem, ...teams.map(item)] : []), { sep: true },
+    { label: "New group conversation", icon: "plus", disabled: true, hint: "Needs the message store" }];
+}
+
+const NO_UPLOAD = () => notify("Attachments arrive with the approved message store. Nothing is uploaded in the prototype.");
+const ATTACH: MenuItem[] = [
+  { label: "Screenshot from a Task Room", icon: "image", run: NO_UPLOAD },
+  { label: "File from the repository", icon: "doc", run: NO_UPLOAD },
+  { label: "Link to a decision", icon: "flag", run: NO_UPLOAD },
+  { sep: true },
+  { label: "Upload from this computer", icon: "clip", disabled: true, hint: "Needs approval" },
+];
 
 function Bubble({ m }: { m: ChatMessage }) {
   const jay = m.from === "jay";
@@ -35,7 +54,7 @@ function Bubble({ m }: { m: ChatMessage }) {
         {m.ask && <div className="ask-card">
           <span className="ask-ico"><Icon name="help" size={18} /></span>
           <div><b>Decision needed · {m.ask}</b><small>Replying here is not a decision. Choose in the Decision Room; this conversation keeps its place.</small></div>
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => go("decisions")}><Icon name="shield" size={15} /> Open Decision Room</button>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => go("decisions", "sv-025")}><Icon name="shield" size={15} /> Open Decision Room</button>
         </div>}
       </div>
     </div>
@@ -60,7 +79,8 @@ export function Thread({ conv, standalone }: { conv: string; standalone?: boolea
   const openAgent = useOpenAgent();
   const [draft, setDraft] = useViewState(`dm:${conv}`, "draft", "");
   const end = useRef<HTMLDivElement>(null);
-  useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [msgs.length, conv]);
+  // Scroll only the message list to its newest message; scrolling the page too would hide the top of a phone screen.
+  useEffect(() => { const box = end.current?.closest(".thread-scroll"); if (box) box.scrollTop = box.scrollHeight; }, [msgs.length, conv]);
   if (!c) return <div className="empty">Choose a conversation.</div>;
   const a = c.agent ? agent(c.agent) : null;
   const send = () => { const t = draft.trim(); if (!t) return; setDraft(""); sendDemo(conv, t, c.agent); };
@@ -87,7 +107,7 @@ export function Thread({ conv, standalone }: { conv: string; standalone?: boolea
       <div ref={end} />
     </div>
     {c.kind !== "slack" && !c.archived && <form className="composer" onSubmit={(e) => { e.preventDefault(); send(); }}>
-      <button type="button" className="icon-btn is-box" aria-label="Attach (demo)"><Icon name="plus" size={18} /></button>
+      <button type="button" className="icon-btn is-box" aria-label="Attach (demo)" aria-haspopup="menu" onClick={(e) => openMenu(e.currentTarget, ATTACH, "Attach")}><Icon name="plus" size={18} /></button>
       <div className="composer-in"><input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={`Message ${c.title}…`} aria-label={`Message ${c.title}`} />
         <Icon name="smile" size={19} /><Icon name="clip" size={19} /></div>
       <button type="submit" className="send" aria-label="Send" disabled={!draft.trim()}><Icon name="send" size={20} /></button>
@@ -146,7 +166,7 @@ export function Messages() {
   const [, force] = useState(0);
   return <div className="page page-messages">
     <div className="page-head"><div><h1>Messages</h1><p>Direct and group conversations across your projects, agents and teams.</p></div>
-      <button type="button" className="btn btn-primary" onClick={() => go("messages", "sv-lead")}><Icon name="edit" size={16} /> New Message</button></div>
+      <button type="button" className="btn btn-primary" aria-haspopup="menu" onClick={(e) => openMenu(e.currentTarget, newMessageMenu(), "New message")}><Icon name="edit" size={16} /> New Message</button></div>
     <div className="msg-grid" style={{ gridTemplateColumns: `clamp(240px, 19vw, 310px) minmax(0,1fr) ${ctxOpen ? `min(${ctxW}px, 31vw)` : "44px"}` }}>
       <div className="conv-col">
         <div className="conv-search"><Icon name="search" size={17} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search messages…" aria-label="Search messages" /><Icon name="edit" size={17} /></div>

@@ -61,6 +61,9 @@ Broker grants, budget holds, Slack buttons, Phase 2 enforcement and deployment e
 
 ## 5. Phased migration (each step is its own gated PR; nothing auto-deploys)
 
+> **Superseded 2026-10-25** by the integration roadmap (Claude Doc): https://claude.ai/artifact/3SUAvgfk4Dy63JiFebrkQi.
+> It splits this plan into 25 small PRs with eight approval gates. The list below is kept for history.
+
 1. Jay reviews the prototype; decisions in §2.
 2. Tokens + shell (sidebar, top bar, tab strip) behind a `?ui=hq` flag; old UI default.
 3. Window manager in `web/app`, wrapping existing Room/Pane pop-outs; regression tests that closing never calls `ptyClose`.

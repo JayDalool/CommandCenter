@@ -1,13 +1,16 @@
 // DECISIONS — Sentry-style investigation + formal decision desk (references 03 and 08).
 // Discussing is not deciding: an answer is recorded once, with actor, task, policy and evidence, and
 // in the real app would go to the EXISTING task session through the existing gates. Nothing here merges or deploys.
-import { useState } from "react";
-import { DECISION, task } from "../data/seed";
+import { useEffect, useState } from "react";
+import { DECISION, project, task } from "../data/seed";
 import { useViewState } from "../data/live";
-import { go } from "../lib/router";
+import { go, useRoute } from "../lib/router";
+import { useStore } from "../lib/store";
 import { Icon } from "../components/Icon";
-import { Avatar, Demo, Pill, ProdBanner, cx } from "../components/ui";
+import { Avatar, Demo, Pill, ProdBanner, ProjIcon, TaskKey, cx } from "../components/ui";
 import { Detachable, PopButton } from "../windows/Detachable";
+import { gov } from "../data/governance";
+import { inPopout, needs, type Kind } from "../data/needs";
 
 const V = "page:decisions";
 const LOGS = [
@@ -26,18 +29,30 @@ function MockShot({ variant }: { variant: "a" | "b" }) {
   </div>;
 }
 
+const FINDINGS: [string, string, string][] = [
+  ["Minor", "Filter chips wrap early at 1366", "Option A · the fourth chip moves to a second line"],
+  ["Minor", "Sort arrow has low contrast in light mode", "3.9:1 against 4.5:1 required"],
+  ["Pass", "Keyboard order follows the layout", "Tab order checked on both options"],
+];
+const FILES: [string, string][] = [["spec.md", "Requirements and acceptance criteria · Iris"], ["playwright-1920.png", "Option A at 1920 × 1080 · Pixel"], ["playwright-1366.png", "Option A at 1366 × 768 · Pixel"], ["review-notes.md", "Independent review notes · Atlas"]];
+
 export function Evidence() {
   const [tab, setTab] = useViewState("panel:evidence", "tab", "Logs");
   const [shot, setShot] = useViewState("panel:evidence", "shot", 0);
   return <aside className="evidence" aria-label="Evidence and context">
     <header className="ev-head"><Icon name="db" size={22} /><h2>Evidence &amp; Context</h2><span className="sp" /><PopButton id="panel:evidence" compact /></header>
     <div className="seg seg-boxed" role="tablist">{["Logs", "Screenshots", "UI Findings", "Files"].map((x) => <button key={x} type="button" role="tab" aria-selected={tab === x} onClick={() => setTab(x)}>{x}</button>)}</div>
-    {(tab === "Logs" || tab === "Files") && <section className="ev-sec"><h3><Icon name="doc" size={16} /> Relevant Logs <Demo label="Demo" /></h3>
+    {tab === "Logs" && <section className="ev-sec"><h3><Icon name="doc" size={16} /> Relevant Logs <Demo label="Demo" /></h3>
       <pre className="code">{LOGS.map(([t, l, m], i) => <span key={i} className={l === "WARN" ? "is-warn" : ""}><i>{i + 1}</i>[{t}] {l} {m}{"\n"}</span>)}</pre></section>}
-    <section className="ev-sec"><h3><Icon name="image" size={16} /> UI Screenshots <span className="sp" /><small className="muted">staging · mock</small></h3>
+    {(tab === "Logs" || tab === "Screenshots") && <section className={cx("ev-sec", tab === "Screenshots" && "is-big")}><h3><Icon name="image" size={16} /> UI Screenshots <span className="sp" /><small className="muted">staging · mock</small></h3>
       <div className="carousel"><button type="button" className="icon-btn" aria-label="Previous screenshot" onClick={() => setShot((shot + 5) % 6)}><Icon name="arrowl" size={16} /></button>
         <MockShot variant={shot % 2 ? "b" : "a"} /><button type="button" className="icon-btn" aria-label="Next screenshot" onClick={() => setShot((shot + 1) % 6)}><Icon name="arrowr" size={16} /></button></div>
-      <p className="muted small">Option {shot % 2 ? "B" : "A"} – comparison (staging) · {shot + 1} of 6. No property records in screenshots (SamVision policy).</p></section>
+      <p className="muted small">Option {shot % 2 ? "B" : "A"} – comparison (staging) · {shot + 1} of 6. No property records in screenshots (SamVision policy).</p></section>}
+    {tab === "UI Findings" && <section className="ev-sec"><h3><Icon name="eye" size={16} /> UI Findings <Demo label="Demo" /></h3>
+      <ul className="prec">{FINDINGS.map(([sev, title, d]) => <li key={title}><span className={`prec-ico t-${sev === "Minor" ? "info" : "ok"}`}><Icon name={sev === "Minor" ? "info" : "check"} size={16} /></span><div><b>{title} <span className={`pill no-dot t-${sev === "Minor" ? "warn" : "ok"}`}>{sev}</span></b><small>{d}</small></div></li>)}</ul></section>}
+    {tab === "Files" && <section className="ev-sec"><h3><Icon name="doc" size={16} /> Files <Demo label="Demo" /></h3>
+      <ul className="prec">{FILES.map(([n, d]) => <li key={n}><span className="prec-ico t-info"><Icon name={n.endsWith(".png") ? "image" : "doc"} size={16} /></span><div><b>{n}</b><small>{d}</small></div></li>)}</ul>
+      <p className="muted small">Files open in the Task Room. Nothing is downloaded in the prototype.</p></section>}
     <section className="ev-sec"><h3><Icon name="users" size={16} /> Precedents &amp; Policy</h3>
       <ul className="prec"><li><span className="prec-ico t-violet"><Icon name="doc" size={16} /></span><div><b>D-004 · SamVision release windows</b><small>Thu / Sat 01:00 America/Winnipeg; otherwise prepare and hold for Jay.</small></div></li>
         <li><span className="prec-ico t-info"><Icon name="shield" size={16} /></span><div><b>Plan approval required</b><small>ui_change_client_visible → full plan package, Claude + Codex review.</small></div></li></ul></section>
@@ -46,7 +61,59 @@ export function Evidence() {
   </aside>;
 }
 
+const KINDS: ("All" | Kind)[] = ["All", "Decision", "Question", "Review", "Approval"];
+
+function Queue({ openDecision }: { openDecision: (id: string) => void }) {
+  const g = useStore(gov);
+  const [kind, setKind] = useViewState<string>(V, "kind", "All");
+  const [recorded] = useViewState<null | { option: string; at: string }>(V, "recorded", null);
+  const all = needs(g.requests, g.decisions, recorded, openDecision);
+  const waiting = all.filter((n) => !n.done);
+  const list = all.filter((n) => kind === "All" || n.kind === kind);
+  const shown = [...list.filter((n) => !n.done), ...list.filter((n) => n.done)];
+  return <div className="page page-needs">
+    <div className="page-head"><div><h1>Needs My Attention</h1><p>Decisions, questions, reviews and approvals waiting for you. Each opens where it is answered. Answering records your choice; it never merges or deploys.</p></div>
+      <div className="row-gap"><Demo /><PopButton id={V} /></div></div>
+    <div className="needs-kpis">{(["Decision", "Question", "Review", "Approval"] as Kind[]).map((k) => { const n = waiting.filter((x) => x.kind === k).length;
+      return <button key={k} type="button" className={cx("needs-kpi", kind === k && "is-on")} aria-pressed={kind === k} onClick={() => setKind(kind === k ? "All" : k)}>
+        <b>{n}</b><span>{k === "Review" ? "Reviews" : `${k}s`}</span><small className="muted">{k === "Decision" ? "Formal choices" : k === "Question" ? "Blocking answers" : k === "Review" ? "Read and respond" : "Signed-in approvals"}</small></button>; })}</div>
+    <div className="needs-grid">
+      <section className="panel needs-panel">
+        <header className="panel-h"><span className="panel-ico t-bad"><Icon name="info" size={20} /></span><div className="panel-t"><h2>Waiting for you <span className="count t-bad">{waiting.length}</span></h2><p>Blockers first, then by age.</p></div>
+          <div className="panel-a"><div className="seg seg-pills" role="tablist" aria-label="Kind">{KINDS.map((k) => <button key={k} type="button" role="tab" aria-selected={kind === k} onClick={() => setKind(k)}>{k === "All" ? `All (${all.length})` : k === "Review" ? "Reviews" : `${k}s`}</button>)}</div></div></header>
+        <ul className="attn needs-list">{shown.map((n) => <li key={n.id} className={cx(n.done && "is-done")}><button type="button" onClick={n.open}>
+          <span className={`attn-ico t-${n.tone}`}><Icon name={n.icon} size={18} /></span>
+          <span className="attn-body"><span className="ellip">{n.k && <TaskKey k={n.k} />} {n.title}</span><small>{n.kind} · {n.sub} · {n.age}</small></span>
+          {n.project && <span className="needs-pj" title={project(n.project)?.name}><ProjIcon k={n.project} size={22} /></span>}
+          <Pill tone={n.pill[1]}>{n.pill[0]}</Pill><Icon name="chevron" size={16} /></button></li>)}</ul>
+        {!shown.length && <p className="empty">Nothing waiting here.</p>}
+      </section>
+      <aside className="panel pad needs-side" aria-label="How answers travel">
+        <h2>How your answers travel</h2>
+        <ol className="numlist">
+          <li><span>1</span><div><b>Decisions and questions</b><small className="muted">Recorded once, with you as the actor, and sent to the task's existing session. Needs Developer Unlock in the real app.</small></div></li>
+          <li><span>2</span><div><b>Approvals</b><small className="muted">On the signed-in Approvals screen. High risk needs Developer Unlock and the typed agent ID. Slack only links here.</small></div></li>
+          <li><span>3</span><div><b>Reviews</b><small className="muted">Open the Task Room to read the evidence and reply.</small></div></li>
+        </ol>
+        <p className="callout t-info"><Icon name="lock" size={16} /> Nothing on this page merges, releases or deploys. Those stay behind their own gates.</p>
+      </aside>
+    </div>
+  </div>;
+}
+
+/** The queue, or one decision. In the main window the decision is in the address (#/decisions/sv-025); a pop-out keeps it in shared view state. */
 export function Decisions() {
+  const route = useRoute();
+  const [open, setOpen] = useViewState<string | null>(V, "open", null);
+  const inMain = route.screen === "decisions";
+  const id = inMain ? route.id : open;
+  useEffect(() => { if (inMain && open !== (route.id ?? null)) setOpen(route.id ?? null); }, [inMain, route.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openDecision = (x: string | null) => { if (inPopout()) setOpen(x); else go("decisions", x); };
+  if (id && id.toLowerCase() === "sv-025") return <DecisionRoom back={() => openDecision(null)} />;
+  return <Queue openDecision={openDecision} />;
+}
+
+function DecisionRoom({ back }: { back: () => void }) {
   const t = task("SV-025")!;
   const [tab, setTab] = useViewState(V, "tab", "Overview");
   const [pick, setPick] = useViewState(V, "pick", "A");
@@ -55,7 +122,7 @@ export function Decisions() {
   const opt = DECISION.options.find((o) => o.id === pick)!;
   return <div className="page page-decisions">
     <div className="dec-main">
-      <a className="back" href="#/decisions"><Icon name="arrowl" size={15} /> Back to Decisions</a>
+      <button type="button" className="back" onClick={back}><Icon name="arrowl" size={15} /> Back to Needs My Attention</button>
       <header className="dec-head">
         <span className="dec-ico"><Icon name="edit" size={30} /></span>
         <div className="dec-title"><h1><span className="mono">{t.key}</span> {t.title}</h1>

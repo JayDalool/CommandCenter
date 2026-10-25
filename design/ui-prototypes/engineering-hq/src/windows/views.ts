@@ -12,7 +12,7 @@ export interface ViewDef { id: string; kind: ViewKind; title: string; sub?: stri
 
 export const PAGE_TITLE: Record<Page, string> = { office: "My Office", messages: "Messages", decisions: "Decisions", teams: "Teams",
   topology: "Operations Topology", engineering: "Engineering", revenue: "Revenue", more: "More",
-  agents: "Agents", onboard: "New Agent", newproject: "New Project", design: "Design System", budgets: "Budgets", approvals: "Approvals" };
+  agents: "Agents", onboard: "New Agent", newproject: "New Project", design: "Design System", budgets: "Budgets", approvals: "Approvals", settings: "Settings" };
 
 const PANELS: Record<string, { title: string; hash: string }> = {
   "topology-inspector": { title: "Topology Inspector", hash: "#/topology" },

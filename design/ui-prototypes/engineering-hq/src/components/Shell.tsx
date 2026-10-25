@@ -5,6 +5,7 @@ import { Icon, Logo } from "./Icon";
 import { cx } from "./ui";
 import { focusWindow, notices, owners, popOut, returnHere } from "../windows/manager";
 import { PopButton, useOwner } from "../windows/Detachable";
+import { useNeedsSummary } from "../data/needs";
 import { viewById, viewForRoute, type ViewDef } from "../windows/views";
 import { WIN_ID } from "../lib/shared";
 import { AGENTS, CONVERSATIONS, PROJECTS, TASKS } from "../data/seed";
@@ -39,6 +40,8 @@ export function closeTab(id: string) { tabs.set((t) => t.filter((x) => x !== id)
 function NavItem({ n, current }: { n: (typeof NAV)[number]; current: boolean }) {
   const id = `page:${n.page}`;
   const o = useOwner(id);
+  const needsNow = useNeedsSummary().total;
+  const badge = n.page === "decisions" ? needsNow : n.badge;
   const out = !!o && o.win !== WIN_ID;
   const menu = useContextMenu(() => out
     ? [{ label: "Focus its window", icon: "popout", run: () => focusWindow(id) }, { label: "Return to this window", icon: "returnin", run: () => returnHere(id) }]
@@ -48,7 +51,7 @@ function NavItem({ n, current }: { n: (typeof NAV)[number]; current: boolean }) 
       onClick={() => { if (out) focusWindow(id); }}>
       <Icon name={n.icon} size={21} /><span className="nav-label">{n.label}</span>
       {out ? <span className="nav-out" aria-label="open in another window"><Icon name="popout" size={14} /></span>
-        : n.badge ? <span className="nav-badge">{n.badge}</span> : null}
+        : badge ? <span className="nav-badge">{badge}</span> : null}
     </a>
     {!out && <PopButton id={id} compact />}
   </div>;
@@ -66,8 +69,8 @@ export function Sidebar() {
     <nav className="nav nav-low" aria-label="More">
       <div className={cx("nav-item", cur === "approvals" && "is-current")}><a href="#/approvals" aria-current={cur === "approvals" ? "page" : undefined}><Icon name="check" size={21} /><span className="nav-label">Approvals</span>{pending > 0 && <span className="nav-badge">{pending}</span>}</a></div>
       <div className={cx("nav-item", cur === "budgets" && "is-current")}><a href="#/budgets" aria-current={cur === "budgets" ? "page" : undefined}><Icon name="receipt" size={21} /><span className="nav-label">Budgets</span></a></div>
-      <div className={cx("nav-item", cur === "more" && "is-current")}><a href="#/more"><Icon name="gear" size={21} /><span className="nav-label">Settings &amp; more</span></a></div>
-      <div className="nav-item"><a href="#/more"><Icon name="help" size={21} /><span className="nav-label">Help &amp; Support</span></a></div>
+      <div className={cx("nav-item", (cur === "settings" && route.id !== "help" || cur === "more") && "is-current")}><a href="#/settings" aria-current={cur === "settings" && route.id !== "help" ? "page" : undefined}><Icon name="gear" size={21} /><span className="nav-label">Settings &amp; more</span></a></div>
+      <div className={cx("nav-item", cur === "settings" && route.id === "help" && "is-current")}><a href="#/settings/help" aria-current={cur === "settings" && route.id === "help" ? "page" : undefined}><Icon name="help" size={21} /><span className="nav-label">Help &amp; Support</span></a></div>
     </nav>
     <div className="side-proto"><b>Design prototype</b><span>Mock data · not connected to ccd</span></div>
   </aside>;
@@ -88,7 +91,9 @@ function Palette({ onClose }: { onClose: () => void }) {
       { id: "new-agent", label: "New Agent", sub: "Onboarding", run: () => go("onboard") },
       { id: "new-project", label: "New Project", sub: "Onboarding", run: () => go("newproject") },
       ...CONVERSATIONS.filter((c) => !c.archived).map((c) => ({ id: c.id, label: `${c.title} — ${c.sub}`, sub: "Conversation", run: () => go("messages", c.id) })),
-      { id: "more", label: "Releases, Fleet, Activity, AI Usage, Settings…", sub: "More", run: () => go("more") },
+      { id: "settings", label: "Settings", sub: "Preferences", run: () => go("settings") },
+      { id: "shortcuts", label: "Keyboard shortcuts", sub: "Help", run: () => go("settings", "help") },
+      { id: "more", label: "Releases, Fleet, Activity, AI Usage…", sub: "Other destinations", run: () => go("settings", "more") },
       { id: "design", label: "Design system", sub: "Reference", run: () => go("design") },
       { id: "approvals", label: "Approvals (Slack requests, approval screen)", sub: "Governance", run: () => go("approvals") },
       { id: "budgets", label: "Budgets (agent, project, company)", sub: "Governance", run: () => go("budgets") },
@@ -116,7 +121,8 @@ function Palette({ onClose }: { onClose: () => void }) {
 function meMenu(): MenuItem[] {
   const m = motionPref.get(), slow = slowDemo.get();
   return [
-    { label: "Settings & more", icon: "gear", run: () => go("more") },
+    { label: "Settings", icon: "gear", run: () => go("settings") },
+    { label: "Help & shortcuts", icon: "help", run: () => go("settings", "help") },
     { label: "Design system", icon: "layers", run: () => go("design") },
     { sep: true },
     { label: "Motion: follow system", checked: m === "system", run: () => setMotionPref("system") },
@@ -143,7 +149,7 @@ export function TopBar({ status }: { status?: ReactNode }) {
     <button type="button" ref={bellRef} className={cx("bell", bell && "is-open")} aria-label="Notifications (demo)" aria-expanded={bell} onClick={() => setBell((b) => !b)}><Icon name="bell" size={21} /><span>1</span></button>
     <Popover open={bell} onClose={() => setBell(false)} anchor={bellRef} label="Notifications" className="pop-notes">
       <header className="pop-h"><b>Notifications</b><Demo label="Demo" /></header>
-      <button type="button" className="note-row" data-autofocus onClick={() => { setBell(false); go("decisions"); }}>
+      <button type="button" className="note-row" data-autofocus onClick={() => { setBell(false); go("decisions", "sv-025"); }}>
         <span className="attn-ico t-info"><Icon name="doc" size={16} /></span><span><b>SV-025 is waiting for your decision</b><small className="muted">Rental comparison redesign · 2h ago</small></span></button>
       <footer className="pop-f"><button type="button" className="link" onClick={() => { setBell(false); go("decisions"); }}>Open Decisions <Icon name="arrowr" size={12} /></button></footer>
     </Popover>

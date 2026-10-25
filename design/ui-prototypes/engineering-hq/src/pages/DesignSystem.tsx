@@ -57,9 +57,9 @@ export function DesignSystem() {
       </Panel>
 
       <Panel icon="target" title="Buttons" sub="Hover lifts, press settles, focus ring">
-        <div className="row-gap"><button type="button" className="btn btn-primary"><Icon name="plus" size={15} /> Primary</button><button type="button" className="btn">Secondary</button>
-          <button type="button" className="btn btn-outline">Outline</button><button type="button" className="btn btn-danger">Danger</button><button type="button" className="btn" disabled>Disabled</button>
-          <button type="button" className="btn btn-sm">Small</button><button type="button" className="icon-btn" aria-label="Settings" title="Settings"><Icon name="gear" size={16} /></button></div>
+        <div className="row-gap"><button type="button" className="btn btn-primary" onClick={() => notify("Primary button pressed.")}><Icon name="plus" size={15} /> Primary</button><button type="button" className="btn" onClick={() => notify("Secondary button pressed.")}>Secondary</button>
+          <button type="button" className="btn btn-outline" onClick={() => notify("Outline button pressed.")}>Outline</button><button type="button" className="btn btn-danger" onClick={() => notify("Danger buttons always ask first in the real app.", "warn")}>Danger</button><button type="button" className="btn" disabled>Disabled</button>
+          <button type="button" className="btn btn-sm" onClick={() => notify("Small button pressed.")}>Small</button><button type="button" className="icon-btn" aria-label="Settings" title="Settings" onClick={() => { location.hash = "#/settings"; }}><Icon name="gear" size={16} /></button></div>
       </Panel>
       <Panel icon="edit" title="Inputs" sub="Text, select, segmented, toggle">
         <div className="ds-form">
