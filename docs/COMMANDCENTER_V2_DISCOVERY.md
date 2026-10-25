@@ -403,7 +403,7 @@ PulseItem ── LearningItem  BudgetLedger ── Execution     AuditEvent (glo
 | **WorkItem** | existing ticket + `profile_version`, `risk_class`, `origin` (Jay idea, agent finding, Pulse), `parent goal` | `tickets` + `ticket_work`. A *Goal* is a parent WorkItem (relations exist). |
 | **Execution** (job) | id, work item, role, node constraint, state, lease owner, lease expiry, attempt, idempotency key, input pack hash, outputs, usage (tokens, cost, turns), timings, exit reason | New; replaces "a pane is working on it". |
 | **Decision** | project, work item, question, options, decision, rationale, alternatives + why rejected, recommended by, decided by (`jay`, `policy:auto`, `delegate:shadow`), evidence refs, risk, reversible?, decided at, reconsider at/when, supersedes, related PR/release, profile hash | Subsumes `ticket_questions` (keep as view). Append-only; change = new Decision that supersedes. |
-| **Approval** | subject type + id + **subject hash** (plan hash, head SHA, release id), action, required approver class, state, approved by, via (UI + Developer Unlock / Slack button / policy), expires at, consumed at | Generalises `ticket_work.gate`. Single-use and hash-bound. |
+| **Approval** | subject type + id + **subject hash** (plan hash, head SHA, release id), action, required approver class, state, approved by, via (authenticated CommandCenter Jay session / policy; a Slack link is never an approval credential, D-024), expires at, consumed at | Generalises `ticket_work.gate`. Single-use and hash-bound. |
 | **Discussion / Position** | topic, trigger, participants, positions (agent, stance, one-paragraph argument, evidence), resolution, rationale, rounds | Stores concise rationale only, never transcripts. |
 | **Artifact** | kind (plan pdf, screenshot, report, deck, release notes, lesson), owner record, storage location(s), hash, size, node, retention, visibility, Drive id | Generalises attachments/records. |
 | **ToolProposal** | problem, tool, alternatives (free, self-host, hosted, AWS, Azure), cost, security, lock-in, maintenance, recommendation, status, decision id | Paid → always Jay. |
@@ -631,7 +631,7 @@ data, employer code, secrets (.env, API keys, Claude/Codex credentials), ccd tok
 | T9 | **ccd token theft** (another local user, browser) | Strong controls (Host/Origin, 0600, no URL tokens, CSP) | Keep; add per-actor tokens so a leaked agent token ≠ Jay. |
 | T10 | **Jay Delegate abuse / drift** | N/A | Delegate may only act on actions the engine marks `delegable` (reversible, low risk, not on the hard list); compiled deny on money/secrets/destructive/legal/major redesign/permissions; shadow mode first with measured accuracy; every delegated decision is a Decision with `decided_by: delegate`, visible in a daily digest, one-click revert; Jay can disable instantly (kill switch file + UI). Delegate cannot change its own scope (that is `change_agent_permissions`). |
 | T11 | **Destructive automation** (worktree removal, data ops) | Exhaustive checks, no `--force`, kill switches | Keep the pattern for every new destructive action; prod data ops always Jay. |
-| T12 | **Notification channel spoofing** (approve via Slack) | N/A | Approvals accepted only from the Slack user id bound to Jay, in a DM or the project channel, verified by Slack's signed Socket Mode payloads; each button carries the Approval id + subject hash and expires; see the channel matrix in §11.4. |
+| T12 | **Notification channel spoofing** (a forged or forwarded Slack message) | N/A | A Slack message is only a notification with a secure link; it is never an approval credential (D-024 clause 12). Every approval happens in an authenticated CommandCenter Jay session, bound to the Approval id, subject hash and expiry. Direct Slack buttons for explicitly Low-risk, reversible actions are a separate future approval, not part of Phase 2 (§11.4). |
 | T13 | **Supply chain of CC itself auto-deploying** | `go-live.sh` from main only | CC auto-deploy requires the broker, CI green on GitHub-hosted runners, verify, canary health, automatic rollback; changes to `autonomy.py`, `broker.py`, `security.py`, `policy/**` never auto-merge. |
 
 ---
@@ -644,7 +644,7 @@ data, employer code, secrets (.env, API keys, Claude/Codex credentials), ccd tok
 Agent proposes action ──▶ autonomy.decide ──Allow──▶ broker/worker executes ──▶ AuditEvent
                                   │
                                   ├─RequireApproval(class)─▶ Approval(subject hash) ──▶ Needs You (+ notify per policy)
-                                  │                              │ Jay approves (UI+Developer Unlock | Slack for low/med)
+                                  │                              │ Jay approves (authenticated Jay session; Slack = link)
                                   │                              ▼
                                   │                         Approval consumed once by broker ──▶ executes ──▶ AuditEvent
                                   │                              │ subject changed (new head, new plan hash) → Approval void
@@ -670,22 +670,29 @@ new ideas, client impact, client-facing note, Claude verdict, Codex verdict, ris
 plus a rendered artifact (HTML/PDF). The Approval's subject hash is the package hash, so any change after Jay
 approves re-opens it.
 
-### 11.4 Approval channels (D-006: Slack first, phone included)
+### 11.4 Approval channels (D-006 as refined by D-024)
 
-Slack is the first interface for approving from the phone. CommandCenter stays loopback-only; Slack reaches
-ccd through Socket Mode (an outbound connection from ccd), so nothing new is exposed. Proposed matrix (Claude's
-proposal, to be confirmed by Jay):
+*Rewritten 2026-10-25 (Jay): the earlier one-tap Slack matrix here conflicted with D-024 and is replaced.*
 
-| Approval class | Slack (phone) | CommandCenter UI (Developer Unlock) |
-|---|---|---|
-| Questions, "choose A/B", retry / pause / resume a job, acknowledge a release | one tap | ✅ |
-| Low / medium risk: plan approvals, release-ready → deploy within policy, merge of a held PR | one tap, card shows summary + risk + link | ✅ |
-| High risk: major client-impacting change, migration, downtime, GYST personal-data triggers (D-005) | tap **plus** a Slack confirmation dialog that repeats what will happen and the short subject hash | ✅ |
-| Hard human-only boundaries: money / paid service, credentials or secrets, destructive production data, legal | Slack shows the request and can **reject or defer**; approval waits for the UI until a secure remote-access option exists (Phase 6) | ✅ |
-| Policy / profile changes, agent permission changes | never from Slack | ✅ only |
+Slack is the first phone surface, for notifications, approval requests and secure links. It is not an approval
+authority. For Phase 2 every approval follows one path:
 
-Every Slack approval records `via: slack`, the Slack user id, message ts and the Approval subject hash; a stale
-button (subject changed, expired, already consumed) answers "this request changed, open the new one".
+```
+Slack message ──▶ secure link ──▶ authenticated CommandCenter Jay session ──▶ approval
+```
+
+- **A Slack link is never an approval credential** (D-024 clause 12). Opening the link proves nothing; Jay
+  approves inside CommandCenter, in a Jay session.
+- **Jay sessions** start from Developer Unlock, once host isolation makes `developer.token` unreadable by agents.
+  WebAuthn passkeys follow as the preferred mechanism, before remote phone approvals are relied on heavily.
+  Developer Unlock stays as the recovery and local-console path.
+- Each approval is single-use and bound to the Approval id, the subject hash (plan hash, head SHA, release id) and
+  an expiry. It records `via` (the Jay session and its device), never a Slack user id alone.
+- CommandCenter stays loopback-only. Slack reaches ccd through Socket Mode (an outbound connection), so nothing new
+  is exposed.
+- **Future, separate approval (not Phase 2):** direct Slack buttons for explicitly Low-risk, reversible actions
+  only (for example acknowledge, retry, pause). This stays a possible later design, gated by its own approval from
+  Jay; it never covers plans, merges, deploys, credentials, money, destructive data, policy or permissions.
 
 ---
 
@@ -932,9 +939,10 @@ by explicit link (not only title-leading key) — a small change to the existing
   One bot posts to `#commandcenter`, `#samvision`, `#gyst` (plus a DM to Jay for anything that needs him) from the
   notification outbox: Needs You, questions, choose A/B, blockers, plan ready, release ready, deployed, major
   failures, weekly report. Every message links to the CommandCenter record. Dedupe and quiet hours from the profile.
-- **Slack Socket Mode** for interactivity (buttons, dialogs, retry/pause, later `@architect`) keeps CommandCenter
-  loopback-only: ccd opens an outbound WebSocket to Slack; no public endpoint, no change to the local-access rule.
-- **Buttons** follow the channel matrix in §11.4, bound to Jay's Slack user id.
+- **Slack Socket Mode** keeps CommandCenter loopback-only: ccd opens an outbound WebSocket to Slack; no public
+  endpoint, no change to the local-access rule.
+- **No approval buttons in Phase 2.** Messages carry a secure link to the record; approval happens in an
+  authenticated CommandCenter Jay session (§11.4, D-024). Low-risk reversible buttons are a separate future approval.
 - **Secure remote access later (Phase 6, separate design and approval).** Options to compare then: a private
   tailnet (Tailscale/Headscale) reaching the existing SSH tunnel, or an identity-aware tunnel (Cloudflare Access).
   Requirements: never publicly reachable, device + identity authentication in front of ccd's own token and
@@ -1076,10 +1084,52 @@ actor tokens, usage; PR 7) — all additive, forward-only. Rollback for each PR 
 - Move CI off the production host (or isolate the runner).
 - Budgets enforced; night shift reimplemented as scheduled jobs (retire screen-reading reminders for autonomous
   work; herdr stays for Jay).
-- **Slack (D-006)**: outbox → Slack via Socket Mode; approvals, questions, choose A/B, retry/pause, release
-  notifications, per the §11.4 matrix.
-- **Laptop worker** (WSL): pilot on a personal repo for a few days, then the employer repos (D-002: AI permitted,
-  laptop-only storage and secrets).
+- **Slack (D-006, D-024)**: outbox → Slack via Socket Mode; notifications, approval requests and secure links.
+  Approvals happen only in an authenticated CommandCenter Jay session (§11.4).
+- **Laptop worker** (WSL): personal runners move to a dedicated Personal-CI WSL distribution (see the Phase 2
+  preparation decisions below). Employer repositories stay outside Personal-CI (D-002: AI permitted, laptop-only
+  storage and secrets); a dedicated employer WSL distribution is the next option if they need stronger separation.
+
+#### Phase 2 preparation decisions (Jay, 2026-10-25)
+
+Jay approved Phase 2 **preparation and shadow implementation only**, after the read-only readiness pass
+([Phase 2 Readiness and Identity Design](https://claude.ai/artifact/6CLUD1rayhy9DJss4Du65R)). Phase 2 enforcement,
+Broker enforcement, auto-merge, auto-deploy and onboarding enforcement stay off.
+
+1. **Separate Unix identities.** Human, control plane and agents must not collapse into one account. Target:
+   `jay` (human/admin), `ccdsvc` (CommandCenter control-plane service), `ccagent` (agent execution on jay-server),
+   and separate deploy/backup identities where their capabilities need it. herdr runs under the control-plane
+   identity or its own service identity, never as Jay for convenience. No agent identity gets the docker group,
+   unrestricted sudo, Jay's home secrets, the Developer Unlock secret, production `.env` files, Jay's GitHub
+   credentials or production backups. Launching agents as `ccagent` uses a narrow root-owned systemd mechanism, not
+   broad sudo, and is challenged for privilege escalation before it is built. The exact ownership/group/service
+   layout and rollback procedure go to Jay before implementation.
+2. **Four world-readable `.env` files** on jay-server: permissions fix approved (contents untouched).
+3. **Slack:** D-024 wins (§11.4). Slack message → secure link → authenticated CommandCenter Jay session →
+   approval. Direct Low-risk reversible buttons remain a separate future approval.
+4. **Jay proof:** Developer Unlock first (after host isolation makes `developer.token` unreadable by agents) to create
+   authenticated Jay sessions; WebAuthn passkeys next, as the preferred mechanism; Developer Unlock stays the recovery
+   and local-console path.
+5. **GitHub authority:** a GitHub App owned by Jay for Broker-mediated repository actions, installed only on approved
+   repositories, minimum permissions, short-lived installation tokens fetched by ccd only when needed, never given to
+   agents, capabilities separated (push / PR / merge), every operation audited, employer and client repositories
+   excluded unless enrolled later. Jay's `gh` login stays as rollback/manual access until the Broker path is proven.
+   The App's requested permissions go to Jay before it is created.
+6. **Personal-CI WSL distribution.** Personal self-hosted runners move out of Jay's interactive WSL distro into a
+   dedicated distro with, at distro level: Windows automount off, interop off, Windows PATH injection off, no Jay SSH
+   keys, no Windows Credential Manager, no browser profiles, no production credentials, no backups. Inside it, one
+   Linux service user per runner (CommandCenter, GYST, SamVision) with private runner directories and credentials.
+   (`/etc/wsl.conf` applies per distribution, not per user.) Employer work stays outside Personal-CI. Before
+   enforcement, a real runner job must prove it cannot list or read `/mnt/c`, Jay's SSH keys, Windows credential
+   helpers, the employer repository location or other runners' credentials.
+7. **Root read-only checks** of `/etc/sudoers.d/minecraft-ai` and `ufw status verbose` approved; Cockpit (9090)
+   exposure reported, not changed.
+8. **D-057 Temporary Remote Laptop Access** recorded as a docs-only placeholder ([D-057](decisions/D-057.md)): a future
+   consumer of Phase 2 identity and the Broker; nothing implemented.
+
+Still to be evaluated before Track A: moving ccd off Jay's interactive account into `ccdsvc` (cost and
+recommendation), and a maintainable outbound-egress design for agent execution that fails closed for unknown
+destinations where a project's data-egress policy requires it.
 
 ### Phase 3 — Planning, review, release
 
@@ -1177,9 +1227,9 @@ repos → D-002 · Q4 phone access → D-006 · Q5 GYST personal data → D-005 
 - **Q8 · CommandCenter self-protection.** CommandCenter merges and deploys automatically (D-001). Proposal: changes
   to the autonomy engine, the gatekeeper, `security.py` and `policy/**` still need Jay, because "no agent may expand
   its own authority". Agreed?
-- **Q9 · Slack approval matrix.** Confirm §11.4, especially: high-risk approvals from Slack need a confirmation
-  dialog, and money/secrets/destructive-data/legal approvals wait for the CommandCenter UI until secure remote access
-  exists. Also: which Slack workspace, and is a bot install acceptable?
+- **Q9 · Slack approval matrix.** *Answered 2026-10-25:* D-024 wins. Slack carries links; approvals happen in an
+  authenticated CommandCenter Jay session (§11.4). Still open: which Slack workspace, and is a bot install
+  acceptable?
 - **Q10 · MyFamilyExpenses windows.** Same 01:00 Thu/Sat windows as SamVision, or its own?
 - **Q11 · Budget.** Weekly token/usage budget per project. Can wait for a week of metering data from Phase 1.
 
