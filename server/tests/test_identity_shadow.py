@@ -278,6 +278,15 @@ class OverHttp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((e["identity"]["resolvedActor"], e["identity"]["reasons"]), ("svc:ci", []))
         summary = self.c.get("/api/audit", headers=self.h).json()["summary"]
         self.assertEqual((summary["service"], summary["mismatch"]), (1, 0))
+        # the same token with an explicit `X-CCD-Actor: jay` is a claim of Jay, and is counted as one
+        before = summary
+        self.c.post("/api/tasks", headers=dict(self.h, **{"x-ccd-actor": "jay", "x-ccd-actor-token": svc["token"]}),
+                    json={"project": "samvision", "title": "claims jay"})
+        e = self.d.audit.list(limit=1)[0]
+        self.assertIn("different actor", e["summary"])
+        summary = self.c.get("/api/audit", headers=self.h).json()["summary"]
+        self.assertEqual((summary["service"], summary["mismatch"], summary["wouldRefuse"] - before["wouldRefuse"]),
+                         (1, 1, 1))
 
     def test_a_failing_shadow_record_never_costs_the_audit_row(self):
         before = len(self.d.audit.list(limit=500))
@@ -298,6 +307,8 @@ class OverHttp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.d.audit.list(limit=1)[0]["identity"]["reasons"], ["project_mismatch"])
         self.assertEqual(self.d._write_project("/api/tasks/NOPE-1/comments", None), None)
         self.assertEqual(self.d._write_project(f"/api/tasks/{key}/comments", {"project": ""}), "samvision")
+        self.assertEqual(self.d._write_project(f"/api/tasks/{key}/comments", {"project": "Sam Vision"}), "samvision")
+        self.assertEqual(self.c.post("/api/actors/revoke", headers=self.dev, json={"id": 2 ** 70}).status_code, 400)
 
     def test_with_the_switch_off_nothing_is_observed(self):
         ts = tasks_db()

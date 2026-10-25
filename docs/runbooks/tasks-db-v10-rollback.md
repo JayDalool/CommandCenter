@@ -112,3 +112,5 @@ stop with no `tasks.db-wal` present; steps 4 and 5 above cover the case where cc
   `python -c "import sqlite3,sys; s=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro', uri=True); d=sqlite3.connect(sys.argv[2]); s.backup(d)" tasks.db COPY.db`.
 - `server/tests/test_migration_safety.py` runs the drill in CI and tests each refusal of the rollback and the
   export.
+- From tasks.db v11 on, the drill rehearses the newest migration (v10 → v11); see
+  [tasks-db-v11-rollback.md](tasks-db-v11-rollback.md). The v10 rollback tests still run under a patched v10 ccd.

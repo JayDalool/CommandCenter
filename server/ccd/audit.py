@@ -23,6 +23,7 @@ import re
 import time
 
 GENESIS = "0" * 64
+SERVICE_NO_HEADER = "service token; no actor header"   # daemon.audit_write's summary for that case
 KEY_RE = re.compile(r"/api/tasks/([A-Z][A-Z0-9-]{0,20}-\d{1,6})(?:/|$)")
 OBS_COLUMNS = ("audit_id", "audit_sha", "asserted_actor", "resolved_actor", "via", "token_kind", "token_fp",
                "token_project", "would_refuse", "reasons", "enforced")
@@ -140,18 +141,17 @@ class Audit:
     def identity_summary(self, since=None):
         """Phase 2 shadow: what enforcing verified identity would refuse, by reason and by resolved actor."""
         since = since if since is not None else self.clock() - 30 * 86400
-        total, refuse, by_reason, by_resolved, missing = 0, 0, {}, {}, 0
-        for resolved, asserted, would, reasons, n in self.db.execute(
-                "SELECT o.resolved_actor, o.asserted_actor IS NULL, o.would_refuse, o.reasons, COUNT(*) "
+        total, refuse, by_reason, by_resolved = 0, 0, {}, {}
+        for resolved, would, reasons, n in self.db.execute(
+                "SELECT o.resolved_actor, o.would_refuse, o.reasons, COUNT(*) "
                 "FROM identity_observations o JOIN audit_events a ON a.id = o.audit_id WHERE a.at >= ? "
-                "GROUP BY o.resolved_actor, o.asserted_actor IS NULL, o.would_refuse, o.reasons", (since,)):
+                "GROUP BY o.resolved_actor, o.would_refuse, o.reasons", (since,)):
             total += n
             refuse += n if would else 0
-            missing += n if asserted else 0
             by_resolved[resolved] = by_resolved.get(resolved, 0) + n
             for reason in json.loads(reasons or "[]"):
                 by_reason[reason] = by_reason.get(reason, 0) + n
-        return {"since": since, "total": total, "wouldRefuse": refuse, "missingHeader": missing,
+        return {"since": since, "total": total, "wouldRefuse": refuse, "missingHeader": by_reason.get("missing_header", 0),
                 "byReason": by_reason, "byResolved": by_resolved, "enforced": False}
 
     def observations(self, ids):
@@ -221,13 +221,13 @@ class Audit:
         claim Jay without Developer Unlock, and token/claim mismatches."""
         since = since if since is not None else self.clock() - 30 * 86400
         rows = self.db.execute(
-            "SELECT via, verified, actor, token_actor, COUNT(*) FROM audit_events WHERE at >= ? "
-            "GROUP BY via, verified, actor, token_actor", (since,)).fetchall()
+            "SELECT via, verified, actor, token_actor, summary = ?, COUNT(*) FROM audit_events WHERE at >= ? "
+            "GROUP BY via, verified, actor, token_actor, summary = ?", (SERVICE_NO_HEADER, since, SERVICE_NO_HEADER)).fetchall()
         by_via, unverified_jay, mismatch, agents_unverified, total, refuse, service = {}, 0, 0, 0, 0, 0, 0
-        for via, verified, actor, token_actor, n in rows:
+        for via, verified, actor, token_actor, no_header, n in rows:
             total += n
             by_via[via] = by_via.get(via, 0) + n
-            if via == "token" and actor == "jay" and str(token_actor or "").startswith("svc:"):
+            if no_header and via == "token" and str(token_actor or "").startswith("svc:"):
                 service += n         # a service token with no actor header (v11): its token is its claim
                 continue
             if actor == "jay" and not verified and via != "system":

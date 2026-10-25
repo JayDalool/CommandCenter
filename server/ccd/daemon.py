@@ -1983,7 +1983,7 @@ class Daemon:
             self.audit.record(actor=who["actor"], verified=who["verified"], via=who["via"],
                               token_actor=who["tokenActor"], method=method, path=path, status=status, body=body,
                               summary="actor token names a different actor" if who["mismatch"] else
-                              "service token; no actor header" if who["via"] == "token" and not who["verified"] else "",
+                              audit_mod.SERVICE_NO_HEADER if who["via"] == "token" and not who["verified"] else "",
                               profile_hash=getattr(self.policy, "fingerprint", None), identity=shadow)
         except Exception as e:  # noqa: BLE001 — the audit trail is a record; it must never break a write
             log.warning(json.dumps({"msg": "audit write skipped", "path": str(path)[:100], "error": repr(e)[:200]}))
@@ -2011,8 +2011,9 @@ class Daemon:
     def _write_project(self, path, body):
         """The project a write touches, for the shadow record: the body's `project`, else the project of the ticket
         key in the path. None when neither names one."""
-        if isinstance(body, dict) and isinstance(body.get("project"), str) and body["project"]:
-            return body["project"][:40]
+        if isinstance(body, dict) and isinstance(body.get("project"), str) \
+                and identity_mod.PROJECT_RE.fullmatch(body["project"]):
+            return body["project"]
         m = audit_mod.KEY_RE.search(path or "")
         if m and self.tasks is not None:
             key = m.group(1)
@@ -2043,7 +2044,7 @@ class Daemon:
                                                              "kind": out["kind"], "project": out["project"]})
                 return out
             tid = body.get("id")
-            if not isinstance(tid, int) or isinstance(tid, bool):
+            if not isinstance(tid, int) or isinstance(tid, bool) or not -2 ** 62 < tid < 2 ** 62:
                 raise ActionError(400, "id must be a number")
             out = self.actor_tokens.revoke(tid, actor)
             self._event("security", "actor_token.revoked", f"Jay revoked actor token {tid} ({out['actor']})",
