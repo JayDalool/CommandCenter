@@ -1,27 +1,27 @@
-"""Migration safety for tasks.db: a rehearsal of the newest migration (v11) on a copy, and the way back. Never imported by the
-daemon; it adds no route.
+"""Migration safety for tasks.db: a rehearsal of the newest migration (vN = tasks.SCHEMA_VERSION, now v12) on a copy,
+and the way back. Never imported by the daemon; it adds no route.
 
     python -m ccd.migration_safety drill --snapshot COPY.db --out DIR [--old-ccd OLD_CHECKOUT/server]
                                          [--redact --label "where the snapshot came from"] [--clean]
-    python -m ccd.migration_safety rollback --db tasks.db --to 10 --backup-dir DIR       (stop ccd first)
+    python -m ccd.migration_safety rollback --db tasks.db --to 11 --backup-dir DIR       (stop ccd first)
     python -m ccd.migration_safety export-onboarding --db tasks.db --out FILE.json       (read-only; ccd may run)
 
 drill     Works only on copies it makes inside DIR. The snapshot is opened read-only and never written; make it with
           `sqlite3 tasks.db ".backup COPY.db"`. Writes drill.json and drill.md, and exits 0 when every check passes,
-          1 when one fails, 2 when it cannot run. The checks:
+          1 when one fails, 2 when it cannot run. The checks (N = the newest migration):
             backup    SQLite's online backup of the snapshot holds exactly the same rows in every table
-            upgrade   v10 -> v11 adds exactly the tables migration 11 adds (identity_tokens, identity_observations)
-                      and their indexes and triggers; every existing
+            upgrade   vN-1 -> vN adds exactly the tables migration N adds (v12: node_keys, node_observations,
+                      node_nonces) and their indexes and triggers; every existing
                       table, row, index and trigger is unchanged; integrity, foreign keys and the audit hash chain
                       still check; reopening applies nothing; ccd reads the upgraded file
-            old ccd   a v10 ccd refuses the v11 file and changes nothing (in process; with --old-ccd, also a real
+            old ccd   a vN-1 ccd refuses the vN file and changes nothing (in process; with --old-ccd, also a real
                       older checkout in its own process)
-            rollback  v11 -> v10 in place, after new work was written at v11: the schema is exactly v10 again, the new
-                      work is kept, and a v10 ccd opens it; it refuses, changing nothing, when a table migration 11
+            rollback  vN -> vN-1 in place, after new work was written at vN: the schema is exactly vN-1 again, the new
+                      work is kept, and a vN-1 ccd opens it; it refuses, changing nothing, when a table migration N
                       added holds a row
-            restore   copying the backup back gives the snapshot's rows exactly, and a v10 ccd opens it
+            restore   copying the backup back gives the snapshot's rows exactly, and a vN-1 ccd opens it
             recovery  a migration interrupted part-way, or whose process is killed part-way (with uncommitted pages
-                      already in the write-ahead log), leaves v10 exactly; killed straight after its commit leaves v11
+                      already in the write-ahead log), leaves vN-1 exactly; killed straight after its commit leaves vN
                       complete; either way the next start finishes the job
           --redact  the report names no path, host or user: the snapshot is shown by --label, folders as <out>,
                     <older checkout> and ~, and each detail is cut to 300 characters. It never holds row contents.
@@ -30,7 +30,7 @@ drill     Works only on copies it makes inside DIR. The snapshot is opened read-
           An older snapshot is lifted to the drill's starting version on the copy first, and the report says so.
 export-onboarding  Writes every row of the four onboarding tables (migration 10) to a JSON file with its SHA-256, through a
           read-only connection, so the records are kept outside the database before a backup is restored over them
-          (docs/runbooks/tasks-db-v10-rollback.md, docs/runbooks/tasks-db-v11-rollback.md). It changes nothing.
+          (docs/runbooks/tasks-db-v10-rollback.md; v11 and v12 have their own runbooks). It changes nothing.
 rollback  Takes a backup with SQLite's backup API, then runs tasks.downgrade(): it drops only tables a migration added,
           only when they are empty, in one transaction, and checks the result is exactly the older schema.
 """
@@ -56,6 +56,8 @@ HISTORY_ROW = {
          "VALUES ('d-000000000001', 'agent', 'open', '{}', ?, 1, 0, 'jay', 0)", ("0" * 64,)),
     11: ("INSERT INTO identity_tokens (kind, subject, token_sha, issued_at, issued_by, expires_at) "
          "VALUES ('agent', 'agent:drill', ?, 0, 'jay', 1)", ("0" * 64,)),
+    12: ("INSERT INTO node_observations (at, node_id, kind, outcome, signed, verified, would_refuse, prev_sha, sha) "
+         "VALUES (0, 'drill', 'heartbeat', 200, 0, 0, 1, ?, 'drill')", ("0" * 64,)),
 }
 # The areas Jay asked to see (2026-10-23), in report order.
 AREAS = (("backup", "Backup"), ("upgrade", f"v{FROM} -> v{TO} migration and schema integrity"),

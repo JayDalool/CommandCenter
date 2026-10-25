@@ -93,11 +93,13 @@
                                      Read-only: the queue itself is state.needs.
     GET   /api/workers               worker nodes (server, laptop, …): status pending|online|offline|revoked,
                                      capabilities, last heartbeat; recent worker events. Nothing runs on a node yet.
-    POST  /api/workers/enrol         {id, kind: laptop|gpu|cloud, capabilities, version} → {id, status: pending, token,
-                                     fingerprint}. The node token is shown ONCE (ccd keeps its SHA-256). Pending until
+    POST  /api/workers/enrol         {id, kind: laptop|gpu|cloud, capabilities, version, publicKey?} → {id, status:
+                                     pending, token, fingerprint, keyFingerprint?}. The node token is shown ONCE (ccd keeps its SHA-256). Pending until
                                      Jay approves. Not for agent:* actors; at most 10 pending (429).
     POST  /api/workers/heartbeat     ccd's token AND header X-CCD-Node: "<id> <token>"; {capabilities?, version?}.
-                                     401 wrong node token, 403 revoked.
+                                     401 wrong node token, 403 revoked. Optional X-CCD-Node-Signature (Phase 2
+                                     shadow, ccd/nodekeys.py): checked and recorded when phase2_node_shadow is on;
+                                     never required
     POST  /api/workers/approve       Jay AND Developer Unlock. {id}: pending → active
     POST  /api/workers/revoke        Jay AND Developer Unlock. {id, reason?}: final for that node and token
 
@@ -538,7 +540,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     async def worker_heartbeat(request, body):
         parts = (request.headers.get("x-ccd-node") or "").split(None, 1)     # "<id> <token>", any whitespace
         node, token = (parts + ["", ""])[:2]
-        return daemon.worker_heartbeat(node, token.strip(), body)
+        return daemon.worker_heartbeat(node, token.strip(), body, signature=request.headers.get("x-ccd-node-signature"),
+                                       method=request.method, path=request.url.path)
 
     async def worker_approve(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")

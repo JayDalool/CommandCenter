@@ -476,6 +476,31 @@ nothing**: `enforced` is 0 and the table's CHECK refuses any other value, and a
 shadow row that cannot be written is skipped without losing the audit row (`identityErrors` counts them). Enforcing
 any of it is a separate decision for Jay.
 
+**Worker node keys and signed heartbeats** (Phase 2 shadow step 2, tasks.db v12; Jay 2026-10-25; `ccd/nodekeys.py`).
+With `config.json` `"phase2_node_shadow": true` (default **false**) a node may send an Ed25519 public key when it
+enrols (`python -m ccd.nodekeys init --dir DIR` makes the pair; the private key is 0600 in a 0700 directory and never
+leaves the node). ccd keeps the public key in `node_keys` with a 16-hex fingerprint, which enrol returns and
+`GET /api/workers` lists. Settings → Workers does not show it yet, so **approving a node does not approve its key**:
+every key stays `key_not_approved` until a later step adds a screen where Jay compares the fingerprint the node printed
+and approves the key on purpose. Revoking a node revokes its key. Keys are never deleted or replaced, a node has at
+most one live key (a second one is recorded as `node_has_key`), a key is never reused across nodes (`duplicate_key`),
+and the database refuses a row added as `agent:*` (that name is the caller's own claim until Phase 2 enforces
+identity, so this is a guard, not a proof). Each heartbeat
+may carry `X-CCD-Node-Signature: v1 ts=… nonce=… sig=…` over `ccd-node-v1`, the method, path, node id, time, nonce
+and the SHA-256 of the canonical JSON body. ccd checks it and appends a `node_observations` row (its own hash chain)
+with the reasons Phase 2 would refuse it: `unsigned`, `malformed`, `no_key`, `key_not_approved`, `bad_signature`,
+`stale_timestamp` (more than 60 s off), `replayed_nonce` (seen in the last 10 minutes; only a verified signature
+records a nonce, so forgeries cannot burn one), `node_pending`, `node_revoked`, `bad_node_token`, `bad_key`,
+`duplicate_key`, `node_has_key`. The canonical body is Python's `json.dumps(sort_keys=True, separators=(",", ":"),
+ensure_ascii=True)` (non-ASCII text as `\uXXXX` escapes); a non-Python node must match it exactly. The signed path is the path ccd sees, so a proxy that
+rewrites a path prefix would make every signature fail (none does today).
+**It refuses nothing**: every heartbeat and enrolment answers exactly as before, `enforced` is 0 (CHECK), and a check
+that fails is counted (`shadow.errors`), never raised. Not covered yet: the server node (ccd's own host heartbeats
+in-process), capability claims beyond what Jay approved, job claims and key rotation; existing nodes must re-enrol to
+get a key, under a new name (revoked names are never reused). Observations are kept for good, like the audit trail (about 200 bytes each; a retention rule comes with
+enforcement). Verification uses PyCA `cryptography` (pinned in requirements.txt); if it is missing, ccd still starts and
+logs a warning with the check off.
+
 **Metering** (`ccd/meter.py`, `usage_records`). Every 5 minutes ccd reads what is new in the agents' own session logs
 on this machine (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`), off the event loop, at most 8 MB
 a pass. From each line it keeps only the model, token counts, time, session id, working directory and branch (to tie

@@ -2,3 +2,5 @@
 starlette==1.7.0
 uvicorn==0.54.0
 websockets==17.1
+# Ed25519 for worker node keys (Phase 2 shadow, ccd/nodekeys.py).
+cryptography==50.0.2

@@ -658,6 +658,68 @@ CREATE TRIGGER identity_observations_no_replace BEFORE INSERT ON identity_observ
   WHEN EXISTS (SELECT 1 FROM identity_observations WHERE audit_id = NEW.audit_id OR sha = NEW.sha)
   BEGIN SELECT RAISE(ABORT, 'identity observations are append-only'); END;
 """),
+    # 12: Phase 2 shadow step 2 (Jay 2026-10-25): worker node keys and signed requests, RECORDED ONLY
+    # (ccd/nodekeys.py). A node may send an Ed25519 public key when it enrols; the key waits for its own approval.
+    # Each accepted enrol and each heartbeat is checked (signature, timestamp, nonce, node state) and an observation is kept with
+    # the reasons Phase 2 would refuse it. Nothing is refused: `enforced` is always 0. Written only when config
+    # phase2_node_shadow is true. Additive.
+    (12, """
+CREATE TABLE node_keys (
+  id          INTEGER PRIMARY KEY,
+  node_id     TEXT NOT NULL REFERENCES worker_nodes(id),
+  public_key  TEXT NOT NULL CHECK (length(public_key) = 43 AND public_key NOT GLOB '*[^A-Za-z0-9_-]*'),
+  key_fp      TEXT NOT NULL UNIQUE CHECK (length(key_fp) = 19),
+  added_at    REAL NOT NULL,
+  added_by    TEXT NOT NULL CHECK (added_by NOT GLOB 'agent:*'),
+  approved_at REAL,
+  approved_by TEXT CHECK (approved_by IS NULL OR approved_by = 'jay'),
+  revoked_at  REAL,
+  CHECK ((approved_at IS NULL) = (approved_by IS NULL))
+);
+CREATE UNIQUE INDEX node_keys_one_live ON node_keys(node_id) WHERE revoked_at IS NULL;
+CREATE TRIGGER node_keys_never_deleted BEFORE DELETE ON node_keys
+  BEGIN SELECT RAISE(ABORT, 'a node key is history; revoke it instead'); END;
+CREATE TRIGGER node_keys_fixed BEFORE UPDATE ON node_keys
+  WHEN NEW.id IS NOT OLD.id OR NEW.node_id IS NOT OLD.node_id OR NEW.public_key IS NOT OLD.public_key
+    OR NEW.key_fp IS NOT OLD.key_fp OR NEW.added_at IS NOT OLD.added_at OR NEW.added_by IS NOT OLD.added_by
+    OR (OLD.approved_at IS NOT NULL AND (NEW.approved_at IS NOT OLD.approved_at OR NEW.approved_by IS NOT OLD.approved_by))
+    OR OLD.revoked_at IS NOT NULL
+  BEGIN SELECT RAISE(ABORT, 'a node key is approved once and revoked once; nothing else changes'); END;
+CREATE TRIGGER node_keys_no_replace BEFORE INSERT ON node_keys
+  WHEN EXISTS (SELECT 1 FROM node_keys WHERE id = NEW.id OR key_fp = NEW.key_fp)
+  BEGIN SELECT RAISE(ABORT, 'a node key is history; it is never replaced'); END;
+CREATE TABLE node_observations (
+  id           INTEGER PRIMARY KEY,
+  at           REAL NOT NULL,
+  node_id      TEXT NOT NULL CHECK (length(node_id) <= 40),
+  kind         TEXT NOT NULL CHECK (kind IN ('enrol', 'heartbeat')),
+  outcome      INTEGER NOT NULL,
+  key_fp       TEXT,
+  signed       INTEGER NOT NULL CHECK (signed IN (0, 1)),
+  verified     INTEGER NOT NULL CHECK (verified IN (0, 1)),
+  skew         REAL,
+  would_refuse INTEGER NOT NULL CHECK (would_refuse IN (0, 1)),
+  reasons      TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(reasons)),
+  enforced     INTEGER NOT NULL DEFAULT 0 CHECK (enforced = 0),
+  prev_sha     TEXT NOT NULL,
+  sha          TEXT NOT NULL UNIQUE
+);
+CREATE INDEX node_observations_node ON node_observations(node_id, id);
+CREATE TRIGGER node_observations_append_only_u BEFORE UPDATE ON node_observations
+  BEGIN SELECT RAISE(ABORT, 'node observations are append-only'); END;
+CREATE TRIGGER node_observations_append_only_d BEFORE DELETE ON node_observations
+  BEGIN SELECT RAISE(ABORT, 'node observations are append-only'); END;
+CREATE TRIGGER node_observations_no_replace BEFORE INSERT ON node_observations
+  WHEN EXISTS (SELECT 1 FROM node_observations WHERE id = NEW.id OR sha = NEW.sha)
+  BEGIN SELECT RAISE(ABORT, 'node observations are append-only'); END;
+CREATE TABLE node_nonces (
+  node_id TEXT NOT NULL,
+  nonce   TEXT NOT NULL,
+  seen_at REAL NOT NULL,
+  PRIMARY KEY (node_id, nonce)
+);
+CREATE INDEX node_nonces_seen ON node_nonces(seen_at);
+"""),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
@@ -687,6 +749,7 @@ def migrate(db, migrations=None):
 DOWNGRADES = {
     10: ("onboarding_events", "onboarding_drafts", "agent_config_versions", "agent_registrations"),
     11: ("identity_observations", "identity_tokens"),
+    12: ("node_nonces", "node_observations", "node_keys"),
 }
 
 

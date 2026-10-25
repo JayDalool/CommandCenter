@@ -70,6 +70,10 @@ DEFAULTS = {
     # write saying who it proves to be and why Phase 2 would refuse it. Off until Jay sets it true; read at start.
     # Records only: it refuses nothing, with or without this flag.
     "phase2_identity_shadow": False,
+    # Phase 2 shadow node keys (ccd/nodekeys.py; Jay 2026-10-25): a node's Ed25519 key at enrolment and a check of
+    # each heartbeat's signature, recorded with the reasons Phase 2 would refuse it. Off until Jay sets it true; read
+    # at start. Records only: it refuses nothing.
+    "phase2_node_shadow": False,
 }
 
 # The only project fields that may leave the server.
