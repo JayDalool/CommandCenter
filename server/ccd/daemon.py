@@ -1974,8 +1974,12 @@ class Daemon:
             asserted = asserted or None
             who = identity_mod.identify(claimed, bool(developer), hit["actor"] if hit else None,
                                         header_missing=asserted is None)
-            shadow = identity_mod.resolve(asserted, bool(developer), hit, self._write_project(path, body)) \
-                if self.identity_shadow_on else None
+            shadow = None
+            if self.identity_shadow_on:
+                try:                 # a shadow-record failure must never cost the audit row
+                    shadow = identity_mod.resolve(asserted, bool(developer), hit, self._write_project(path, body))
+                except Exception:  # noqa: BLE001
+                    self.audit.identity_errors += 1
             self.audit.record(actor=who["actor"], verified=who["verified"], via=who["via"],
                               token_actor=who["tokenActor"], method=method, path=path, status=status, body=body,
                               summary="actor token names a different actor" if who["mismatch"] else
@@ -2007,11 +2011,15 @@ class Daemon:
     def _write_project(self, path, body):
         """The project a write touches, for the shadow record: the body's `project`, else the project of the ticket
         key in the path. None when neither names one."""
-        if isinstance(body, dict) and isinstance(body.get("project"), str):
+        if isinstance(body, dict) and isinstance(body.get("project"), str) and body["project"]:
             return body["project"][:40]
         m = audit_mod.KEY_RE.search(path or "")
         if m and self.tasks is not None:
-            row = self.tasks.db.execute("SELECT project FROM tickets WHERE key=?", (m.group(1),)).fetchone()
+            key = m.group(1)
+            row = self.tasks.db.execute("SELECT project FROM tickets WHERE key=?", (key,)).fetchone()
+            if row is None:          # a key minted under a retired prefix (GM-014 → its project)
+                row = self.tasks.db.execute("SELECT project FROM task_project_aliases WHERE prefix=?",
+                                            (key.rsplit("-", 1)[0],)).fetchone()
             return row[0] if row else None
         return None
 

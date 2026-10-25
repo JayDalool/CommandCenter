@@ -276,6 +276,18 @@ class OverHttp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((e["actor"], e["via"], e["verified"], e["tokenActor"]), ("jay", "token", False, "svc:ci"))
         self.assertEqual(e["summary"], "service token; no actor header")
         self.assertEqual((e["identity"]["resolvedActor"], e["identity"]["reasons"]), ("svc:ci", []))
+        summary = self.c.get("/api/audit", headers=self.h).json()["summary"]
+        self.assertEqual((summary["service"], summary["mismatch"]), (1, 0))
+
+    def test_a_failing_shadow_record_never_costs_the_audit_row(self):
+        before = len(self.d.audit.list(limit=500))
+        with mock.patch.object(self.d, "_write_project", side_effect=sqlite3.OperationalError("boom")):
+            r = self.c.post("/api/tasks", headers=self.h, json={"project": "samvision", "title": "still audited"})
+        self.assertEqual(r.status_code, 201)
+        rows = self.d.audit.list(limit=500)
+        self.assertEqual(len(rows), before + 1)
+        self.assertIsNone(rows[0]["identity"])
+        self.assertEqual(self.d.audit.identity_errors, 1)
 
     def test_project_binding_is_checked_for_a_ticket_named_only_in_the_path(self):
         bound = self.issue(actor="agent:gyst-only", project="gyst")
@@ -285,6 +297,7 @@ class OverHttp(unittest.IsolatedAsyncioTestCase):
         self.assertIn(r.status_code, (200, 201))                               # never refused
         self.assertEqual(self.d.audit.list(limit=1)[0]["identity"]["reasons"], ["project_mismatch"])
         self.assertEqual(self.d._write_project("/api/tasks/NOPE-1/comments", None), None)
+        self.assertEqual(self.d._write_project(f"/api/tasks/{key}/comments", {"project": ""}), "samvision")
 
     def test_with_the_switch_off_nothing_is_observed(self):
         ts = tasks_db()

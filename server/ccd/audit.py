@@ -223,10 +223,13 @@ class Audit:
         rows = self.db.execute(
             "SELECT via, verified, actor, token_actor, COUNT(*) FROM audit_events WHERE at >= ? "
             "GROUP BY via, verified, actor, token_actor", (since,)).fetchall()
-        by_via, unverified_jay, mismatch, agents_unverified, total, refuse = {}, 0, 0, 0, 0, 0
+        by_via, unverified_jay, mismatch, agents_unverified, total, refuse, service = {}, 0, 0, 0, 0, 0, 0
         for via, verified, actor, token_actor, n in rows:
             total += n
             by_via[via] = by_via.get(via, 0) + n
+            if via == "token" and actor == "jay" and str(token_actor or "").startswith("svc:"):
+                service += n         # a service token with no actor header (v11): its token is its claim
+                continue
             if actor == "jay" and not verified and via != "system":
                 unverified_jay += n
             if token_actor and token_actor != actor:
@@ -237,4 +240,4 @@ class Audit:
                 refuse += n
         return {"since": since, "total": total, "byVia": by_via, "unverifiedJay": unverified_jay,
                 "agentUnverified": agents_unverified, "mismatch": mismatch,
-                "wouldRefuse": refuse}
+                "wouldRefuse": refuse, "service": service}
