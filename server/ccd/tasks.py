@@ -720,6 +720,37 @@ CREATE TABLE node_nonces (
 );
 CREATE INDEX node_nonces_seen ON node_nonces(seen_at);
 """),
+    # 13: Phase 2 shadow step 3 (Jay 2026-10-25): the Capability Broker, RECORDED ONLY (ccd/broker.py). One row per
+    # action that exercises authority (merge, go-live approval, deploy request/record, pane input, repository writes,
+    # worktree removal) with the eight checks and whether Phase 2 would refuse it. Nothing is refused: `enforced` is
+    # always 0. Written only when config phase2_broker_shadow is true. Additive.
+    (13, """
+CREATE TABLE broker_observations (
+  id           INTEGER PRIMARY KEY,
+  at           REAL NOT NULL,
+  verb         TEXT NOT NULL CHECK (length(verb) <= 40),
+  project      TEXT CHECK (project IS NULL OR length(project) <= 40),
+  target       TEXT NOT NULL CHECK (length(target) <= 200),
+  actor        TEXT NOT NULL,
+  asserted     TEXT,
+  via          TEXT NOT NULL,
+  terms        TEXT NOT NULL CHECK (json_valid(terms)),
+  would_refuse INTEGER NOT NULL CHECK (would_refuse IN (0, 1)),
+  reasons      TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(reasons)),
+  enforced     INTEGER NOT NULL DEFAULT 0 CHECK (enforced = 0),
+  version      INTEGER NOT NULL,
+  prev_sha     TEXT NOT NULL,
+  sha          TEXT NOT NULL UNIQUE
+);
+CREATE INDEX broker_observations_at ON broker_observations(at);
+CREATE TRIGGER broker_observations_append_only_u BEFORE UPDATE ON broker_observations
+  BEGIN SELECT RAISE(ABORT, 'broker observations are append-only'); END;
+CREATE TRIGGER broker_observations_append_only_d BEFORE DELETE ON broker_observations
+  BEGIN SELECT RAISE(ABORT, 'broker observations are append-only'); END;
+CREATE TRIGGER broker_observations_no_replace BEFORE INSERT ON broker_observations
+  WHEN EXISTS (SELECT 1 FROM broker_observations WHERE id = NEW.id OR sha = NEW.sha)
+  BEGIN SELECT RAISE(ABORT, 'broker observations are append-only'); END;
+"""),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
@@ -750,6 +781,7 @@ DOWNGRADES = {
     10: ("onboarding_events", "onboarding_drafts", "agent_config_versions", "agent_registrations"),
     11: ("identity_observations", "identity_tokens"),
     12: ("node_nonces", "node_observations", "node_keys"),
+    13: ("broker_observations",),
 }
 
 

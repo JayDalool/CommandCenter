@@ -501,6 +501,35 @@ get a key, under a new name (revoked names are never reused). Observations are k
 enforcement). Verification uses PyCA `cryptography` (pinned in requirements.txt); if it is missing, ccd still starts and
 logs a warning with the check off.
 
+**Capability Broker, recorded only** (Phase 2 shadow step 3, tasks.db v13; Jay 2026-10-25; `ccd/broker.py`). With
+`config.json` `"phase2_broker_shadow": true` (default **false**) ccd records, just before each action that exercises
+authority, what the Phase 2 Broker would decide. The design's eight checks are each `ok`, `n/a`, `deny` or `unknown`,
+and unknown counts as deny:
+- `actor`: who the request proves to be (`identity.resolve`, as in the identity shadow); ccd acting on its own is
+  `system:ccd`;
+- `agent_grant` and `task_mode`: these do not exist yet, so they are `unknown` for every agent;
+- `project`: the profile is present, valid and the project not paused;
+- `node`: today every action runs on the server;
+- `capability`: which kinds of actor may use the verb at all. Writes inside Jay's own checkout (`repo.write`, the
+  Workspace's stage/unstage/discard/commit/branch, and `worktree.remove`) are denied for everyone, because Phase 2
+  moves them to a mirror the Broker owns;
+- `approval`: Jay's live Developer Unlock for his own actions, the Autonomy Engine's verdict "auto" for a merge ccd
+  makes itself (`gh pr merge` in auto-merge), and the ticket's recorded deploy approval for `deploy.record`;
+- `egress`: no recorded verb sends data out, so `n/a`.
+
+Verbs and where they are recorded: `pr.merge` (auto-merge, and Jay's Merge for each PR the coordinator is asked to
+merge), `go_live.approve`, `deploy.request` and `deploy.record` (pipeline steps), `pane.input` (answer, prompt and
+key from the UI, Task nudges, dispatch, coordinator messages, night-shift nudges and end), `repo.write` and
+`worktree.remove` (recorded after git removed it; the cleanup decides inside its own thread). Each row goes into
+`broker_observations`, which has its own hash chain, `enforced` fixed at 0 by a CHECK, and append-only triggers.
+`GET /api/broker` shows the summary and the newest rows. **It refuses nothing**: every action runs exactly as before,
+the record is written before the action and never raises (a failure is counted in `errors`), and with the switch off
+nothing is recorded. The API caller's identity reaches the record through a context variable set by `BrokerContext`
+in api.py, which reads only headers. Not covered yet: the terminal WebSocket, node job claims and writer claims (not
+built), token issuance and revocation, merges an agent does with Jay's `gh` login outside ccd, and single-use approval
+records bound to a PR head (the approval term uses today's gates instead). The record is kept for good, like the audit
+trail.
+
 **Metering** (`ccd/meter.py`, `usage_records`). Every 5 minutes ccd reads what is new in the agents' own session logs
 on this machine (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/*.jsonl`), off the event loop, at most 8 MB
 a pass. From each line it keeps only the model, token counts, time, session id, working directory and branch (to tie

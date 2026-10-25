@@ -91,6 +91,9 @@
                                      (subject hash, expiry, overdue), the shadow engine's last verdict for the gate,
                                      and earlier answers to the same question (precedents; shown, never applied).
                                      Read-only: the queue itself is state.needs.
+    GET   /api/broker                Capability Broker, Phase 2 shadow (ccd/broker.py): what it would have decided for
+                                     each merge, Go Live approval, deploy request/record, pane input, repository
+                                     write and worktree removal; the eight checks, the chain. Never enforced. ?full=1 ?limit=
     GET   /api/workers               worker nodes (server, laptop, …): status pending|online|offline|revoked,
                                      capabilities, last heartbeat; recent worker events. Nothing runs on a node yet.
     POST  /api/workers/enrol         {id, kind: laptop|gpu|cloud, capabilities, version, publicKey?} → {id, status:
@@ -177,6 +180,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from starlette.responses import StreamingResponse
 
+from . import broker as broker_mod
 from . import identity as identity_mod
 from . import registry, security
 from .attachments import content_disposition
@@ -193,6 +197,7 @@ WRITE_METHODS = ("POST", "PATCH", "PUT", "DELETE")
 # is not a CORS-safelisted type either, so a cross-site page still needs a preflight.
 STREAM_PATHS = ("/api/files/upload", "/api/attachments")
 DEV_HEADER = "x-ccd-developer"
+SCM_OPS = ("stage", "unstage", "stage-all", "discard", "commit", "branch")
 # SSH sign-in: the browser trades a one-time code (minted over Jay's SSH login) for the ccd token and a
 # Developer session. It cannot present a token yet, so this one route needs none; Host and Origin still apply.
 REDEEM_PATH = "/api/developer/redeem"
@@ -262,6 +267,33 @@ class AuditTrail:
                 claimed = note.get("claimed") or headers.get("x-ccd-actor") or "jay"
                 self.daemon.audit_write(scope["method"], path, status[0] or 500, claimed, note.get("body"),
                                         dev, headers.get("x-ccd-actor-token"), asserted=headers.get("x-ccd-actor"))
+
+
+class BrokerContext:
+    """Phase 2 shadow step 3: tells the Capability Broker record (ccd/broker.py) who is behind the current API write:
+    the Developer Unlock session (read-only peek), the actor token and the asserted actor. It sets a context variable
+    for the request and nothing else; it never reads the body and never changes the request or the response."""
+
+    def __init__(self, app, daemon):
+        self.app = app
+        self.daemon = daemon
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("method") not in WRITE_METHODS \
+                or not getattr(self.daemon, "broker_shadow_on", False):
+            return await self.app(scope, receive, send)
+        try:
+            headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+            dev = identity_mod.developer_session_valid(getattr(self.daemon, "dev_gate", None), headers.get(DEV_HEADER))
+            req = {"developer": bool(dev), "token": headers.get(identity_mod.HEADER),
+                   "asserted": headers.get("x-ccd-actor")}
+        except Exception:  # noqa: BLE001 — unknown means "nothing backs the claim", never a failed request
+            req = {"developer": False, "token": None, "asserted": None}
+        tok = broker_mod.REQUEST.set(req)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            broker_mod.REQUEST.reset(tok)
 
 
 class Guard:
@@ -533,6 +565,16 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
 
     async def workers_state(request, _):
         return daemon.workers_state()
+
+    async def broker_state(request, _):
+        q = request.query_params
+        try:
+            limit = int(q.get("limit") or 50)
+        except ValueError:
+            raise ActionError(400, "limit must be a number")
+        if not 1 <= limit <= 500:
+            raise ActionError(400, "limit must be 1-500")
+        return daemon.broker_state(full=q.get("full") == "1", limit=limit)
 
     async def worker_enrol(request, body):
         return daemon.worker_enrol(body, request.state.actor)
@@ -964,6 +1006,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         op = request.url.path.rsplit("/", 1)[-1]
         key = str(body.get("project") or "")
         sc = _need_scm()
+        if op in SCM_OPS:
+            daemon._broker("repo.write", key or None, f"scm {op}")
         if op == "stage":
             out = await sc.stage(key, _paths(body))
         elif op == "unstage":
@@ -1200,6 +1244,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/actors/issue", guarded(actor_issue), methods=["POST"]),
         Route("/api/actors/revoke", guarded(actor_revoke), methods=["POST"]),
         Route("/api/workers", guarded(workers_state), methods=["GET"]),
+        Route("/api/broker", guarded(broker_state), methods=["GET"]),
         Route("/api/workers/enrol", guarded(worker_enrol), methods=["POST"]),
         Route("/api/workers/heartbeat", guarded(worker_heartbeat), methods=["POST"]),
         Route("/api/workers/approve", guarded(worker_approve), methods=["POST"]),
@@ -1260,7 +1305,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/scm/diff", ws_route(scm_diff), methods=["GET"]),
         Route("/api/scm/ticket-branch", ws_route(scm_ticket_branch), methods=["GET"]),
         *[Route(f"/api/scm/{op}", ws_route(scm_op, dev=True), methods=["POST"])
-          for op in ("stage", "unstage", "stage-all", "discard", "commit", "branch")],
+          for op in SCM_OPS],
         Route("/api/action/prompt", ws_route(claude_prompt, dev=True), methods=["POST"]),
         Route("/api/action/key", ws_route(claude_key, dev=True), methods=["POST"]),
         Route("/api/pty", ws_route(pty_list), methods=["GET"]),
@@ -1276,4 +1321,4 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         mounts.append(Mount("/", app=UiFiles(ui, port), name="ui"))
     app = Starlette(routes=routes + mounts, lifespan=lifespan)
     app.state.routes_table = routes
-    return Guard(AuditTrail(app, daemon), token, port), app
+    return Guard(BrokerContext(AuditTrail(app, daemon), daemon), token, port), app

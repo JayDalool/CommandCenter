@@ -74,6 +74,10 @@ DEFAULTS = {
     # each heartbeat's signature, recorded with the reasons Phase 2 would refuse it. Off until Jay sets it true; read
     # at start. Records only: it refuses nothing.
     "phase2_node_shadow": False,
+    # Phase 2 shadow Capability Broker (ccd/broker.py; Jay 2026-10-25): for each action that exercises authority
+    # (merge, Go Live approval, deploy request/record, pane input, repository writes, worktree removal), the eight
+    # checks and whether Phase 2 would refuse it. Off until Jay sets it true; read at start. Records only.
+    "phase2_broker_shadow": False,
 }
 
 # The only project fields that may leave the server.
