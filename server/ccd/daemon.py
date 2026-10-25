@@ -30,6 +30,7 @@ from . import inbox as inbox_mod
 from . import audit as audit_mod
 from . import identity as identity_mod
 from . import nodekeys as nodekeys_mod
+from . import broker as broker_mod
 from . import meter as meter_mod
 from . import budgets as budgets_mod
 from . import onboarding as onboarding_mod
@@ -340,6 +341,10 @@ class Daemon:
         # Phase 2 shadow identity record (Jay 2026-10-25). Off unless config.json says "phase2_identity_shadow": true;
         # read once, here. Records only: it never refuses a write.
         self.identity_shadow_on = isinstance(cfg, dict) and cfg.get("phase2_identity_shadow") is True
+        # Phase 2 shadow step 3 (Jay 2026-10-25): the Capability Broker, recorded only (ccd/broker.py). Off unless
+        # config.json says "phase2_broker_shadow": true; read once, here. It never refuses or changes an action.
+        self.broker_shadow_on = isinstance(cfg, dict) and cfg.get("phase2_broker_shadow") is True
+        self.broker = broker_mod.Shadow(tasks.db) if has_db else None
         self.onboarding = onboarding_mod.Onboarding(tasks.db, enabled=self.onboarding_on) if has_db else None
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
         self.github_fn = github_fn or sources.github
@@ -681,6 +686,7 @@ class Daemon:
         changed = False
         for key, project, path, outcome, reason in results:
             if outcome == "removed":
+                self._broker("worktree.remove", project, f"{key}: {path}")
                 kept.pop(key, None)
                 changed = True
                 gone = os.path.normpath(path)
@@ -1026,6 +1032,7 @@ class Daemon:
                         if nightshift_mod.input_is_empty(screen["text"]) is not True:
                             self.night.skipped(key, "input line not empty or not recognised")
                             continue
+                        self._broker("pane.input", key, f"night-shift nudge -> pane {agent['pane_id']}")
                         await self.herdr.prompt(agent["pane_id"], self.night.nudge_text(key))
                         self.night.nudged(key)               # counted only once it was delivered
                         self._event("action", "action.night_shift", f"night shift reminder → {coordinators.canonical(proj)}",
@@ -1072,6 +1079,7 @@ class Daemon:
                     agent = await self._fresh_agent(r["paneId"])
                     # The message only, never Esc: an interrupt can leave a half-finished repository operation.
                     if agent["status"] != "blocked":
+                        self._broker("pane.input", project, f"night-shift end -> pane {agent['pane_id']}")
                         await self.herdr.prompt(agent["pane_id"], nightshift_mod.END_TEXT.format(project=project))
                         told = True
                 except (ActionError, OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
@@ -1521,8 +1529,10 @@ class Daemon:
         elif op == "stale":
             r = self._wrap(pl.stale, key, body.get("reason"), actor)
         elif op == "deploy-request":
+            self._broker_ticket("deploy.request", key, body.get("env"))
             r = self._wrap(pl.deploy_request, key, body.get("env"), body.get("what"), body.get("verification"), actor)
         else:
+            self._broker_ticket("deploy.record", key, body.get("env"))
             r = self._wrap(pl.deployed, key, body.get("env"), body.get("result"), body.get("evidence"), actor)
         self._pipeline_result(*r)
         return self.task_work(key)
@@ -1715,6 +1725,9 @@ class Daemon:
           3. the worktree's writer is released; the worktree itself is never deleted here
           4. the final task.md / workflow.md are written
         The project coordinator is never touched."""
+        # Runs as its own task (_closed_soon), which copied the context of the request that closed the ticket: what
+        # it does later is ccd acting on its own, so the Broker record must not credit that request (task-local).
+        broker_mod.REQUEST.set(None)
         names, claude = [], None
         if not teardown:
             claude = "left running: closed without Developer Unlock"
@@ -2019,6 +2032,74 @@ class Daemon:
         raise ActionError(400, f"unknown onboarding action {op}")
 
     # ---------- audit trail, actor identity, metering (PR 7) ----------
+
+    # ---------- Capability Broker, shadow (Phase 2 step 3) ----------
+
+    def _broker(self, verb, project=None, target="", approval=None):
+        """Record what the Broker would decide for this action. Called just before the action happens; never raises,
+        never refuses, never changes the action. Does nothing while phase2_broker_shadow is off."""
+        if not self.broker_shadow_on or self.broker is None:
+            return
+        try:
+            req = broker_mod.REQUEST.get()
+            if req is None:
+                who, dev = broker_mod.system_who(), False
+            else:
+                tok = req.get("token")
+                hit = self.actor_tokens.lookup(tok) if tok and self.actor_tokens else None
+                dev = bool(req.get("developer"))
+                who = identity_mod.resolve(req.get("asserted"), dev, hit, project)
+            if project is None:
+                profile = None
+            elif registry.paused(project):
+                profile = "paused"
+            else:
+                profile = "ok" if self.policy.profile(project) is not None else "missing"
+            facts = dict(approval or {}, developer=dev)
+            self.broker.observe(verb, project, target, who, broker_mod.check(verb, who, project, profile, facts))
+        except Exception:  # noqa: BLE001 — the shadow record must never touch the action
+            if self.broker is not None:
+                self.broker.errors += 1
+
+    def _broker_ticket(self, verb, key, env):
+        """_broker for a pipeline deploy step on ticket `key`; the approval term reads the ticket's deploy approval."""
+        if not self.broker_shadow_on:
+            return
+        try:
+            project = self.tasks.get(key)["project"] if self.tasks.exists(key) else None
+            approved = bool(((self.pipeline.work(key) or {}).get("deploy") or {}).get("approvedAt")) if project else False
+        except Exception:  # noqa: BLE001
+            project, approved = None, False
+        self._broker(verb, project, f"{str(key)[:20]} env={str(env)[:20]}", {"deployApproved": approved})
+
+    def _broker_engine_merge(self, project, ticket, work, pr):
+        """The Autonomy Engine's merge verdict for the PR ccd is about to merge, for the Broker's approval term. Read
+        only; None when it cannot be worked out."""
+        if not self.broker_shadow_on:
+            return None
+        try:
+            rollup = pr.get("statusCheckRollup")
+            facts = autonomy.facts_of(ticket, work, {
+                "files": pr.get("files"), "additions": pr.get("additions"), "deletions": pr.get("deletions"),
+                "ci": merge_policy.ci_state(rollup), "ci_passed": autonomy.ci_passed(rollup), "draft": pr.get("isDraft"),
+                "mergeable": pr.get("mergeable"), "base": pr.get("baseRefName"),
+                "cross_repo": pr.get("isCrossRepository"), "pr_head": pr.get("headRefOid"), "state": pr.get("state")})
+            return autonomy.evaluate("merge", self.policy.profile(project), facts).get("outcome")
+        except Exception:  # noqa: BLE001
+            return None
+
+    def broker_state(self, full=False, limit=50):
+        """GET /api/broker: what the Broker would have decided. Read-only."""
+        if self.broker is None:
+            return {"available": False, "brokerShadow": self.broker_shadow_on}
+        try:
+            return {"available": True, "brokerShadow": self.broker_shadow_on, "summary": self.broker.summary(),
+                    "chain": self.broker.verify(full=full), "recent": self.broker.recent(limit),
+                    "errors": self.broker.errors, "terms": list(broker_mod.TERMS), "enforced": False}
+        except Exception as e:  # noqa: BLE001
+            log.warning(json.dumps({"msg": "broker shadow read failed", "error": repr(e)[:200]}))
+            return {"available": True, "brokerShadow": self.broker_shadow_on, "error": "the Broker record could not "
+                    "be read", "errors": self.broker.errors, "enforced": False}
 
     def audit_write(self, method, path, status, claimed, body, developer, actor_token, asserted=None):
         """AuditTrail (api.py) after every write that passed Guard. `developer`: whether the request's Developer
@@ -2522,6 +2603,8 @@ class Daemon:
             return
         if self._auto_merge_stopped():
             return
+        self._broker("pr.merge", project, f"{pr_ref} @ {head[:12]} ({key})",
+                     {"engine": self._broker_engine_merge(project, t2, w2, pr)})
         code, out, err = await asyncio.to_thread(self.gh_cli, ["gh", "pr", "merge", number, "--repo", repo, "--merge",
                                                               "--match-head-commit", head])
         if code != 0:
@@ -2675,6 +2758,7 @@ class Daemon:
         # Audit first. The answer's text is not stored, only its length.
         self._event("action", "action.answer", f"answer sent to {agent.get('agent_name') or pid}",
                     project=agent.get("project"), agent_id=pid, data={"count": len(text)})
+        self._broker("pane.input", agent.get("project"), f"answer -> pane {pid}")
         try:
             await self.herdr.send_answer(pid, text)
         except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
@@ -2701,6 +2785,7 @@ class Daemon:
         pid = agent["pane_id"]
         self._event("action", "action.prompt", f"message sent to {agent.get('agent_name') or pid}",
                     project=agent.get("project"), agent_id=pid, data={"count": len(text)})
+        self._broker("pane.input", agent.get("project"), f"prompt -> pane {pid}")
         try:
             await self.herdr.prompt(pid, text)
         except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
@@ -2717,6 +2802,7 @@ class Daemon:
         pid = agent["pane_id"]
         self._event("action", "action.key", f"{k} sent to {agent.get('agent_name') or pid}",
                     project=agent.get("project"), agent_id=pid, data={"key": k})
+        self._broker("pane.input", agent.get("project"), f"key {k} -> pane {pid}")
         try:
             await self.herdr.call("pane.send_keys", {"pane_id": pid, "keys": [k]})
         except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
@@ -2825,6 +2911,7 @@ class Daemon:
             raise ActionError(409, f"{name} is {agent['status']}; the {what.replace('-', ' ')} goes only to an idle coordinator")
         self._event("action", f"action.{what.replace('-', '_')}", f"{what.replace('-', ' ')} → {name}", project=project,
                     agent_id=agent["pane_id"], data={"kind": what.replace("-", "_"), **data})
+        self._broker("pane.input", project, f"{what} -> coordinator pane {agent['pane_id']}")
         try:
             await self.herdr.prompt(agent["pane_id"], text)
         except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
@@ -3003,6 +3090,8 @@ class Daemon:
         lines = "\n".join(f"{i}. {r['key']} — {r['pr']} — head {r['head'][:12]} — {r['title']}"
                            for i, r in enumerate(ready, 1))
         text = MERGE_TEMPLATE.format(project=project, items=lines)
+        for r in ready:
+            self._broker("pr.merge", project, f"{r['pr']} @ {r['head'][:12]} ({r['key']}; Merge, by the coordinator)")
         name = await self._to_coordinator(project, "merge", text, {"keys": [r["key"] for r in ready]})
         errors = []
         for r in ready:
@@ -3043,6 +3132,7 @@ class Daemon:
         pending = [k for k in shown if k in open_now]
         skipped = [{"key": k, "reason": "its live-deploy gate is no longer open"} for k in shown if k not in open_now]
         text = GO_LIVE_TEMPLATE.format(project=project, approved=", ".join(pending) or "none")
+        self._broker("go_live.approve", project, ("Go Live: " + (", ".join(pending) or "none"))[:200])
         # The coordinator must be reachable before anything is approved: no approval without the message. Every
         # check that can refuse (409) runs before it; after it, a ticket that cannot be approved (its gate moved
         # since the page loaded) is reported in `errors` and never undoes the others.
@@ -3167,6 +3257,7 @@ class Daemon:
         text = DISPATCH_TEMPLATE.format(verb=verb, task=task, plan=plan, note=note.replace('"', "'"))
         self._event("action", "action.dispatch", f"{verb} {task} → {name}", project=project, agent_id=agent["pane_id"],
                     ref=task, data={"kind": verb})
+        self._broker("pane.input", project, f"dispatch {verb} {task} -> coordinator pane {agent['pane_id']}")
         try:
             await self.herdr.prompt(agent["pane_id"], text)
         except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:

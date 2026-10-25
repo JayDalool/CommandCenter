@@ -1,17 +1,17 @@
-"""Migration safety for tasks.db: a rehearsal of the newest migration (vN = tasks.SCHEMA_VERSION, now v12) on a copy,
+"""Migration safety for tasks.db: a rehearsal of the newest migration (vN = tasks.SCHEMA_VERSION, now v13) on a copy,
 and the way back. Never imported by the daemon; it adds no route.
 
     python -m ccd.migration_safety drill --snapshot COPY.db --out DIR [--old-ccd OLD_CHECKOUT/server]
                                          [--redact --label "where the snapshot came from"] [--clean]
-    python -m ccd.migration_safety rollback --db tasks.db --to 11 --backup-dir DIR       (stop ccd first)
+    python -m ccd.migration_safety rollback --db tasks.db --to 12 --backup-dir DIR       (stop ccd first)
     python -m ccd.migration_safety export-onboarding --db tasks.db --out FILE.json       (read-only; ccd may run)
 
 drill     Works only on copies it makes inside DIR. The snapshot is opened read-only and never written; make it with
           `sqlite3 tasks.db ".backup COPY.db"`. Writes drill.json and drill.md, and exits 0 when every check passes,
           1 when one fails, 2 when it cannot run. The checks (N = the newest migration):
             backup    SQLite's online backup of the snapshot holds exactly the same rows in every table
-            upgrade   vN-1 -> vN adds exactly the tables migration N adds (v12: node_keys, node_observations,
-                      node_nonces) and their indexes and triggers; every existing
+            upgrade   vN-1 -> vN adds exactly the tables migration N adds (v13: broker_observations) and
+                      its indexes and triggers; every existing
                       table, row, index and trigger is unchanged; integrity, foreign keys and the audit hash chain
                       still check; reopening applies nothing; ccd reads the upgraded file
             old ccd   a vN-1 ccd refuses the vN file and changes nothing (in process; with --old-ccd, also a real
@@ -30,7 +30,7 @@ drill     Works only on copies it makes inside DIR. The snapshot is opened read-
           An older snapshot is lifted to the drill's starting version on the copy first, and the report says so.
 export-onboarding  Writes every row of the four onboarding tables (migration 10) to a JSON file with its SHA-256, through a
           read-only connection, so the records are kept outside the database before a backup is restored over them
-          (docs/runbooks/tasks-db-v10-rollback.md; v11 and v12 have their own runbooks). It changes nothing.
+          (docs/runbooks/tasks-db-v10-rollback.md; v11, v12 and v13 have their own runbooks). It changes nothing.
 rollback  Takes a backup with SQLite's backup API, then runs tasks.downgrade(): it drops only tables a migration added,
           only when they are empty, in one transaction, and checks the result is exactly the older schema.
 """
@@ -58,6 +58,8 @@ HISTORY_ROW = {
          "VALUES ('agent', 'agent:drill', ?, 0, 'jay', 1)", ("0" * 64,)),
     12: ("INSERT INTO node_observations (at, node_id, kind, outcome, signed, verified, would_refuse, prev_sha, sha) "
          "VALUES (0, 'drill', 'heartbeat', 200, 0, 0, 1, ?, 'drill')", ("0" * 64,)),
+    13: ("INSERT INTO broker_observations (at, verb, target, actor, via, terms, would_refuse, version, prev_sha, sha) "
+         "VALUES (0, 'pr.merge', 'drill', 'system:ccd', 'system', '{}', 0, 1, ?, 'drill')", ("0" * 64,)),
 }
 # The areas Jay asked to see (2026-10-23), in report order.
 AREAS = (("backup", "Backup"), ("upgrade", f"v{FROM} -> v{TO} migration and schema integrity"),
