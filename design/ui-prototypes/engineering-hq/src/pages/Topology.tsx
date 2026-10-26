@@ -48,7 +48,7 @@ function NodeCard({ n, sel, dim, hot, expanded, onSel, onHover, onToggle }: {
     const p = project(n.ref!);
     return <button type="button" {...common} aria-label="CommandCenter, control plane directed by Jay">
       <span className="gn-row"><ProjIcon k={p.key} size={42} /><span className="gn-body"><b className="lg">{p.name}</b><small>{p.version} · {p.env}</small></span>
-        <Spark data={SPARK.a} color={p.color} w={70} h={24} /></span>
+        <Spark data={SPARK.a} color={p.color} w={50} h={24} /></span>
       <span className="gn-row gn-mid"><span className={`pres t-${healthOf(p).tone}`}><i /><b>{healthOf(p).label}</b></span><span className="gn-sep" />
         <span className="root-jay"><span className="av av-jay" style={{ width: 22, height: 22, fontSize: 11 }}>J</span>Directed by <b>Jay</b></span></span>
       <span className="gn-row gn-foot">{roster(p.key).length ? <AvatarStack ids={roster(p.key).slice(0, 3)} size={20} /> : <Icon name="lock" size={14} />}<span>{roster(p.key).length ? plural(roster(p.key).length, "agent") : "No agents"}</span>

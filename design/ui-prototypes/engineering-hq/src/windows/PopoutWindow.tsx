@@ -33,7 +33,7 @@ export function PopoutWindow({ render }: { render: (id: string) => ReactNode }) 
       <Logo size={24} /><span className="pop-kind"><Icon name="popout" size={14} /> Detached</span>
       {def.color && <i className="tab-dot" style={{ background: def.color }} />}<b>{def.title}</b>{def.sub && <span className="muted">· {def.sub}</span>}
       <span className="sp" /><Demo label="Prototype" />
-      <button type="button" className="btn btn-sm" onClick={() => { returnHere(id); window.close(); }} title="Put this view back in the main window"><Icon name="returnin" size={15} /> Return to main window</button>
+      <button type="button" className="btn btn-sm" onClick={() => { returnHere(id); window.close(); }} title="Put this view back in the main window" aria-label="Return to main window"><Icon name="returnin" size={15} /><span className="btn-text"> Return to main window</span></button>
     </header>
     {orphan && <div className="pop-orphan" role="status"><Icon name="info" size={16} /> The main CommandCenter window is closed. This window keeps working.
       <button type="button" className="btn btn-sm" onClick={becomeMain}>Make this the main window</button></div>}

@@ -115,7 +115,7 @@ export function Teams() {
   return <div className="page page-teams">
     <a className="back" href="#/teams"><Icon name="arrowl" size={15} /> Teams</a>
     <header className="team-head">
-      <h1>{p.name} <em style={{ color: "#a98bff" }}>Team</em></h1>
+      <h1>{p.name} <em>Team</em></h1>
       <span className={cx("pill-lg", `t-${h.tone}`)}><Icon name={p.health === "onboarding" ? "eye" : "pulse"} size={17} /> {h.label}</span>
       <span className="pill-lg t-idle"><Icon name="branch" size={17} /> {p.env}</span>
       <span className="sp" />

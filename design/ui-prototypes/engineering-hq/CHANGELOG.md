@@ -3,6 +3,36 @@
 Each version is a commit on the draft branch `claude/project-thread-gs2u2h` (PR #64). Every gallery and package
 names the commit it was captured from. Visual requests and their approval state are tracked in `DESIGN_CHANGES.md`.
 
+## 2026-10-26 · Overnight QA: accessibility and polish (V12, proposed)
+
+A new QA sweep (`e2e/qa.mjs`) opened every gallery state and pop-out in Dark and Light at 1920, 1366, 1280 and 390 px
+(600 checks), Tab-walked 14 pages in both themes, and checked Reduce Motion and the System theme. It found no crash,
+console error, sideways scroll on a page, theme leak or motion problem. The first run reported 55 distinct findings;
+after fixes, a second run with a stricter focus check reported 9, and the third none. An independent review then
+found one more defect the sweep could not see, one regression in tonight's focus fix, and gaps in the sweep; all are
+fixed. In total 19 defects are fixed (see V12):
+
+- **Contrast.** Count badges, the tab-strip hint, code line numbers, Light status text (idle, green, amber, red,
+  muted), topology edge labels in Light (SamVision green was 1.7:1 on white), the Teams heading accent in Light, the
+  current lifecycle step and the step numbers in a task's Plan tab all reach 4.5:1 (3:1 for large text). In Dark,
+  only the badge red, the tab-strip hint, the code line numbers and the Plan step numbers change.
+- **Focus.** Text fields and selects lost their focus ring to the later field style (all fields in Light, text
+  fields in Dark); the Topology canvas and the Messages search and message box had none. All show one now. Fields
+  with an error keep their red border while focused.
+- **Names.** In the 76 px rail the page links and the logo had no name once focused (the labels were hidden from
+  screen readers, and the tooltip takes over `title` on focus). The labels are now hidden only visually. The
+  conversation header's icon buttons had no name below 1500 px.
+- **Pop-outs.** At 520 px the pop-out header pushed the window 20 px sideways and cut off Return to main window. The
+  button shows only its icon in narrow windows, with its name kept for screen readers; a long title ends in "…".
+- **Small things.** Timeline bars end with an ellipsis at 1366 and 1280; sparkline gradients get unique ids; the
+  CommandCenter node's name no longer runs under its sparkline; truncated titles in Needs Your Attention and the
+  conversation header show the full text on hover.
+- **The sweep itself.** It measures any CSS colour, including `color-mix` results, reports a colour it cannot
+  measure instead of skipping it, applies 4.5:1 exactly, reads focus rings with transitions settled, and records a
+  pass that fails instead of stopping.
+
+Tests: 103 unit tests, 27 browser checks, and a QA sweep with no findings (600 page checks, 28 keyboard walks).
+
 ## 2026-10-25 · Visual sign-off and clearer light-mode graph lines
 
 Jay approved V7 to V10 (light theme, phone tab bar and More sheet, 1920×1080 layouts, spacing and readability

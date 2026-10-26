@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { agent, project, task, PRESENCE_LABEL, type Presence, type Stage } from "../data/seed";
 import { Icon, type IconId } from "./Icon";
 
@@ -54,7 +54,7 @@ export function Spark({ data, color, w = 90, h = 26, area = true }: { data: numb
   const max = Math.max(...data), min = Math.min(...data);
   const pts = data.map((v, i) => [(i / (data.length - 1)) * w, h - 2 - ((v - min) / (max - min || 1)) * (h - 4)]);
   const line = pts.map((p) => p.join(",")).join(" ");
-  const id = `sg${color.replace(/[^a-z0-9]/gi, "")}${w}`;
+  const id = `sg${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   return <svg className="spark" width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden>
     <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={color} stopOpacity=".35" /><stop offset="1" stopColor={color} stopOpacity="0" /></linearGradient></defs>
     {area && <polygon points={`0,${h} ${line} ${w},${h}`} fill={`url(#${id})`} />}

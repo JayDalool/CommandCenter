@@ -72,6 +72,25 @@ node e2e/run.mjs                        # 27 real-browser checks (pop-outs, menu
 The browser checks load Playwright from the global npm install, or from `PLAYWRIGHT_MODULE`, so the prototype does
 not depend on it.
 
+## QA sweep
+
+```bash
+npm run build && npm run preview &
+node e2e/qa.mjs                                   # every gallery state and pop-out, Dark and Light, 4 sizes (600 checks)
+node e2e/qa.mjs http://127.0.0.1:5181/ e2e/out/qa.json office,decisions   # only these states
+QA_THEMES=light QA_VP=1366 node e2e/qa.mjs        # narrow the run
+node e2e/qa-shot.mjs topology light 1366 ".edge-tag" /tmp/shot.png   # look closer at one finding
+```
+
+For each state the sweep checks, in a real browser: page and console errors, sideways scroll, text cut off with no
+ellipsis, text that runs out of its box, WCAG AA contrast (4.5:1, or 3:1 for large text, for any CSS colour including
+`color-mix`; text over a gradient or image is skipped), a dark slab in Light or a
+light slab in Dark, controls with no accessible name, duplicate ids and positive tabindex. It then Tab-walks 14 pages
+in both themes (every stop must be on screen and show a focus ring), checks that nothing keeps animating under
+Reduce Motion, and checks that System follows the OS live. It exits 1 when anything is found and writes a JSON report.
+Ellipsis truncation at 1920 is listed for review, not counted as a failure. The states come from `e2e/states.mjs`,
+shared with the gallery capture.
+
 ## Rebuild the screenshot gallery
 
 ```bash

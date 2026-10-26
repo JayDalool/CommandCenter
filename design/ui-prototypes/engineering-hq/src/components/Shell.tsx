@@ -73,10 +73,10 @@ export function Sidebar() {
     <nav className="nav" aria-label="Pages">{NAV.map((n) => <NavItem key={n.page} n={n} current={cur === n.page} />)}</nav>
     <div className="side-fill" />
     <nav className="nav nav-low" aria-label="More">
-      <div className={cx("nav-item", cur === "approvals" && "is-current")}><a href="#/approvals" aria-current={cur === "approvals" ? "page" : undefined}><Icon name="check" size={21} /><span className="nav-label">Approvals</span>{pending > 0 && <span className="nav-badge">{pending}</span>}</a></div>
-      <div className={cx("nav-item", cur === "budgets" && "is-current")}><a href="#/budgets" aria-current={cur === "budgets" ? "page" : undefined}><Icon name="receipt" size={21} /><span className="nav-label">Budgets</span></a></div>
-      <div className={cx("nav-item", (cur === "settings" && route.id !== "help" || cur === "more") && "is-current")}><a href="#/settings" aria-current={cur === "settings" && route.id !== "help" ? "page" : undefined}><Icon name="gear" size={21} /><span className="nav-label">Settings &amp; more</span></a></div>
-      <div className={cx("nav-item", cur === "settings" && route.id === "help" && "is-current")}><a href="#/settings/help" aria-current={cur === "settings" && route.id === "help" ? "page" : undefined}><Icon name="help" size={21} /><span className="nav-label">Help &amp; Support</span></a></div>
+      <div className={cx("nav-item", cur === "approvals" && "is-current")}><a href="#/approvals" title="Approvals" aria-current={cur === "approvals" ? "page" : undefined}><Icon name="check" size={21} /><span className="nav-label">Approvals</span>{pending > 0 && <span className="nav-badge">{pending}</span>}</a></div>
+      <div className={cx("nav-item", cur === "budgets" && "is-current")}><a href="#/budgets" title="Budgets" aria-current={cur === "budgets" ? "page" : undefined}><Icon name="receipt" size={21} /><span className="nav-label">Budgets</span></a></div>
+      <div className={cx("nav-item", (cur === "settings" && route.id !== "help" || cur === "more") && "is-current")}><a href="#/settings" title="Settings &amp; more" aria-current={cur === "settings" && route.id !== "help" ? "page" : undefined}><Icon name="gear" size={21} /><span className="nav-label">Settings &amp; more</span></a></div>
+      <div className={cx("nav-item", cur === "settings" && route.id === "help" && "is-current")}><a href="#/settings/help" title="Help &amp; Support" aria-current={cur === "settings" && route.id === "help" ? "page" : undefined}><Icon name="help" size={21} /><span className="nav-label">Help &amp; Support</span></a></div>
     </nav>
     <div className="side-proto"><b>Design prototype</b><span>Mock data · not connected to ccd</span></div>
   </aside>;

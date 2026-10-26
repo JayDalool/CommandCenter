@@ -22,7 +22,8 @@ HQ uses its own attribute, `data-hq-theme`, so a theme attribute set by a host p
 The choice is a shared store (`hq.theme`), so every pop-out window follows it. An inline script in `index.html`
 applies it before the first paint. `?theme=light|dark|system` overrides it for a review link. The terminal and
 the Slack phone preview stay dark in both themes. Project, agent and status colours keep their hue in light; the
-status colours are darkened so text keeps at least 4.5:1 contrast on white panels and on the page background.
+status colours are darkened so text keeps at least 4.5:1 contrast on white panels, on the page background and on
+their own tinted pills (checked by `e2e/qa.mjs`).
 
 ## Colour
 
@@ -40,19 +41,20 @@ status colours are darkened so text keeps at least 4.5:1 contrast on white panel
 | `--line-2` | `#243154` | `#d0d4e2` | Stronger borders, inputs |
 | `--text` | `#e9edf8` | `#151a2d` | Primary text |
 | `--text-2` | `#b4bdd6` | `#434a63` | Secondary text |
-| `--muted` | `#7c88a6` | `#606881` | Captions, metadata |
+| `--muted` | `#7c88a6` | `#5b637c` | Captions, metadata |
 | `--faint` | `#4e5a78` | `#9aa0b4` | Disabled, chart "other" |
 | `--accent` | `#6d5cff` | `#5a48f5` | Primary actions, current item |
 | `--accent-2` | `#3f7bff` | `#2f6bf0` | Gradient partner of the accent |
 | `--accent-soft` | `rgba(109, 92, 255, .16)` | `rgba(90, 72, 245, .1)` | Selected backgrounds |
 | `--focus` | `#8fa2ff` | `#5b63f0` | Focus ring |
-| `--ok` | `#2fe08c` | `#107a48` | Healthy, passed, approved |
-| `--warn` | `#ffb020` | `#a35f00` | Warning, needs input |
+| `--ok` | `#2fe08c` | `#0e7243` | Healthy, passed, approved |
+| `--warn` | `#ffb020` | `#985800` | Warning, needs input |
 | `--bad` | `#ff4f6d` | `#d2273f` | Blocked, failed, high risk |
 | `--info` | `#58a6ff` | `#1c66d0` | Information |
 | `--violet` | `#a77bff` | `#7040dc` | Review, design |
 | `--pink` | `#ff4fa0` | `#c5246f` | UI testing |
-| `--idle` | `#8a95b0` | `#6f7891` | Paused, unknown, not connected |
+| `--idle` | `#8a95b0` | `#5f6780` | Paused, unknown, not connected |
+| `--badge` | `#dc2f4c` | `#d2273f` | Count badges (white numbers keep 4.5:1) |
 
 ### Supporting tokens
 
@@ -68,7 +70,8 @@ Every other colour in `hq.css` is a token too (119 of them), grouped in the `:ro
 
 Graph connections keep their project colour in both themes. In light, each line is drawn in its colour mixed
 with 22% navy ink (`color-mix(in oklab, var(--c) 78%, #10142c)`), about 0.3 to 0.4 px thicker, with the glow
-at 14% (V11). Each edge passes its colour to CSS as `--c`.
+at 14% (V11). Each edge passes its colour to CSS as `--c`. Edge labels are text, so in light they mix the colour
+with 44% navy (`color-mix(in oklab, var(--c) 56%, #10142c)`), which keeps every project colour at 4.5:1 on white (V12).
 
 ### Projects (concept-art palette, approved 2026-10-22, confirmed 2026-10-25)
 

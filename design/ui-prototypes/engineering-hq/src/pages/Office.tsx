@@ -123,7 +123,7 @@ export function Office() {
       <div className="office-right">
         <Panel icon="info" iconTone="bad" title="Needs Your Attention" action={<ViewAll onClick={() => go("decisions")} />}>
           <ul className="attn">{ATTN.map((a) => <li key={a.k}><button type="button" onClick={a.to}><span className={`attn-ico t-${a.tone}`}><Icon name={a.icon} size={18} /></span>
-            <span className="attn-body"><span className="ellip"><TaskKey k={a.k} /> {a.t}</span><small>{a.s}</small></span><Pill tone={a.pill[1]}>{a.pill[0]}</Pill><Icon name="chevron" size={16} /></button></li>)}</ul>
+            <span className="attn-body"><span className="ellip" title={`${a.k} ${a.t}`}><TaskKey k={a.k} /> {a.t}</span><small>{a.s}</small></span><Pill tone={a.pill[1]}>{a.pill[0]}</Pill><Icon name="chevron" size={16} /></button></li>)}</ul>
         </Panel>
         <Panel icon="message" iconTone="violet" title="Recent Updates from Leads" action={<ViewAll onClick={() => go("messages")} />}>
           <ul className="updates">{UPDATES.slice(0, 3).map((u) => <li key={u.a + u.at}><Avatar id={u.a} size={34} /><div><p><b>{agent(u.a).name}</b><small>{u.role} · <span style={{ color: project(u.p).color }}>{project(u.p).name}</span></small><time>{u.at}</time></p><span>{u.t}</span></div></li>)}</ul>

@@ -89,12 +89,12 @@ export function Thread({ conv, standalone }: { conv: string; standalone?: boolea
       {standalone && <button type="button" className="icon-btn" aria-label="Back to Messages" onClick={() => go("messages", conv)}><Icon name="arrowl" size={18} /></button>}
       {a ? <button type="button" className="av-btn" onClick={() => openAgent(a.id)} aria-label={`${a.name} details`}><Avatar id={a.id} size={44} /></button>
         : c.kind === "slack" ? <span className="slack-ico is-sm"><Icon name="slack" size={22} /></span> : <ProjIcon k={c.project ?? "samvision"} size={40} icon="users" />}
-      <div className="thread-title"><h2>{c.title}{a && <span className="muted"> · {a.role}</span>}{c.kind === "dm" && <span className="private-chip" title="Only you and this agent's sessions see this conversation"><Icon name="lock" size={12} /> Private</span>}</h2>
+      <div className="thread-title"><h2 title={a ? `${c.title} · ${a.role}` : c.title}>{c.title}{a && <span className="muted"> · {a.role}</span>}{c.kind === "dm" && <span className="private-chip" title="Only you and this agent's sessions see this conversation"><Icon name="lock" size={12} /> Private</span>}</h2>
         <p>{c.project && <span className="am-proj"><i style={{ background: project(c.project).color }} />{project(c.project).name} {c.kind === "team" ? "team channel" : "team"}</span>}{!c.project && c.sub}</p>
         {a && <p className="thread-agent"><AgentStatus v={v} detail /><AgentMeta v={v} project={false} /></p>}</div>
       <span className="sp" />
-      {c.kind !== "slack" && <><button type="button" className="btn btn-outline" onClick={() => go("teams", c.project)}><Icon name="users" size={16} /><span className="btn-text">Open Team Space</span></button>
-        <button type="button" className="btn btn-outline" onClick={() => go("decisions")} title="Formal decisions are recorded in the Decision Room, not by chat"><Icon name="shield" size={16} /><span className="btn-text">Decision Room</span></button></>}
+      {c.kind !== "slack" && <><button type="button" className="btn btn-outline" onClick={() => go("teams", c.project)} aria-label="Open Team Space" title="Open Team Space"><Icon name="users" size={16} /><span className="btn-text">Open Team Space</span></button>
+        <button type="button" className="btn btn-outline" onClick={() => go("decisions")} aria-label="Decision Room" title="Formal decisions are recorded in the Decision Room, not by chat"><Icon name="shield" size={16} /><span className="btn-text">Decision Room</span></button></>}
       <PopButton id={`dm:${conv}`} />
     </header>
     <div className="thread-scroll" data-testid="thread-scroll">
