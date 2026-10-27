@@ -1,0 +1,89 @@
+name: web-e2e
+
+# Classic in a real browser (web/app/e2e), on a GitHub-hosted runner: a fresh VM per job, never the self-hosted
+# runner. Read-only, no secrets. Every route must load clean in Dark and Light, and on a pull request every screen
+# must look exactly as it does on the base branch. See web/app/e2e/README.md.
+on:
+  pull_request:
+    branches: [main]
+    # labeled/unlabeled: adding or removing classic-ui-change re-runs this check (only this workflow, never ci.yml).
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths: ["web/app/**", "server/ccd/api.py", ".github/workflows/web-e2e.yml"]
+  push:
+    branches: [main]
+    paths: ["web/app/**", "server/ccd/api.py", ".github/workflows/web-e2e.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: web/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          # A pull request is checked out as its merge commit; its first parent is the base it is compared with.
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/app/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps --only-shell chromium
+      - run: npm run build
+      - name: every route loads clean
+        run: npm run test:e2e -- --grep-invert @parity
+
+      - name: build the base branch
+        if: github.event_name == 'pull_request'
+        working-directory: .
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/base" HEAD^1
+          cd "$RUNNER_TEMP/base/web/app"
+          npm ci
+          npm run build
+      - name: screenshots of the base build
+        if: github.event_name == 'pull_request'
+        env:
+          E2E_PARITY: "1"
+          E2E_DIST: ${{ runner.temp }}/base/web/app/dist
+          E2E_REPORT: playwright-report-base
+          E2E_OUT: test-results-base
+        run: npx playwright test --grep @parity --update-snapshots=all
+      - name: Classic looks unchanged
+        id: parity
+        if: github.event_name == 'pull_request'
+        # A pull request labelled classic-ui-change means to change how Classic looks: the comparison still runs and
+        # its differences are uploaded for review, but they do not fail the check.
+        continue-on-error: ${{ contains(github.event.pull_request.labels.*.name, 'classic-ui-change') }}
+        env:
+          E2E_PARITY: "1"
+          E2E_REPORT: playwright-report-parity
+          E2E_OUT: test-results-parity
+        run: npx playwright test --grep @parity
+      - name: note intended Classic changes
+        if: steps.parity.outcome == 'failure' && steps.parity.conclusion == 'success'
+        run: |
+          echo "Classic looks different from the base branch, as this pull request's classic-ui-change label says it" \
+            "should. The changed screens are in the playwright-report artifact (expected, actual and diff images)." >> "$GITHUB_STEP_SUMMARY"
+
+      - if: failure() || steps.parity.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            web/app/playwright-report*/
+            web/app/test-results*/
+          retention-days: 7
