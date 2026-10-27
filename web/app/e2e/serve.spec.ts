@@ -1,6 +1,7 @@
 // The test server answers like ccd's UiFiles (server/ccd/api.py): its headers on every response, a hashed asset
 // cached for a year, everything else revalidated, a plain 404 (never the app shell) for a missing file, and nothing
-// but GET and HEAD. tests/e2e-serve.test.ts checks the header values themselves against api.py.
+// but GET and HEAD (other methods get Guard's plain 405). tests/e2e-serve.test.ts checks the header values
+// themselves against api.py.
 import { test, expect } from "@playwright/test";
 import { csp } from "./serve.mjs";
 import { env } from "./env";
@@ -47,9 +48,23 @@ test("there is no API without a fixture, and nothing but GET and HEAD", async ({
   expect(api.status()).toBe(404);
   expect(await api.json()).toEqual({ ok: false, error: "no fixture for this request" });
   for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+    // As ccd's Guard answers it, before the UI's own headers apply.
     const res = await request.fetch("/", { method });
     expect(res.status(), method).toBe(405);
-    expect(headersOf(res), method).toEqual(STRICT);
+    expect(await res.json(), method).toEqual({ ok: false, error: "the UI is read-only files" });
+    expect(res.headers()["cache-control"], method).toBe("no-store");
+    expect(res.headers()["x-content-type-options"], method).toBe("nosniff");
+    expect(res.headers()["content-security-policy"], method).toBeUndefined();
   }
   expect((await request.head("/")).status()).toBe(200);
+});
+
+test("a path with a NUL byte or bad escaping is refused, and the server keeps serving", async ({ request }) => {
+  for (const path of ["/%00", "/assets/%00.js", "/%E0%A4%A"]) {
+    const res = await request.get(path);
+    expect(res.status(), path).toBe(400);
+    expect(headersOf(res), path).toEqual(STRICT);
+    expect(res.headers()["cache-control"], path).toBe("no-store");
+  }
+  expect((await request.get("/")).status()).toBe(200);
 });

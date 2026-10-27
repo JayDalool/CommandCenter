@@ -19,9 +19,11 @@ export default defineConfig({
   workers: CI ? 2 : undefined,
   reporter: [[CI ? "github" : "list"], ["html", { open: "never", outputFolder: env.E2E_REPORT ?? "playwright-report" }]],
   expect: {
-    // Every pixel must match. The per-pixel threshold only absorbs Chromium's rasterising noise: a colour one step
-    // off at the edge of a shadow or rounded corner, seen between two runs of the same build. Moving Classic's
-    // background two steps (#0a0f18 to #0c1119) already fails on more than half the screen.
+    // No pixel may differ by more than the threshold, and pixelmatch skips pixels it judges anti-aliased. The
+    // threshold absorbs Chromium's rasterising noise (a colour a step or two off at the edge of a shadow or rounded
+    // corner, between two runs of the same build; at 0 the same build fails about 7 runs in 10). It also hides a
+    // uniform shift of about one step per channel, so parity.spec.ts compares Classic's design tokens exactly too.
+    // Moving the background two steps (#0a0f18 to #0c1119) fails on more than half the screen.
     toHaveScreenshot: { maxDiffPixels: 0, threshold: 0.006, animations: "disabled", caret: "hide", scale: "css" },
   },
   use: {

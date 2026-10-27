@@ -7,7 +7,10 @@ Classic in a real browser (Chromium, through `@playwright/test` 1.56.1), sealed 
   drift, and `serve.spec.ts` checks the server itself.
 - **No ccd and no network.** Every `/api` request is answered from `tests/fixture.json`, the data the unit tests
   already use (`fixture.ts`). The live-events socket is stubbed with the server's greeting. The token is a dummy of
-  the right shape. Any request to another host is aborted, and fails the test.
+  the right shape. All of this is set on the browser context, so pop-outs and popups get it too. A request to
+  another host is aborted and fails the test, and so does a window the page opens itself.
+  One gap: Playwright cannot route a Web Worker's own WebSockets. ccd's CSP (`connect-src`) still limits them to the
+  test server, and Classic's only workers are Monaco's, from its own `/assets/`; a worker from anywhere else fails.
 - **The same every time.** The clock is fixed at the fixture's moment, the time zone is UTC, motion is reduced,
   animations and the text caret are off for screenshots, service workers are blocked.
 
@@ -15,9 +18,9 @@ Classic in a real browser (Chromium, through `@playwright/test` 1.56.1), sealed 
 
 | Spec | Checks |
 | --- | --- |
-| `load.spec.ts` | Every screen, every Settings tab, a task detail and both pop-outs (`routes.ts`, `LOAD`), in Dark and Light: no console error or warning, no uncaught exception, no CSP violation, no request off the test server, no API call without a fixture answer, no write, the token only in its header (never in a URL), and live events connected. |
-| `parity.spec.ts` | 17 screens (`routes.ts`, `PARITY`) in Dark and Light look exactly as they do on the base branch. |
-| `serve.spec.ts` | The test server answers like ccd: headers, caching, a plain 404 for a missing file, GET and HEAD only. |
+| `load.spec.ts` | Every screen, every Settings tab, a task detail and both pop-outs (`routes.ts`, `SHOWS`), in Dark and Light: the screen it names (the router would quietly show the Dashboard for a broken route), no console error or warning, no uncaught exception, no CSP violation, no request off the test server, no API call without a fixture answer, no write, the token only in its header (never in a URL), no window or worker it should not open, and live events live. |
+| `parity.spec.ts` | Every route but the two aliases (`routes.ts`, `PARITY`), in Dark and Light, looks as it does on the base branch: the whole page, then again with every scrolling panel at its end. Every Classic design token (CSS custom property) has exactly the base branch's value. |
+| `serve.spec.ts` | The test server answers like ccd: headers, caching, a plain 404 for a missing file, a 400 for a NUL byte, GET and HEAD only (Guard's 405 otherwise). |
 
 ## Running it
 
@@ -31,14 +34,28 @@ npm run test:e2e          # load + serve; parity is skipped without a base build
 **Parity** compares this build with another build, normally the base branch's, on the same machine. Screenshots are
 never committed: fonts differ between machines, so both sides must be taken by the same machine and browser.
 
+`npm run test:e2e:local -- --parity` (below) does all of this. By hand:
+
 ```sh
-git worktree add --detach ../base origin/main && (cd ../base/web/app && npm ci && npm run build)
-E2E_PARITY=1 E2E_DIST=../base/web/app/dist npx playwright test --grep @parity --update-snapshots=all   # base
-E2E_PARITY=1 npx playwright test --grep @parity                                                         # this build
+base=$(mktemp -d)/base   # outside the repository
+git worktree add --detach "$base" origin/main && (cd "$base/web/app" && npm ci && npm run build)
+E2E_PARITY=1 E2E_DIST="$base/web/app/dist" npx playwright test --grep @parity --update-snapshots=all   # base
+E2E_PARITY=1 npx playwright test --grep @parity                                                        # this build
 ```
 
 A difference fails with expected, actual and diff images in `test-results/`; `npx playwright show-report` shows
 them side by side.
+
+**How exact it is.** Screenshots allow each pixel a tiny colour difference (`threshold` in `playwright.config.ts`)
+and skip pixels Chromium anti-aliases: without that, two runs of the same build differ at the edges of shadows and
+rounded corners. That tolerance hides a uniform change of about one colour step, so the design tokens are compared
+as text, exactly. A change to a single colour written straight into a rule, by a step or two, can still pass.
+
+**Both sides run this branch's harness.** The base build is screenshotted with this branch's `e2e/`,
+`playwright.config.ts` and `tests/fixture.json`, so a branch that changes those changes the judge as well as the
+code: review them first (`git diff origin/main -- web/app/e2e web/app/playwright.config.ts web/app/tests/fixture.json`).
+The harness must also work against the base build: a wait for something only this branch renders would time the
+base side out.
 
 ## Test execution in the current draft PR
 

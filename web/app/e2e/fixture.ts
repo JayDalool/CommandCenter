@@ -66,16 +66,17 @@ function answer(path: string): unknown {
   return undefined;
 }
 
-/** What went wrong in one page, collected as it happens. */
+/** What went wrong in the browser context (every page, pop-outs and popups included), collected as it happens. */
 export interface Watch {
   console: string[];       // console.error and console.warn
   pageErrors: string[];    // uncaught exceptions
-  blocked: string[];       // requests to anything but the test server
+  blocked: string[];       // requests and workers that are not the test server's
   unanswered: string[];    // /api requests the fixture has no answer for
   writes: string[];        // non-GET /api requests: the suite only looks
   badAuth: string[];       // /api requests without the token header
   tokenInUrl: string[];    // any URL that carries the token
-  sockets: string[];       // WebSocket URLs the page opened
+  sockets: string[];       // WebSocket URLs a page opened
+  popups: string[];        // windows a page opened itself (window.open, target=_blank); a spec's own newPage is not one
 }
 
 export type Theme = "dark" | "light";
@@ -83,24 +84,44 @@ export type Theme = "dark" | "light";
 export const test = base.extend<{ theme: Theme; watch: Watch }>({
   theme: ["dark", { option: true }],
   colorScheme: async ({ theme }, use) => { await use(theme); },
-  watch: [async ({ page, theme }, use) => {
+  watch: [async ({ context, page, theme }, use) => {
     const w: Watch = { console: [], pageErrors: [], blocked: [], unanswered: [], writes: [], badAuth: [], tokenInUrl: [],
-      sockets: [] };
-    page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") w.console.push(`${m.type()}: ${m.text()}`); });
-    page.on("pageerror", (e) => w.pageErrors.push(String(e)));
-    page.on("request", (r) => { if (r.url().includes(TOKEN)) w.tokenInUrl.push(r.url()); });
+      sockets: [], popups: [] };
+    // Everything below is set on the browser context, so a pop-out or a popup is sealed and watched like the first page.
+    context.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") w.console.push(`${m.type()}: ${m.text()}`); });
+    context.on("weberror", (e) => w.pageErrors.push(String(e.error())));
+    context.on("request", (r) => { if (r.url().includes(TOKEN)) w.tokenInUrl.push(r.url()); });
+    const watchPage = (p: Page) => {
+      // Playwright cannot route a worker's own WebSockets; ccd's CSP (connect-src) still holds them to this server.
+      // Classic's only workers are Monaco's, from its own /assets/.
+      p.on("worker", (wk) => { if (!wk.url().startsWith(`${ORIGIN}/`) && !wk.url().startsWith(`blob:${ORIGIN}/`)) w.blocked.push(`worker ${wk.url()}`); });
+    };
+    watchPage(page);
+    context.on("page", async (p) => {
+      watchPage(p);
+      if (!(await p.opener())) return;
+      const i = w.popups.push(p.url()) - 1;
+      p.on("framenavigated", (f) => { if (f === p.mainFrame()) w.popups[i] = f.url(); });
+    });
 
-    await page.clock.setFixedTime(NOW);
-    await page.addInitScript(({ token, theme }) => {
-      sessionStorage.setItem("ccd.token", token);
-      // First load only, so a spec that changes a preference keeps it across reloads.
-      if (localStorage.getItem("cc.prefs") === null) localStorage.setItem("cc.prefs", JSON.stringify({ theme }));
-      const seen: string[] = [];
-      Object.defineProperty(window, "__e2eCsp", { value: seen });
-      document.addEventListener("securitypolicyviolation", (e) => seen.push(`${e.violatedDirective} ${e.blockedURI}`));
-    }, { token: TOKEN, theme });
+    await context.clock.setFixedTime(NOW);
+    await context.addInitScript(({ origin, token, theme }) => {
+      // CSP violations are recorded on the window: a popup runs this script only in its first about:blank, then keeps
+      // that window when it navigates to the app.
+      if (!Object.hasOwn(window, "__e2eCsp")) {
+        const seen: string[] = [];
+        Object.defineProperty(window, "__e2eCsp", { value: seen });
+        window.addEventListener("securitypolicyviolation", (e) => seen.push(`${e.violatedDirective} ${e.blockedURI}`));
+      }
+      if (location.origin !== origin) return;  // about:blank, or a frame with an opaque origin: no storage of its own
+      try {
+        sessionStorage.setItem("ccd.token", token);
+        // First load only, so a spec that changes a preference keeps it across reloads.
+        if (localStorage.getItem("cc.prefs") === null) localStorage.setItem("cc.prefs", JSON.stringify({ theme }));
+      } catch { /* storage refused: the page shows Connect, and the spec fails on what it expected to see */ }
+    }, { origin: ORIGIN, token: TOKEN, theme });
 
-    await page.route(() => true, async (route) => {
+    await context.route(() => true, async (route) => {
       const req = route.request();
       const url = new URL(req.url());
       if (url.origin !== ORIGIN) { w.blocked.push(req.url()); return route.abort("blockedbyclient"); }
@@ -112,7 +133,8 @@ export const test = base.extend<{ theme: Theme; watch: Watch }>({
       return route.fulfill({ json: body, headers: { "cache-control": "no-store" } });
     });
 
-    await page.routeWebSocket(() => true, (ws: WebSocketRoute) => {
+    // A routed socket never reaches the browser's own CSP check, so the origin check here stands in for connect-src.
+    await context.routeWebSocket(() => true, (ws: WebSocketRoute) => {
       const url = ws.url();
       w.sockets.push(url);
       if (url.includes(TOKEN)) w.tokenInUrl.push(url);
@@ -145,10 +167,27 @@ export async function settle(page: Page) {
   });
 }
 
-/** Everything a clean page must not have. An empty list means clean. */
+/** Which screen the page shows: the top bar's title (with the Settings section), "Dashboard", or "pop-out". */
+export async function shown(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    if (document.querySelector(".shell.is-bare")) return "pop-out";
+    if (document.querySelector(".shell.is-dash .dash-top")) return "Dashboard";
+    const title = document.querySelector("h1.page-title")?.textContent ?? "(no title)";
+    const section = document.querySelector('[aria-label="Settings section"] [aria-pressed="true"]')?.textContent;
+    return section ? `${title} › ${section}` : title;
+  });
+}
+
+/** Everything a clean page must not have, across every page in its context. An empty list means clean. */
 export async function problems(page: Page, w: Watch): Promise<string[]> {
-  const csp = await page.evaluate(() => (window as unknown as { __e2eCsp: string[] }).__e2eCsp.slice());
-  const live = w.sockets.some((u) => new URL(u).pathname === "/api/events");
+  const csp: string[] = [];
+  for (const p of page.context().pages()) {
+    if (new URL(p.url()).origin !== ORIGIN) continue;
+    csp.push(...await p.evaluate(() => (window as unknown as { __e2eCsp?: string[] }).__e2eCsp?.slice() ?? []));
+  }
+  const socket = w.sockets.some((u) => new URL(u).pathname === "/api/events");
+  // The connection banner (Shell.tsx, OfflineBanner) shows whenever live events are not live.
+  const notLive = await page.locator(".banner .caps").filter({ hasText: /^(Reconnecting|Offline)$/ }).count();
   return [
     ...w.console.map((x) => `console ${x}`),
     ...w.pageErrors.map((x) => `page error: ${x}`),
@@ -158,6 +197,8 @@ export async function problems(page: Page, w: Watch): Promise<string[]> {
     ...w.writes.map((x) => `wrote: ${x}`),
     ...w.badAuth.map((x) => `no token header: ${x}`),
     ...w.tokenInUrl.map((x) => `token in a URL: ${x}`),
-    ...(live ? [] : ["live events never connected"]),
+    ...w.popups.map((x) => `opened a window: ${x}`),
+    ...(socket ? [] : ["live events never connected"]),
+    ...(notLive ? ["live events connected but not live"] : []),
   ];
 }

@@ -1,6 +1,6 @@
 // Serves a built UI (dist/) the way ccd does, for the browser tests: the same Content-Security-Policy and security
 // headers (copied from server/ccd/api.py, UiFiles; tests/e2e-serve.test.ts fails if the two drift), GET and HEAD
-// only, and a plain 404 for a missing file, never the app shell. There is no API here: every /api request is answered
+// only (Guard's 405 otherwise), and a plain 404 for a missing file, never the app shell. There is no API here: every /api request is answered
 // by the test's own fixture (e2e/fixture.ts), or gets this server's 404. No ccd, no token, no network.
 //
 // Usage: node e2e/serve.mjs [port] [dist-dir]      (defaults: 4317, ./dist; E2E_PORT and E2E_DIST also work)
@@ -38,11 +38,16 @@ export function createServer(dist, port) {
   return http.createServer((req, res) => {
     const headers = securityHeaders(port);
     const send = (status, body, extra = {}) => { res.writeHead(status, { ...headers, ...extra }); res.end(req.method === "HEAD" ? undefined : body); };
-    if (req.method !== "GET" && req.method !== "HEAD") return send(405, JSON.stringify({ ok: false, error: "the UI is read-only files" }), { "content-type": "application/json", "cache-control": "no-store" });
+    // ccd's Guard refuses other methods before UiFiles sees them: plain JSON, NO_STORE headers, no UI headers.
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.writeHead(405, { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff" });
+      return res.end(JSON.stringify({ ok: false, error: "the UI is read-only files" }));
+    }
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (url.pathname.startsWith("/api/")) return send(404, JSON.stringify({ ok: false, error: "no fixture for this request" }), { "content-type": "application/json", "cache-control": "no-store" });
     let rel;
-    try { rel = decodeURIComponent(url.pathname); } catch { return send(400, "Bad Request", { "content-type": "text/plain", "cache-control": "no-store" }); }
+    try { rel = decodeURIComponent(url.pathname); } catch { rel = "\0"; }
+    if (rel.includes("\0")) return send(400, "Bad Request", { "content-type": "text/plain", "cache-control": "no-store" });
     if (rel.endsWith("/")) rel += "index.html";
     const file = path.resolve(root, `.${rel}`);
     if (file !== root && !file.startsWith(root + path.sep)) return send(404, "Not Found", { "content-type": "text/plain", "cache-control": "no-store" });
