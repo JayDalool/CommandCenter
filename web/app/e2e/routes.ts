@@ -1,4 +1,4 @@
-// The Classic routes the suite opens, as the address bar shows them after "#/".
+// The routes the suite opens, in Classic and in the HQ preview, as the address bar shows them after "#/".
 
 /** Every screen and Settings tab, plus a task detail and the two pop-out windows, with what each must show. The router
  *  sends an unknown screen to the Dashboard, so this is what stops a renamed or broken route from passing as one. */

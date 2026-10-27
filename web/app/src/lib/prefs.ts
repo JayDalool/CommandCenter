@@ -59,11 +59,25 @@ export function parsePrefs(raw: string | null): Prefs {
 function load(): Prefs { try { return parsePrefs(localStorage.getItem(KEY)); } catch { return { ...DEFAULTS }; } }
 
 export const prefs = new Store<Prefs>(load());
+let adopting = false;
 prefs.subscribe(() => {
   const p = prefs.get();
-  try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* per-viewer convenience only */ }
+  if (!adopting) try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* per-viewer convenience only */ }
   apply(p);
 });
+
+// Another window of this app (a tab or a pop-out) switched between Classic and the HQ preview: follow it. Otherwise
+// this window would write its old choice back with its next preference, and Back to Classic would not hold. Only `ui`
+// is taken over, and not written again: the other window has saved it.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key !== KEY) return;
+    const ui = parsePrefs(e.newValue).ui;
+    if (ui === prefs.get().ui) return;
+    adopting = true;
+    try { prefs.patch({ ui }); } finally { adopting = false; }
+  });
+}
 
 export function apply(p: Prefs = prefs.get()) {
   if (typeof document === "undefined") return;

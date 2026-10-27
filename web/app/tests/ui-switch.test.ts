@@ -35,11 +35,18 @@ describe("?ui= in the address", () => {
     expect(open("?ui=classic", "#/workspace?project=gyst&ui=hq").urls).toEqual(["/#/workspace?project=gyst&ui=hq"]);
   });
 
-  it("ignores any other value, but still takes it out of the address", () => {
-    for (const bad of ["?ui=HQ", "?ui=", "?ui=hq%20", "?ui=1", "?ui=%3Cscript%3E"]) {
-      expect(open(bad), bad).toEqual({ ui: null, urls: ["/#/dashboard"] });
-      expect(prefs.get().ui, bad).toBe("classic");
+  it("ignores any other value, from either mode, but still takes it out of the address", () => {
+    for (const from of ["classic", "hq"] as const) {
+      for (const bad of ["?ui=HQ", "?ui=", "?ui", "?ui=hq%20", "?ui=1", "?ui=%3Cscript%3E"]) {
+        prefs.patch({ ui: from });
+        expect(open(bad), bad).toEqual({ ui: null, urls: ["/#/dashboard"] });
+        expect(prefs.get().ui, `${bad} from ${from}`).toBe(from);
+      }
     }
+  });
+
+  it("keeps empty parameters as written", () => {
+    expect(open("?a=1&&ui=hq&b").urls).toEqual(["/?a=1&&b#/dashboard"]);
   });
 
   it("does nothing when the address has no ui", () => {

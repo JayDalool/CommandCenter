@@ -65,3 +65,37 @@ describe("the Interface preference", () => {
     expect(localStorage.getItem("cc.rooms")).toBe("[]");
   });
 });
+
+describe("another window switching", () => {
+  /** What the browser fires here when another tab or pop-out of this origin writes cc.prefs. */
+  const elsewhere = (key: string | null, value: object | string | null) => window.dispatchEvent(new StorageEvent("storage",
+    { key, newValue: value === null || typeof value === "string" ? value : JSON.stringify(value) }));
+
+  it("follows it, without writing it back, and the next preference saves the new choice", () => {
+    const writes = vi.spyOn(Storage.prototype, "setItem");
+    elsewhere("cc.prefs", { ui: "hq", railCollapsed: true });
+    expect(prefs.get().ui).toBe("hq");
+    expect(document.documentElement.dataset.ui).toBe("hq");
+    expect(writes).not.toHaveBeenCalled();
+    expect(prefs.get().railCollapsed, "only ui is taken over").toBe(false);
+
+    prefs.patch({ railCollapsed: true });
+    expect(JSON.parse(localStorage.getItem("cc.prefs")!)).toMatchObject({ ui: "hq", railCollapsed: true });
+    prefs.patch({ railCollapsed: false });
+
+    elsewhere("cc.prefs", { ui: "classic" });
+    expect(prefs.get().ui).toBe("classic");
+    expect(document.documentElement.hasAttribute("data-ui")).toBe(false);
+  });
+
+  it("reads anything but exactly \"hq\" as Classic, and ignores other keys", () => {
+    prefs.patch({ ui: "hq" });
+    elsewhere("cc.rooms", { ui: "classic" });
+    expect(prefs.get().ui).toBe("hq");
+    elsewhere("cc.prefs", "not json");
+    expect(prefs.get().ui).toBe("classic");
+    prefs.patch({ ui: "hq" });
+    elsewhere("cc.prefs", null);  // removed in the other window: the next load would be Classic
+    expect(prefs.get().ui).toBe("classic");
+  });
+});

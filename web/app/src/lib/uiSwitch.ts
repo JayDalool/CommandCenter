@@ -14,7 +14,7 @@ const isUi = (part: string) => {
 
 /** Saves the interface named by `?ui=` (any other value is ignored) and takes `ui` out of the address. */
 export function takeUiFromUrl(loc: Loc = location, hist: Hist = history): Prefs["ui"] | null {
-  const parts = loc.search.replace(/^\?/, "").split("&").filter(Boolean);
+  const parts = loc.search.replace(/^\?/, "").split("&");
   if (!parts.some(isUi)) return null;
   const value = new URLSearchParams(loc.search).get("ui");
   const ui = value === "hq" || value === "classic" ? value : null;

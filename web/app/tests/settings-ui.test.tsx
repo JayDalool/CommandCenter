@@ -34,6 +34,16 @@ describe("Interface in Settings", () => {
     expect(within(row).getByRole("button", { name: "Classic" })).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("Back to Classic leaves keyboard focus in the rail, on the first button below the label", () => {
+    prefs.patch({ ui: "hq" });
+    render(<aside className="rail"><HqPreviewTag /><div className="rail-foot"><button type="button">Commands</button></div></aside>);
+    const back = screen.getByRole("button", { name: "Back to Classic" });
+    back.focus();
+    fireEvent.click(back);
+    expect(document.querySelector(".hq-tag")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Commands" }));
+  });
+
   it("the icons-only rail shows HQ, named for what it does", () => {
     prefs.patch({ ui: "hq" });
     render(<HqPreviewTag mini />);
