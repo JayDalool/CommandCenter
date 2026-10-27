@@ -40,15 +40,14 @@ E2E_PARITY=1 npx playwright test --grep @parity                                 
 A difference fails with expected, actual and diff images in `test-results/`; `npx playwright show-report` shows
 them side by side.
 
-## In CI
+## Test execution in the current draft PR
 
-`.github/workflows/web-e2e.yml` runs on a GitHub-hosted `ubuntu-24.04` runner, read-only and with no secrets, for
-pull requests and pushes to `main` that touch `web/app/` (or ccd's UI headers). The self-hosted runner is not used.
-On a pull request it builds the base branch in the same job, screenshots it, then compares this build with it.
+The hosted `web-e2e` workflow was removed from draft PR #72 because GitHub-hosted jobs could not start.
+Use the sealed **local WSL test runner** documented below and attach `local-e2e-results/summary.md`
+and any Playwright failure report to the PR. The existing GitHub `ci.yml` workflow remains unchanged.
 
-**A pull request that means to change how Classic looks** gets the label `classic-ui-change`. The comparison still
-runs and uploads its images (artifact `playwright-report`) for review, but its differences no longer fail the check.
-Without the label, any visible change to Classic fails the check.
+Do not register the unverified laptop runner for browser jobs automatically. A dedicated, isolated
+`browser-ci` self-hosted runner and a workflow require a separate security/isolation approval.
 
 ## Environment
 
@@ -63,49 +62,49 @@ Without the label, any visible change to Classic fails the check.
 ## Windows + WSL2 (local development; not the GitHub Actions runner)
 
 Use an ordinary, non-root Ubuntu/WSL2 shell. Keep this checkout in WSL's Linux filesystem
-(e.g. under \`~/\`, **not** \`/mnt/c/\`). No Docker, ccd API, real token, or live database is needed.
+(e.g. under `~/`, **not** `/mnt/c/`). No Docker, ccd API, real token, or live database is needed.
 
 Check the dependencies first:
 
-\`\`\`bash
+```bash
 wsl --status   # Windows PowerShell, NOT inside WSL
-\`\`\`
+```
 
-\`\`\`bash
+```bash
 node --version # from WSL: needs Node 22
 npm --version
 git --version
-\`\`\`
+```
 
 Run this inside the PR's **review checkout** (or an isolated worktree):
 
-\`\`\`bash
+```bash
 cd ~/CommandCenter-e2e/web/app
 npm ci
 npx playwright install chromium
 npm run test:e2e:local
-\`\`\`
+```
 
 The command runs TypeScript, unit tests, a production build, then Chromium load/security tests
-against sealed mock API fixtures. It saves \`local-e2e-results/summary.md\` and any failures in
-\`playwright-report*/\` and \`test-results*/\`, all ignored by git. No Chromium display is required.
+against sealed mock API fixtures. It saves `local-e2e-results/summary.md` and any failures in
+`playwright-report*/` and `test-results*/`, all ignored by git. No Chromium display is required.
 
 For pixel-level Classic parity, compare the current branch against the locally fetched
-\`origin/main\` on the *same WSL machine*:
+`origin/main` on the *same WSL machine*:
 
-\`\`\`bash
+```bash
 git fetch origin main
 npm run test:e2e:local -- --parity
-\`\`\`
+```
 
-Parity temporarily checks out \`origin/main\` in a disposable worktree outside your repo, installs
+Parity temporarily checks out `origin/main` in a disposable worktree outside your repo, installs
 dependencies and builds there, captures its screenshots, then compares. No branch is switched and
 your working tree is not modified. Run only on trusted, reviewed PR code on your personal machine.
 
 If Linux Chromium complains about missing shared libraries, first inspect the error and only
 then, with Jay's approval on this development WSL distribution, run
-\`sudo npx playwright install-deps chromium\` (this uses apt). Never make a self-hosted GitHub
-runner automatically run \`sudo\` or install system packages. Ensure browser binaries are
+`sudo npx playwright install-deps chromium` (this uses apt). Never make a self-hosted GitHub
+runner automatically run `sudo` or install system packages. Ensure browser binaries are
 installed once by the WSL user; do not run the tests as root.
 
 ### Future WSL self-hosted Actions job (NOT configured here)
@@ -113,8 +112,8 @@ installed once by the WSL user; do not run the tests as root.
 A GitHub Actions self-hosted runner on a personal laptop can execute arbitrary checked-out
 PR code with the runner user's file access. Existing D-030 runner isolation is **not** verified.
 Do not automatically move this browser job onto the existing self-hosted runner. For later CI:
-isolate a separate runner with a dedicated \`browser-ci\` label and Unix user/WSL VM,
+isolate a separate runner with a dedicated `browser-ci` label and Unix user/WSL VM,
 no employer/client code, sensitive home files, SSH keys, production backups or credentials,
 read-only checkout, only reviewed branches; verify the isolation first and get separate
 approval before modifying a workflow. Until then, attach the local test summary and failure
-screenshots to the draft PR. GitHub's normal \`ci\` workflow stays unchanged.
+screenshots to the draft PR. GitHub's normal `ci` workflow stays unchanged.
