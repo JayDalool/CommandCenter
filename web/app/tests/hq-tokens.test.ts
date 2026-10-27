@@ -6,9 +6,12 @@ import { HQ_AGENT_COLORS, HQ_PROJECT_COLORS } from "../src/hq/palette";
 // Read with node:fs: Vitest turns every CSS import into an empty string, ?raw included. The module name is a plain
 // string so the type check does not need @types/node.
 const NODE_FS: string = "node:fs";
+const NODE_CRYPTO: string = "node:crypto";
 const { readFileSync } = (await import(NODE_FS)) as { readFileSync(path: string, encoding: "utf8"): string };
+const { createHash } = (await import(NODE_CRYPTO)) as { createHash(alg: "sha256"): { update(s: string): { digest(e: "hex"): string } } };
 const here = (import.meta as unknown as { dirname: string }).dirname;  // web/app/tests
 const css = readFileSync(`${here}/../src/hq/tokens.css`, "utf8");
+const paletteTs = readFileSync(`${here}/../src/hq/palette.ts`, "utf8");
 
 const HQ = ':root[data-ui="hq"]';
 
@@ -81,6 +84,14 @@ describe("HQ tokens are inert in Classic", () => {
     expect(find(`${HQ}[data-theme="system"]`, "(prefers-color-scheme: light)")).toBeTruthy();
   });
 
+  it("follows the computer's light mode only when Classic's theme is System", () => {
+    // Otherwise Classic Dark on a computer in light mode would get HQ's light tokens.
+    for (const r of rules) {
+      const system = r.selector === `${HQ}[data-theme="system"]`;
+      expect(r.media === "(prefers-color-scheme: light)", `${r.media} ${r.selector}`).toBe(system);
+    }
+  });
+
   it("declares only --hq-* custom properties", () => {
     for (const r of rules) for (const [name] of r.decls) expect(name, `${r.selector} ${name}`).toMatch(/^--hq-[a-z0-9-]+$/);
   });
@@ -97,6 +108,15 @@ describe("HQ tokens are inert in Classic", () => {
 });
 
 describe("HQ tokens match the approved design (4b72f3f)", () => {
+  it("is exactly what the generator wrote (its seal), so a hand edit fails even without the approved commit", () => {
+    // `node design/hq-tokens/generate.mjs --check` (in npm run test:e2e:local) compares with the commit itself.
+    for (const [name, text] of [["tokens.css", css], ["palette.ts", paletteTs]]) {
+      const stated = /values sha256 ([0-9a-f]{64})/.exec(text)?.[1];
+      const actual = createHash("sha256").update(text.replace(/values sha256 [0-9a-f]{64}/, "values sha256 ")).digest("hex");
+      expect(actual, `${name} was edited by hand: run node design/hq-tokens/generate.mjs`).toBe(stated);
+    }
+  });
+
   it("has every token: 187 dark, 152 light, 5 project colours", () => {
     expect([...dark.keys()].filter((k) => !k.startsWith("--hq-pj-")).length).toBe(187);
     expect([...dark.keys()].filter((k) => k.startsWith("--hq-pj-")).length).toBe(5);
@@ -131,10 +151,14 @@ describe("HQ tokens match the approved design (4b72f3f)", () => {
 
 describe("nothing in Classic turns HQ on yet", () => {
   it("no source file sets data-ui", () => {
-    const sources = import.meta.glob("../src/**/*.{ts,tsx}", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+    // A heuristic over the source; e2e/load.spec.ts checks the attribute itself on every route.
+    const sources = { ...import.meta.glob("../src/**/*.{ts,tsx}", { query: "?raw", import: "default", eager: true }),
+      "../index.html": readFileSync(`${here}/../index.html`, "utf8") } as Record<string, string>;
     expect(Object.keys(sources).length).toBeGreaterThan(50);
-    const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-    const setters = Object.entries(sources).filter(([, src]) => /data-ui|dataset\.ui/.test(code(src))).map(([f]) => f);
+    // Comments out (a // after a colon or quote is a URL, not a comment), then any way of reaching the attribute.
+    const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`\\])\/\/.*$/gm, "$1");
+    const sets = /data-ui|dataset\s*(\.\s*ui\b|\[\s*["'`]ui["'`]\s*\])|Object\.assign\(\s*[\w.]*dataset\b/;
+    const setters = Object.entries(sources).filter(([, src]) => sets.test(code(src))).map(([f]) => f);
     expect(setters).toEqual([]);
   });
 });

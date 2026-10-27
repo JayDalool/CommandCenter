@@ -1,6 +1,6 @@
-// HQ's tokens in a real browser: they resolve only under <html data-ui="hq">, follow Classic's theme (dark, light,
-// system), and never change one of Classic's own variables. tests/hq-tokens.test.ts checks the file itself, and
-// parity.spec.ts proves Classic's pixels do not move with the attribute on or off.
+// HQ's tokens in a real browser: they resolve only under <html data-ui="hq"> and follow Classic's theme (dark, light,
+// system). tests/hq-tokens.test.ts checks the file itself, and parity.spec.ts proves Classic's pixels and every one of
+// its variables stay the same with the attribute on or off.
 import { test, expect, open } from "./fixture";
 
 test("HQ tokens exist only under data-ui=\"hq\" and follow Classic's theme", async ({ page }) => {
@@ -29,6 +29,14 @@ test("HQ tokens exist only under data-ui=\"hq\" and follow Classic's theme", asy
   expect((await read()).hq).toBe("#f2f3f8");
   await page.emulateMedia({ colorScheme: "dark" });
   expect((await read()).hq).toBe("#070b17");
+
+  // Classic Dark stays dark on a computer in light mode, and Light stays light on one in dark mode.
+  await set("data-theme", "dark");
+  await page.emulateMedia({ colorScheme: "light" });
+  expect((await read()).hq).toBe("#070b17");
+  await set("data-theme", "light");
+  await page.emulateMedia({ colorScheme: "dark" });
+  expect((await read()).hq).toBe("#f2f3f8");
 
   await set("data-ui", null);
   expect((await read()).hq).toBe("");
