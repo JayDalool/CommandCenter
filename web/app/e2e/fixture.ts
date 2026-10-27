@@ -80,11 +80,14 @@ export interface Watch {
 }
 
 export type Theme = "dark" | "light";
+/** Classic or the HQ preview, as the Interface preference (cc.prefs) says on first load. */
+export type Ui = "classic" | "hq";
 
-export const test = base.extend<{ theme: Theme; watch: Watch }>({
+export const test = base.extend<{ theme: Theme; ui: Ui; watch: Watch }>({
   theme: ["dark", { option: true }],
+  ui: ["classic", { option: true }],
   colorScheme: async ({ theme }, use) => { await use(theme); },
-  watch: [async ({ context, page, theme }, use) => {
+  watch: [async ({ context, page, theme, ui }, use) => {
     const w: Watch = { console: [], pageErrors: [], blocked: [], unanswered: [], writes: [], badAuth: [], tokenInUrl: [],
       sockets: [], popups: [] };
     // Everything below is set on the browser context, so a pop-out or a popup is sealed and watched like the first page.
@@ -105,7 +108,7 @@ export const test = base.extend<{ theme: Theme; watch: Watch }>({
     });
 
     await context.clock.setFixedTime(NOW);
-    await context.addInitScript(({ origin, token, theme }) => {
+    await context.addInitScript(({ origin, token, theme, ui }) => {
       // CSP violations are recorded on the window: a popup runs this script only in its first about:blank, then keeps
       // that window when it navigates to the app.
       if (!Object.hasOwn(window, "__e2eCsp")) {
@@ -117,9 +120,9 @@ export const test = base.extend<{ theme: Theme; watch: Watch }>({
       try {
         sessionStorage.setItem("ccd.token", token);
         // First load only, so a spec that changes a preference keeps it across reloads.
-        if (localStorage.getItem("cc.prefs") === null) localStorage.setItem("cc.prefs", JSON.stringify({ theme }));
+        if (localStorage.getItem("cc.prefs") === null) localStorage.setItem("cc.prefs", JSON.stringify({ theme, ui }));
       } catch { /* storage refused: the page shows Connect, and the spec fails on what it expected to see */ }
-    }, { origin: ORIGIN, token: TOKEN, theme });
+    }, { origin: ORIGIN, token: TOKEN, theme, ui });
 
     await context.route(() => true, async (route) => {
       const req = route.request();

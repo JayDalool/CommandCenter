@@ -11,6 +11,7 @@ import { CommandPalette } from "./CommandPalette";
 import { NewTicket } from "./NewTicket";
 import { DevDot, UnlockDialog } from "./DevMode";
 import { NotificationBell } from "./Notifications";
+import { HqPreviewTag } from "./HqPreview";
 import { hasUnsavedWork, staleBuild } from "../lib/stale";
 
 // The six primary destinations of the control room (spec §3), in Jay's order. Everything that used to
@@ -79,6 +80,7 @@ function Rail() {
         <span>{s.label}</span>{n[s.id] ?? <span />}</a>)}
     </nav>
     <div className="sl-fill" />
+    <HqPreviewTag mini={collapsed} />
     <div className="rail-foot">
       {!collapsed && <button type="button" className="btn is-quiet is-sm" onClick={() => window.dispatchEvent(new Event("cc:palette"))}>
         <Kbd>Ctrl</Kbd><Kbd>K</Kbd><span>Commands</span></button>}

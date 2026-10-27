@@ -18,8 +18,9 @@ Classic in a real browser (Chromium, through `@playwright/test` 1.56.1), sealed 
 
 | Spec | Checks |
 | --- | --- |
-| `load.spec.ts` | Every screen, every Settings tab, a task detail and both pop-outs (`routes.ts`, `SHOWS`), in Dark and Light: the screen it names (the router would quietly show the Dashboard for a broken route), no console error or warning, no uncaught exception, no CSP violation, no request off the test server, no API call without a fixture answer, no write, the token only in its header (never in a URL), no window or worker it should not open, live events live, and no `data-ui` attribute (HQ stays off). |
-| `parity.spec.ts` | Every route but the two aliases (`routes.ts`, `PARITY`), in Dark and Light, looks as it does on the base branch: the whole page, then again with every scrolling panel at its end. Every Classic design token (CSS custom property) has exactly the base branch's value. All of it twice: as it is, and with `<html data-ui="hq">` forced on from the first script (HQ's tokens must be inert in Classic). |
+| `load.spec.ts` | Every screen, every Settings tab, a task detail and both pop-outs (`routes.ts`, `SHOWS`), in Dark and Light, in Classic and in the HQ preview: the screen it names (the router would quietly show the Dashboard for a broken route), no console error or warning, no uncaught exception, no CSP violation, no request off the test server, no API call without a fixture answer, no write, the token only in its header (never in a URL), no window or worker it should not open, live events live. `data-ui="hq"` only in the HQ preview, and its label only there, at the foot of the rail (none in pop-outs). |
+| `parity.spec.ts` | Every route but the two aliases (`routes.ts`, `PARITY`), in Dark and Light, looks as it does on the base branch: the whole page, then again with every scrolling panel at its end. Every Classic design token (CSS custom property) has exactly the base branch's value. All of it twice: in Classic, and in the HQ preview (`<html data-ui="hq">`: HQ's tokens must not move a Classic pixel). What the branch adds on purpose (`routes.ts`, `ADDED`, and the HQ label) is hidden first; the rest must match. |
+| `ui-switch.spec.ts` | The Classic/HQ switch: Settings › General › Interface, the rail's Back to Classic, a reload, `?ui=hq` and `?ui=classic` links (taken out of the address after), an unknown `?ui=` value, and a pop-out keeping the mode with no label. |
 | `hq-tokens.spec.ts` | HQ's tokens (`src/hq/tokens.css`) resolve only under `data-ui="hq"`, and follow Classic's Dark, Light and System theme, including Dark while the computer is in light mode. |
 | `serve.spec.ts` | The test server answers like ccd: headers, caching, a plain 404 for a missing file, a 400 for a NUL byte, GET and HEAD only (Guard's 405 otherwise). |
 
@@ -57,6 +58,11 @@ as text, exactly. A change to a single colour written straight into a rule, by a
 code: review them first (`git diff origin/main -- web/app/e2e web/app/playwright.config.ts web/app/tests/fixture.json`).
 The harness must also work against the base build: a wait for something only this branch renders would time the
 base side out.
+
+**What a branch adds on purpose.** A branch that adds to a Classic screen lists the new elements in `routes.ts`
+(`ADDED`, CSS selectors by route). Parity hides exactly those on this build, checks each is there, and compares the
+rest with the base branch as usual, so the page around the addition is still held to every pixel. An entry hides
+what it matches from the comparison: review `ADDED` with the rest of the harness, and keep it to new elements.
 
 ## Test execution in the current draft PR
 

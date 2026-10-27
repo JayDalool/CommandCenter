@@ -5,9 +5,11 @@ import "./styles/app.css";
 import "./styles/control.css";
 import "./hq/tokens.css"; // HQ design tokens: inert unless <html data-ui="hq">
 import { apply } from "./lib/prefs";
+import { takeUiFromUrl } from "./lib/uiSwitch";
 import { installStaleBuildHandler } from "./lib/stale";
 import { App } from "./App";
 
+takeUiFromUrl();
 apply();
 installStaleBuildHandler();
 createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);

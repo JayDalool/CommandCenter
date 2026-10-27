@@ -102,6 +102,14 @@ tr:focus-visible, .row-btn:focus-visible { outline-offset: -2px; }
 .banner.is-offline .caps { color: var(--bad); }
 .banner.is-warn .caps { color: var(--warn); }
 
+/* The "HQ preview" label above the rail's foot (components/HqPreview.tsx), only while the preview is on. In the
+ * narrower rail (windows up to 1180px) the button wraps under the label. */
+.hq-tag { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 6px;
+  padding: 6px 10px 6px 16px; border-top: 1px solid var(--line); }
+.hq-tag > * { white-space: nowrap; }
+.hq-tag .caps { color: var(--accent); font-weight: 700; }
+.shell.is-rail-mini .hq-tag { justify-content: center; padding: 6px 0; }
+
 /* ================= status line (freshness) ================= */
 .statusline { grid-area: status; display: flex; align-items: stretch; background: var(--bg-2); border-top: 1px solid var(--line-strong);
   font: var(--fs-mono-xs) var(--font-mono); color: var(--muted); white-space: nowrap; overflow: hidden; min-width: 0; }
