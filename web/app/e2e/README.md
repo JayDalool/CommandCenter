@@ -19,7 +19,8 @@ Classic in a real browser (Chromium, through `@playwright/test` 1.56.1), sealed 
 | Spec | Checks |
 | --- | --- |
 | `load.spec.ts` | Every screen, every Settings tab, a task detail and both pop-outs (`routes.ts`, `SHOWS`), in Dark and Light: the screen it names (the router would quietly show the Dashboard for a broken route), no console error or warning, no uncaught exception, no CSP violation, no request off the test server, no API call without a fixture answer, no write, the token only in its header (never in a URL), no window or worker it should not open, and live events live. |
-| `parity.spec.ts` | Every route but the two aliases (`routes.ts`, `PARITY`), in Dark and Light, looks as it does on the base branch: the whole page, then again with every scrolling panel at its end. Every Classic design token (CSS custom property) has exactly the base branch's value. |
+| `parity.spec.ts` | Every route but the two aliases (`routes.ts`, `PARITY`), in Dark and Light, looks as it does on the base branch: the whole page, then again with every scrolling panel at its end. Every Classic design token (CSS custom property) has exactly the base branch's value. All of it twice: as it is, and with `<html data-ui="hq">` forced on from the first script (HQ's tokens must be inert in Classic). |
+| `hq-tokens.spec.ts` | HQ's tokens (`src/hq/tokens.css`) resolve only under `data-ui="hq"`, and follow Classic's Dark, Light and System theme, including Dark while the computer is in light mode. |
 | `serve.spec.ts` | The test server answers like ccd: headers, caching, a plain 404 for a missing file, a 400 for a NUL byte, GET and HEAD only (Guard's 405 otherwise). |
 
 ## Running it
