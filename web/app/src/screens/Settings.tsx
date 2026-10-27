@@ -103,6 +103,10 @@ function General() {
     <dl style={{ display: "grid", gap: 8 }}>
       <DetailRow label="Theme"><Seg label="Theme" value={p.theme} onChange={(v) => prefs.patch({ theme: v })}
         options={[{ v: "dark", label: "Dark" }, { v: "light", label: "Light" }, { v: "system", label: "System" }]} /></DetailRow>
+      <DetailRow label="Interface"><Seg label="Interface" value={p.ui} onChange={(v) => prefs.patch({ ui: v })}
+        options={[{ v: "classic", label: "Classic" }, { v: "hq", label: "HQ preview" }]} />
+        <div className="muted">HQ preview is the new design, rolled out page by page. Every page and control works the same.
+          Switch back any time.</div></DetailRow>
       <DetailRow label="Rows"><Seg label="Row density" value={p.density} onChange={(v) => prefs.patch({ density: v })}
         options={[{ v: "comfortable", label: "30 px" }, { v: "compact", label: "28 px compact" }]} /></DetailRow>
       <DetailRow label="SSH host"><input className="input mono" value={p.sshHost} onChange={(e) => prefs.patch({ sshHost: e.target.value.replace(/[^A-Za-z0-9@._-]/g, "") })}

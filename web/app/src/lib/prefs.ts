@@ -27,13 +27,16 @@ export interface Prefs {
   wsFocus: boolean;
   /** The navigation rail shows icons only. */
   railCollapsed: boolean;
+  /** Which interface this browser shows: Classic (the default) or the HQ preview. Only exactly "hq" turns HQ on. */
+  ui: "classic" | "hq";
 }
 const KEY = "cc.prefs";
 const DEFAULTS: Prefs = { theme: "dark", density: "comfortable", sshHost: "jay-server",
   consoleTab: "claude", consoleProject: null,
   lastProject: null, wsExplorerW: 260, wsExplorerOpen: true, wsTermH: 300, wsTermOpen: true, wsMax: "none",
   wsSide: "explorer", wsCollapsed: [], wsDetailOpen: true,
-  wsTreeOpen: true, wsLeft: "projects", wsTasksW: 640, wsFocus: false, railCollapsed: false };
+  wsTreeOpen: true, wsLeft: "projects", wsTasksW: 640, wsFocus: false, railCollapsed: false,
+  ui: "classic" };
 
 const SIDES = ["explorer", "scm", "search"];
 
@@ -49,22 +52,40 @@ export function parsePrefs(raw: string | null): Prefs {
     if (!Array.isArray(p.wsCollapsed)) p.wsCollapsed = [];
     if (p.wsLeft !== "tasks") p.wsLeft = "projects";
     if (typeof p.wsTasksW !== "number" || !Number.isFinite(p.wsTasksW)) p.wsTasksW = DEFAULTS.wsTasksW;
+    if (p.ui !== "hq") p.ui = "classic";
     return p;
   } catch { return { ...DEFAULTS }; }
 }
 function load(): Prefs { try { return parsePrefs(localStorage.getItem(KEY)); } catch { return { ...DEFAULTS }; } }
 
 export const prefs = new Store<Prefs>(load());
+let adopting = false;
 prefs.subscribe(() => {
   const p = prefs.get();
-  try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* per-viewer convenience only */ }
+  if (!adopting) try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* per-viewer convenience only */ }
   apply(p);
 });
+
+// Another window of this app (a tab or a pop-out) switched between Classic and the HQ preview: follow it. Otherwise
+// this window would write its old choice back with its next preference, and Back to Classic would not hold. Only `ui`
+// is taken over, and not written again: the other window has saved it.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key !== KEY) return;
+    const ui = parsePrefs(e.newValue).ui;
+    if (ui === prefs.get().ui) return;
+    adopting = true;
+    try { prefs.patch({ ui }); } finally { adopting = false; }
+  });
+}
 
 export function apply(p: Prefs = prefs.get()) {
   if (typeof document === "undefined") return;
   document.documentElement.dataset.theme = p.theme;
   document.documentElement.dataset.density = p.density;
+  // HQ preview only: Classic's <html> keeps exactly the attributes it always had.
+  if (p.ui === "hq") document.documentElement.dataset.ui = "hq";
+  else delete document.documentElement.dataset.ui;
 }
 
 export const usePrefs = <S,>(sel: (p: Prefs) => S) => useSelector(prefs, sel);
