@@ -26,3 +26,6 @@ dist/
 web/app/playwright-report*/
 web/app/test-results*/
 web/app/e2e/.parity/
+
+# Manual WSL browser verification summary (contains device-specific details).
+web/app/local-e2e-results/
