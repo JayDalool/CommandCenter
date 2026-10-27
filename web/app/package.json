@@ -9,7 +9,8 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:local": "node e2e/local.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
