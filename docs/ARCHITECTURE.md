@@ -66,6 +66,18 @@ pane. If herdr or claude moves, that line moves with it.
 | git / host | last value kept, error in `sources` |
 | ccd itself | clients reconnect with `?since=`; agents unaffected; legacy board builds locally |
 
+## Time and time zones
+
+ccd stores and sends epoch seconds. Budgets and metering use UTC days and months (`budgets.period_bounds`,
+`meter.py`). Three paths use the host's local time (`America/Winnipeg` on jay-server) through the C library:
+the night-shift morning cutoff (`nightshift.cutoff_after`, default 07:00), the "brief written today" check
+(`model.py`) and task-record time stamps (`records._ts`). The browser UI shows times in the viewer's own zone.
+Release windows in `policy/` (`Thu 01:00 America/Winnipeg`) are labels; nothing schedules from them.
+
+Manitoba keeps UTC−05 all year from 2026-11-01 (IANA tzdata 2026e). The host needs tzdata ≥ 2026e and ccd must be
+started after that install. `server/tests/test_timezone_manitoba.py` fails on a machine with older tz data, and
+`scripts/check-tz.sh` checks the C library, Python and Node on any box (audit: `docs/MANITOBA-TIMEZONE-AUDIT-2026.md`).
+
 
 ## P4B: the browser UI
 
