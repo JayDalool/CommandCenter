@@ -2,6 +2,10 @@
 
 Steps only Jay can do. Newest first. Delete a line when it's done.
 
+- [ ] TZ-2026 · Rebuild GYST, SamVision, MFE images: tzdata 2026c, −06 · docs/MANITOBA-TIMEZONE-AUDIT-2026.md
+- [ ] TZ-2026 · Check PC clock and browser read Winnipeg −05 · docs/MANITOBA-TIMEZONE-AUDIT-2026.md
+- [ ] TZ-2026 · Upgrade host Node to 22.23.4; run scripts/check-tz.sh · docs/MANITOBA-TIMEZONE-AUDIT-2026.md
+- [ ] TZ-2026 · Run scripts/check-tz.sh on laptop WSL CI runner · scripts/check-tz.sh
 - [ ] CC-030 · Run scripts/go-live.sh --dry-run; check sha and log · scripts/go-live.sh
 - [ ] CC-025 · Auto-merge: auto_merge true in ~/command-center/board/config.json, restart ccd, watch one docs PR · docs/adr/0007-auto-merge-policy.md
 - [ ] CC-023 · Install launcher 0.5.0; new gate shows a tray notice · http://127.0.0.1:7777/#/settings?tab=desktop
