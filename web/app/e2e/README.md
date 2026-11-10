@@ -57,14 +57,15 @@ code: review them first (`git diff origin/main -- web/app/e2e web/app/playwright
 The harness must also work against the base build: a wait for something only this branch renders would time the
 base side out.
 
-## Test execution in the current draft PR
+## Where it runs
 
-The hosted `web-e2e` workflow was removed from draft PR #72 because GitHub-hosted jobs could not start.
-Use the sealed **local WSL test runner** documented below and attach `local-e2e-results/summary.md`
-and any Playwright failure report to the PR. The existing GitHub `ci.yml` workflow remains unchanged.
+`.github/workflows/web-e2e.yml` runs the suite on GitHub's hosted `ubuntu-24.04` machines (a fresh VM per job,
+read-only token, no secrets) for every pull request and push to `main` that touches `web/app/**`,
+`server/ccd/api.py` or the workflow. On a pull request it also runs parity against the base branch. A pull request
+labelled `classic-ui-change` is meant to change how Classic looks: parity still runs and uploads its differences,
+but they do not fail the check.
 
-Do not register the unverified laptop runner for browser jobs automatically. A dedicated, isolated
-`browser-ci` self-hosted runner and a workflow require a separate security/isolation approval.
+It never runs on a self-hosted runner. The local runner below does the same checks on your own machine.
 
 ## Environment
 
@@ -124,13 +125,9 @@ then, with Jay's approval on this development WSL distribution, run
 runner automatically run `sudo` or install system packages. Ensure browser binaries are
 installed once by the WSL user; do not run the tests as root.
 
-### Future WSL self-hosted Actions job (NOT configured here)
+### Not on a self-hosted runner
 
 A GitHub Actions self-hosted runner on a personal laptop can execute arbitrary checked-out
-PR code with the runner user's file access. Existing D-030 runner isolation is **not** verified.
-Do not automatically move this browser job onto the existing self-hosted runner. For later CI:
-isolate a separate runner with a dedicated `browser-ci` label and Unix user/WSL VM,
-no employer/client code, sensitive home files, SSH keys, production backups or credentials,
-read-only checkout, only reviewed branches; verify the isolation first and get separate
-approval before modifying a workflow. Until then, attach the local test summary and failure
-screenshots to the draft PR. GitHub's normal `ci` workflow stays unchanged.
+PR code with the runner user's file access. Do not move this browser job onto a self-hosted
+runner. Moving it anywhere other than GitHub's hosted machines needs a separate security
+review and Jay's approval.
