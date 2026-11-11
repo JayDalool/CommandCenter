@@ -68,12 +68,13 @@ what it matches from the comparison: review `ADDED` with the rest of the harness
 ## Where it runs
 
 `.github/workflows/web-e2e.yml` runs the suite on GitHub's hosted `ubuntu-24.04` machines (a fresh VM per job,
-read-only token, no secrets) for every pull request and push to `main` that touches `web/app/**`,
+read-only token, no secrets) for pull requests to `main` and pushes to `main` that touch `web/app/**`,
 `server/ccd/api.py` or the workflow. On a pull request it also runs parity against the base branch. A pull request
 labelled `classic-ui-change` is meant to change how Classic looks: parity still runs and uploads its differences,
 but they do not fail the check.
 
-It never runs on a self-hosted runner. The local runner below does the same checks on your own machine.
+It never runs on a self-hosted runner. The local runner below runs the same browser checks on your own machine,
+plus TypeScript and the unit tests.
 
 ## Environment
 
