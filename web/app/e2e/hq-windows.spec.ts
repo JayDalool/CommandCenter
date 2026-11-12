@@ -54,3 +54,22 @@ test("a link in the pop-out opens in the main window", async ({ page, watch }) =
   expect(pop.url()).toBe(POP);
   expect(await clean(page, watch)).toEqual([]);
 });
+
+// The pop-out's own address is #/pop/tasks: Engineering shows the list (no task "tasks", no request for it), and a
+// row opens its task in the main window while the pop-out stays where it is.
+test("Engineering pops out as the list, and a row opens its task in the main window", async ({ page, watch }) => {
+  const ENG = `${ORIGIN}/#/pop/tasks`;
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await open(page, "tasks");
+  await page.getByRole("button", { name: "Pop out" }).click();
+  const [pop] = await Promise.all([page.waitForEvent("popup"), page.getByRole("menuitem", { name: /^New window/ }).click()]);
+  const row = pop.locator(".hq-popwin .hq-eng tbody tr").first();
+  await row.waitFor();
+  await expect(pop.locator(".hq-eng-detail")).toHaveCount(0);
+  const key = (await row.locator(".c-key code").textContent())!;
+  await row.locator(".c-title").click();
+  await expect(page).toHaveURL(`${ORIGIN}/#/tasks/${key}`);
+  expect(pop.url()).toBe(ENG);
+  await expect(pop.locator(".hq-eng-detail")).toHaveCount(0);
+  expect((await problems(page, watch)).filter((p) => p !== `opened a window: ${ENG}`)).toEqual([]);
+});

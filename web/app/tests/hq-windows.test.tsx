@@ -182,6 +182,37 @@ describe("the pop-out window", () => {
     expect(main.focus).toHaveBeenCalled();
   });
 
+  // The pop-out's own address is #/pop/tasks: Engineering must not read "tasks" as a task key, and opening a task
+  // from it goes to the main window, as its links do, so the pop-out keeps showing the list.
+  it("pops Engineering out as the list, and opens a task in the main window", async () => {
+    load();
+    const main = { closed: false, focus: vi.fn(), location: { hash: "#/dashboard" } };
+    vi.stubGlobal("opener", main);
+    const loadTicket = vi.spyOn(app, "loadTicket");
+    const c = await show("#/pop/tasks");
+    expect(c.querySelector(".hq-popwin .hq-eng")).not.toBeNull();
+    expect(c.querySelector(".hq-eng-detail")).toBeNull();
+    expect(loadTicket).not.toHaveBeenCalled();
+    const row = c.querySelector<HTMLTableRowElement>(".hq-popwin .hq-eng tbody tr")!;
+    const key = row.querySelector(".c-key code")!.textContent!;
+    fireEvent.click(row.querySelector(".c-title")!);
+    expect(main.location.hash).toBe(href("tasks", key));
+    expect(main.focus).toHaveBeenCalled();
+    expect(location.hash).toBe("#/pop/tasks");
+    expect(c.querySelector(".hq-eng-detail")).toBeNull();
+    expect(loadTicket).not.toHaveBeenCalled();
+  });
+
+  it("with no main window left, opening a task turns the pop-out into an ordinary window", async () => {
+    load();
+    vi.stubGlobal("opener", null);
+    const c = await show("#/pop/tasks");
+    const row = c.querySelector<HTMLTableRowElement>(".hq-popwin .hq-eng tbody tr")!;
+    const key = row.querySelector(".c-key code")!.textContent!;
+    fireEvent.click(row.querySelector(".c-title")!);
+    expect(location.hash).toBe(href("tasks", key));
+  });
+
   it("closes itself when the main window takes the page back", async () => {
     load();
     const close = vi.spyOn(window, "close").mockImplementation(() => {});

@@ -2,19 +2,30 @@
 // Return to main window; the page below is the same component as in the main window, on the same live data. The
 // window says it is open every couple of seconds, remembers where it was put, and says when it closes. Closing it
 // only closes it.
-import { Suspense, useEffect, type MouseEvent } from "react";
+import { Suspense, useEffect, useMemo, type MouseEvent } from "react";
 import "../pages/office.css";
 import "./windows.css";
-import { useRoute } from "../../lib/router";
+import { href, useRoute } from "../../lib/router";
 import { HqBoundary } from "../../components/Shell";
 import { DevDot } from "../../components/DevMode";
 import { NotificationBell } from "../../components/Notifications";
 import { hqPageFor } from "../pages";
+import { PageNavProvider, type PageNav } from "../pages/route";
 import { hqTitle } from "../frame/nav";
 import { Icon } from "../frame/icons";
 import { HEARTBEAT_MS, herePlace, onMessage, popViewOf, savePlace, send, type PopView } from "./manager";
 
 const pageRoute = (v: PopView) => ({ screen: v, id: null, params: new URLSearchParams() });
+
+/** Open an address in the main window and bring it forward, so this window keeps showing its page. With no main window
+ *  left (or not this app's), open it here: this window becomes an ordinary one. */
+function openInMain(h: string) {
+  const main = window.opener as Window | null;
+  if (main && !main.closed) {
+    try { main.location.hash = h; main.focus(); return; } catch { /* not this app's window */ }
+  }
+  location.hash = h;
+}
 
 /** While this window shows `v`: say so, remember where it is, come forward or close when the main window asks. */
 function usePopOut(v: PopView) {
@@ -49,6 +60,9 @@ export default function PopWindow() {
 function PopBody({ v }: { v: PopView }) {
   usePopOut(v);
   const Page = hqPageFor(pageRoute(v));
+  // The page stands for its own address here, not #/pop/<view>, and opening something from it (a task row) goes to
+  // the main window, as its links do.
+  const nav = useMemo<PageNav>(() => ({ route: pageRoute(v), go: (screen, id, params) => openInMain(href(screen, id, params)) }), [v]);
   const title = hqTitle(v, null, null);
   useEffect(() => { document.title = `${title} · Command Center`; }, [title]);
   // A link here opens in the main window, so this window keeps showing its page. With no main window left, the link
@@ -56,9 +70,9 @@ function PopBody({ v }: { v: PopView }) {
   const onClick = (e: MouseEvent) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     const h = (e.target as HTMLElement).closest("a")?.getAttribute("href");
-    const main = window.opener as Window | null;
-    if (!h?.startsWith("#/") || !main || main.closed) return;
-    try { main.location.hash = h; main.focus(); e.preventDefault(); } catch { /* not this app's window: open here */ }
+    if (!h?.startsWith("#/")) return;
+    e.preventDefault();
+    openInMain(h);
   };
   return <div className="hq-popwin" onClick={onClick}>
     <header className="hq-popwin-head">
@@ -69,7 +83,7 @@ function PopBody({ v }: { v: PopView }) {
         title="Close this window and show the page in the main window again"><Icon name="returnin" size={14} />Return to main window</button>
     </header>
     {Page ? <HqBoundary fallback={<p className="hq-popwin-empty">This page could not be shown here. Return it to the main window.</p>}>
-      <Suspense fallback={null}><div className="hq-screen"><Page /></div></Suspense></HqBoundary>
+      <Suspense fallback={null}><PageNavProvider value={nav}><div className="hq-screen"><Page /></div></PageNavProvider></Suspense></HqBoundary>
       : <p className="hq-popwin-empty">This page cannot open in its own window.</p>}
   </div>;
 }
