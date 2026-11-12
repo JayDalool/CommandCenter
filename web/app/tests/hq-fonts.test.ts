@@ -1,6 +1,6 @@
 // HQ's fonts (src/hq/fonts/fonts.css) are self-hosted Geist faces. A browser fetches a face only when a rendered
 // element uses its family, so they stay inert in Classic as long as only HQ's tokens name them. This holds that, and
-// e2e/hq-tokens.spec.ts checks the network side in Chromium.
+// e2e/hq-fonts.spec.ts checks the network side in Chromium.
 const NODE_FS: string = "node:fs";
 const { readFileSync, readdirSync, statSync } = (await import(NODE_FS)) as {
   readFileSync(path: string, encoding?: "utf8"): string;
@@ -37,15 +37,22 @@ describe("HQ fonts", () => {
     }
   });
 
-  it("ships the font licence beside the files", () => {
-    expect(readFileSync(`${dir}/OFL.txt`, "utf8")).toMatch(/SIL Open Font License, Version 1\.1/);
+  it("ships the font licence with the build (public/ is copied into dist/)", () => {
+    expect(readFileSync(`${here}/../public/fonts/OFL.txt`, "utf8")).toMatch(/SIL Open Font License, Version 1\.1/);
   });
 
   it("is named only by HQ's own tokens, so Classic never fetches it", () => {
+    // Quoted or not, in a font-family, a font shorthand or a custom property's value. Comments are not uses.
+    const uses = /["']Geist( Mono)?["']|(?:font(?:-family)?|--[\w-]+)\s*:[^;{}]*\bGeist\b/i;
+    const code = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`\\])\/\/.*$/gm, "$1");
+    for (const t of ["font-family: Geist, sans-serif", "font: 600 12px/1 Geist Mono", "--x: Geist", "fontFamily: 'Geist'"]) {
+      expect(uses.test(t), t).toBe(true);
+    }
+    expect(uses.test(code("/* font-family: Geist */ // font: Geist"))).toBe(false);
     const src = `${here}/../src`;
     const naming = files(src)
       .filter((p) => /\.(css|tsx?|html)$/.test(p) && !p.endsWith("/hq/fonts/fonts.css"))
-      .filter((p) => /["']Geist( Mono)?["']/.test(readFileSync(p, "utf8")))
+      .filter((p) => uses.test(code(readFileSync(p, "utf8"))))
       .map((p) => p.slice(src.length + 1));
     expect(naming).toEqual(["hq/tokens.css"]);
   });

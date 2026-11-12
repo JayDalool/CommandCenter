@@ -111,20 +111,38 @@ for (const theme of ["dark", "light"] as Theme[]) {
   test.describe(`HQ preview, ${theme}`, () => {
     test.use({ theme, ui: "hq" });
 
-    // On <html> every one of Classic's tokens keeps its value. Inside the frame (#main is in it) Classic's colours and
-    // fonts point at HQ's tokens on purpose (hq/frame/classic-bridge.css), so #main is checked for that instead.
+    // On <html> every one of Classic's tokens keeps its value. Inside the frame (#main is in it) the ones
+    // hq/frame/classic-bridge.css names take the HQ token it points at, and every other one keeps Classic's value.
     test("design tokens are unchanged", { tag: "@parity" }, async ({ page }, info) => {
       test.skip(writing(info), "compares with the base tokens from Classic");
       await open(page, "dashboard");
       await hq(page);
       const NODE_FS: string = "node:fs";  // a plain string, so the type check needs no @types/node (env.ts does the same)
       const { readFileSync } = (await import(NODE_FS)) as { readFileSync(path: string, enc: "utf8"): string };
-      const base = JSON.parse(readFileSync(info.snapshotPath(`tokens-${theme}.json`), "utf8")) as { html: object };
-      const now = JSON.parse(await tokens(page)) as { html: object; main: Record<string, string> };
+      const base = JSON.parse(readFileSync(info.snapshotPath(`tokens-${theme}.json`), "utf8")) as
+        { html: Record<string, string>; main: Record<string, string> };
+      const now = JSON.parse(await tokens(page)) as typeof base;
       expect(now.html).toEqual(base.html);
-      const hqOf = (n: string) => page.evaluate((v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim(), n);
-      expect(now.main["--bg"]).toBe(await hqOf("--hq-bg"));
-      expect(now.main["--accent"]).toBe(await hqOf("--hq-accent"));
+      // The bridge as the browser parsed it: each Classic name, and the computed value of the --hq-* it points at.
+      const bridged = await page.evaluate(() => {
+        const out: Record<string, string> = {};
+        const html = getComputedStyle(document.documentElement);
+        const walk = (rules: CSSRuleList) => {
+          for (const r of rules) {
+            if (r instanceof CSSStyleRule && r.selectorText === ':root[data-ui="hq"] .hq-shell') {
+              for (const n of r.style) {
+                const to = /^var\((--hq-[a-z0-9-]+)\)$/.exec(r.style.getPropertyValue(n).trim())?.[1];
+                if (n.startsWith("--") && to) out[n] = html.getPropertyValue(to).trim();
+              }
+            }
+            if ("cssRules" in r && (r as CSSGroupingRule).cssRules) walk((r as CSSGroupingRule).cssRules);
+          }
+        };
+        for (const sheet of document.styleSheets) walk(sheet.cssRules);
+        return out;
+      });
+      expect(Object.keys(bridged).length).toBeGreaterThan(30);
+      expect(now.main).toEqual({ ...base.main, ...bridged });
     });
 
     for (const route of PARITY.filter(isBare)) {

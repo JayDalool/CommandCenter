@@ -1,4 +1,5 @@
-/* Geist and Geist Mono (SIL Open Font License 1.1, OFL.txt beside this file), from the geist npm package 1.7.2.
+/* Geist and Geist Mono (SIL Open Font License 1.1, in public/fonts/OFL.txt, which the build ships as /fonts/OFL.txt),
+ * from the geist npm package 1.7.2.
  * Self-hosted because the CSP allows fonts from 'self' only. A browser fetches a face only when a rendered element
  * asks for its family, and only HQ's --hq-font and --hq-mono name Geist, so Classic never downloads these files.
  * tests/hq-fonts.test.ts holds that. One variable file per family covers every weight HQ uses. */
