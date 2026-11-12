@@ -1,13 +1,15 @@
-// Every route renders the same screen with the HQ preview on as in Classic: in Gate 0 the only difference is the
-// "HQ preview" label at the foot of the navigation rail (none in the room and pane pop-outs, which have no rail).
-// Navigation and its keys do not move.
+// Every route shows the same screen with the HQ preview on as in Classic. HQ puts its own frame around it (sidebar, top
+// bar, tabs: hq/frame), with the "HQ preview" label at the foot of its sidebar; the screen itself, inside #main, is
+// Classic's, unchanged. The room and pane pop-outs have no frame in either mode, so they match whole. Navigation and its
+// keys do not move.
 import { act, cleanup, render } from "@testing-library/react";
 import { vi } from "vitest";
 import { App } from "../src/App";
 import { app, initial } from "../src/store/app";
 import { prefs } from "../src/lib/prefs";
 import { SCREENS } from "../src/lib/router";
-import { NAV } from "../src/components/Shell";
+import { NAV, loadHqFrame } from "../src/components/Shell";
+import { HQ_NAV, HQ_NAV_LOW } from "../src/hq/frame/nav";
 import { state, tasks } from "./helpers";
 
 const BARE = ["room", "pane"];
@@ -22,33 +24,57 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); prefs.patch({ ui: "classic" }); });
 
-/** The route's HTML with the label taken out, and whether there was one. Settings' Interface control naturally shows
- *  which mode is on, so its pressed state is left out too. React's generated ids are numbered per render. */
+const ids = (html: string) => html.replace(/«r[0-9a-z]+»|:r[0-9a-z]+:/g, "«id»");
+
+/** The screen's HTML (#main), the whole window's, and what frames it. React's generated ids are numbered per render;
+ *  Settings' Interface control naturally shows which mode is on, so its pressed state is left out. */
 async function renderIn(route: string, ui: "classic" | "hq") {
   prefs.patch({ ui });
   location.hash = `#/${route}`;
+  if (ui === "hq") await loadHqFrame();
   const view = render(<App />);
   await act(async () => {});
-  const tag = view.container.querySelector(".hq-tag");
-  tag?.remove();
-  view.container.querySelectorAll('[aria-label="Interface"] button').forEach((b) => b.removeAttribute("aria-pressed"));
-  const html = view.container.innerHTML.replace(/«r[0-9a-z]+»|:r[0-9a-z]+:/g, "«id»");
+  const c = view.container;
+  c.querySelectorAll('[aria-label="Interface"] button').forEach((b) => b.removeAttribute("aria-pressed"));
+  const out = {
+    screen: ids(c.querySelector("#main")?.innerHTML ?? ""),
+    whole: ids(c.innerHTML),
+    rail: c.querySelector(".rail") !== null,
+    frame: c.querySelector(".hq-side") !== null,
+    label: c.querySelector(".hq-side .hq-tag") !== null,
+    anyLabel: c.querySelector(".hq-tag") !== null,
+  };
   view.unmount();
-  return { html, label: tag !== null };
+  return out;
 }
 
 describe("both modes", () => {
-  it.each([...SCREENS])("#/%s renders the same screen", async (route) => {
+  it.each([...SCREENS])("#/%s shows the same screen", async (route) => {
     const classic = await renderIn(route, "classic");
     const hq = await renderIn(route, "hq");
-    expect(classic.label).toBe(false);
-    expect(hq.label).toBe(!BARE.includes(route));
-    expect(hq.html).toBe(classic.html);
-    expect(hq.html.length).toBeGreaterThan(200);
+    expect(classic.anyLabel).toBe(false);
+    expect(classic.frame).toBe(false);
+    expect(hq.screen).toBe(classic.screen);
+    expect(hq.screen.length).toBeGreaterThan(50);
+    expect(hq.whole.length).toBeGreaterThan(200);
+    if (BARE.includes(route)) {
+      expect(hq.whole).toBe(classic.whole);
+      expect(hq.anyLabel).toBe(false);
+    } else {
+      expect(classic.rail).toBe(true);
+      expect({ rail: hq.rail, frame: hq.frame, label: hq.label }).toEqual({ rail: false, frame: true, label: true });
+    }
   });
 
   it("keeps the navigation, its order and its keys", () => {
     expect(NAV.map((n) => `${n.id}:${n.key}`)).toEqual(["dashboard:1", "needs:0", "workspace:2", "tasks:3", "activity:4",
       "files:5", "settings:6"]);
+  });
+
+  it("HQ's sidebar opens the same screens with the same keys", () => {
+    const classic = Object.fromEntries(NAV.map((n) => [n.id, n.key]));
+    const hq = [...HQ_NAV, ...HQ_NAV_LOW];
+    expect(hq.map((n) => n.id).sort()).toEqual(NAV.map((n) => n.id).sort());
+    for (const n of hq) expect(`${n.id}:${n.key}`).toBe(`${n.id}:${classic[n.id]}`);
   });
 });

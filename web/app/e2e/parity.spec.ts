@@ -1,4 +1,4 @@
-// Classic must look as it did before this change, in Classic and in the HQ preview. The base build is run first
+// Classic must look as it did before this change. The base build is run first
 // with --update-snapshots=all, which writes e2e/.parity/, then this build, which must match. Run on its own it is
 // skipped: there is nothing to compare with. See e2e/README.md.
 //
@@ -8,7 +8,7 @@
 // What this branch adds on purpose (routes.ts, ADDED) is hidden first, and everything else must match.
 import { test, expect, open, settle, type Theme } from "./fixture";
 import type { Page, TestInfo } from "@playwright/test";
-import { ADDED, ADDED_IN_HQ, PARITY, isBare, slug } from "./routes";
+import { ADDED, PARITY, isBare, slug } from "./routes";
 import { env } from "./env";
 
 test.skip(!env.E2E_PARITY, "parity needs a base build: see e2e/README.md");
@@ -89,8 +89,10 @@ for (const theme of ["dark", "light"] as Theme[]) {
     }
   });
 
-  // The HQ preview with no screen redesigned yet: <html data-ui="hq"> switches HQ's tokens on, and they must not
-  // change one of Classic's, or a single pixel but the label.
+  // The HQ preview: <html data-ui="hq"> switches HQ's tokens on, and they must not change one of Classic's. Its frame
+  // (sidebar, top bar, tabs) is HQ's own look, so a framed screen is not compared with Classic's pixels; the screen
+  // inside it is Classic's markup (tests/routes-both-modes.test.tsx). The pop-outs have no frame in either mode and
+  // must still match Classic pixel for pixel.
   test.describe(`HQ preview, ${theme}`, () => {
     test.use({ theme, ui: "hq" });
 
@@ -101,12 +103,12 @@ for (const theme of ["dark", "light"] as Theme[]) {
       expect(await tokens(page)).toMatchSnapshot(`tokens-${theme}.json`);
     });
 
-    for (const route of PARITY) {
-      test(`#/${route} looks unchanged but for the label`, { tag: "@parity" }, async ({ page }, info) => {
+    for (const route of PARITY.filter(isBare)) {
+      test(`#/${route} looks unchanged`, { tag: "@parity" }, async ({ page }, info) => {
         test.skip(writing(info), "compares with the base screenshots from Classic");
         await open(page, route);
         await hq(page);
-        await hideAdded(page, [...(ADDED[route] ?? []), ...(isBare(route) ? [] : ADDED_IN_HQ)]);
+        await hideAdded(page, ADDED[route] ?? []);
         await shoot(page, route, theme);
         await hq(page);
       });

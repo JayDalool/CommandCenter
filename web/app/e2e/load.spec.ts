@@ -3,7 +3,7 @@
 // call the fixture cannot answer, no write, the token only ever in its header, no window or worker it should not
 // open, and live events live.
 import { test, expect, open, problems, shown, type Theme, type Ui } from "./fixture";
-import { LOAD, SHOWS, isBare } from "./routes";
+import { LOAD, SHOWS, SHOWS_HQ, isBare } from "./routes";
 
 for (const ui of ["classic", "hq"] as Ui[]) {
   for (const theme of ["dark", "light"] as Theme[]) {
@@ -12,15 +12,19 @@ for (const ui of ["classic", "hq"] as Ui[]) {
       for (const route of LOAD) {
         test(`#/${route} loads clean`, async ({ page, watch }) => {
           await open(page, route);
-          expect(await shown(page)).toBe(SHOWS[route]);
+          expect(await shown(page)).toBe((ui === "hq" ? SHOWS_HQ : SHOWS)[route]);
           const html = page.locator("html");
           await expect(html).toHaveAttribute("data-theme", theme);
           // HQ's attribute only in the HQ preview: in Classic its tokens stay inert.
           if (ui === "hq") await expect(html).toHaveAttribute("data-ui", "hq");
           else await expect(html).not.toHaveAttribute("data-ui", /.*/);
-          // The label: only in the HQ preview, at the foot of the rail, so never in a pop-out (no rail).
-          await expect(page.locator(".rail .hq-tag")).toHaveCount(ui === "hq" && !isBare(route) ? 1 : 0);
-          await expect(page.locator(".hq-tag")).toHaveCount(ui === "hq" && !isBare(route) ? 1 : 0);
+          // HQ's frame, and its label at the foot of the sidebar: only in the HQ preview, and never in a pop-out (no
+          // frame there in either mode). Classic keeps its rail.
+          const framed = ui === "hq" && !isBare(route);
+          await expect(page.locator(".hq-side .hq-tag")).toHaveCount(framed ? 1 : 0);
+          await expect(page.locator(".hq-tag")).toHaveCount(framed ? 1 : 0);
+          await expect(page.locator(".hq-side")).toHaveCount(framed ? 1 : 0);
+          await expect(page.locator(".rail")).toHaveCount(ui === "classic" && !isBare(route) ? 1 : 0);
           expect(await problems(page, watch)).toEqual([]);
         });
       }

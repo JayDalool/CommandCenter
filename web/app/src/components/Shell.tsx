@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Component, Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from "react";
 import { app } from "../store/app";
 import { useSelector, shallowEqual } from "../lib/store";
 import { prefs, usePrefs } from "../lib/prefs";
@@ -37,7 +37,7 @@ export const NAV: { id: (typeof SCREENS)[number]; label: string; title: string; 
   { id: "settings", label: "Settings", title: "Settings", key: "6" },
 ];
 /** Screens reached from Settings / Activity (diagnostics) and the routes old links use. */
-const TITLES: Record<string, string> = { overview: "Dashboard", projects: "Projects", development: "Development",
+export const TITLES: Record<string, string> = { overview: "Dashboard", projects: "Projects", development: "Development",
   agents: "Agents", server: "Server", alerts: "Alerts", prs: "Pull requests", workspaces: "herdr layout", console: "Files" };
 
 /** Keys typed into a field belong to the field. */
@@ -207,19 +207,49 @@ export function AppShell({ children, flush = false, bare = false, chrome = "full
   // Focus (the Workspace only): no rail, no top bar — the tree and the terminals get the whole window.
   const focus = wsFocus && route.screen === "workspace";
   const noChrome = bare || focus;
-  return <div className={`shell${noChrome ? " is-bare" : ""}${chrome === "dash" ? " is-dash" : ""}${railCollapsed ? " is-rail-mini" : ""}`}>
-    <a className="sr" href="#main">Skip to content</a>
-    {!noChrome && <Rail />}
-    <div className="main">
-      {!noChrome && chrome !== "dash" && <TopBar />}
-      <UpdatedBanner />
-      <OfflineBanner />
-      <main id="main" className={`screen${flush ? " is-flush" : ""}`} tabIndex={-1}>{children}</main>
-    </div>
+  const ui = usePrefs((p) => p.ui);
+  const banners = <><UpdatedBanner /><OfflineBanner /></>;
+  const screen = <main id="main" className={`screen${flush ? " is-flush" : ""}`} tabIndex={-1}>{children}</main>;
+  const overlays = <>
     {!bare && <FreshnessBar />}
     <Toast />
     {palette && <CommandPalette onClose={() => setPalette(false)} onNewTask={() => { setPalette(false); setNewProject(undefined); setNewTask(true); }} />}
     {newTask && <NewTicket onClose={() => setNewTask(false)} defaults={newProject ? { project: newProject } : undefined} />}
     {unlock && <UnlockDialog onClose={() => setUnlock(false)} />}
+  </>;
+  const classic = <div className={`shell${noChrome ? " is-bare" : ""}${chrome === "dash" ? " is-dash" : ""}${railCollapsed ? " is-rail-mini" : ""}`}>
+    <a className="sr" href="#main">Skip to content</a>
+    {!noChrome && <Rail />}
+    <div className="main">
+      {!noChrome && chrome !== "dash" && <TopBar />}
+      {banners}
+      {screen}
+    </div>
+    {overlays}
   </div>;
+  // The HQ preview puts its own frame around the same screen. Pop-outs and Workspace Focus have no frame in either.
+  if (ui !== "hq" || noChrome) return classic;
+  return <HqBoundary fallback={classic}>
+    <Suspense fallback={null}><HqFrame dash={chrome === "dash"} banners={banners} screen={screen} overlays={overlays} /></Suspense>
+  </HqBoundary>;
+}
+
+// The HQ frame is its own chunk (hq/frame), fetched only while the HQ preview is on, and fetched early so it is
+// usually ready before ccd answers. If that early fetch fails, React's own load tries again (a failure is not kept);
+// if that fails too, HqBoundary shows Classic until a reload.
+let hqFrame: Promise<typeof import("../hq/frame/Frame")> | null = null;
+export function loadHqFrame() {
+  hqFrame ??= import("../hq/frame/Frame").catch((e: unknown) => { hqFrame = null; throw e; });
+  return hqFrame;
+}
+const HqFrame = lazy(loadHqFrame);
+if (typeof window !== "undefined" && prefs.get().ui === "hq") void loadHqFrame().catch(() => { /* HqBoundary shows Classic */ });
+
+/** If the HQ frame fails to load or throws, this window shows Classic and says so; Classic's own screens are
+ *  unaffected, and a reload tries HQ again. */
+export class HqBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch() { app.toast("Engineering HQ could not be shown, so this window shows Classic. Reload to try HQ again.", "bad"); }
+  render() { return this.state.failed ? this.props.fallback : this.props.children; }
 }
