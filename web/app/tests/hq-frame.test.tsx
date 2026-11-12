@@ -1,10 +1,11 @@
 // The HQ frame (hq/frame): its tabs, titles and sidebar, and the fallback to Classic when it cannot be shown.
+import { Component, Suspense, lazy, useState, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { vi } from "vitest";
 import { App } from "../src/App";
 import { app, initial } from "../src/store/app";
 import { prefs } from "../src/lib/prefs";
-import { HqBoundary, loadHqFrame } from "../src/components/Shell";
+import { AppShell, HqBoundary, ScreenMark, loadHqFrame } from "../src/components/Shell";
 import { hqTitle, sectionOf, viewKey } from "../src/hq/frame/nav";
 import { MAX_TABS, close, parseTabs, tabs, visit } from "../src/hq/frame/tabs";
 import { state, tasks } from "./helpers";
@@ -121,8 +122,54 @@ describe("the frame in the app", () => {
   });
 });
 
+describe("Workspace Focus in HQ", () => {
+  afterEach(() => { cleanup(); prefs.patch({ ui: "classic", wsFocus: false }); });
+
+  it("hides the frame without remounting the screen (its terminals stay connected)", async () => {
+    let mounts = 0;
+    function Probe() { useState(() => { mounts++; return 0; }); return <p>screen</p>; }
+    prefs.patch({ ui: "hq", wsFocus: false });
+    location.hash = "#/workspace";
+    await loadHqFrame();
+    render(<AppShell flush><Probe /></AppShell>);
+    await act(async () => {});
+    expect(document.querySelector(".hq-side")).not.toBeNull();
+    await act(async () => { prefs.patch({ wsFocus: true }); });
+    expect(document.querySelector(".hq-side")).toBeNull();
+    expect(document.querySelector(".hq-shell.is-focus")).not.toBeNull();
+    await act(async () => { prefs.patch({ wsFocus: false }); });
+    expect(document.querySelector(".hq-side")).not.toBeNull();
+    expect(screen.getByText("screen")).toBeInTheDocument();
+    expect(mounts).toBe(1);
+  });
+});
+
 describe("fallback", () => {
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  it("shows Classic when the frame's chunk cannot be fetched", async () => {
+    const toast = vi.spyOn(app, "toast").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const Missing = lazy(() => Promise.reject(new TypeError("Failed to fetch dynamically imported module: /assets/Frame-x.js")));
+    render(<HqBoundary fallback={<p>classic</p>}><Suspense fallback={null}><Missing /></Suspense></HqBoundary>);
+    expect(await screen.findByText("classic")).toBeInTheDocument();
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/shows Classic/), "bad");
+  });
+
+  it("does not blame HQ for an error in the Classic screen inside it: the error goes on as in Classic", () => {
+    const toast = vi.spyOn(app, "toast").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    class Root extends Component<{ children: ReactNode }, { e: string | null }> {
+      state = { e: null as string | null };
+      static getDerivedStateFromError(e: Error) { return { e: e.message }; }
+      render() { return this.state.e ? <p>root caught {this.state.e}</p> : this.props.children; }
+    }
+    const Broken = () => { throw new Error("screen bug"); };
+    render(<Root><HqBoundary fallback={<p>classic</p>}><ScreenMark><Broken /></ScreenMark></HqBoundary></Root>);
+    expect(screen.getByText("root caught screen bug")).toBeInTheDocument();
+    expect(screen.queryByText("classic")).toBeNull();
+    expect(toast).not.toHaveBeenCalled();
+  });
 
   it("shows Classic and says so when the frame throws", () => {
     const toast = vi.spyOn(app, "toast").mockImplementation(() => {});
