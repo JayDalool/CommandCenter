@@ -35,10 +35,7 @@ export const slug = (route: string) => route.replace(/[^A-Za-z0-9]+/g, "-").repl
  *  and the rest of the screen must still match the base branch pixel for pixel; each must be on the page, so a stale
  *  entry fails. Anything listed here is not compared, so keep it to new elements and say why in the PR. Once the
  *  branch merges, its base has them too: the next branch starts this list empty. */
-export const ADDED: Record<string, string[]> = {
-  // Settings › General › Interface (Classic or the HQ preview).
-  settings: ['.detail-row:has([role="group"][aria-label="Interface"])'],
-};
+export const ADDED: Record<string, string[]> = {};
 
 /** Added in the HQ preview only, on every screen with a rail: the label at the rail's foot. */
 export const ADDED_IN_HQ = [".rail .hq-tag"];
