@@ -39,6 +39,11 @@
                                      ?full=1 walks it all), and what enforcing identity would refuse. ?actor= ?verified=0|1 ?limit=
     GET   /api/usage                 token use and estimated cost from the agents' session logs (PR 7) by project,
                                      model, day and ticket, plus month-to-date against profile budgets. ?days=
+    GET   /api/notify                Slack and ntfy: settings, status, what is configured (never a token or the ntfy URL)
+    PUT   /api/notify                JAY + DEVELOPER UNLOCK. change those settings: slack, ntfy (on/off), quiet hours,
+                                     summary time, time zone, replyScope ("answers" | "answers_low_risk")
+    POST  /api/notify/test           JAY + DEVELOPER UNLOCK. one test DM and one test push, now
+    POST  /api/notify/summary        JAY + DEVELOPER UNLOCK. post the owner's and technical summaries now
     GET   /api/actors                per-agent actor tokens (fingerprints only; a token is shown once, on issue)
     POST  /api/actors/issue          JAY + DEVELOPER UNLOCK. {actor: "agent:<name>" | "svc:<name>", ttlDays?, note?,
                                      project?} → a typed token (cca_a_… / cca_s_…), once. Sent as X-CCD-Actor-Token;
@@ -533,6 +538,43 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     async def task_answers(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
         return await daemon.task_answers(request.path_params["key"], body, request.state.actor, developer=dev)
+
+    def _notifier():
+        if daemon.notifier is None:
+            raise ActionError(503, "notifications are not set up in this ccd")
+        return daemon.notifier
+
+    def _jay_dev(request, what):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        if request.state.actor != "jay" or not dev:
+            raise ActionError(403, f"Developer Unlock required: {what}")
+
+    async def notify_state(request, _):
+        return _notifier().public()
+
+    async def notify_update(request, body):
+        _jay_dev(request, "notification settings are Jay's")
+        try:
+            return _notifier().update_settings(body)
+        except ValueError as e:
+            raise ActionError(400, str(e))
+
+    async def notify_test(request, body):
+        _jay_dev(request, "a test sends to your phone")
+        n = _notifier()
+        if not (n.settings["slack"] or n.settings["ntfy"]):
+            raise ActionError(409, "switch Slack or ntfy on first")
+        ts = await n.post("dm", "CommandCenter test: Slack works. Reply here to check that replies reach ccd.")
+        await n.push("CommandCenter test", n.link())
+        return {"ok": True, "slack": bool(ts), "status": n.public()["status"]}
+
+    async def notify_summary(request, body):
+        _jay_dev(request, "summaries post to Slack")
+        n = _notifier()
+        if not n.settings["slack"]:
+            raise ActionError(409, "switch Slack on first")
+        await n.summaries(force=True)
+        return {"ok": True, "status": n.public()["status"]}
 
     async def task_check(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
@@ -1239,6 +1281,10 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/inbox", guarded(inbox_state), methods=["GET"]),
         Route("/api/audit", guarded(audit_state), methods=["GET"]),
         Route("/api/usage", guarded(usage_state), methods=["GET"]),
+        Route("/api/notify", guarded(notify_state), methods=["GET"]),
+        Route("/api/notify", guarded(notify_update), methods=["PUT"]),
+        Route("/api/notify/test", guarded(notify_test), methods=["POST"]),
+        Route("/api/notify/summary", guarded(notify_summary), methods=["POST"]),
         Route("/api/actors", guarded(actors_state), methods=["GET"]),
         Route("/api/actors/issue", guarded(actor_issue), methods=["POST"]),
         Route("/api/actors/revoke", guarded(actor_revoke), methods=["POST"]),

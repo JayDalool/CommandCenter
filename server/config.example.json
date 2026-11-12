@@ -6,6 +6,7 @@
   "reconcile_seconds": 30,
   "retention_days": 30,
   "dispatch_projects": ["samvision", "gauzemate"],
+  "notify": {"slack": {"jay_member_id": "U0XXXXXXX", "link_base": "http://localhost:7777"}},
   "projects": [
     {"key": "samvision", "name": "SamVision", "repo": "OWNER/SamVisionAI", "path": "/srv/server/apps/samvisionai",
      "branch": "main", "model": "opus", "effort": "", "index": "docs/tasks/INDEX.md", "links": []}

@@ -15,7 +15,7 @@ import sys
 
 import uvicorn
 
-from . import __version__, attachments, config, files, gitops, nightshift, pty, records, search, security, uitests
+from . import __version__, attachments, config, files, gitops, nightshift, notify, pty, records, search, security, uitests
 from .api import create_app
 from .daemon import Daemon
 from .herdr import Herdr
@@ -100,6 +100,7 @@ def build(cfg=None):
     daemon.records_dir = records.RECORDS_DIR
     daemon.night = nightshift.NightShift(nightshift.NIGHT_DIR)
     daemon.uitests = uitests.UiTests(uitests.UI_TEST_DIR)
+    daemon.notifier = notify.Notifier(daemon, cfg)   # Slack and ntfy: both off until Jay switches them on
 
     @contextlib.asynccontextmanager
     async def lifespan(app):

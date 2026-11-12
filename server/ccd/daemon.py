@@ -359,6 +359,7 @@ class Daemon:
         self.records_dir = None   # where task records are written; None = off (tests, previews)
         self.night = None         # nightshift.NightShift (reports + supervisor state); set by __main__
         self.uitests = None       # uitests.UiTests (UI test runs and Jay's decisions); set by __main__
+        self.notifier = None      # notify.Notifier (Slack and ntfy; off until Jay switches it on); set by __main__
         self._activity = {}       # project → when one of its tickets last changed (night-shift progress)
         self._record_timers = {}
         self._closing = set()
@@ -400,6 +401,8 @@ class Daemon:
     def start(self):
         loops = [self.herdr_loop, self.github_loop, self.git_loop, self.host_loop, self.derive_loop,
                  self.housekeeping_loop, self.night_loop, self.meter_loop]
+        if self.notifier is not None:
+            loops += self.notifier.loops()
         self._loops = [asyncio.create_task(fn(), name=fn.__name__) for fn in loops]
         self._event("daemon", "daemon.started", f"ccd {__version__} started", data={"pid": os.getpid()})
         self._log_merge_policy()
@@ -1654,6 +1657,24 @@ class Daemon:
                         data={"kind": "pipeline.answers_delivered"})
         return {"work": self.task_work(key), "complete": True, "delivered": delivered, "reason": reason,
                 "replanned": replanned}
+
+    async def slack_confirm(self, key, gate):
+        """Jay approves a Low-risk gate by replying in Slack (ccd/notify.py). Only the gates in notify.SLACK_GATES,
+        never in a client project, and recorded with via "slack". Plans, merges and deploys are refused here as well
+        as in the notifier, so no caller can widen it."""
+        from . import notify as notify_mod
+        if gate not in notify_mod.SLACK_GATES:
+            raise ActionError(403, f"a {gate} gate is approved in CommandCenter, not from Slack")
+        t = self._wrap(self._need_tasks().get, key)
+        if self.notifier is not None and self.notifier.client(t["project"]):
+            raise ActionError(403, "client projects are approved in CommandCenter")
+        self._pipeline_result(*self._wrap(self.pipeline.confirm, key, gate, "jay", "slack"))
+        work = self.task_work(key)
+        text = self._nudge_text(work["key"], "confirm", {"gate": gate}, work)
+        if not text:
+            return {"work": work, "delivered": True}
+        delivered, reason = await self._nudge_task(work["key"], text)
+        return {"work": work, "delivered": delivered, "reason": reason}
 
     def task_record(self, key):
         """task.md and workflow.md as rendered now (and written, when records are on)."""
