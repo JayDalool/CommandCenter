@@ -36,6 +36,7 @@ from . import budgets as budgets_mod
 from . import onboarding as onboarding_mod
 from . import herdr as herdr_mod
 from . import importer
+from .leadchat import LeadChat
 # A ticket key in an /api/tasks path, in any case (tasks._id_of upper-cases it), for the shadow identity record.
 TICKET_PATH_RE = re.compile(r"/api/tasks/([A-Za-z][A-Za-z0-9-]{0,20}-\d{1,6})(?:/|$)")
 from . import nightshift as nightshift_mod
@@ -280,7 +281,7 @@ def oom_kills_24h():
     return sum(1 for l in r.stdout.splitlines() if "Out of memory: Killed process" in l)
 
 
-class Daemon:
+class Daemon(LeadChat):
     def __init__(self, cfg, store, herdr, *, github_fn=None, host_fn=None, git_fn=None, oom_fn=None, tasks=None,
                  gh_cli=None, policy=None):
         self.cfg = cfg
@@ -399,7 +400,7 @@ class Daemon:
 
     def start(self):
         loops = [self.herdr_loop, self.github_loop, self.git_loop, self.host_loop, self.derive_loop,
-                 self.housekeeping_loop, self.night_loop, self.meter_loop]
+                 self.housekeeping_loop, self.night_loop, self.meter_loop, self.chat_loop]
         self._loops = [asyncio.create_task(fn(), name=fn.__name__) for fn in loops]
         self._event("daemon", "daemon.started", f"ccd {__version__} started", data={"pid": os.getpid()})
         self._log_merge_policy()
@@ -2654,6 +2655,8 @@ class Daemon:
             srcs = dict(snap.get("sources") or {})
             srcs["tasks"] = {"ok": True, "asOf": self.tasks.last_change, "error": None}
             snap["sources"] = srcs
+        if self.chat is not None:
+            snap["chat"] = {"unread": self.chat_unread_total()}
         return snap
 
     def health(self, short=False):
