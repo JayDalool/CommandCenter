@@ -36,7 +36,8 @@ export interface TeamsView {
   teams: Team[];
   /** Sessions herdr reports with no project. */
   unassigned: TeamMember[];
-  sessions: { total: number; working: number; waiting: number; unknown: number };
+  /** total counts every pane herdr lists; offline and unknown say how many of those are not confirmed running. */
+  sessions: { total: number; working: number; waiting: number; offline: number; unknown: number };
 }
 
 export function member(a: Agent, tickets: Ticket[], ev: Evidence): TeamMember {
@@ -56,7 +57,7 @@ function leadOf(st: State, key: string, agents: Agent[]): { agent: Agent | null;
 
 export function buildTeams(src: HqSource, ev: Evidence): TeamsView {
   const st = src.state;
-  if (!st) return { teams: [], unassigned: [], sessions: { total: 0, working: 0, waiting: 0, unknown: 0 } };
+  if (!st) return { teams: [], unassigned: [], sessions: { total: 0, working: 0, waiting: 0, offline: 0, unknown: 0 } };
   const agents = st.agents;
   const teams = st.projects.map((p): Team => {
     const { agent: lead, why } = leadOf(st, p.key, agents);
@@ -70,5 +71,5 @@ export function buildTeams(src: HqSource, ev: Evidence): TeamsView {
   const unassigned = agents.filter((a) => !a.project || !known.has(a.project)).map((a) => member(a, src.tickets, ev));
   const all = agents.map((a) => presenceOf(a, ev));
   return { teams, unassigned, sessions: { total: all.length, working: all.filter((p) => p === "working").length,
-    waiting: all.filter((p) => p === "waiting").length, unknown: all.filter((p) => p === "unknown").length } };
+    waiting: all.filter((p) => p === "waiting").length, offline: all.filter((p) => p === "offline").length, unknown: all.filter((p) => p === "unknown").length } };
 }

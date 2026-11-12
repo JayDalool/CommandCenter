@@ -102,7 +102,7 @@ describe("My Office (P3.2)", () => {
     const { s, ev } = src();
     const o = buildOffice(s, ev);
     expect(o.agents.map((a) => a.id).sort()).toEqual(s.state!.agents.map((a) => a.id).sort());
-    expect(o.kpis.sessions).toEqual({ total: 3, working: 1, waiting: 1 });
+    expect(o.kpis.sessions).toEqual({ total: 3, working: 1, waiting: 1, offline: 0, unknown: 0 });
     expect(o.leadUpdates.available).toBe(false);
   });
 
@@ -196,6 +196,12 @@ describe("Topology (P3.1)", () => {
     const t = tasks().tickets.find((x) => x.key === "SV-056")!;
     expect(groupOf(t)).toBe("review");
     expect(groupOf({ ...t, gate: "ui", openQuestions: 2 })).toBe("review");
+    // A UI ticket in VERIFYING stays in UI Testing when a question or gate is open (stageOf says "Needs Jay" then).
+    const ui = { ...t, status: "VERIFYING" as const, labels: ["ui"] };
+    expect(groupOf(ui)).toBe("qa");
+    expect(groupOf({ ...ui, openQuestions: 1 })).toBe("qa");
+    expect(groupOf({ ...ui, gate: "deploy" })).toBe("qa");
+    expect(groupOf({ ...ui, labels: [], openQuestions: 1 })).toBe("release");
   });
 
   it("filters: projects and attention", () => {

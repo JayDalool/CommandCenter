@@ -26,7 +26,8 @@ export function groupOf(t: Ticket): StageGroup {
     case "IN_PROGRESS": case "BLOCKED": return "build";
     case "IN_REVIEW": return "review";
     case "READY_TO_MERGE": return "release";
-    case "VERIFYING": return stageOf(t) === "UI Testing" ? "qa" : "release";
+    // stageOf's own UI-testing test, applied directly: stageOf returns "Needs Jay" first when a gate or question is open.
+    case "VERIFYING": return t.labels.includes("ui") || t.flags.includes("needs_ui_review") || t.type === "DESIGN" ? "qa" : "release";
     default: return "plan";
   }
 }

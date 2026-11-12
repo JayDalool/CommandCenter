@@ -29,7 +29,7 @@ export interface OfficeProject {
 export interface OfficeView {
   kpis: {
     projects: number;
-    sessions: { total: number; working: number; waiting: number };
+    sessions: { total: number; working: number; waiting: number; offline: number; unknown: number };
     needsYou: { total: number; urgent: number };
     health: { state: Health; why: string };
   };
@@ -94,7 +94,7 @@ export function buildOffice(src: HqSource, ev: Evidence): OfficeView {
   return {
     kpis: {
       projects: projects.length,
-      sessions: { total: teams.sessions.total, working: teams.sessions.working, waiting: teams.sessions.waiting },
+      sessions: teams.sessions,
       needsYou: { total: decisions.summary.total, urgent: decisions.summary.urgent },
       health,
     },
