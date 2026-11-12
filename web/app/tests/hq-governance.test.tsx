@@ -1,6 +1,7 @@
 // Jay's menu and the pages behind it (hq/frame/JayMenu.tsx, hq/pages/Approvals.tsx, Budgets.tsx, NotConnected.tsx) on
-// the test fixture. Approvals and Budgets read the server's own data and change nothing; Messages and Revenue have no
-// backend yet and say Not connected, with no sample data. Classic has none of these pages and says where they are.
+// the test fixture. Approvals and Budgets read the server's own data and change nothing; Revenue has no backend yet and
+// says Not connected, with no sample data (Messages has its own test, hq-messages.test.tsx). Classic has none of these
+// pages and says where they are.
 import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
 import { vi } from "vitest";
 import { App } from "../src/App";
@@ -176,7 +177,7 @@ describe("Budgets", () => {
 });
 
 describe("Messages and Revenue", () => {
-  it.each([["#/messages", "Messages is not connected", "#/needs"], ["#/revenue", "Revenue is not connected", "#/budgets"]])(
+  it.each([["#/revenue", "Revenue is not connected", "#/budgets"]])(
     "%s says Not connected, shows no sample data, and points to where to go", async (hash, title, to) => {
       load();
       const c = await show(hash);

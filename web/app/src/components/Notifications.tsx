@@ -59,6 +59,17 @@ export function NotificationBell() {
   const known = useRef<Set<string>>(new Set());
   const box = useRef<HTMLDivElement>(null);
   const unseen = items.filter((i) => !seen.has(i.id));
+  // Messages (C8): lead replies Jay has not read count on the bell too, with the same tone when one arrives.
+  const unreadMsgs = useSelector(app.store, (d) => d.state?.chat?.unread ?? 0);
+  const lastMsgs = useRef<number | null>(null);
+  useEffect(() => {
+    if (lastMsgs.current !== null && unreadMsgs > lastMsgs.current) {
+      chime();
+      app.toast(unreadMsgs - lastMsgs.current === 1 ? "New message from a lead" : `${unreadMsgs - lastMsgs.current} new messages from your leads`, "ok");
+    }
+    lastMsgs.current = unreadMsgs;
+  }, [unreadMsgs]);
+  const total = items.length + unreadMsgs;
 
   // New attention: a tone and a toast, once per item (never for what was already there on load).
   useEffect(() => {
@@ -89,17 +100,20 @@ export function NotificationBell() {
   };
 
   return <div className="bell-wrap" ref={box}>
-    <button type="button" className={`bell${unseen.length ? " is-new" : ""}`} aria-haspopup="dialog" aria-expanded={open}
-      aria-label={`Notifications: ${items.length} need you${unseen.length ? `, ${unseen.length} new` : ""}`}
+    <button type="button" className={`bell${unseen.length || unreadMsgs ? " is-new" : ""}`} aria-haspopup="dialog" aria-expanded={open}
+      aria-label={`Notifications: ${items.length} need you${unseen.length ? `, ${unseen.length} new` : ""}${unreadMsgs ? `, ${unreadMsgs} unread message${unreadMsgs === 1 ? "" : "s"}` : ""}`}
       onClick={() => setOpen((v) => !v)}>
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"
         strokeLinejoin="round" aria-hidden><path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15z" /><path d="M10 20a2 2 0 0 0 4 0" /></svg>
-      {items.length > 0 && <span className="bell-n">{items.length}</span>}
+      {total > 0 && <span className="bell-n">{total}</span>}
     </button>
     {open && <div className="bell-pop" role="dialog" aria-label="Notifications">
       <div className="bell-head"><b>Needs you</b><span className="muted mono-xs">{items.length}</span>
         <span className="sl-fill" />{unseen.length > 0 && <button type="button" className="link mono-xs" onClick={markAll}>Mark all seen</button>}</div>
-      {items.length === 0 ? <div className="bell-empty muted">Nothing needs you right now.</div>
+      {unreadMsgs > 0 && <button type="button" className="bell-item is-new" onClick={() => { setOpen(false); location.hash = "#/messages"; }}>
+        <span className="bell-kind">Messages</span>
+        <span className="bell-text">{unreadMsgs === 1 ? "1 unread message from a lead" : `${unreadMsgs} unread messages from your leads`}</span></button>}
+      {items.length === 0 ? (unreadMsgs ? null : <div className="bell-empty muted">Nothing needs you right now.</div>)
         : <ul className="bell-list">{items.map((i) => <li key={i.id}>
           <button type="button" className={`bell-item${seen.has(i.id) ? "" : " is-new"}`} onClick={() => go(i)}>
             <span className="bell-kind" style={{ ["--pj" as string]: `var(--pj-${i.project}, var(--muted))` }}>

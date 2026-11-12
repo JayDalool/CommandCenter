@@ -432,6 +432,35 @@ granted, no agent started, no proposed policy enforced. `ccd/onboarding.py` and 
   (`docs/runbooks/tasks-db-v10-rollback.md`). A drill report made with `--redact` names no path, host or user and
   never holds row contents; `--clean` deletes the copies of the data after the run.
 
+## Messages (Jay's answers C1-C8, 2026-11-12)
+
+Jay talks to the CTO and each project lead in HQ's Messages (docs/API.md, Messages).
+
+- **Nothing Jay writes is typed into a terminal** (C2 b). The lead gets one fixed nudge through herdr's `agent.prompt`,
+  only while idle and only when its input line reads as empty (the night-shift check), so a half-typed draft is never
+  submitted. The nudge names the conversation and the two commands; the lead reads the words with `cc-inbox`.
+  A message is a request from Jay, not an approval: gates, approvals and rules stay where they are.
+- **Who.** No Developer Unlock (C3). Jay's side is the ordinary ccd token with no `X-CCD-Actor`; an agent writes only as
+  the lead (`agent:*`), can read only through its inbox, cannot mark Jay's side read and cannot start a lead. As
+  everywhere else, `X-CCD-Actor` is self-asserted: anything holding the token could write as Jay. That is the same
+  boundary as every other route until Phase 2 identity is enforced.
+- **Storage.** `DATA_DIR/chat.db` (created `0600`) and `SHARE_DIR/chat-files/` (`0700`), apart from `ccd.db` and
+  `tasks.db`, never in a repository. This is the one store that holds conversation text, because Jay asked to keep all
+  history (C4). Text that looks like a token, key, password or credential URL is refused whole (`onboarding.SECRET_RE`).
+  Events and the audit trail record which conversation and message, never the text.
+- **Files** (C6). The type comes from the first bytes (PNG, JPEG, GIF, WebP, `%PDF-`), and a text file must also be
+  named `.md`, `.markdown` or `.txt` and decode as UTF-8 with no NUL; SVG, HTML and everything else are refused
+  before anything is kept. Names are display text only (the generated id is the path; no `/`, control or bidi
+  characters). Downloads are `application/octet-stream` + `attachment` + `Content-Security-Policy: sandbox`. HQ shows
+  an image by fetching its bytes and making a `blob:` of the stored image type; the UI's CSP gains `img-src blob:`
+  for that, and nothing else. Markdown is shown as plain text, never rendered as HTML.
+- **Starting a lead** (C7) is the one place ccd starts a Claude. Only Jay, only from Messages, only while
+  `chat_start_leads` is true, never for a paused project, and never when an unidentified Claude already sits in the
+  lead's folder. A budget at its hold refuses the start until Jay confirms it; the confirmation is recorded. It runs
+  herdr's own CLI: `workspace create --no-focus` (a new workspace at the lead's folder) and `agent start <name>
+  --kind claude` in its root pane. It splits, moves, closes and stops nothing; a failed start leaves the workspace
+  for Jay to see.
+
 ## Audit trail, actor identity and metering (v2 Phase 1, PR 7)
 
 **Audit trail** (`ccd/audit.py`, tasks.db v9 `audit_events`). One row for every write (`POST/PATCH/PUT/DELETE`)

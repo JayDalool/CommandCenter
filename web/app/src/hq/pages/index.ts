@@ -9,7 +9,8 @@ import { Teams } from "./Teams";
 import { Topology } from "./Topology";
 import { Approvals } from "./Approvals";
 import { Budgets } from "./Budgets";
-import { Messages, Revenue } from "./NotConnected";
+import { Revenue } from "./NotConnected";
+import { Messages } from "./Messages";
 import { Settings } from "./Settings";
 
 export type HqPage = () => React.JSX.Element;
