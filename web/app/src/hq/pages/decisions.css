@@ -11,7 +11,7 @@
 }
 :root[data-ui="hq"] .hq-dec.is-late { border-color: var(--hq-bad); box-shadow: inset 3px 0 0 var(--hq-bad); }
 :root[data-ui="hq"] .hq-dec-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
-:root[data-ui="hq"] .hq-dec-main .hq-pill { flex: 0 0 112px; justify-content: center; }
+:root[data-ui="hq"] .hq-dec-main .hq-pill { flex: 0 0 112px; justify-content: flex-start; }
 :root[data-ui="hq"] .hq-dec-main .hq-btn { flex: none; text-decoration: none; }
 :root[data-ui="hq"] .hq-dec-meta { margin: 0; padding-left: 124px; color: var(--hq-muted); font-size: var(--hq-fs-sm); display: flex; flex-wrap: wrap; gap: 4px 14px; }
 :root[data-ui="hq"] .hq-dec-meta b { color: var(--hq-text); }

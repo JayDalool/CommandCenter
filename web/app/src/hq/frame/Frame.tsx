@@ -4,6 +4,7 @@
 // adds no data source and no action of its own; each control here calls the same code as its Classic counterpart.
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import "./frame.css";
+import "./classic-bridge.css";
 import { app } from "../../store/app";
 import { useSelector, shallowEqual } from "../../lib/store";
 import { prefs, usePrefs } from "../../lib/prefs";

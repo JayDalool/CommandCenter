@@ -192,7 +192,6 @@ function Canvas({ v, c, sel, setSel, layers, expanded, setExpanded }: { v: Topol
     onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}>
     <div className="hq-world" style={{ transform: `translate(${t.x}px, ${t.y}px) scale(${t.k})`, width: g.bounds.w, height: g.bounds.h }}>
       <svg className="hq-edges" width={g.bounds.w} height={g.bounds.h} aria-hidden>
-        <defs><filter id="hq-topo-glow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="3.5" /></filter></defs>
         {g.edges.map((e) => {
           const a = byId.get(e.from), b = byId.get(e.to); if (!a || !b) return null;
           const o = off.get(e.id) ?? { a: 0, b: 0 };
@@ -200,9 +199,8 @@ function Canvas({ v, c, sel, setSel, layers, expanded, setExpanded }: { v: Topol
           const dim = linked && !(linked.has(e.from) && linked.has(e.to));
           return <g key={e.id} className={cx("hq-edge", `ek-${e.kind}`, dim && "is-dim", e.blocked && "is-blocked", e.idle && "is-idle")}
             style={{ ["--c" as string]: e.pj ? pjColor(e.pj) : undefined }} data-edge={e.id}>
-            {e.kind !== "host" && !e.idle && !e.blocked && <path d={d} className="hq-edge-glow" filter="url(#hq-topo-glow)" />}
             <path d={d} className="hq-edge-line" />
-            <circle cx={a.x + a.w / 2 + o.a} cy={a.y + a.h} r="3.4" /><circle cx={b.x + b.w / 2 + o.b} cy={b.y} r="3.4" />
+            <circle cx={a.x + a.w / 2 + o.a} cy={a.y + a.h} r="2.6" /><circle cx={b.x + b.w / 2 + o.b} cy={b.y} r="2.6" />
           </g>;
         })}
       </svg>
@@ -336,7 +334,7 @@ function Inspector({ sel, c, onBack }: { sel: string; c: Ctx; onBack: () => void
       <h4 className="hq-insp-h">Needs you <a className="hq-link" href={href("needs")}>Decisions</a></h4>
       {top.length ? <ul className="hq-attn">{top.map((d) => <AttentionRow key={d.id} d={d} now={ev.now} />)}</ul>
         : <p className="hq-empty">Nothing is waiting on you.</p>}
-      <p className="hq-note">Select a project, stage, task or host in the graph to see it here.</p>
+      <p className="hq-note">Select something in the graph.</p>
     </>;
   }
   return <aside className="hq-panel hq-topo-insp" aria-label="Inspector">
@@ -436,7 +434,7 @@ export function Topology() {
 
   return <div className="hq-page hq-topology">
     <header className="hq-hero"><div><h2>Company</h2>
-      <p>Your projects, where their open work sits in the pipeline, and the machines it runs on. Select anything in the graph for its details.</p></div>
+      <p>Projects, their open work and the machines it runs on.</p></div>
       <div className="hq-seg" role="group" aria-label="View">
         {([["graph", "Graph", "graph"], ["list", "List", "list"]] as const).map(([k, label, icon]) =>
           <button key={k} type="button" aria-pressed={mode === k} onClick={() => setMode(k)}><Icon name={icon} size={14} />{label}</button>)}
@@ -469,6 +467,6 @@ export function Topology() {
     {failed ? <p className="hq-note">Could not read the worker nodes; only the ccd host is shown.</p>
       : workers && !workers.available ? <p className="hq-note">Worker nodes are not enabled on this server.</p>
       : workers && !workers.nodes.length ? <p className="hq-note">No worker node is enrolled.</p> : null}
-    {c.stale && <p className="hq-note">The session feed is not live, so lead status and session counts are the last ones reported.</p>}
+    {c.stale && <p className="hq-note">Session feed not live: lead status and session counts are the last reported.</p>}
   </div>;
 }

@@ -1,4 +1,3 @@
-import { useId } from "react";
 // The approved prototype's stroke icons (design/ui-prototypes/engineering-hq/src/components/Icon.tsx), only the ones
 // the frame and the HQ pages use. 24×24, currentColor. "folder" is new: the prototype has no Files page.
 const P: Record<string, React.ReactNode> = {
@@ -48,12 +47,10 @@ export function Icon({ name, size = 18 }: { name: string; size?: number }) {
     strokeLinecap="round" strokeLinejoin="round" aria-hidden>{P[name] ?? null}</svg>;
 }
 
-/** The CommandCenter mark: a hexagonal C, purple to blue. Each copy has its own gradient id. */
+/** The CommandCenter mark: a hexagonal C in HQ's accent, one solid colour. A placeholder until Jay's logo replaces it. */
 export function Logo({ size = 34 }: { size?: number }) {
-  const id = `hq-logo-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
-  return <svg viewBox="0 0 40 40" width={size} height={size} aria-hidden>
-    <defs><linearGradient id={id} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#8b6bff" /><stop offset="1" stopColor="#3f7bff" /></linearGradient></defs>
-    <path d="M20 2.5 35 11v18L20 37.5 5 29V11z" fill="none" stroke={`url(#${id})`} strokeWidth="3" strokeLinejoin="round" />
-    <path d="M26 14.5a8 8 0 1 0 0 11" fill="none" stroke={`url(#${id})`} strokeWidth="3.4" strokeLinecap="round" />
+  return <svg viewBox="0 0 40 40" width={size} height={size} aria-hidden style={{ color: "var(--hq-accent)" }}>
+    <path d="M20 2.5 35 11v18L20 37.5 5 29V11z" fill="none" stroke="currentColor" strokeWidth="3" strokeLinejoin="round" />
+    <path d="M26 14.5a8 8 0 1 0 0 11" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round" />
   </svg>;
 }

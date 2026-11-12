@@ -26,7 +26,7 @@
 :root[data-ui="hq"] .hq-org-jay small { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
 :root[data-ui="hq"] .hq-org-av {
   display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 50%;
-  background: var(--hq-accent); color: #fff; font: 700 15px/1 var(--hq-font);
+  background: var(--hq-accent); color: var(--hq-bg); font: 700 15px/1 var(--hq-font);
 }
 
 :root[data-ui="hq"] .hq-org .hq-org-projects { position: relative; display: flex; justify-content: center; gap: 16px; width: 100%; min-width: min-content; padding-top: 18px; }

@@ -111,11 +111,20 @@ for (const theme of ["dark", "light"] as Theme[]) {
   test.describe(`HQ preview, ${theme}`, () => {
     test.use({ theme, ui: "hq" });
 
+    // On <html> every one of Classic's tokens keeps its value. Inside the frame (#main is in it) Classic's colours and
+    // fonts point at HQ's tokens on purpose (hq/frame/classic-bridge.css), so #main is checked for that instead.
     test("design tokens are unchanged", { tag: "@parity" }, async ({ page }, info) => {
       test.skip(writing(info), "compares with the base tokens from Classic");
       await open(page, "dashboard");
       await hq(page);
-      expect(await tokens(page)).toMatchSnapshot(`tokens-${theme}.json`);
+      const NODE_FS: string = "node:fs";  // a plain string, so the type check needs no @types/node (env.ts does the same)
+      const { readFileSync } = (await import(NODE_FS)) as { readFileSync(path: string, enc: "utf8"): string };
+      const base = JSON.parse(readFileSync(info.snapshotPath(`tokens-${theme}.json`), "utf8")) as { html: object };
+      const now = JSON.parse(await tokens(page)) as { html: object; main: Record<string, string> };
+      expect(now.html).toEqual(base.html);
+      const hqOf = (n: string) => page.evaluate((v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim(), n);
+      expect(now.main["--bg"]).toBe(await hqOf("--hq-bg"));
+      expect(now.main["--accent"]).toBe(await hqOf("--hq-accent"));
     });
 
     for (const route of PARITY.filter(isBare)) {

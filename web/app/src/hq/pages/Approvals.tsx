@@ -28,8 +28,7 @@ export function Approvals() {
 
   return <div className="hq-page hq-approvals">
     <header className="hq-hero"><div><h2>Approvals</h2>
-      <p>Merges and deploys waiting for you, with the approval record each is bound to. Each opens the place you approve
-        today. Nothing here approves, merges or deploys.</p></div></header>
+      <p>Merges and deploys waiting for you. Each opens where you approve it; nothing here approves, merges or deploys.</p></div></header>
 
     <div className="hq-office-grid">
       <section className="hq-panel" aria-labelledby="hq-appr-list">
