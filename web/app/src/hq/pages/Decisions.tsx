@@ -71,7 +71,7 @@ export function Decisions() {
   const [kind, setKind] = useState<DecisionKind | null>(null);
   const extra = inbox?.items ?? {};
   // Classic's order: overdue first, then by type, then oldest first.
-  const rank = (d: DecisionItem) => [late(extra[d.id]) ? 0 : 1, TYPE_ORDER.indexOf(typeOf(d.source)), d.source.since ?? Infinity];
+  const rank = (d: DecisionItem) => [late(extra[d.id]) ? 0 : 1, TYPE_ORDER.indexOf(typeOf(d.source)), d.source.since ?? Number.MAX_SAFE_INTEGER];
   const sorted = [...v.items].sort((a, b) => { const [x, y] = [rank(a), rank(b)]; return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]; });
   const shown = sorted.filter((d) => !kind || d.kind === kind);
   const overdue = v.items.filter((d) => late(extra[d.id])).length;
