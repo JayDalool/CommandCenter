@@ -35,10 +35,15 @@ export const slug = (route: string) => route.replace(/[^A-Za-z0-9]+/g, "-").repl
  *  and the rest of the screen must still match the base branch pixel for pixel; each must be on the page, so a stale
  *  entry fails. Anything listed here is not compared, so keep it to new elements and say why in the PR. Once the
  *  branch merges, its base has them too: the next branch starts this list empty. */
-export const ADDED: Record<string, string[]> = {
-  // Settings › General › Interface (Classic or the HQ preview).
-  settings: ['.detail-row:has([role="group"][aria-label="Interface"])'],
-};
+export const ADDED: Record<string, string[]> = {};
 
 /** Added in the HQ preview only, on every screen with a rail: the label at the rail's foot. */
 export const ADDED_IN_HQ = [".rail .hq-tag"];
+
+/** Not new, but different in the HQ preview by design, by route: the preview's screenshots are compared with the
+ *  base branch's Classic ones, so a control that shows which interface is on cannot match. Permanent, unlike ADDED.
+ *  Parity makes these invisible (visibility: hidden, so the layout is kept) on both sides, Classic and HQ alike. */
+export const DIFFERS_IN_HQ: Record<string, string[]> = {
+  // Settings › General › Interface has "HQ preview" selected in the preview, "Classic" in Classic.
+  settings: ['[role="group"][aria-label="Interface"]'],
+};

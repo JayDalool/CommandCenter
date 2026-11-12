@@ -8,7 +8,7 @@
 // What this branch adds on purpose (routes.ts, ADDED) is hidden first, and everything else must match.
 import { test, expect, open, settle, type Theme } from "./fixture";
 import type { Page, TestInfo } from "@playwright/test";
-import { ADDED, ADDED_IN_HQ, PARITY, isBare, slug } from "./routes";
+import { ADDED, ADDED_IN_HQ, DIFFERS_IN_HQ, PARITY, isBare, slug } from "./routes";
 import { env } from "./env";
 
 test.skip(!env.E2E_PARITY, "parity needs a base build: see e2e/README.md");
@@ -61,6 +61,20 @@ async function hideAdded(page: Page, selectors: string[]) {
   await settle(page);
 }
 
+/** Makes the controls that show which interface is on invisible, keeping their space (routes.ts, DIFFERS_IN_HQ). On
+ *  both sides and in both modes, so the rest of the screen is still compared. Each selector must match. */
+async function blankDiffers(page: Page, route: string) {
+  for (const sel of DIFFERS_IN_HQ[route] ?? []) {
+    const n = await page.evaluate((s) => {
+      const found = [...document.querySelectorAll<HTMLElement>(s)];
+      for (const el of found) el.style.setProperty("visibility", "hidden", "important");
+      return found.length;
+    }, sel);
+    expect(n, `${sel} (routes.ts, DIFFERS_IN_HQ) is on the page`).toBeGreaterThan(0);
+  }
+  await settle(page);
+}
+
 const hq = (page: Page) => expect(page.locator("html"), "the HQ preview is on").toHaveAttribute("data-ui", "hq");
 
 async function shoot(page: Page, route: string, theme: Theme) {
@@ -84,6 +98,7 @@ for (const theme of ["dark", "light"] as Theme[]) {
       test(`#/${route} looks unchanged`, { tag: "@parity" }, async ({ page }, info) => {
         await open(page, route);
         if (!writing(info)) await hideAdded(page, ADDED[route] ?? []);
+        await blankDiffers(page, route);
         await shoot(page, route, theme);
       });
     }
@@ -107,6 +122,7 @@ for (const theme of ["dark", "light"] as Theme[]) {
         await open(page, route);
         await hq(page);
         await hideAdded(page, [...(ADDED[route] ?? []), ...(isBare(route) ? [] : ADDED_IN_HQ)]);
+        await blankDiffers(page, route);
         await shoot(page, route, theme);
         await hq(page);
       });
