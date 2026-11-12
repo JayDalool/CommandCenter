@@ -5,7 +5,7 @@
 //   Return to Workspace   puts it back on the wall (this window closes)
 //   Close Window / Detach closes only this window; the session keeps running (listed to reattach)
 //   End Session           the explicit, confirmed way to stop the work itself
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { app } from "../store/app";
 import { useSelector } from "../lib/store";
 import { useRoute } from "../lib/router";
@@ -15,6 +15,8 @@ import { ConfirmDialog } from "../components/Dialog";
 import { DevDot } from "../components/DevMode";
 import { PaneBody, RoomView, useRoom, useWsProjects } from "../workspace/Room";
 import { StagePill } from "../workspace/Dossier";
+import { usePrefs } from "../lib/prefs";
+import { popViewOf } from "../hq/windows/address";
 import { TOOL_LABEL, TOOLS, assertPoppedPane, assertPoppedRoom, detachPane, detachRoom, layout, reattachPane, returnRoom, sessionName,
   type Tool } from "../workspace/rooms";
 
@@ -96,4 +98,17 @@ export function PaneWindow() {
           onClose={() => setSure(false)}>Anything running in it stops.</ConfirmDialog>)}
     <div className="pane-body is-pop">{proj ? <PaneBody room={room} tool={tool} proj={proj} active /> : <EmptyState title="Loading…" />}</div>
   </div>;
+}
+
+// One HQ page in its own window (#/pop/<view>), opened from the HQ preview's Pop out. The page and the window manager are
+// HQ's own chunk, loaded only here and only with the HQ preview on, so Classic never downloads them.
+const HqPopWindow = lazy(() => import("../hq/windows/PopWindow"));
+
+export function PopWindow() {
+  useRoute();
+  const ui = usePrefs((p) => p.ui);
+  if (!popViewOf(location.hash)) return <EmptyState title="Nothing to show in this window" hint="Pop a page out from the HQ preview." />;
+  if (ui !== "hq") return <EmptyState title="Pages open in their own window only in the HQ preview"
+    hint="Turn it on in Settings › General › Interface, or close this window." />;
+  return <Suspense fallback={<EmptyState title="Loading…" />}><HqPopWindow /></Suspense>;
 }

@@ -11,7 +11,7 @@ import { Tasks } from "./screens/Tasks";
 import { Development } from "./screens/Development";
 import { Workspace } from "./screens/Workspace";
 import { Files } from "./screens/Files";
-import { PaneWindow, RoomWindow } from "./screens/Popout";
+import { PaneWindow, PopWindow, RoomWindow } from "./screens/Popout";
 import { restoreToken } from "./api/auth";
 import { restoreDevSession } from "./api/developer";
 import { redeemSignin } from "./api/signin";
@@ -28,8 +28,8 @@ const SCREENS: Record<string, () => React.JSX.Element> = { dashboard: Dashboard,
   agents: Agents, tasks: Tasks, development: Development, workspace: Workspace, files: Files, console: Files, prs: PullRequests,
   workspaces: Workspaces, server: Server, activity: Activity, alerts: Alerts, settings: Settings, needs: NeedsYou };
 const FLUSH = new Set(["tasks", "workspaces", "console", "workspace", "files"]);
-/** Pop-out windows: one room or one terminal, no navigation around them. */
-const BARE: Record<string, () => React.JSX.Element> = { room: RoomWindow, pane: PaneWindow };
+/** Pop-out windows: one room, one terminal or one HQ page, no navigation around them. */
+const BARE: Record<string, () => React.JSX.Element> = { room: RoomWindow, pane: PaneWindow, pop: PopWindow };
 
 /** A pop-out or second window gets the token and the Developer session from the open windows. */
 export async function start() {

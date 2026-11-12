@@ -15,7 +15,7 @@ import { state, tasks } from "./helpers";
 
 const hasPage = (route: string) => hqPageFor(parse(`#/${route}`)) !== null;
 
-const BARE = ["room", "pane"];
+const BARE = ["room", "pane", "pop"];
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-27T15:00:00Z") });
