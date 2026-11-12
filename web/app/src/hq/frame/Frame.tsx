@@ -2,7 +2,7 @@
 // loaded only when this browser has the HQ preview on (components/Shell.tsx), so Classic never downloads or runs it.
 // Everything inside the frame is Classic's: the screens, the banners, the palette, the dialogs, the keys. The frame
 // adds no data source and no action of its own; each control here calls the same code as its Classic counterpart.
-import { useEffect, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import "./frame.css";
 import { app } from "../../store/app";
 import { useSelector, shallowEqual } from "../../lib/store";
@@ -14,7 +14,7 @@ import { DevDot } from "../../components/DevMode";
 import { NotificationBell } from "../../components/Notifications";
 import { HqPreviewTag } from "../../components/HqPreview";
 import { HqBoundary } from "../../components/Shell";
-import { HQ_PAGES } from "../pages";
+import { hqPageFor } from "../pages";
 import { HQ_NAV, HQ_NAV_LOW, hqTitle, sectionOf, viewKey, type HqNavItem } from "./nav";
 import { tabs, visit, close } from "./tabs";
 import { Icon, Logo } from "./icons";
@@ -139,16 +139,20 @@ export default function HqFrame({ dash, focus, banners, screen, overlays }: {
 }) {
   const route = useRoute();
   const { icons } = useIconsOnly();
-  const Page = HQ_PAGES[route.screen];
+  const Page = hqPageFor(route);
+  // The screen whose HQ page fell back to Classic: that Classic screen brings its own header (the Dashboard's has the
+  // bell), so the top bar leaves it out as it does in Classic. Cleared on leaving, so the page is tried again on return.
+  const [fellBack, setFellBack] = useState<string | null>(null);
+  if (fellBack && fellBack !== route.screen) setFellBack(null);
   return <div className={cx("shell hq-shell", icons && "is-icons", focus && "is-focus")}>
     <a className="sr" href="#main">Skip to content</a>
     {!focus && <HqSide />}
     <div className="hq-main">
-      {!focus && <HqTop dash={dash && !Page} />}
+      {!focus && <HqTop dash={dash && (!Page || fellBack === route.screen)} />}
       {!focus && <HqTabs />}
       {banners}
       {Page
-        ? <HqBoundary key={route.screen} fallback={screen}
+        ? <HqBoundary key={route.screen} fallback={screen} onFail={() => setFellBack(route.screen)}
             message="This HQ page could not be shown, so the Classic screen is shown instead. Reload to try again.">
           <main id="main" className="screen hq-screen" tabIndex={-1}><Page /></main></HqBoundary>
         : screen}

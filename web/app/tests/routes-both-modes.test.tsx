@@ -1,5 +1,5 @@
 // Every route shows the same screen with the HQ preview on as in Classic, except where HQ has its own page for the
-// address (hq/pages, HQ_PAGES). HQ puts its own frame around it (sidebar, top bar, tabs: hq/frame), with the
+// address (hq/pages, hqPageFor). HQ puts its own frame around it (sidebar, top bar, tabs: hq/frame), with the
 // "HQ preview" label at the foot of its sidebar; the screen itself, inside #main, is Classic's, unchanged. The room and
 // pane pop-outs have no frame in either mode, so they match whole. Navigation and its keys do not move.
 import { act, cleanup, render } from "@testing-library/react";
@@ -7,10 +7,12 @@ import { vi } from "vitest";
 import { App } from "../src/App";
 import { app, initial } from "../src/store/app";
 import { prefs } from "../src/lib/prefs";
-import { SCREENS } from "../src/lib/router";
+import { SCREENS, parse } from "../src/lib/router";
 import { NAV, loadHqFrame } from "../src/components/Shell";
 import { HQ_NAV, HQ_NAV_LOW } from "../src/hq/frame/nav";
-import { HQ_PAGES } from "../src/hq/pages";
+import { hqPageFor } from "../src/hq/pages";
+
+const hasPage = (route: string) => hqPageFor(parse(`#/${route}`)) !== null;
 import { state, tasks } from "./helpers";
 
 const BARE = ["room", "pane"];
@@ -57,8 +59,8 @@ describe("both modes", () => {
     expect(classic.anyLabel).toBe(false);
     expect(classic.frame).toBe(false);
     expect(classic.hqPage).toBe(false);
-    expect(hq.hqPage).toBe(route in HQ_PAGES);
-    if (!(route in HQ_PAGES)) expect(hq.screen).toBe(classic.screen);
+    expect(hq.hqPage).toBe(hasPage(route));
+    if (!hasPage(route)) expect(hq.screen).toBe(classic.screen);
     expect(hq.screen.length).toBeGreaterThan(50);
     expect(hq.whole.length).toBeGreaterThan(200);
     if (BARE.includes(route)) {
@@ -68,6 +70,18 @@ describe("both modes", () => {
       expect(classic.rail).toBe(true);
       expect({ rail: hq.rail, frame: hq.frame, label: hq.label }).toEqual({ rail: false, frame: true, label: true });
     }
+  });
+
+  // Classic's own Tasks views keep Classic's screen in HQ, so their links still work; a task's address opens Engineering.
+  it.each(["tasks?view=board", "tasks?status=IN_REVIEW", "tasks?view=jay"])("#/%s shows Classic's Tasks screen in HQ", async (route) => {
+    const classic = await renderIn(route, "classic");
+    const hq = await renderIn(route, "hq");
+    expect(hq.hqPage).toBe(false);
+    expect(hq.screen).toBe(classic.screen);
+  });
+  it("#/tasks/KEY shows Engineering in HQ", async () => {
+    expect(hasPage("tasks/SV-056")).toBe(true);
+    expect((await renderIn("tasks/SV-056", "hq")).hqPage).toBe(true);
   });
 
   it("keeps the navigation, its order and its keys", () => {

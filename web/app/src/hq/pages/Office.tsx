@@ -7,15 +7,12 @@ import { href } from "../../lib/router";
 import { ago } from "../../lib/time";
 import { buildOffice, PRESENCE_LABEL, type DecisionItem, type Health, type OfficeProject, type Presence, type TeamMember } from "../data";
 import { useHqData } from "./live";
+import { Pill, PRESENCE_TONE, cx, plural } from "./ui";
 import type { Alert } from "../../api/types";
-
-const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 const HEALTH: Record<Health, { label: string; tone: string }> = {
   healthy: { label: "Healthy", tone: "ok" }, degraded: { label: "Degraded", tone: "bad" }, unknown: { label: "Unknown", tone: "idle" },
 };
-const PRESENCE_TONE: Record<Presence, string> = { working: "ok", waiting: "warn", idle: "info", offline: "idle", unknown: "idle" };
 
 function greeting(d: Date) { const h = d.getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; }
 
@@ -24,11 +21,7 @@ function Kpi({ label, value, sub, tone, to }: { label: string; value: string | n
   return to ? <a className="hq-kpi" href={to}>{body}</a> : <div className="hq-kpi">{body}</div>;
 }
 
-function Pill({ tone, children, title }: { tone: string; children: React.ReactNode; title?: string }) {
-  return <span className={`hq-pill t-${tone}`} title={title}><i aria-hidden />{children}</span>;
-}
-
-function ProjectCard({ p }: { p: OfficeProject }) {
+function ProjectCard({ p, stale }: { p: OfficeProject; stale: boolean }) {
   const h = HEALTH[p.health];
   return <a className="hq-proj" href={href("projects", p.key)} style={{ ["--pj" as string]: `var(--hq-pj-${p.key}, var(--hq-accent))` }}>
     <span className="hq-proj-top"><b>{p.name}</b><Pill tone={h.tone} title={p.healthWhy}>{h.label}</Pill></span>
@@ -41,7 +34,7 @@ function ProjectCard({ p }: { p: OfficeProject }) {
     </span>
     <span className="hq-proj-foot">
       {p.blocked > 0 && <span className="t-bad">{p.blocked} blocked</span>}
-      <span>{plural(p.sessions, "session")}</span>
+      <span>{plural(p.sessions, "session")}{stale && " last reported"}</span>
       <span>{p.lead ? `Lead: ${p.lead}` : "No lead session"}</span>
     </span>
   </a>;
@@ -101,7 +94,7 @@ export function Office() {
     <div className="hq-office-grid">
       <section className="hq-panel hq-office-projects" aria-labelledby="hq-office-projects">
         <header><h3 id="hq-office-projects">Projects</h3><a className="hq-link" href={href("projects")}>All projects</a></header>
-        {v.projects.length ? <div className="hq-proj-grid">{v.projects.map((p) => <ProjectCard key={p.key} p={p} />)}</div>
+        {v.projects.length ? <div className="hq-proj-grid">{v.projects.map((p) => <ProjectCard key={p.key} p={p} stale={stale} />)}</div>
           : <p className="hq-empty">No projects reported yet.</p>}
       </section>
       <div className="hq-office-side">
@@ -118,7 +111,7 @@ export function Office() {
     </div>
 
     <section className="hq-panel" aria-labelledby="hq-office-sessions">
-      <header><h3 id="hq-office-sessions">Sessions <small>{plural(v.agents.length, "session")} reported by herdr</small></h3>
+      <header><h3 id="hq-office-sessions">Sessions <small>{plural(v.agents.length, "session")} {stale ? "last reported" : "reported"} by herdr</small></h3>
         {stale && <Pill tone="warn">Feed not live · status unknown</Pill>}
         <div className="hq-seg" role="group" aria-label="Filter sessions">
           {FILTERS.map((f) => <button key={f} type="button" aria-pressed={filter === f} onClick={() => setFilter(f)}>

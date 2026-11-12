@@ -70,6 +70,9 @@ describe("My Office", () => {
     expect(page.querySelector(".hq-sess .hq-pill")?.textContent).toBe("Unknown");
     expect(within(page).queryByText("Working")).toBeNull();
     expect(page.textContent).toMatch(/Feed not live/);
+    // Counts from the last snapshot say so (review of #80).
+    expect(page.querySelector("#hq-office-sessions")).toHaveTextContent("last reported by herdr");
+    page.querySelectorAll(".hq-proj-foot").forEach((f) => expect(f).toHaveTextContent(/last reported/));
   });
 
   it("filters sessions by presence", async () => {

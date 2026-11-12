@@ -29,4 +29,24 @@ it("My Office falls back to the Classic Dashboard if it throws, and the frame st
   expect(document.querySelector(".dash-top")).not.toBeNull();
   expect(document.querySelector(".hq-side")).not.toBeNull();
   expect(toast).toHaveBeenCalledWith(expect.stringMatching(/Classic screen is shown/), "bad");
+  // The Dashboard's own header has the bell, so the top bar leaves it out, as it does when no HQ page is involved.
+  expect(document.querySelectorAll("[aria-label*='otification']")).toHaveLength(1);
+});
+
+it("Engineering falls back to Classic's Tasks screen if it throws", async () => {
+  vi.stubGlobal("fetch", () => new Promise(() => {}));
+  vi.spyOn(app, "boot").mockResolvedValue(undefined);
+  vi.spyOn(app, "toast").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const t = tasks();
+  app.store.set({ ...initial, auth: "ok", state: state(), stateAt: Date.now(), tickets: t.tickets, ticketsLoaded: true,
+    taskProjects: t.projects, meta: t.meta });
+  prefs.patch({ ui: "hq" });
+  location.hash = "#/tasks";
+  await loadHqFrame();
+  render(<App />);
+  await act(async () => {});
+  expect(document.querySelector("#main > .hq-eng")).toBeNull();
+  expect(document.querySelector("#main .tasks")).not.toBeNull();
+  expect(document.querySelectorAll("[aria-label*='otification']")).toHaveLength(1);
 });

@@ -269,13 +269,14 @@ export class ScreenMark extends Component<{ children: ReactNode }, { error: { e:
 /** If the HQ frame (or an HQ page) fails to load or throws, this shows the fallback and says so: Classic, or the Classic
  *  screen at that address. A reload tries HQ again. An error from the Classic screen itself (ScreenMark) is not HQ's:
  *  it is passed on unchanged. */
-export class HqBoundary extends Component<{ children: ReactNode; fallback: ReactNode; message?: string },
+export class HqBoundary extends Component<{ children: ReactNode; fallback: ReactNode; message?: string; onFail?: () => void },
   { failed: boolean; rethrow: { e: unknown } | null }> {
   state: { failed: boolean; rethrow: { e: unknown } | null } = { failed: false, rethrow: null };
   static getDerivedStateFromError(e: unknown) { return screenErrors.has(e) ? { rethrow: { e } } : { failed: true }; }
   componentDidCatch(e: unknown) {
     if (screenErrors.has(e)) return;
     app.toast(this.props.message ?? "Engineering HQ could not be shown, so this window shows Classic. Reload to try HQ again.", "bad");
+    this.props.onFail?.();
   }
   render() {
     if (this.state.rethrow) throw this.state.rethrow.e;
