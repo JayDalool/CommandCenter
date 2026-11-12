@@ -41,10 +41,11 @@ function answer(path: string): unknown {
     case "/api/audit": return { available: false, events: [], summary: {}, chain: {} };
     case "/api/actors": return { available: false, tokens: [] };
     case "/api/usage": return { available: false };
-    // A ccd with the notifier and nothing set up yet: no Slack tokens, no member ID, no ntfy topic, everything off.
+    // A ccd with the notifier and nothing set up yet: no Slack tokens, no member ID, no ntfy topic, everything off, and
+    // Slack replies limited to answers (ccd's default until Jay chooses).
     case "/api/notify":
       return { settings: { slack: false, ntfy: false, quietStart: "22:00", quietEnd: "07:00", summaryAt: "07:00",
-        timezone: "America/Winnipeg", replyScope: "answers_low_risk" },
+        timezone: "America/Winnipeg", replyScope: "answers" },
         status: { slack: "off", socket: "off", ntfy: "off", lastError: null, lastSentAt: null },
         configured: { slackTokens: false, slackTokensError: null, jayMemberId: false, ntfy: false },
         channels: { cto: "cto" }, clientProjects: ["gauzemate"], slackGates: ["failure", "ui"], quietNow: false, held: 0 };

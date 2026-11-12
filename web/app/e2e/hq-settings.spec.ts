@@ -64,6 +64,8 @@ test("Slack and phone show what is not set up yet, fit a phone, and ask for Deve
   await expect(group.getByText("No ntfy topic in config.json")).toBeVisible();
   await expect(group.getByLabel("Quiet hours start")).toHaveValue("22:00");
   await expect(group.getByRole("button", { name: "Send a test" })).toBeDisabled();
+  await expect(group.getByRole("group", { name: "Your Slack replies" }).getByRole("button", { name: "Answers only" }))
+    .toHaveAttribute("aria-pressed", "true");
   expect(await page.evaluate(wide)).toBe(true);
   await group.getByRole("group", { name: "Slack", exact: true }).getByRole("button", { name: "On" }).click();
   await expect(page.getByRole("dialog", { name: "Developer Unlock" })).toBeVisible();

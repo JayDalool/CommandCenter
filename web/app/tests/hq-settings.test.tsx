@@ -172,11 +172,60 @@ describe("HQ Settings", () => {
     developer.set({ active: false, expiresAt: null, error: null });
   });
 
-  it("Slack and phone say so when this ccd has no alerts", async () => {
+  it("Slack and phone say so when this ccd has no alerts, or has them switched off", async () => {
     load();
-    vi.spyOn(app.api, "notify").mockRejectedValue(new ApiError(404, "not found"));
-    const page = await show("#/settings?tab=notifications");
+    vi.spyOn(app.api, "notify").mockRejectedValueOnce(new ApiError(404, "not found"))
+      .mockRejectedValueOnce(new ApiError(503, "notifications are not set up in this ccd"));
+    let page = await show("#/settings?tab=notifications");
     expect(within(page).getByText("This ccd has no Slack or phone alerts yet.")).toBeInTheDocument();
+    cleanup();
+    page = await show("#/settings?tab=notifications");
+    expect(within(page).getByText("Alerts are not set up in this ccd.")).toBeInTheDocument();
+  });
+
+  it("a time that was not saved goes back to ccd's, locked or refused", async () => {
+    load();
+    developer.set({ active: false, expiresAt: null, error: null });
+    vi.spyOn(app.api, "notify").mockResolvedValue(NOTIFY);
+    const put = vi.spyOn(app.api, "setNotify").mockRejectedValue(new ApiError(400, "quietEnd must be HH:MM (24-hour)"));
+    const page = await show("#/settings?tab=notifications");
+    const end = within(page).getByLabelText("Quiet hours end");
+    fireEvent.change(end, { target: { value: "06:30" } });
+    await act(async () => { fireEvent.blur(end); });
+    expect(put).not.toHaveBeenCalled();
+    expect(end).toHaveValue("07:00");
+    act(() => developer.set({ active: true, expiresAt: null, error: null }));
+    fireEvent.change(end, { target: { value: "06:30" } });
+    await act(async () => { fireEvent.blur(end); });
+    expect(put).toHaveBeenCalledWith({ quietEnd: "06:30" });
+    expect(end).toHaveValue("07:00");
+    expect(within(page).getByRole("status")).toHaveTextContent("quietEnd must be HH:MM (24-hour)");
+    developer.set({ active: false, expiresAt: null, error: null });
+  });
+
+  it("the test says which part failed", async () => {
+    load();
+    developer.set({ active: true, expiresAt: null, error: null });
+    const on = { ...NOTIFY, settings: { ...NOTIFY.settings, slack: true, ntfy: true } };
+    vi.spyOn(app.api, "notify").mockResolvedValue(on);
+    vi.spyOn(app.api, "notifyTest").mockResolvedValueOnce({ ok: true, slack: false, status: { ...on.status, lastError: "not_in_channel" } })
+      .mockResolvedValueOnce({ ok: true, slack: true, status: { ...on.status, lastError: null, lastSentAt: 1 } });
+    const page = await show("#/settings?tab=notifications");
+    const send = within(page).getByRole("button", { name: "Send a test" });
+    await act(async () => { fireEvent.click(send); });
+    expect(within(page).getByRole("status")).toHaveTextContent("Slack message failed. Last error: not_in_channel");
+    expect(within(page).getByRole("status")).not.toHaveTextContent("Phone push sent");
+    await act(async () => { fireEvent.click(send); });
+    expect(within(page).getByRole("status")).toHaveTextContent("Slack message sent. Phone push sent.");
+    developer.set({ active: false, expiresAt: null, error: null });
+  });
+
+  it("the reply rule is built from ccd's gates and names the client projects", async () => {
+    load();
+    vi.spyOn(app.api, "notify").mockResolvedValue(NOTIFY);
+    const page = await show("#/settings?tab=notifications");
+    const gauze = app.store.get().state!.projectsConfig.find((p) => p.key === "gauzemate")?.name ?? "gauzemate";
+    expect(within(page).getByText(`Answers, plus clearing a blocker or accepting a UI review. Never a plan, merge or deploy. ${gauze} is a client project: replies there are passed on as text and never answer or approve.`)).toBeInTheDocument();
   });
 
   it("Windows lists pop-outs with Return here, and forgets the remembered places", async () => {

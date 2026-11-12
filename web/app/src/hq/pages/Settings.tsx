@@ -54,11 +54,11 @@ function Classic({ id, children }: { id: string; children: ReactNode }) {
   return <div className="hq-set-classic" id={`set-${id}`}>{children}</div>;
 }
 
-function Seg<T extends string>({ label, value, options, onChange }: {
-  label: string; value: T; options: [T, string][]; onChange: (v: T) => void;
+function Seg<T extends string>({ label, value, options, onChange, disabled }: {
+  label: string; value: T; options: [T, string][]; onChange: (v: T) => void; disabled?: boolean;
 }) {
   return <div className="hq-seg" role="group" aria-label={label}>{options.map(([v, l]) =>
-    <button key={v} type="button" aria-pressed={value === v} onClick={() => onChange(v)}>{l}</button>)}</div>;
+    <button key={v} type="button" aria-pressed={value === v} disabled={disabled} onClick={() => onChange(v)}>{l}</button>)}</div>;
 }
 
 function useMedia(q: string): boolean {
@@ -156,10 +156,18 @@ type NotifyLoad = { s: "loading" } | { s: "ok"; d: NotifyState } | { s: "off"; w
 const notifyOff = (e: unknown) => e instanceof ApiError && e.status === 404 ? "This ccd has no Slack or phone alerts yet."
   : e instanceof ApiError && e.status === 503 ? "Alerts are not set up in this ccd." : "Could not read the alert settings.";
 
+/** What a Slack reply may close, in words, from ccd's own fixed list (SLACK_GATES in server/ccd/notify.py). */
+const GATE_WORDS: Record<string, string> = { failure: "clearing a blocker", ui: "accepting a UI review" };
+const gateWords = (gates: string[]) => {
+  const w = gates.map((g) => GATE_WORDS[g] ?? `the ${g} gate`);
+  return w.length > 1 ? `${w.slice(0, -1).join(", ")} or ${w[w.length - 1]}` : w[0] ?? "nothing more";
+};
+
 /** Slack and ntfy, from ccd's notifier (GET /api/notify). Changing anything is Jay's and needs Developer Unlock; ccd
  *  checks both. Tokens and the ntfy address never reach the browser, only whether each is set up. */
 function SlackAndPhone() {
   const active = useDevActive();
+  const names = useSelector(app.store, (d) => d.state?.projectsConfig ?? []);
   const [st, setSt] = useState<NotifyLoad>({ s: "loading" });
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
@@ -174,30 +182,43 @@ function SlackAndPhone() {
     </Group>;
   }
   const { settings: v, status, configured: c } = st.d;
-  const run = (job: () => Promise<NotifyState | { status: NotifyState["status"] }>, done?: string) => {
+  /** Resolves true once ccd took the change; false when it was not sent (locked) or was refused. */
+  const save = (patch: Partial<NotifySettings>): Promise<boolean> => {
+    if (!active) { unlockDialogOpen(); return Promise.resolve(false); }
+    setBusy(true); setNote(null);
+    return app.api.setNotify(patch).then((d) => { setSt({ s: "ok", d }); return true; })
+      .catch((e: unknown) => { setNote({ tone: "bad", text: e instanceof Error ? e.message : String(e) }); return false; })
+      .finally(() => setBusy(false));
+  };
+  const test = () => {
     if (!active) { unlockDialogOpen(); return; }
     setBusy(true); setNote(null);
-    job().then((r) => {
-      setSt((was) => was.s !== "ok" ? was : { s: "ok", d: "settings" in r ? r : { ...was.d, status: r.status } });
-      if (done) setNote({ tone: "ok", text: done });
+    app.api.notifyTest().then((r) => {
+      setSt((was) => was.s !== "ok" ? was : { s: "ok", d: { ...was.d, status: r.status } });
+      // ccd answers slack: false when the DM failed, and puts the reason (redacted) in status.lastError.
+      const err = r.status.lastError;
+      const said = [v.slack && (r.slack ? "Slack message sent." : "Slack message failed."), v.ntfy && !err && "Phone push sent."];
+      const failed = (v.slack && !r.slack) || Boolean(err);
+      setNote({ tone: failed ? "bad" : "ok", text: [...said.filter(Boolean), err && `Last error: ${err}`].filter(Boolean).join(" ") });
     }).catch((e: unknown) => setNote({ tone: "bad", text: e instanceof Error ? e.message : String(e) }))
       .finally(() => setBusy(false));
   };
-  const save = (patch: Partial<NotifySettings>) => run(() => app.api.setNotify(patch));
+  const clients = st.d.clientProjects.map((k) => names.find((p) => p.key === k)?.name ?? k);
+  const clientRule = clients.length ? ` ${clients.join(" and ")} ${clients.length > 1 ? "are client projects" : "is a client project"}: replies there are passed on as text and never answer or approve.` : "";
   const slackWhy = !c.slackTokens ? (c.slackTokensError ?? "Tokens not set up on jay-server (slack.env)")
     : !c.jayMemberId ? "Your Slack member ID is not in config.json" : `Connection: ${status.slack}`;
   return <Group id="slack" title="Slack and phone" foot={active ? undefined
     : <>Changing these needs Developer Unlock. <button type="button" className="hq-link" onClick={unlockDialogOpen}>Unlock…</button></>}>
     <Row label="Slack" hint={slackWhy}>
-      <Seg label="Slack" value={v.slack ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]}
-        onChange={(x) => x === (v.slack ? "on" : "off") || save({ slack: x === "on" })} /></Row>
+      <Seg label="Slack" value={v.slack ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]} disabled={busy}
+        onChange={(x) => x === (v.slack ? "on" : "off") || void save({ slack: x === "on" })} /></Row>
     <Row label="Phone alerts (ntfy)" hint={c.ntfy ? `Connection: ${status.ntfy}` : "No ntfy topic in config.json"}>
-      <Seg label="Phone alerts" value={v.ntfy ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]}
-        onChange={(x) => x === (v.ntfy ? "on" : "off") || save({ ntfy: x === "on" })} /></Row>
-    <Row label="Your Slack replies" hint={v.replyScope === "answers" ? "Answer agents' questions. Approvals open Command Center."
-      : "Answers, plus clearing a blocker or accepting a UI review. Never a plan, merge or deploy."}>
+      <Seg label="Phone alerts" value={v.ntfy ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]} disabled={busy}
+        onChange={(x) => x === (v.ntfy ? "on" : "off") || void save({ ntfy: x === "on" })} /></Row>
+    <Row label="Your Slack replies" hint={(v.replyScope === "answers" ? "Answer agents' questions. Approvals open Command Center."
+      : `Answers, plus ${gateWords(st.d.slackGates)}. Never a plan, merge or deploy.`) + clientRule}>
       <Seg label="Your Slack replies" value={v.replyScope} options={[["answers", "Answers only"], ["answers_low_risk", "Answers and low-risk"]]}
-        onChange={(x) => x === v.replyScope || save({ replyScope: x })} /></Row>
+        disabled={busy} onChange={(x) => x === v.replyScope || void save({ replyScope: x })} /></Row>
     <Row label="Quiet hours" hint={`${v.timezone}${st.d.quietNow ? " · quiet now" : ""}${st.d.held ? ` · ${plural(st.d.held, "alert")} held` : ""}`}>
       <TimeBox label="Quiet hours start" value={v.quietStart} onSave={(t) => save({ quietStart: t })} />
       <span aria-hidden>to</span>
@@ -206,18 +227,21 @@ function SlackAndPhone() {
       <TimeBox label="Daily summaries at" value={v.summaryAt} onSave={(t) => save({ summaryAt: t })} /></Row>
     <Row label="Test" hint={status.lastError ? `Last error: ${status.lastError}`
       : status.lastSentAt ? `Last sent ${new Date(status.lastSentAt * 1000).toLocaleString()}` : "Nothing sent yet"}>
-      <button type="button" className="hq-btn" disabled={busy || !(v.slack || v.ntfy)}
-        onClick={() => run(() => app.api.notifyTest(), "Test sent. Check Slack and your phone.")}>Send a test</button></Row>
+      <button type="button" className="hq-btn" disabled={busy || !(v.slack || v.ntfy)} onClick={test}>Send a test</button></Row>
     {note && <p className={cx("hq-note", note.tone === "ok" ? "t-ok" : "t-bad")} role="status">{note.text}</p>}
   </Group>;
 }
 
-/** A 24-hour time that saves when it loses focus, and only a complete, changed value. */
-function TimeBox({ label, value, onSave }: { label: string; value: string; onSave: (t: string) => void }) {
+/** A 24-hour time that saves when it loses focus, and only a complete, changed value. A change that was not saved
+ *  (locked, refused or failed) goes back to what ccd has, so the box never shows a time ccd does not use. */
+function TimeBox({ label, value, onSave }: { label: string; value: string; onSave: (t: string) => Promise<boolean> }) {
   const [t, setT] = useState(value);
   useEffect(() => setT(value), [value]);
   return <input type="time" className="hq-input hq-time" aria-label={label} value={t} onChange={(e) => setT(e.target.value)}
-    onBlur={() => { if (/^\d\d:\d\d$/.test(t) && t !== value) onSave(t); else setT(value); }} />;
+    onBlur={() => {
+      if (/^\d\d:\d\d$/.test(t) && t !== value) void onSave(t).then((ok) => { if (!ok) setT(value); });
+      else setT(value);
+    }} />;
 }
 
 type Perm = Awaited<ReturnType<typeof screenPermission>>;
