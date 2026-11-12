@@ -195,11 +195,13 @@ function SlackAndPhone() {
     setBusy(true); setNote(null);
     app.api.notifyTest().then((r) => {
       setSt((was) => was.s !== "ok" ? was : { s: "ok", d: { ...was.d, status: r.status } });
-      // ccd answers slack: false when the DM failed, and puts the reason (redacted) in status.lastError.
-      const err = r.status.lastError;
-      const said = [v.slack && (r.slack ? "Slack message sent." : "Slack message failed."), v.ntfy && !err && "Phone push sent."];
-      const failed = (v.slack && !r.slack) || Boolean(err);
-      setNote({ tone: failed ? "bad" : "ok", text: [...said.filter(Boolean), err && `Last error: ${err}`].filter(Boolean).join(" ") });
+      // slack and ntfy are this test's own results. ccd clears lastError when a test starts, so an error shown here is
+      // this test's; it is shown only when a channel failed.
+      const said = [v.slack && (r.slack ? "Slack message sent." : "Slack message failed."),
+        v.ntfy && (r.ntfy ? "Phone push sent." : "Phone push failed.")];
+      const failed = (v.slack && !r.slack) || (v.ntfy && !r.ntfy);
+      const err = failed ? r.status.lastError : null;
+      setNote({ tone: failed ? "bad" : "ok", text: [...said, err && `Error: ${err}`].filter(Boolean).join(" ") });
     }).catch((e: unknown) => setNote({ tone: "bad", text: e instanceof Error ? e.message : String(e) }))
       .finally(() => setBusy(false));
   };

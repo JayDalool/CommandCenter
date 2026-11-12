@@ -208,15 +208,22 @@ describe("HQ Settings", () => {
     developer.set({ active: true, expiresAt: null, error: null });
     const on = { ...NOTIFY, settings: { ...NOTIFY.settings, slack: true, ntfy: true } };
     vi.spyOn(app.api, "notify").mockResolvedValue(on);
-    vi.spyOn(app.api, "notifyTest").mockResolvedValueOnce({ ok: true, slack: false, status: { ...on.status, lastError: "not_in_channel" } })
-      .mockResolvedValueOnce({ ok: true, slack: true, status: { ...on.status, lastError: null, lastSentAt: 1 } });
+    vi.spyOn(app.api, "notifyTest")
+      .mockResolvedValueOnce({ ok: true, slack: false, ntfy: true, status: { ...on.status, lastError: "not_in_channel" } })
+      .mockResolvedValueOnce({ ok: true, slack: true, ntfy: false, status: { ...on.status, lastError: "ntfy: HTTP 429" } })
+      // An error left over from before the test (ccd clears it when a test starts; this pins that the page ignores one
+      // anyway when both channels worked).
+      .mockResolvedValueOnce({ ok: true, slack: true, ntfy: true, status: { ...on.status, lastError: "bot not in #gyst", lastSentAt: 1 } });
     const page = await show("#/settings?tab=notifications");
     const send = within(page).getByRole("button", { name: "Send a test" });
+    const said = () => within(page).getByRole("status");
     await act(async () => { fireEvent.click(send); });
-    expect(within(page).getByRole("status")).toHaveTextContent("Slack message failed. Last error: not_in_channel");
-    expect(within(page).getByRole("status")).not.toHaveTextContent("Phone push sent");
+    expect(said()).toHaveTextContent("Slack message failed. Phone push sent. Error: not_in_channel");
     await act(async () => { fireEvent.click(send); });
-    expect(within(page).getByRole("status")).toHaveTextContent("Slack message sent. Phone push sent.");
+    expect(said()).toHaveTextContent("Slack message sent. Phone push failed. Error: ntfy: HTTP 429");
+    await act(async () => { fireEvent.click(send); });
+    expect(said()).toHaveTextContent(/^Slack message sent\. Phone push sent\.$/);
+    expect(said()).toHaveClass("t-ok");
     developer.set({ active: false, expiresAt: null, error: null });
   });
 

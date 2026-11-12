@@ -130,7 +130,8 @@ export class Api {
   notify() { return this.req<NotifyState>("GET", "/api/notify"); }
   /** Jay with Developer Unlock. Only the keys given change. */
   setNotify(patch: Partial<NotifySettings>) { return this.req<NotifyState>("PUT", "/api/notify", patch); }
-  notifyTest() { return this.req<{ ok: true; slack: boolean; status: NotifyState["status"] }>("POST", "/api/notify/test", {}); }
+  /** One test DM and one test push. slack and ntfy are this test's own results (false for a channel that is off). */
+  notifyTest() { return this.req<{ ok: true; slack: boolean; ntfy: boolean; status: NotifyState["status"] }>("POST", "/api/notify/test", {}); }
   /** Shadow budgets (D-033). Read-only; 404 while the onboarding groundwork is off. */
   budgets() {
     return this.req<BudgetsState>("GET", "/api/onboarding/budgets");
