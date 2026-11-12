@@ -363,17 +363,21 @@ class UiFiles:
 
     def __init__(self, directory, port, remote=()):
         self.files = StaticFiles(directory=str(directory), html=True)
-        # A tailnet origin (security.remote_origins) opens its live feed and terminals over wss:// to its own host.
-        # CSP 3 lets 'self' match that, but it is named as well so an older browser does not depend on it.
-        wss = "".join(f" wss://{o.removeprefix('https://')}" for o in remote)
         self.headers = [
             (b"content-security-policy", (
                 "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-                f"connect-src 'self' ws://127.0.0.1:{port} ws://localhost:{port}{wss}; font-src 'self'; "
+                f"connect-src 'self' ws://127.0.0.1:{port} ws://localhost:{port}; font-src 'self'; "
                 "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'").encode()),
             (b"x-frame-options", b"DENY"), (b"referrer-policy", b"no-referrer"),
             (b"x-content-type-options", b"nosniff"),
         ]
+        if remote:
+            # A tailnet origin (security.remote_origins) opens its live feed and terminals over wss:// to its own host.
+            # CSP 3 lets 'self' match that; it is named as well so an older browser does not depend on it. Added here,
+            # after the literal, so the policy above stays the one e2e/serve.mjs mirrors (tests/e2e-serve.test.ts).
+            wss = "".join(f" wss://{o.removeprefix('https://')}" for o in remote)
+            name, value = self.headers[0]
+            self.headers[0] = (name, value.replace(f"ws://localhost:{port};".encode(), f"ws://localhost:{port}{wss};".encode(), 1))
 
     async def __call__(self, scope, receive, send):
         immutable = bool(HASHED_ASSET.match(scope.get("path", "")))
