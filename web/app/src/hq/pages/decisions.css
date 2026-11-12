@@ -1,0 +1,27 @@
+/* Decisions. Scoped to :root[data-ui="hq"], no custom property declared here (parity.spec.ts). Panels, KPIs, pills,
+ * buttons and tones come from office.css and engineering.css. Follows the prototype's Decisions queue (.needs-*). */
+
+:root[data-ui="hq"] button.hq-kpi { font: inherit; color: inherit; text-align: left; cursor: pointer; }
+:root[data-ui="hq"] button.hq-kpi:hover { border-color: var(--hq-line-2); background: var(--hq-panel-2); }
+:root[data-ui="hq"] button.hq-kpi[aria-pressed="true"] { border-color: var(--hq-accent); background: var(--hq-accent-soft); }
+
+:root[data-ui="hq"] .hq-dec-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+:root[data-ui="hq"] .hq-dec {
+  display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--hq-line); border-radius: var(--hq-r-md); background: var(--hq-tile);
+}
+:root[data-ui="hq"] .hq-dec.is-late { border-color: var(--hq-bad); box-shadow: inset 3px 0 0 var(--hq-bad); }
+:root[data-ui="hq"] .hq-dec-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
+:root[data-ui="hq"] .hq-dec-main .hq-pill { flex: 0 0 112px; justify-content: center; }
+:root[data-ui="hq"] .hq-dec-main .hq-btn { flex: none; text-decoration: none; }
+:root[data-ui="hq"] .hq-dec-meta { margin: 0; padding-left: 124px; color: var(--hq-muted); font-size: var(--hq-fs-sm); display: flex; flex-wrap: wrap; gap: 4px 14px; }
+:root[data-ui="hq"] .hq-dec-meta b { color: var(--hq-text); }
+
+:root[data-ui="hq"] .hq-dl { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; margin: 0; }
+:root[data-ui="hq"] .hq-dl dt { color: var(--hq-text-2); }
+:root[data-ui="hq"] .hq-dl dd { margin: 0; font-weight: 700; text-align: right; }
+:root[data-ui="hq"] .hq-dec-orphans { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: var(--hq-fs-sm); }
+
+@media (max-width: 760px) {
+  :root[data-ui="hq"] .hq-dec-main { flex-wrap: wrap; }
+  :root[data-ui="hq"] .hq-dec-meta { padding-left: 0; }
+}

@@ -91,6 +91,26 @@ describe("Engineering", () => {
     expect(sessions).not.toContain("Working");
   });
 
+  it("follows a new ?project= in the address while it stays open", async () => {
+    load(true);
+    const page = await show("#/tasks?project=samvision");
+    expect(within(page).getByRole("combobox", { name: "Project" })).toHaveValue("samvision");
+    await act(async () => { location.hash = "#/tasks?project=gauzemate"; window.dispatchEvent(new HashChangeEvent("hashchange")); });
+    expect(within(page).getByRole("combobox", { name: "Project" })).toHaveValue("gauzemate");
+    const gz = buildEngineering(app.store.get(), evidence(app.store.get(), Date.now() / 1000), { project: "gauzemate" });
+    expect(keys(page).sort()).toEqual(gz.columns.flatMap((c) => c.tasks.map((t) => t.key)).sort());
+  });
+
+  it("keeps the project filter when a task is opened from the table", async () => {
+    load(true);
+    const page = await show("#/tasks?project=samvision");
+    const row = page.querySelector<HTMLElement>(".hq-table tbody tr")!;
+    const key = row.querySelector("code")!.textContent;
+    await act(async () => { fireEvent.click(row); });
+    expect(location.hash).toBe(`#/tasks/${key}`);
+    expect(within(page).getByRole("combobox", { name: "Project" })).toHaveValue("samvision");
+  });
+
   it("New task opens today's new-ticket flow, for the project in view", async () => {
     load(true);
     const page = await show("#/tasks?project=samvision");

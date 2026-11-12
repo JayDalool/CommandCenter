@@ -12,6 +12,16 @@
 :root[data-ui="hq"] .hq-link { color: var(--hq-accent-2); font-size: var(--hq-fs-sm); white-space: nowrap; }
 :root[data-ui="hq"] .hq-link:hover { text-decoration: underline; }
 
+:root[data-ui="hq"] .hq-btn {
+  padding: 6px 14px; border: 1px solid var(--hq-line-2); border-radius: var(--hq-r-sm); background: var(--hq-panel-2);
+  color: var(--hq-text); font: 600 var(--hq-fs-sm) var(--hq-font); cursor: pointer;
+}
+:root[data-ui="hq"] .hq-btn:hover { background: var(--hq-hover); }
+:root[data-ui="hq"] .hq-btn.is-primary { border-color: var(--hq-accent); background: var(--hq-accent); color: #fff; }
+:root[data-ui="hq"] .hq-btn.is-primary:hover { filter: brightness(1.1); }
+:root[data-ui="hq"] .hq-dim { color: var(--hq-muted); }
+:root[data-ui="hq"] .hq-note { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+
 /* tones */
 :root[data-ui="hq"] .hq-page .t-ok { color: var(--hq-ok); }
 :root[data-ui="hq"] .hq-page .t-bad { color: var(--hq-bad); }
