@@ -22,7 +22,7 @@ export function Approvals() {
   const extra = inbox?.items ?? {};
   // Overdue first, then oldest first.
   const mine = v.items.filter((d) => d.kind === "Approval").sort((a, b) =>
-    Number(late(extra[b.id])) - Number(late(extra[a.id])) || (a.since ?? Infinity) - (b.since ?? Infinity));
+    Number(late(extra[b.id])) - Number(late(extra[a.id])) || (a.since ?? Number.MAX_SAFE_INTEGER) - (b.since ?? Number.MAX_SAFE_INTEGER));
   const overdue = mine.filter((d) => late(extra[d.id])).length;
   const names = new Map(src.taskProjects.map((p) => [p.key, p.name]));
 

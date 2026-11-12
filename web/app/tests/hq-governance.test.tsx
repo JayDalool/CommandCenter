@@ -150,6 +150,20 @@ describe("Budgets", () => {
     expect(within(c).getByText("Shadow budgets").parentElement).toHaveTextContent("1 line would hold");
   });
 
+  it("keeps the last shadow reading when a later read fails, and says so", async () => {
+    load();
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"], now: new Date("2026-10-27T15:00:00Z") });
+    vi.spyOn(app.api, "usage").mockResolvedValue(USAGE);
+    vi.spyOn(app.api, "budgets").mockResolvedValueOnce(SHADOW).mockRejectedValueOnce(new ApiError(0, "ccd unreachable"));
+    const c = await show("#/budgets");
+    const shadow = within(c).getByRole("region", { name: "Company, project and agent budgets" });
+    expect(shadow.querySelectorAll(".hq-bud-line")).toHaveLength(3);
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    await act(async () => {});
+    expect(shadow.querySelectorAll(".hq-bud-line")).toHaveLength(3);
+    expect(shadow).toHaveTextContent("Could not re-read the shadow budgets (ccd unreachable). Showing the last reading.");
+  });
+
   it("says when it could not read the shadow budgets, without calling them off", async () => {
     load();
     vi.spyOn(app.api, "usage").mockResolvedValue(USAGE);

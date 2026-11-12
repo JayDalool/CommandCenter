@@ -15,9 +15,11 @@ import type { BudgetLine, BudgetsState, UsageState } from "../../api/types";
 import { tokens, usd } from "../../components/Usage";
 import { Kpi, Pill, cx, plural } from "./ui";
 
-type Shadow = { s: "loading" } | { s: "off" } | { s: "failed"; error: string } | { s: "on"; data: BudgetsState };
+/** on: the last good reading, with the error of a later read that failed, if one did. */
+type Shadow = { s: "loading" } | { s: "off" } | { s: "failed"; error: string } | { s: "on"; data: BudgetsState; error?: string };
 
-/** Both reads, again every minute. A failure keeps what was last read. */
+/** Both reads, again every minute. A failed read keeps what was last read and says it failed; a 404 means the shadow
+ *  budgets are switched off, so it replaces them. */
 function useBudgets() {
   const [usage, setUsage] = useState<UsageState | null>(null);
   const [usageErr, setUsageErr] = useState<string | null>(null);
@@ -28,7 +30,12 @@ function useBudgets() {
       app.api.usage(30).then((d) => { if (live) { setUsage(d); setUsageErr(null); } })
         .catch((e) => { if (live) setUsageErr((e as Error).message); });
       app.api.budgets().then((d) => { if (live) setShadow({ s: "on", data: d }); })
-        .catch((e) => { if (live) setShadow(e instanceof ApiError && e.status === 404 ? { s: "off" } : { s: "failed", error: (e as Error).message }); });
+        .catch((e) => {
+          if (!live) return;
+          const error = (e as Error).message;
+          setShadow((was) => e instanceof ApiError && e.status === 404 ? { s: "off" }
+            : was.s === "on" ? { s: "on", data: was.data, error } : { s: "failed", error });
+        });
     };
     load();
     const t = setInterval(load, 60_000);
@@ -109,6 +116,7 @@ export function Budgets() {
                 name={k === "company" ? "Whole company" : k === "project" ? names.get(l.key) ?? l.key : l.key} />)}</ul></div> : null;
           })}
           {!shadow.data.lines.length && <p className="hq-empty">No budget is set yet.</p>}
+          {shadow.error && <p className="hq-note t-warn">Could not re-read the shadow budgets ({shadow.error}). Showing the last reading.</p>}
           {shadow.data.meter.stale && <p className="hq-note t-warn">No meter reading in the last {Math.round(shadow.data.meter.staleAfterSeconds / 60)} minutes:
             spend is Unknown, and lines at 80 % or more would hold.</p>}
           {!!shadow.data.dataAlerts.length && <ul className="hq-bud-alerts">{shadow.data.dataAlerts.map((a) =>
