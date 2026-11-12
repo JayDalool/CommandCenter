@@ -43,7 +43,7 @@ function useIconsOnly(): { icons: boolean; narrow: boolean; collapsed: boolean }
 
 function NavLink({ n, current, badge }: { n: HqNavItem; current: boolean; badge?: ReactNode }) {
   return <a className={cx("hq-nav-item", current && "is-current")} href={href(n.id)} aria-current={current ? "page" : undefined}
-    aria-keyshortcuts={n.key} title={`${n.label} (${n.key})`}>
+    aria-keyshortcuts={n.key} title={n.key ? `${n.label} (${n.key})` : n.label}>
     <Icon name={n.icon} size={20} /><span className="hq-nav-label">{n.label}</span>{badge}</a>;
 }
 

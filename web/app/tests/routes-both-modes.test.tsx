@@ -83,16 +83,30 @@ describe("both modes", () => {
     expect(hasPage("tasks/SV-056")).toBe(true);
     expect((await renderIn("tasks/SV-056", "hq")).hqPage).toBe(true);
   });
+  // One session or one project keeps Classic's screen, where its actions are; the lists are Teams and Company.
+  it("#/agents/ID and #/projects/KEY show Classic's screens in HQ", async () => {
+    const st = state();
+    for (const route of [`agents/${st.agents[0].id}`, `projects/${st.projects[0].key}`]) {
+      const classic = await renderIn(route, "classic");
+      const hq = await renderIn(route, "hq");
+      expect(hq.hqPage).toBe(false);
+      expect(hq.screen).toBe(classic.screen);
+    }
+  });
 
   it("keeps the navigation, its order and its keys", () => {
     expect(NAV.map((n) => `${n.id}:${n.key}`)).toEqual(["dashboard:1", "needs:0", "workspace:2", "tasks:3", "activity:4",
       "files:5", "settings:6"]);
   });
 
-  it("HQ's sidebar opens the same screens with the same keys", () => {
+  it("HQ's sidebar opens every Classic sidebar screen with the same key, and its own items open real screens", () => {
     const classic = Object.fromEntries(NAV.map((n) => [n.id, n.key]));
     const hq = [...HQ_NAV, ...HQ_NAV_LOW];
-    expect(hq.map((n) => n.id).sort()).toEqual(NAV.map((n) => n.id).sort());
-    for (const n of hq) expect(`${n.id}:${n.key}`).toBe(`${n.id}:${classic[n.id]}`);
+    const keyed = hq.filter((n) => n.key);
+    expect(keyed.map((n) => n.id).sort()).toEqual(NAV.map((n) => n.id).sort());
+    for (const n of keyed) expect(`${n.id}:${n.key}`).toBe(`${n.id}:${classic[n.id]}`);
+    // Teams and Company: Classic screens with no sidebar entry or key of their own.
+    expect(hq.filter((n) => !n.key).map((n) => n.id)).toEqual(["agents", "projects"]);
+    for (const n of hq) expect(SCREENS).toContain(n.id);
   });
 });

@@ -65,6 +65,13 @@
 :root[data-ui="hq"] .hq-shell.is-icons .hq-side-foot { justify-content: center; }
 :root[data-ui="hq"] .hq-shell.is-icons .hq-side .hq-tag { justify-content: center; margin: 4px 0 0; padding: 6px 0; border: 0; }
 
+/* Short windows: every screen and Settings stay in view without scrolling the sidebar (ui-switch.spec.ts). */
+@media (max-height: 620px) {
+  :root[data-ui="hq"] .hq-brand, :root[data-ui="hq"] .hq-shell.is-icons .hq-brand { padding-bottom: 6px; }
+  :root[data-ui="hq"] .hq-nav-item { padding-block: 6px; }
+  :root[data-ui="hq"] .hq-shell.is-icons .hq-nav-item { padding-block: 7px; }
+}
+
 /* ---------- main column: top bar, tabs, Classic's banners, the screen ---------- */
 :root[data-ui="hq"] .hq-main { grid-area: main; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 :root[data-ui="hq"] .hq-main > .screen { flex: 1 1 auto; min-height: 0; }
