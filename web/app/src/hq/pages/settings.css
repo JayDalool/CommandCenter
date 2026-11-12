@@ -67,6 +67,9 @@
 }
 :root[data-ui="hq"] .hq-input:hover { border-color: var(--hq-input-line-hover); }
 :root[data-ui="hq"] .hq-input:focus-visible { outline: 2px solid var(--hq-focus); outline-offset: 1px; }
+:root[data-ui="hq"] .hq-time { width: 132px; }
+:root[data-ui="hq"] .hq-set-foot button.hq-link { padding: 0; border: 0; background: none; font: inherit; cursor: pointer; }
+:root[data-ui="hq"] .hq-settings .hq-btn:disabled { opacity: .5; cursor: default; }
 
 :root[data-ui="hq"] .hq-keys { display: inline-flex; align-items: center; gap: 4px; color: var(--hq-muted); white-space: nowrap; }
 :root[data-ui="hq"] .hq-keys kbd {

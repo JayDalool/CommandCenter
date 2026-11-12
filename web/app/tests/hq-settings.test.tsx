@@ -12,6 +12,9 @@ import { classicTab } from "../src/screens/Settings";
 import { SECTIONS, settingsSection } from "../src/hq/pages/Settings";
 import { popped, resetWindows, savePlace } from "../src/hq/windows/manager";
 import { state, tasks } from "./helpers";
+import { developer } from "../src/api/developer";
+import { ApiError } from "../src/api/client";
+import type { NotifyState } from "../src/api/types";
 
 function load() {
   vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-27T15:00:00Z") });
@@ -119,13 +122,61 @@ describe("HQ Settings", () => {
     prefs.patch({ density: "comfortable" });
   });
 
-  it("Notifications counts what waits from the Decisions queue, and Slack is off", async () => {
+  it("Notifications counts what waits from the Decisions queue", async () => {
     load();
     const page = await show("#/settings?tab=notifications");
     const n = jayQueue(app.store.get().state, undefined, app.store.get().tickets).length;
     expect(n).toBeGreaterThan(0);
     expect(within(page).getByRole("link", { name: `${n} items in Decisions` })).toHaveAttribute("href", "#/needs");
-    expect(within(page).getByText("Off · needs your approval")).toBeInTheDocument();
+    expect(within(page).getByText("Reading the alert settings…")).toBeInTheDocument();
+  });
+
+  const NOTIFY: NotifyState = {
+    settings: { slack: false, ntfy: false, quietStart: "22:00", quietEnd: "07:00", summaryAt: "07:00",
+      timezone: "America/Winnipeg", replyScope: "answers_low_risk" },
+    status: { slack: "off", socket: "off", ntfy: "off", lastError: null, lastSentAt: null },
+    configured: { slackTokens: true, slackTokensError: null, jayMemberId: false, ntfy: true },
+    channels: { cto: "cto" }, clientProjects: ["gauzemate"], slackGates: ["failure", "ui"], quietNow: false, held: 0,
+  };
+
+  it("Slack and phone show ccd's settings and what is not set up, and changes ask for Developer Unlock", async () => {
+    load();
+    developer.set({ active: false, expiresAt: null, error: null });
+    vi.spyOn(app.api, "notify").mockResolvedValue(NOTIFY);
+    const put = vi.spyOn(app.api, "setNotify").mockResolvedValue(NOTIFY);
+    const asked = vi.fn();
+    window.addEventListener("cc:dev-unlock", asked);
+    const page = await show("#/settings?tab=notifications");
+    expect(within(page).getByText("Your Slack member ID is not in config.json")).toBeInTheDocument();
+    expect(within(page).getByLabelText("Quiet hours start")).toHaveValue("22:00");
+    expect(within(page).getByRole("button", { name: "Send a test" })).toBeDisabled();
+    fireEvent.click(within(within(page).getByRole("group", { name: "Slack" })).getByRole("button", { name: "On" }));
+    expect(asked).toHaveBeenCalledTimes(1);
+    expect(put).not.toHaveBeenCalled();
+    window.removeEventListener("cc:dev-unlock", asked);
+  });
+
+  it("Slack and phone save one change at a time once unlocked", async () => {
+    load();
+    developer.set({ active: true, expiresAt: null, error: null });
+    vi.spyOn(app.api, "notify").mockResolvedValue(NOTIFY);
+    const put = vi.spyOn(app.api, "setNotify").mockResolvedValue({ ...NOTIFY, settings: { ...NOTIFY.settings, ntfy: true } });
+    const page = await show("#/settings?tab=notifications");
+    await act(async () => { fireEvent.click(within(within(page).getByRole("group", { name: "Phone alerts" })).getByRole("button", { name: "On" })); });
+    expect(put).toHaveBeenCalledWith({ ntfy: true });
+    expect(within(page).getByRole("button", { name: "Send a test" })).toBeEnabled();
+    const end = within(page).getByLabelText("Quiet hours end");
+    fireEvent.change(end, { target: { value: "06:30" } });
+    await act(async () => { fireEvent.blur(end); });
+    expect(put).toHaveBeenLastCalledWith({ quietEnd: "06:30" });
+    developer.set({ active: false, expiresAt: null, error: null });
+  });
+
+  it("Slack and phone say so when this ccd has no alerts", async () => {
+    load();
+    vi.spyOn(app.api, "notify").mockRejectedValue(new ApiError(404, "not found"));
+    const page = await show("#/settings?tab=notifications");
+    expect(within(page).getByText("This ccd has no Slack or phone alerts yet.")).toBeInTheDocument();
   });
 
   it("Windows lists pop-outs with Return here, and forgets the remembered places", async () => {

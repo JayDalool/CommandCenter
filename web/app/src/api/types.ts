@@ -609,3 +609,15 @@ export interface BudgetsState {
   safetyKinds: string[]; meter: { lastReadAt: number | null; stale: boolean; staleAfterSeconds: number };
   prices: { asOf: string; ageDays: number; maxAgeDays: number }; dataAlerts: { kind: string; detail: string }[]; note?: string;
 }
+
+/** GET /api/notify: Slack and ntfy. Never a token or the ntfy URL, only whether each is configured. */
+export interface NotifySettings {
+  slack: boolean; ntfy: boolean; quietStart: string; quietEnd: string; summaryAt: string; timezone: string;
+  replyScope: "answers" | "answers_low_risk";
+}
+export interface NotifyState {
+  settings: NotifySettings;
+  status: { slack: string; socket: string; ntfy: string; lastError: string | null; lastSentAt: number | null };
+  configured: { slackTokens: boolean; slackTokensError: string | null; jayMemberId: boolean; ntfy: boolean };
+  channels: Record<string, string>; clientProjects: string[]; slackGates: string[]; quietNow: boolean; held: number;
+}

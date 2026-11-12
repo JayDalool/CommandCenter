@@ -55,3 +55,19 @@ test("Appearance switches the theme, and the arrow keys move between the three",
   await expect(group.getByRole("radio", { name: /^Dark/ })).toBeFocused();
   expect(await problems(page, watch)).toEqual([]);
 });
+
+test("Slack and phone show what is not set up yet, fit a phone, and ask for Developer Unlock before a change", async ({ page, watch }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, "settings?tab=notifications");
+  const group = page.getByRole("region", { name: "Slack and phone" });
+  await expect(group.getByText("Tokens not set up on jay-server (slack.env)")).toBeVisible();
+  await expect(group.getByText("No ntfy topic in config.json")).toBeVisible();
+  await expect(group.getByLabel("Quiet hours start")).toHaveValue("22:00");
+  await expect(group.getByRole("button", { name: "Send a test" })).toBeDisabled();
+  expect(await page.evaluate(wide)).toBe(true);
+  await group.getByRole("group", { name: "Slack", exact: true }).getByRole("button", { name: "On" }).click();
+  await expect(page.getByRole("dialog", { name: "Developer Unlock" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  expect(watch.writes).toEqual([]);
+  expect(await problems(page, watch)).toEqual([]);
+});

@@ -27,6 +27,8 @@ import { canPickScreen, focusView, forgetPlaces, isPopView, listScreens, popOut,
   POP_VIEWS, type PopView, type ScreenInfo } from "../windows/manager";
 import { usePageNav } from "./route";
 import { Pill, cx, plural } from "./ui";
+import { ApiError } from "../../api/client";
+import type { NotifySettings, NotifyState } from "../../api/types";
 
 // ---------- building blocks ----------
 
@@ -140,14 +142,82 @@ function Notifications() {
       <Row label="A major failure" />
       <Row label="Waiting now"><a className="hq-link" href={href("needs")}>{waiting ? `${plural(waiting, "item")} in Decisions` : "Nothing"}</a></Row>
     </Group>
-    <Group title="Where">
+    <Group title="In Command Center">
       <Row label="The bell" hint="In the top bar"><Pill tone="ok">On</Pill></Row>
       <Row label="A tone and a short message" hint="Once per new item, while Command Center is open">
         <Pill tone="ok">On</Pill></Row>
-      <Row label="Slack" hint="Sends a link to approve here. Slack never approves.">
-        <Pill tone="warn">Off · needs your approval</Pill></Row>
     </Group>
+    <SlackAndPhone />
   </>;
+}
+
+type NotifyLoad = { s: "loading" } | { s: "ok"; d: NotifyState } | { s: "off"; why: string };
+
+const notifyOff = (e: unknown) => e instanceof ApiError && e.status === 404 ? "This ccd has no Slack or phone alerts yet."
+  : e instanceof ApiError && e.status === 503 ? "Alerts are not set up in this ccd." : "Could not read the alert settings.";
+
+/** Slack and ntfy, from ccd's notifier (GET /api/notify). Changing anything is Jay's and needs Developer Unlock; ccd
+ *  checks both. Tokens and the ntfy address never reach the browser, only whether each is set up. */
+function SlackAndPhone() {
+  const active = useDevActive();
+  const [st, setSt] = useState<NotifyLoad>({ s: "loading" });
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
+  useEffect(() => {
+    let live = true;
+    app.api.notify().then((d) => { if (live) setSt({ s: "ok", d }); }).catch((e: unknown) => { if (live) setSt({ s: "off", why: notifyOff(e) }); });
+    return () => { live = false; };
+  }, []);
+  if (st.s !== "ok") {
+    return <Group title="Slack and phone">
+      <Row label={st.s === "loading" ? "Reading the alert settings…" : st.why} />
+    </Group>;
+  }
+  const { settings: v, status, configured: c } = st.d;
+  const run = (job: () => Promise<NotifyState | { status: NotifyState["status"] }>, done?: string) => {
+    if (!active) { unlockDialogOpen(); return; }
+    setBusy(true); setNote(null);
+    job().then((r) => {
+      setSt((was) => was.s !== "ok" ? was : { s: "ok", d: "settings" in r ? r : { ...was.d, status: r.status } });
+      if (done) setNote({ tone: "ok", text: done });
+    }).catch((e: unknown) => setNote({ tone: "bad", text: e instanceof Error ? e.message : String(e) }))
+      .finally(() => setBusy(false));
+  };
+  const save = (patch: Partial<NotifySettings>) => run(() => app.api.setNotify(patch));
+  const slackWhy = !c.slackTokens ? (c.slackTokensError ?? "Tokens not set up on jay-server (slack.env)")
+    : !c.jayMemberId ? "Your Slack member ID is not in config.json" : `Connection: ${status.slack}`;
+  return <Group id="slack" title="Slack and phone" foot={active ? undefined
+    : <>Changing these needs Developer Unlock. <button type="button" className="hq-link" onClick={unlockDialogOpen}>Unlock…</button></>}>
+    <Row label="Slack" hint={slackWhy}>
+      <Seg label="Slack" value={v.slack ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]}
+        onChange={(x) => x === (v.slack ? "on" : "off") || save({ slack: x === "on" })} /></Row>
+    <Row label="Phone alerts (ntfy)" hint={c.ntfy ? `Connection: ${status.ntfy}` : "No ntfy topic in config.json"}>
+      <Seg label="Phone alerts" value={v.ntfy ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]}
+        onChange={(x) => x === (v.ntfy ? "on" : "off") || save({ ntfy: x === "on" })} /></Row>
+    <Row label="Your Slack replies" hint={v.replyScope === "answers" ? "Answer agents' questions. Approvals open Command Center."
+      : "Answers, plus clearing a blocker or accepting a UI review. Never a plan, merge or deploy."}>
+      <Seg label="Your Slack replies" value={v.replyScope} options={[["answers", "Answers only"], ["answers_low_risk", "Answers and low-risk"]]}
+        onChange={(x) => x === v.replyScope || save({ replyScope: x })} /></Row>
+    <Row label="Quiet hours" hint={`${v.timezone}${st.d.quietNow ? " · quiet now" : ""}${st.d.held ? ` · ${plural(st.d.held, "alert")} held` : ""}`}>
+      <TimeBox label="Quiet hours start" value={v.quietStart} onSave={(t) => save({ quietStart: t })} />
+      <span aria-hidden>to</span>
+      <TimeBox label="Quiet hours end" value={v.quietEnd} onSave={(t) => save({ quietEnd: t })} /></Row>
+    <Row label="Daily summaries" hint="An owner's summary and a technical summary, in Slack">
+      <TimeBox label="Daily summaries at" value={v.summaryAt} onSave={(t) => save({ summaryAt: t })} /></Row>
+    <Row label="Test" hint={status.lastError ? `Last error: ${status.lastError}`
+      : status.lastSentAt ? `Last sent ${new Date(status.lastSentAt * 1000).toLocaleString()}` : "Nothing sent yet"}>
+      <button type="button" className="hq-btn" disabled={busy || !(v.slack || v.ntfy)}
+        onClick={() => run(() => app.api.notifyTest(), "Test sent. Check Slack and your phone.")}>Send a test</button></Row>
+    {note && <p className={cx("hq-note", note.tone === "ok" ? "t-ok" : "t-bad")} role="status">{note.text}</p>}
+  </Group>;
+}
+
+/** A 24-hour time that saves when it loses focus, and only a complete, changed value. */
+function TimeBox({ label, value, onSave }: { label: string; value: string; onSave: (t: string) => void }) {
+  const [t, setT] = useState(value);
+  useEffect(() => setT(value), [value]);
+  return <input type="time" className="hq-input hq-time" aria-label={label} value={t} onChange={(e) => setT(e.target.value)}
+    onBlur={() => { if (/^\d\d:\d\d$/.test(t) && t !== value) onSave(t); else setT(value); }} />;
 }
 
 type Perm = Awaited<ReturnType<typeof screenPermission>>;
@@ -244,7 +314,8 @@ function Connections() {
         <button type="button" className="hq-btn" onClick={() => app.logout()}>Forget token and disconnect</button></Row>
     </Group>
     <Group title="Services" foot="ccd is reached through the SSH tunnel and is never exposed publicly.">
-      <Row label="Slack" hint="Requests and links only. Slack never approves."><Pill tone="warn">Off · needs your approval</Pill></Row>
+      <Row label="Slack and phone alerts" hint="Set up and switched in Notifications">
+        <a className="hq-link" href={href("settings", null, { tab: "notifications" })}>Notifications</a></Row>
       <Row label="Billing provider" hint="For Revenue: read-only, once you choose a provider">
         <Pill tone="idle">Not connected</Pill><a className="hq-link" href={href("revenue")}>Revenue</a></Row>
       <Row label="Model usage" hint="Read from the agents' own session logs on jay-server">
