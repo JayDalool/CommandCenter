@@ -116,9 +116,12 @@ describe("the frame in the app", () => {
     prefs.patch({ railCollapsed: false });
   });
 
-  it("on the Dashboard the top bar leaves the bell to the Dashboard's own header", async () => {
+  it("My Office replaces the Dashboard, and the bell is in the top bar, once", async () => {
     await show("dashboard");
-    expect(document.querySelectorAll(".hq-top .bell, .hq-top [aria-label*='otification']")).toHaveLength(0);
+    expect(document.querySelector("#main > .hq-office")).not.toBeNull();
+    expect(document.querySelector(".dash-top")).toBeNull();
+    expect(document.querySelectorAll(".hq-top [aria-label*='otification']").length).toBe(1);
+    expect(document.querySelectorAll("[aria-label*='otification']").length).toBe(1);
   });
 });
 

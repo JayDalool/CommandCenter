@@ -68,6 +68,8 @@
 /* ---------- main column: top bar, tabs, Classic's banners, the screen ---------- */
 :root[data-ui="hq"] .hq-main { grid-area: main; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 :root[data-ui="hq"] .hq-main > .screen { flex: 1 1 auto; min-height: 0; }
+/* An HQ page brings its own padding (hq/pages). */
+:root[data-ui="hq"] .hq-main > .screen.hq-screen { padding: 0; background: var(--hq-bg); }
 :root[data-ui="hq"] .hq-top {
   flex: none; display: flex; align-items: center; gap: 16px; height: 56px; padding: 0 18px 0 22px; min-width: 0;
   border-bottom: 1px solid var(--hq-line); background: var(--hq-topbar-2); font-family: var(--hq-font);
