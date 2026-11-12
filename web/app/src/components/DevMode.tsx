@@ -61,7 +61,8 @@ export function UnlockDialog({ onClose }: { onClose: () => void }) {
   </Dialog>;
 }
 
-/** The one small indicator (spec §27): "Developer ●" when active, a click locks; "Developer ○" unlocks. */
+/** The one small indicator (spec §27): "Developer ●" when active, a click locks; "Developer ○" unlocks. HQ on a phone
+ * shows the short label ("Dev ●"); everywhere else the short one is hidden (control.css). */
 export function DevDot() {
   const active = useDevActive();
   return <button type="button" className={`dev-dot${active ? " is-on" : ""}`}
@@ -71,7 +72,7 @@ export function DevDot() {
       if (!active) { unlockDialogOpen(); return; }
       try { await app.api.lock(); } catch { /* the session ends locally regardless */ }
       setDevSession(null); app.toast("Developer Mode locked");
-    }}>Developer <i aria-hidden>{active ? "●" : "○"}</i></button>;
+    }}><span className="dev-dot-l">Developer</span><span className="dev-dot-s">Dev</span><i aria-hidden>{active ? "●" : "○"}</i></button>;
 }
 
 export function DevBadge() {

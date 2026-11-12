@@ -42,6 +42,7 @@
 .dev-dot i { font-style: normal; color: var(--faint); }
 .dev-dot.is-on { color: var(--text-2); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
 .dev-dot.is-on i { color: var(--ok); }
+.dev-dot-s { display: none; }
 .chip-btn { height: 22px; padding: 0 8px; border-radius: 11px; border: 1px solid var(--line-strong); background: transparent;
   color: var(--text-2); font: 11.5px var(--font-ui); cursor: pointer; }
 .chip-btn:hover { border-color: var(--accent); color: var(--text); }

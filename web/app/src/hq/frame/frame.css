@@ -118,7 +118,8 @@
 
 /* ---------- phone (760px and narrower): a tab bar at the bottom and a More sheet (TabBar.tsx) ----------
  * The sidebar and the tab strip go; pop-outs are a desktop feature, so their button goes too. The top bar keeps the
- * title, search, the bell and Jay's menu. The tab bar is a grid row, not fixed, so nothing scrolls under it. dvh keeps
+ * title, search, the Developer Mode switch (short, "Dev ●", but always there: it says whether writes are allowed), the
+ * bell and Jay's menu. The tab bar is a grid row, not fixed, so nothing scrolls under it. dvh keeps
  * it above a phone browser's own toolbar. */
 :root[data-ui="hq"] .hq-tabbar, :root[data-ui="hq"] .hq-top-brand { display: none; }
 @media (max-width: 760px) {
@@ -136,7 +137,10 @@
   :root[data-ui="hq"] .hq-search { flex: none; justify-content: center; width: 40px; height: 40px; padding: 0; border-color: transparent; background: none; }
   :root[data-ui="hq"] .hq-search :is(span, kbd) { display: none; }
   :root[data-ui="hq"] .hq-top-right { margin-left: 0; gap: 2px; }
-  :root[data-ui="hq"] .hq-top-right :is(.hq-new, .hq-pop, .dev-dot) { display: none; }
+  :root[data-ui="hq"] .hq-top-right :is(.hq-new, .hq-pop) { display: none; }
+  :root[data-ui="hq"] .hq-top-right .dev-dot { flex: none; height: 32px; margin-right: 4px; padding: 0 10px; border-radius: 16px; }
+  :root[data-ui="hq"] .hq-top-right .dev-dot-l { display: none; }
+  :root[data-ui="hq"] .hq-top-right .dev-dot-s { display: inline; }
   :root[data-ui="hq"] .hq-me-btn :is(.hq-me-name, svg) { display: none; }
 
   :root[data-ui="hq"] .hq-tabbar {
