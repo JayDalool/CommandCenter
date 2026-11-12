@@ -1,0 +1,22 @@
+/* Activity. Scoped to :root[data-ui="hq"], no custom property declared here (parity.spec.ts). Panels, pills, buttons
+ * and the filter segments come from office.css. */
+
+:root[data-ui="hq"] .hq-check { display: inline-flex; align-items: center; gap: 6px; color: var(--hq-text-2); font-size: var(--hq-fs-sm); cursor: pointer; }
+:root[data-ui="hq"] .hq-act-day { display: grid; gap: 4px; }
+:root[data-ui="hq"] .hq-act-day h4 {
+  margin: 6px 0 2px; color: var(--hq-muted); font: 600 var(--hq-fs-xs) var(--hq-font); letter-spacing: .06em; text-transform: uppercase;
+}
+:root[data-ui="hq"] .hq-act-day ul { display: grid; margin: 0; padding: 0; list-style: none; }
+:root[data-ui="hq"] .hq-act-row {
+  display: grid; grid-template-columns: 44px 92px minmax(0, 1fr); align-items: center; gap: 10px; padding: 6px 8px;
+  border-radius: var(--hq-r-sm);
+}
+:root[data-ui="hq"] .hq-act-row:hover { background: var(--hq-hover); }
+:root[data-ui="hq"] .hq-act-row time { color: var(--hq-muted); font: var(--hq-fs-sm) var(--hq-mono); }
+:root[data-ui="hq"] .hq-act-row .hq-pill { justify-content: center; }
+:root[data-ui="hq"] .hq-act-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:root[data-ui="hq"] .hq-act-text small { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-act-text a { color: var(--hq-accent-2); }
+:root[data-ui="hq"] .hq-act-text a:hover { text-decoration: underline; }
+:root[data-ui="hq"] .hq-act-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+:root[data-ui="hq"] .hq-act-links a { display: inline-block; }
