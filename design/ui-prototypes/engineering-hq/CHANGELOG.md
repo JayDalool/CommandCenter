@@ -3,6 +3,14 @@
 Each version is a commit on the draft branch `claude/project-thread-gs2u2h` (PR #64). Every gallery and package
 names the commit it was captured from. Visual requests and their approval state are tracked in `DESIGN_CHANGES.md`.
 
+## 2026-11-12 · Workbench direction (V13, proposed)
+
+Jay asked for a more professional look: fewer effects, matte components, nothing see-through, close to Linear, with a
+modern-meets-retro technical feel (answers E1 to E4). Three directions were drawn on one My Office page; this commit
+carries option C, Workbench. Only the tokens change: `styles/hq.css` (dark) and `styles/theme-light.css` (light) get
+graphite surfaces, one signal-orange accent, Geist and Geist Mono, smaller radii, flat elevation and solid floating
+surfaces; `data/seed.ts` gets muted project colours. The prototype's component rules are unchanged.
+
 ## 2026-10-26 · Overnight QA: accessibility and polish (V12, proposed)
 
 A new QA sweep (`e2e/qa.mjs`) opened every gallery state and pop-out in Dark and Light at 1920, 1366, 1280 and 390 px

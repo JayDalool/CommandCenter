@@ -26,22 +26,22 @@ export type IconName = "image" | "layers" | "chart" | "heart" | "cc" | "code" | 
 
 const T = (...m: [string, string][]): Member[] => m.map(([id, reportsTo]) => ({ id, reportsTo }));
 export const PROJECTS: Project[] = [
-  { key: "samvision", name: "SamVision", prefix: "SV", color: "#2fe0a0", icon: "image",
+  { key: "samvision", name: "SamVision", prefix: "SV", color: "#4fbf8f", icon: "image",
     blurb: "Real-estate analysis tools for realtors: comparables, pricing and listing insight.",
     mode: "controlled_production", modeLabel: "Controlled production", merge: "Jay merges every PR",
     health: "healthy", env: "Staging", version: "v0.4.2", releaseWindows: ["Thu 01:00", "Sat 01:00"],
     repo: "JayDalool/SamVisionAI", repoState: "connected", envs: ["Development", "Staging", "Production"], machines: ["server"], budget: { monthlyUsd: 600, perTaskUsd: 40, alertPct: 80 }, team: T(["claude", "jay"], ["iris", "claude"], ["nova", "claude"], ["atlas", "claude"], ["pixel", "claude"], ["orion", "claude"]) },
-  { key: "gyst", name: "GYST / LifeOps", prefix: "GYST", color: "#9d6bff", icon: "layers",
+  { key: "gyst", name: "GYST / LifeOps", prefix: "GYST", color: "#9a86d8", icon: "layers",
     blurb: "Jay's personal LifeOps software. Personal-data changes always need Jay.",
     mode: "autonomous_product", modeLabel: "Autonomous product (target · shadow only)", merge: "Jay merges every PR",
     health: "healthy", env: "Development", version: "v0.3.1",
     repo: "JayDalool/gyst-lifeops", repoState: "connected", envs: ["Development"], machines: ["server"], budget: { monthlyUsd: 300, perTaskUsd: 25, alertPct: 80 }, team: T(["claude", "jay"], ["nova", "claude"]) },
-  { key: "mfe", name: "MyFamilyExpenses", prefix: "MFE", color: "#ff9f43", icon: "chart",
+  { key: "mfe", name: "MyFamilyExpenses", prefix: "MFE", color: "#d1a94a", icon: "chart",
     blurb: "Family expense tracking. Separate from GYST.",
     mode: "controlled_production", modeLabel: "Controlled production", merge: "Jay merges every PR",
     health: "healthy", env: "Production", version: "v0.2.0",
     repo: "JayDalool/MyFamilyExpenses", repoState: "connected", envs: ["Development", "Production"], machines: ["server"], budget: { monthlyUsd: 250, perTaskUsd: 25, alertPct: 80 }, team: T(["claude", "jay"], ["pixel", "claude"], ["atlas", "claude"]) },
-  { key: "gauzemate", name: "GauzeMate", prefix: "GZ", color: "#ff4f7b", icon: "heart",
+  { key: "gauzemate", name: "GauzeMate", prefix: "GZ", color: "#d9748a", icon: "heart",
     blurb: "Paused by Jay until designs and files are added. No agent works on it.",
     mode: "paused", modeLabel: "Paused", merge: "Jay merges every PR", health: "paused", env: "—", version: "v0.1.5",
     pausedReason: "Jay paused GauzeMate until he adds designs and files",
@@ -49,7 +49,7 @@ export const PROJECTS: Project[] = [
     // D-024 Annex C2 (Jay, 2026-10-24): no active Project Lead while GauzeMate is paused. The other four projects are led
     // by the Claude Project Lead, a stable role whose backing model may change; each project's history stays separate.
     team: [] },
-  { key: "commandcenter", name: "CommandCenter", prefix: "CC", color: "#4f8bff", icon: "cc",
+  { key: "commandcenter", name: "CommandCenter", prefix: "CC", color: "#6a9ad8", icon: "cc",
     blurb: "This control plane. Experimental autonomy is evaluated in shadow mode only (D-008).",
     mode: "experimental_autonomy", modeLabel: "Experimental autonomy (shadow only)", merge: "Auto-merge for low-risk docs/tests only",
     health: "healthy", env: "Production", version: "v1.2.0",

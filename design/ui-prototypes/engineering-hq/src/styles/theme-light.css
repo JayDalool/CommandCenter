@@ -4,54 +4,54 @@
  * Chosen in Settings → Appearance (Dark, Light, or follow the system); <html data-hq-theme="light"> turns it on. */
 :root[data-hq-theme="light"] {
   color-scheme: light;
-  --bg: #f2f3f8; --bg-2: #e9ebf3; --side: #e9ebf3;
-  --panel: #ffffff; --panel-2: #fdfdff; --raise: #f0f1f7; --hover: #eceef7; --sel: #e6e5fd;
-  --line: #e1e4ee; --line-2: #d0d4e2;
-  --text: #151a2d; --text-2: #434a63; --muted: #5b637c; --faint: #9aa0b4;
-  --accent: #5a48f5; --accent-2: #2f6bf0; --accent-soft: rgba(90, 72, 245, .1); --focus: #5b63f0;
-  --ok: #0e7243; --warn: #985800; --bad: #d2273f; --info: #1c66d0; --violet: #7040dc; --pink: #c5246f; --idle: #5f6780;
-  --badge: #d2273f;
-  --hl: inset 0 1px 0 rgba(255, 255, 255, .85);
-  --e1: 0 0 0 .5px rgba(22, 28, 64, .07), 0 1px 2px rgba(22, 28, 64, .06), 0 3px 10px rgba(22, 28, 64, .04);
-  --e2: 0 0 0 .5px rgba(22, 28, 64, .09), 0 2px 6px rgba(22, 28, 64, .08), 0 10px 28px rgba(22, 28, 64, .1);
-  --e3: 0 0 0 .5px rgba(22, 28, 64, .12), 0 8px 20px rgba(22, 28, 64, .1), 0 24px 64px rgba(22, 28, 64, .18);
-  --material: rgba(251, 251, 254, .9); --material-line: rgba(22, 28, 64, .12);
+  --bg: #f5f5f3; --bg-2: #efefec; --side: #efefec;
+  --panel: #ffffff; --panel-2: #fdfdfc; --raise: #f3f3f1; --hover: #efefec; --sel: #e9e9e5;
+  --line: #e2e2de; --line-2: #d6d6d1;
+  --text: #16171a; --text-2: #45464c; --muted: #5f6066; --faint: #a3a4aa;
+  --accent: #c2410c; --accent-2: #c2410c; --accent-soft: rgba(194, 65, 12, .1); --focus: #c2410c;
+  --ok: #1f7a45; --warn: #8f5600; --bad: #c4302b; --info: #1f5fae; --violet: #6b55b8; --pink: #b4386f; --idle: #63646a;
+  --badge: #c4302b;
+  --hl: inset 0 0 0 transparent;
+  --e1: 0 0 0 .5px rgba(20, 20, 24, .08), 0 1px 2px rgba(20, 20, 24, .05);
+  --e2: 0 0 0 .5px rgba(20, 20, 24, .1), 0 6px 20px rgba(20, 20, 24, .1);
+  --e3: 0 0 0 .5px rgba(20, 20, 24, .12), 0 20px 50px rgba(20, 20, 24, .16);
+  --material: #ffffff; --material-line: rgba(20, 20, 24, .12);
   /* Surfaces */
-  --well: #f5f6fa; --field: #ffffff; --field-alt: #ffffff; --input: #ffffff;
-  --field-hover: #fafbfe; --tile: #ffffff; --tile-on: #f3f2ff; --node: #ffffff;
-  --btn-bg: #ffffff; --btn-hover: #f4f5fa; --chrome: #eceef5; --sunk: #eef0f6;
-  --kbd-bg: #f1f2f7; --tab-on: #ffffff; --tab-hover: #e4e7f0; --stripe-a: #eef0f6;
-  --float: #ffffff; --float-a: #ffffff; --float-b: #fbfbfe; --drawer-a: #ffffff;
-  --bubble: #ffffff; --bubble-me-a: #efedff; --bubble-me-b: #e9e6ff; --conv-sel-a: #efeeff;
-  --conv-sel-b: #e9e8ff; --nav-on-a: #e6e5fd; --nav-on-b: #e1e0fb; --side-a: #eef0f6;
-  --side-b: #e8eaf2; --thumb-a: #ffffff; --thumb-b: #fbfbfe; --seg-on: #ffffff;
-  --gn-ico-bg: #f2f3f9; --gn-x-bg: #ffffff; --gn-x-hover: #eef0f8; --life-dot: #e8eaf2;
-  --topbar: rgba(247, 248, 252, .78); --topbar-2: rgba(247, 248, 252, .82); --search-bg: #ffffff; --legend-bg: rgba(255, 255, 255, .92);
-  --tip-bg: rgba(250, 250, 253, .97); --veil: rgba(28, 32, 58, .22); --veil-2: rgba(28, 32, 58, .26); --veil-3: rgba(28, 32, 58, .22);
+  --well: #f7f7f5; --field: #ffffff; --field-alt: #ffffff; --input: #ffffff;
+  --field-hover: #fafaf9; --tile: #ffffff; --tile-on: #f3f3f1; --node: #ffffff;
+  --btn-bg: #ffffff; --btn-hover: #f3f3f1; --chrome: #ececea; --sunk: #efefec;
+  --kbd-bg: #f1f1ef; --tab-on: #ffffff; --tab-hover: #e9e9e5; --stripe-a: #f5f5f3;
+  --float: #ffffff; --float-a: #ffffff; --float-b: #ffffff; --drawer-a: #ffffff;
+  --bubble: #ffffff; --bubble-me-a: #fbefe9; --bubble-me-b: #fbefe9; --conv-sel-a: #efefec;
+  --conv-sel-b: #efefec; --nav-on-a: #e6e6e1; --nav-on-b: #e6e6e1; --side-a: #efefec;
+  --side-b: #efefec; --thumb-a: #ffffff; --thumb-b: #ffffff; --seg-on: #ffffff;
+  --gn-ico-bg: #f3f3f1; --gn-x-bg: #ffffff; --gn-x-hover: #efefec; --life-dot: #e6e6e1;
+  --topbar: #f5f5f3; --topbar-2: #f5f5f3; --search-bg: #ffffff; --legend-bg: #ffffff;
+  --tip-bg: #ffffff; --veil: rgba(20, 20, 24, .24); --veil-2: rgba(20, 20, 24, .28); --veil-3: rgba(20, 20, 24, .24);
   /* Lines, tracks and rings */
-  --panel-line: rgba(22, 28, 64, .09); --panel-line-2: rgba(22, 28, 64, .08); --seg-line: rgba(22, 28, 64, .1); --seg-on-line: rgba(22, 28, 64, .12);
-  --row-line: #eceef4; --row-line-2: #e8eaf1; --line-3: #d5d9e6; --line-4: #c9cde6;
-  --ring: #c3c8d9; --ring-2: #aab1c7; --ring-3: #c5cbdc; --node-line: #d3d7e4;
-  --node-line-hover: #a9b1cc; --node-neutral: #a3abc4; --gn-ico-line: #dde1ec; --gn-x-line: #c5cbe0;
-  --btn-line-hover: #c2c8db; --input-line-hover: #bcc3d8; --outline-line: #c8cbf2; --outline-hover: #9fa5ea;
-  --tile-line-hover: #b9bfe0; --card-line-hover: #b9bfe0; --dash-hover: #9aa2c8; --sel-line: #6a5ff5;
-  --accent-line: #5a5ef0; --conv-sel-line: #b3adff; --bubble-me-line: #cbc5ff; --step-line: #b3b8e8;
-  --detached-line: #c9c4ff; --track: #e3e6ef; --track-2: #d3d7e4; --switch-off: #d5d9e5;
-  --deny-bar: #c9cede; --legend-flow: #7d86a3; --dots: rgba(60, 70, 140, .16); --scroll: rgba(60, 70, 110, .22);
-  --scroll-hover: rgba(60, 70, 110, .36); --marker: rgba(22, 28, 64, .32);
+  --panel-line: #e2e2de; --panel-line-2: #e6e6e2; --seg-line: #d6d6d1; --seg-on-line: #c9c9c4;
+  --row-line: #ececea; --row-line-2: #e8e8e5; --line-3: #d0d0cb; --line-4: #c4c4bf;
+  --ring: #c4c4bf; --ring-2: #a9aaa5; --ring-3: #c4c4bf; --node-line: #d0d0cb;
+  --node-line-hover: #a3a4aa; --node-neutral: #a3a4aa; --gn-ico-line: #e2e2de; --gn-x-line: #d0d0cb;
+  --btn-line-hover: #c4c4bf; --input-line-hover: #b9bab5; --outline-line: #d0d0cb; --outline-hover: #a9aaa5;
+  --tile-line-hover: #c4c4bf; --card-line-hover: #c4c4bf; --dash-hover: #a3a4aa; --sel-line: #c2410c;
+  --accent-line: #c2410c; --conv-sel-line: #e8c9b9; --bubble-me-line: #efd2c3; --step-line: #c4c4bf;
+  --detached-line: #c4c4bf; --track: #ececea; --track-2: #d6d6d1; --switch-off: #d0d0cb;
+  --deny-bar: #c9c9c4; --legend-flow: #6a6b71; --dots: rgba(20, 20, 24, .1); --scroll: rgba(20, 20, 24, .2);
+  --scroll-hover: rgba(20, 20, 24, .34); --marker: rgba(20, 20, 24, .3);
   /* Inks */
-  --text-strong: #0e1222; --link: #4450d6; --link-2: #4450d6; --link-hover: #3038b5;
-  --accent-icon: #5552e0; --accent-icon-2: #5552e0; --accent-em: #6a3fe6; --accent-em-2: #4f55e8;
-  --nav-ico-on: #4b4fe0; --violet-ink: #5a45e0; --violet-ink-2: #5a45e0; --violet-ink-3: #6c3fe0;
-  --violet-ink-4: #4f3fd0; --violet-ink-5: #6c3fe0; --violet-ink-6: #5a45e0; --bad-ink: #b81f39;
-  --bad-ink-2: #c0263f; --bad-ink-3: #b81f39; --bad-ink-4: #b8223c; --bad-ink-5: #b42039;
-  --warn-ink: #8a5300; --warn-ink-2: #915800; --info-ink: #1a4f9e; --info-ink-2: #1c5fc4;
-  --info-ink-3: #1c5fc4; --ico-ink-blue: #3f5bdc; --ico-ink-blue-2: #3f5bdc; --gn-ico-ink: #4a5375;
-  --gn-x-ink: #4a5375; --step-ink: #4a50c8; --bubble-ink: #1b2033; --code-ink: #2b3250;
-  --outline-ink: #3a3fc0; --sel-sub: #3f3a9c; --tip-ink: #1d2133; --knob: #ffffff;
-  --demo-mark: rgba(160, 100, 0, .6);
+  --text-strong: #0b0c0e; --link: #b23a0a; --link-2: #b23a0a; --link-hover: #8a2c07;
+  --accent-icon: #c2410c; --accent-icon-2: #c2410c; --accent-em: #b23a0a; --accent-em-2: #c2410c;
+  --nav-ico-on: #c2410c; --violet-ink: #5c48a8; --violet-ink-2: #5c48a8; --violet-ink-3: #5c48a8;
+  --violet-ink-4: #5c48a8; --violet-ink-5: #5c48a8; --violet-ink-6: #5c48a8; --bad-ink: #b3261e;
+  --bad-ink-2: #b8291f; --bad-ink-3: #b3261e; --bad-ink-4: #b3261e; --bad-ink-5: #a8231b;
+  --warn-ink: #7f4c00; --warn-ink-2: #855000; --info-ink: #1a4a86; --info-ink-2: #1f5fae;
+  --info-ink-3: #1f5fae; --ico-ink-blue: #3d5f9e; --ico-ink-blue-2: #3d5f9e; --gn-ico-ink: #45464c;
+  --gn-x-ink: #45464c; --step-ink: #45464c; --bubble-ink: #16171a; --code-ink: #2a2b30;
+  --outline-ink: #2a2b30; --sel-sub: #3a3b40; --tip-ink: #16171a; --knob: #ffffff;
+  --demo-mark: rgba(143, 86, 0, .6);
   /* Washes tint toward navy instead of white; black shadows are softened */
-  --wash: 30 40 90; --shade-k: .32;
+  --wash: 20 20 24; --shade-k: .32;
 }
 /* Light surfaces that need their own treatment */
 :root[data-hq-theme="light"] .fld input:not([type="checkbox"]), :root[data-hq-theme="light"] .fld select, :root[data-hq-theme="light"] .fld textarea,
