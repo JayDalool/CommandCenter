@@ -16,9 +16,15 @@ export const SHOWS: Record<string, string> = {
   room: "pop-out", pane: "pop-out",
 };
 
-/** What the HQ preview's top bar names differently: its sidebar's names for the same screens (hq/frame/nav.ts). */
+/** What the HQ preview's top bar names differently: its sidebar's names for the same screens (hq/frame/nav.ts), and
+ *  the HQ Settings section that holds each Classic one (hq/pages/Settings.tsx). */
 export const SHOWS_HQ: Record<string, string> = { ...SHOWS, dashboard: "My Office", overview: "My Office", needs: "Decisions",
-  tasks: "Engineering", activity: "Activity", agents: "Teams", projects: "Company" };
+  tasks: "Engineering", activity: "Activity", agents: "Teams", projects: "Company",
+  "settings?tab=desktop": "Settings › Connections", "settings?tab=developer": "Settings › Security",
+  "settings?tab=connection": "Settings › Connections", "settings?tab=policies": "Settings › Operating profiles",
+  "settings?tab=decisions": "Settings › Operating profiles", "settings?tab=audit": "Settings › Audit and usage",
+  "settings?tab=usage": "Settings › Audit and usage", "settings?tab=import": "Settings › General",
+  "settings?tab=diagnostics": "Settings › Other destinations" };
 
 /** Each must load clean. */
 export const LOAD = Object.keys(SHOWS);

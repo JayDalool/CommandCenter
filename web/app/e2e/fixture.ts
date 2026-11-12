@@ -189,7 +189,9 @@ export async function shown(page: Page): Promise<string> {
     const hq = document.querySelector(".hq-top h1.page-title")?.textContent;   // the HQ frame's top bar, on every screen
     if (!hq && document.querySelector(".shell.is-dash .dash-top")) return "Dashboard";
     const title = hq ?? document.querySelector("h1.page-title")?.textContent ?? "(no title)";
-    const section = document.querySelector('[aria-label="Settings section"] [aria-pressed="true"]')?.textContent;
+    // Classic's Settings marks its section with a pressed button, HQ's with the current link in its section list.
+    const section = document.querySelector('[aria-label="Settings section"] [aria-pressed="true"]')?.textContent
+      ?? document.querySelector('[aria-label="Settings sections"] [aria-current="page"] b')?.textContent;
     return section ? `${title} › ${section}` : title;
   });
 }

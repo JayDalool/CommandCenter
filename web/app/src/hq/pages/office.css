@@ -9,8 +9,11 @@
 :root[data-ui="hq"] .hq-page a { color: inherit; text-decoration: none; }
 :root[data-ui="hq"] .hq-ellip { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 :root[data-ui="hq"] .hq-empty { color: var(--hq-muted); padding: 6px 0; }
-:root[data-ui="hq"] .hq-link { color: var(--hq-accent-2); font-size: var(--hq-fs-sm); white-space: nowrap; }
-:root[data-ui="hq"] .hq-link:hover { text-decoration: underline; }
+/* .hq-page a above resets link colour, so a link styled as one has to outrank it. Colours as the prototype's .link. */
+:root[data-ui="hq"] .hq-page .hq-link {
+  color: var(--hq-link); font-size: var(--hq-fs-sm); font-weight: 600; white-space: nowrap; transition: color var(--hq-dur-1);
+}
+:root[data-ui="hq"] .hq-page .hq-link:hover { color: var(--hq-link-hover); text-decoration: underline; }
 
 :root[data-ui="hq"] .hq-btn {
   padding: 6px 14px; border: 1px solid var(--hq-line-2); border-radius: var(--hq-r-sm); background: var(--hq-panel-2);

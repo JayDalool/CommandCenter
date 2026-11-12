@@ -86,6 +86,8 @@ export function savePlace(v: PopView, p: Place) {
     localStorage.setItem(PLACES, JSON.stringify({ ...(all && typeof all === "object" ? all : {}), [v]: p }));
   } catch { /* storage off: the next pop-out opens at the default place */ }
 }
+/** Forget every remembered place: each pop-out opens beside this window again until it is moved. */
+export function forgetPlaces() { try { localStorage.removeItem(PLACES); } catch { /* storage off: nothing remembered */ } }
 export const herePlace = (): Place => ({ x: window.screenX, y: window.screenY, w: window.outerWidth, h: window.outerHeight });
 
 // ---------- monitors (Window Management API, Edge and Chrome) ----------
