@@ -19,6 +19,7 @@ import { HQ_NAV, HQ_NAV_LOW, hqTitle, sectionOf, viewKey, type HqNavItem } from 
 import { tabs, visit, close } from "./tabs";
 import { Icon, Logo } from "./icons";
 import { JayMenu } from "./JayMenu";
+import { HqTabBar } from "./TabBar";
 import { hqMedia } from "../layout";
 import { PopOutButton, PoppedPlaceholder, usePopped, usePoppedViews, useWindowsWatch, viewOfRoute } from "../windows/controls";
 
@@ -85,13 +86,15 @@ export function HqTop({ dash }: { dash: boolean }) {
   const view = viewOfRoute(route);
   const out = usePopped(view);
   return <header className="hq-top">
+    {/* On a phone, where the sidebar is gone, the mark is the way home. */}
+    <a className="hq-top-brand" href={href("dashboard")} aria-label="Command Center, My Office"><Logo size={26} /></a>
     <h1 className="page-title">{hqTitle(route.screen, route.id, projName)}</h1>
     <button type="button" className="hq-search" onClick={() => window.dispatchEvent(new Event("cc:palette"))}
-      aria-keyshortcuts="Control+K">
+      aria-label="Search screens, tasks, projects and commands" aria-keyshortcuts="Control+K">
       <Icon name="search" size={17} /><span>Search screens, tasks, projects and commands</span><Kbd>Ctrl</Kbd><Kbd>K</Kbd></button>
     <div className="hq-top-right">
       {view && !out && <PopOutButton v={view} />}
-      <button type="button" className="btn is-quiet is-sm" onClick={() => window.dispatchEvent(new Event("cc:new-task"))}
+      <button type="button" className="btn is-quiet is-sm hq-new" onClick={() => window.dispatchEvent(new Event("cc:new-task"))}
         aria-keyshortcuts="n"><Kbd>N</Kbd> New task</button>
       {/* The Dashboard has its own Developer Mode dot and bell in its header: not twice on one screen. */}
       {!dash && <><DevDot /><NotificationBell /></>}
@@ -166,6 +169,7 @@ export default function HqFrame({ dash, focus, banners, screen, overlays }: {
           <main id="main" className="screen hq-screen" tabIndex={-1}>{view && out ? <PoppedPlaceholder v={view} /> : <Page />}</main></HqBoundary>
         : screen}
     </div>
+    {!focus && <HqTabBar />}
     {overlays}
   </div>;
 }
