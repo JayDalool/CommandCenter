@@ -564,9 +564,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         n = _notifier()
         if not (n.settings["slack"] or n.settings["ntfy"]):
             raise ActionError(409, "switch Slack or ntfy on first")
-        ts = await n.post("dm", "CommandCenter test: Slack works. Reply here to check that replies reach ccd.")
-        await n.push("CommandCenter test", n.link())
-        return {"ok": True, "slack": bool(ts), "status": n.public()["status"]}
+        return await n.send_test()
 
     async def notify_summary(request, body):
         _jay_dev(request, "summaries post to Slack")

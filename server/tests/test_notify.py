@@ -146,6 +146,27 @@ class Settings(unittest.TestCase):
         self.assertNotIn("topic-abcdef", body)
         self.assertTrue(n.public()["configured"]["ntfy"])
 
+    def test_a_test_reports_each_channel_and_clears_an_old_error(self):
+        n, _, slack, pushes = make(settings={"slack": True, "ntfy": True})
+        n.status["lastError"] = "slack #gyst: the bot is not in #gyst"
+        r = run(n.send_test())
+        self.assertEqual((r["slack"], r["ntfy"], r["status"]["lastError"]), (True, True, None))
+        self.assertEqual((len(slack.posts), len(pushes)), (1, 1))
+        n.update_settings({"ntfy": False})
+        n._ntfy = None
+        r = run(n.send_test())
+        self.assertEqual((r["slack"], r["ntfy"]), (True, False))
+
+    def test_a_failed_push_is_reported_as_failed(self):
+        n, _, _, _ = make(settings={"ntfy": True})
+
+        def boom(*a, **k):
+            raise OSError("down")
+        n._ntfy = boom
+        r = run(n.send_test())
+        self.assertEqual((r["slack"], r["ntfy"]), (False, False))
+        self.assertIn("ntfy", r["status"]["lastError"])
+
     def test_slack_env_must_be_owner_only(self):
         p = os.path.join(tempfile.mkdtemp(), "slack.env")
         with open(p, "w") as f:

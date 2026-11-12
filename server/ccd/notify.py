@@ -378,14 +378,25 @@ class Notifier:
         return ts
 
     async def push(self, title, link):
+        """True when the push was accepted; False when ntfy is off, has no topic, or failed."""
         if not (self.settings["ntfy"] and self.ntfy_url):
-            return
+            return False
         try:
             await self._call(self._ntfy, self.ntfy_url, title, link)
             self.status["ntfy"] = "ok"
+            return True
         except Exception as e:  # noqa: BLE001
             self.status["ntfy"] = "failing"
             self._fail("ntfy", type(e).__name__)
+            return False
+
+    async def send_test(self):
+        """One test DM and one test push, each reported on its own. lastError is cleared first, so it holds only
+        what failed in this test."""
+        self.status["lastError"] = None
+        ts = await self.post("dm", "CommandCenter test: Slack works. Reply here to check that replies reach ccd.")
+        pushed = await self.push("CommandCenter test", self.link())
+        return {"ok": True, "slack": bool(ts), "ntfy": pushed, "status": dict(self.status)}
 
     # ----- Needs You → DM and ntfy -----
 
