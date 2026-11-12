@@ -7,6 +7,9 @@ import { Decisions } from "./Decisions";
 import { Activity } from "./Activity";
 import { Teams } from "./Teams";
 import { Topology } from "./Topology";
+import { Approvals } from "./Approvals";
+import { Budgets } from "./Budgets";
+import { Messages, Revenue } from "./NotConnected";
 
 export type HqPage = () => React.JSX.Element;
 
@@ -21,6 +24,10 @@ export function hqPageFor(r: Pick<Route, "screen" | "id" | "params">): HqPage | 
     case "agents": return r.id ? null : Teams;
     case "projects": return r.id ? null : Topology;
     case "tasks": return r.params.has("view") || r.params.has("status") ? null : Engineering;
+    case "approvals": return Approvals;
+    case "budgets": return Budgets;
+    case "messages": return Messages;
+    case "revenue": return Revenue;
     default: return null;
   }
 }

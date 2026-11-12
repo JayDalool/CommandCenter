@@ -596,3 +596,16 @@ export interface UsageState {
   bySource?: UsageRow[];
   budgets?: { project: string; monthlyUsd: number | null; monthlyTokens: number | null; spentUsd: number; spentTokens: number }[];
 }
+/** GET /api/onboarding/budgets (D-033 in shadow, ccd/budgets.py). 404 while the onboarding groundwork is off. */
+export interface BudgetLine {
+  scope: "company" | "project" | "agent"; key: string; period: "day" | "month";
+  limitUsd: number | null; limitTokens: number | null; spentUsd: number; spentTokens: number;
+  unpricedReplies: number; unpricedUsdAtFallback: number; assessedUsd: number; unattributedUsd?: number;
+  alerts: number[]; source: "measured" | "reported"; state: "none" | "ok" | "alert" | "unknown" | "hold";
+  holdReason: "limit" | "stale-meter" | null; pct: number | null; threshold: number | null; onCourseToHold: boolean;
+}
+export interface BudgetsState {
+  mode: "shadow"; enforced: boolean; lines: BudgetLine[]; wouldHold: { scope: string; key: string }[];
+  safetyKinds: string[]; meter: { lastReadAt: number | null; stale: boolean; staleAfterSeconds: number };
+  prices: { asOf: string; ageDays: number; maxAgeDays: number }; dataAlerts: { kind: string; detail: string }[]; note?: string;
+}

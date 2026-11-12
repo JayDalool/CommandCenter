@@ -2,7 +2,7 @@ import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
 import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
-  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, InboxState, WorkersState, WorkerNode, AuditState, ActorsState, ActorToken, UsageState } from "./types";
+  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, InboxState, WorkersState, WorkerNode, AuditState, ActorsState, ActorToken, UsageState, BudgetsState } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -126,6 +126,10 @@ export class Api {
   }
   usage(days = 14) {
     return this.req<UsageState>("GET", `/api/usage?days=${days}`);
+  }
+  /** Shadow budgets (D-033). Read-only; 404 while the onboarding groundwork is off. */
+  budgets() {
+    return this.req<BudgetsState>("GET", "/api/onboarding/budgets");
   }
   actors() {
     return this.req<ActorsState>("GET", "/api/actors");

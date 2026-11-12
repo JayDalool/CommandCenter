@@ -30,6 +30,12 @@ const P: Record<string, React.ReactNode> = {
   zoomout: <><circle cx="11" cy="11" r="6" /><path d="m20 20-4.5-4.5M8.5 11h5" /></>,
   graph: <><circle cx="12" cy="5" r="2.2" /><circle cx="5" cy="17" r="2.2" /><circle cx="19" cy="17" r="2.2" /><path d="M11 7 6 15M13 7l5 8M7.2 17h9.6" /></>,
   list: <><path d="M9 6.5h11M9 12h11M9 17.5h11M4.5 6.5h.1M4.5 12h.1M4.5 17.5h.1" /></>,
+  message: <><path d="M4 5.5h16v11H9l-5 3.5z" /><path d="M8 10h8M8 13h5" /></>,
+  receipt: <><path d="M6 3.5h12v17l-2-1.3-2 1.3-2-1.3-2 1.3-2-1.3-2 1.3z" /><path d="M9 8h6M9 11.5h6M9 15h4" /></>,
+  chart: <><path d="M4 20V4M4 20h16" /><rect x="7" y="12" width="3" height="5" /><rect x="12" y="8" width="3" height="9" /><rect x="17" y="10" width="3" height="7" /></>,
+  chevdown: <><path d="m6 9 6 6 6-6" /></>,
+  lock: <><rect x="5" y="10.5" width="14" height="10" rx="2" /><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" /></>,
+  plug: <><path d="M9 3.5v5M15 3.5v5M6.5 8.5h11V12a5.5 5.5 0 0 1-11 0zM12 17.5v3" /></>,
 };
 
 export function Icon({ name, size = 18 }: { name: string; size?: number }) {
