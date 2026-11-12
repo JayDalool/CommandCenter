@@ -50,8 +50,9 @@ export function Engineering() {
   const { src, ev } = useHqData();
   const asked = route.params.get("project") ?? "";
   const [project, setProject] = useState(asked);
-  // A new ?project= while the page stays mounted (the address changes, the page does not) applies too.
-  useEffect(() => { setProject(asked); }, [asked]);
+  // A new ?project= while the page stays mounted (the address changes, the page does not) applies too. An address with
+  // none, such as a task opened from the table, keeps the filter.
+  useEffect(() => { if (asked) setProject(asked); }, [asked]);
   const [stage, setStage] = useState<VisibleStage | "">("");
   const [who, setWho] = useState("");
   const [q, setQ] = useState("");

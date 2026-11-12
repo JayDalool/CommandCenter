@@ -101,6 +101,16 @@ describe("Engineering", () => {
     expect(keys(page).sort()).toEqual(gz.columns.flatMap((c) => c.tasks.map((t) => t.key)).sort());
   });
 
+  it("keeps the project filter when a task is opened from the table", async () => {
+    load(true);
+    const page = await show("#/tasks?project=samvision");
+    const row = page.querySelector<HTMLElement>(".hq-table tbody tr")!;
+    const key = row.querySelector("code")!.textContent;
+    await act(async () => { fireEvent.click(row); });
+    expect(location.hash).toBe(`#/tasks/${key}`);
+    expect(within(page).getByRole("combobox", { name: "Project" })).toHaveValue("samvision");
+  });
+
   it("New task opens today's new-ticket flow, for the project in view", async () => {
     load(true);
     const page = await show("#/tasks?project=samvision");
