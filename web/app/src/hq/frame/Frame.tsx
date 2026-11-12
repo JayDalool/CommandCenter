@@ -16,19 +16,22 @@ import { HqPreviewTag } from "../../components/HqPreview";
 import { HQ_NAV, HQ_NAV_LOW, hqTitle, sectionOf, viewKey, type HqNavItem } from "./nav";
 import { tabs, visit, close } from "./tabs";
 import { Icon, Logo } from "./icons";
+import { hqMedia } from "../layout";
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
 
-/** The prototype's sidebar shows icons only in windows up to 1440px wide (hq/tokens.css, --hq-side-w). */
-const NARROW = "(max-width: 1440px)";
-const media = () => (typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(NARROW) : null);
+/** The prototype's sidebar shows icons only in windows up to 1440px wide (hq/layout.ts). */
 function useNarrow(): boolean {
   return useSyncExternalStore((cb) => {
-    const m = media();
+    const m = hqMedia();
     m?.addEventListener("change", cb);
     return () => m?.removeEventListener("change", cb);
-  }, () => media()?.matches ?? false, () => false);
+  }, () => hqMedia()?.matches ?? false, () => false);
 }
+
+/** The theme on screen: System resolves to what the OS asks for, so the toggle always offers the other one. */
+const looksDark = (theme: string) => theme === "dark"
+  || (theme === "system" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches);
 /** Icons only: a narrow window, or the sidebar's own toggle (Ctrl+\, the same preference as Classic's rail). */
 function useIconsOnly(): { icons: boolean; narrow: boolean; collapsed: boolean } {
   const collapsed = usePrefs((p) => p.railCollapsed);
@@ -87,8 +90,8 @@ export function HqTop({ dash }: { dash: boolean }) {
     <div className="hq-top-right">
       <button type="button" className="btn is-quiet is-sm" onClick={() => window.dispatchEvent(new Event("cc:new-task"))}
         aria-keyshortcuts="n"><Kbd>N</Kbd> New task</button>
-      <button type="button" className="btn is-quiet is-sm" onClick={() => prefs.patch({ theme: theme === "dark" ? "light" : "dark" })}
-        aria-label="Toggle light and dark">{theme === "dark" ? "Light" : "Dark"}</button>
+      <button type="button" className="btn is-quiet is-sm" onClick={() => prefs.patch({ theme: looksDark(theme) ? "light" : "dark" })}
+        aria-label="Toggle light and dark">{looksDark(theme) ? "Light" : "Dark"}</button>
       {/* The Dashboard has its own Developer Mode dot and bell in its header: not twice on one screen. */}
       {!dash && <><DevDot /><NotificationBell /></>}
     </div>
@@ -125,17 +128,19 @@ export function HqTabs() {
   </nav>;
 }
 
-/** The whole HQ window around one screen. `banners`, `screen` and `overlays` are Classic's, passed in unchanged. */
-export default function HqFrame({ dash, banners, screen, overlays }: {
-  dash: boolean; banners: ReactNode; screen: ReactNode; overlays: ReactNode;
+/** The whole HQ window around one screen. `banners`, `screen` and `overlays` are Classic's, passed in unchanged.
+ *  `focus` is Workspace Focus: the sidebar, top bar and tabs go, and the screen stays where it is in the tree, so it is
+ *  not remounted (a remount would close and reopen every terminal). */
+export default function HqFrame({ dash, focus, banners, screen, overlays }: {
+  dash: boolean; focus: boolean; banners: ReactNode; screen: ReactNode; overlays: ReactNode;
 }) {
   const { icons } = useIconsOnly();
-  return <div className={cx("shell hq-shell", icons && "is-icons")}>
+  return <div className={cx("shell hq-shell", icons && "is-icons", focus && "is-focus")}>
     <a className="sr" href="#main">Skip to content</a>
-    <HqSide />
+    {!focus && <HqSide />}
     <div className="hq-main">
-      <HqTop dash={dash} />
-      <HqTabs />
+      {!focus && <HqTop dash={dash} />}
+      {!focus && <HqTabs />}
       {banners}
       {screen}
     </div>

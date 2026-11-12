@@ -4,8 +4,15 @@
  * counts every non-HQ custom property as one of Classic's. Layout follows the approved prototype (styles/hq.css,
  * .side, .top, .tabs), scaled to sit around Classic's screens. */
 
-:root[data-ui="hq"] .hq-shell { grid-template-columns: var(--hq-side-w) minmax(0, 1fr); background: var(--hq-bg); }
+/* Areas as Classic's desktop shell (app.css), set here too: Classic's narrow-window rule (max-width: 760px) drops
+ * its rail area, and HQ has no phone layout yet. */
+:root[data-ui="hq"] .hq-shell {
+  grid-template-columns: var(--hq-side-w) minmax(0, 1fr); background: var(--hq-bg);
+  grid-template-areas: "rail main" "console console" "status status";
+}
 :root[data-ui="hq"] .hq-shell.is-icons { grid-template-columns: 76px minmax(0, 1fr); }
+/* Workspace Focus: the screen alone (Frame.tsx). */
+:root[data-ui="hq"] .hq-shell.is-focus { grid-template-columns: 0 minmax(0, 1fr); }
 
 /* ---------- sidebar ---------- */
 :root[data-ui="hq"] .hq-side {

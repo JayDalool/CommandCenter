@@ -2,7 +2,7 @@
 // and keeps that screen's digit key (components/Shell.tsx, NAV), so links, bookmarks and shortcuts all still work.
 // The HQ pages replace these screens one at a time; until then the names are HQ's and the screens are Classic's.
 import type { Route } from "../../lib/router";
-import { TITLES } from "../../components/Shell";
+import { TITLES } from "../../lib/titles";
 
 export interface HqNavItem { id: string; label: string; icon: string; key: string }
 
