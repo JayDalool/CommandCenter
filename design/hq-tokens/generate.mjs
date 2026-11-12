@@ -12,8 +12,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** The design Jay signed off (2026-10-25): "Engineering HQ: final design refinements". */
-export const APPROVED = "4b72f3fec4c6eb640d5330dad45f8b7248628841";
+/** The design Jay picked (2026-11-12): Workbench, "Engineering HQ prototype: Workbench direction (V13)". Before it:
+ *  4b72f3f, "Engineering HQ: final design refinements", signed off 2026-10-25. */
+export const APPROVED = "d55aab08055fceda80ab08e5f105257a4bf13543";
 const PROTO = "design/ui-prototypes/engineering-hq/src";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const OUT_CSS = path.join(ROOT, "web/app/src/hq/tokens.css");
@@ -106,7 +107,7 @@ export function generate() {
  *
  * Inert unless <html data-ui="hq">. Every rule is scoped to ${HQ} and every declaration is an --hq-* custom
  * property, so nothing here can match Classic or change one of Classic's own variables. HQ follows Classic's theme
- * (data-theme dark, light or system) and adds no theme setting of its own. Fonts are names only: nothing is loaded.
+ * (data-theme dark, light or system) and adds no theme setting of its own. Fonts are names only here: src/hq/fonts/fonts.css loads Geist and Geist Mono.
  * tests/hq-tokens.test.ts and e2e/hq-tokens.spec.ts hold these rules.
  *
  * Not here yet: the prototype's dark islands (.term and .slack-phone keep the dark tokens in Light), for the screens
