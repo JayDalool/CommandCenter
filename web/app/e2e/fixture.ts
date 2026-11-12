@@ -170,12 +170,14 @@ export async function settle(page: Page) {
   });
 }
 
-/** Which screen the page shows: the top bar's title (with the Settings section), "Dashboard", or "pop-out". */
+/** Which screen the page shows: the top bar's title (with the Settings section; HQ's top bar in the HQ preview),
+ *  "Dashboard", or "pop-out". */
 export async function shown(page: Page): Promise<string> {
   return page.evaluate(() => {
     if (document.querySelector(".shell.is-bare")) return "pop-out";
-    if (document.querySelector(".shell.is-dash .dash-top")) return "Dashboard";
-    const title = document.querySelector("h1.page-title")?.textContent ?? "(no title)";
+    const hq = document.querySelector(".hq-top h1.page-title")?.textContent;   // the HQ frame's top bar, on every screen
+    if (!hq && document.querySelector(".shell.is-dash .dash-top")) return "Dashboard";
+    const title = hq ?? document.querySelector("h1.page-title")?.textContent ?? "(no title)";
     const section = document.querySelector('[aria-label="Settings section"] [aria-pressed="true"]')?.textContent;
     return section ? `${title} › ${section}` : title;
   });

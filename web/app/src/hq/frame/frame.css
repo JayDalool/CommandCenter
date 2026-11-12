@@ -1,0 +1,101 @@
+/* Engineering HQ's frame: sidebar, top bar, tab strip. Loaded with the frame's chunk, so only once HQ has been on in
+ * this window; every rule is also scoped to :root[data-ui="hq"], so switching back to Classic leaves Classic as it was.
+ * Colours, radii, type and motion come from hq/tokens.css (--hq-*). No custom property is defined here: parity.spec
+ * counts every non-HQ custom property as one of Classic's. Layout follows the approved prototype (styles/hq.css,
+ * .side, .top, .tabs), scaled to sit around Classic's screens. */
+
+/* Areas as Classic's desktop shell (app.css), set here too: Classic's narrow-window rule (max-width: 760px) drops
+ * its rail area, and HQ has no phone layout yet. */
+:root[data-ui="hq"] .hq-shell {
+  grid-template-columns: var(--hq-side-w) minmax(0, 1fr); background: var(--hq-bg);
+  grid-template-areas: "rail main" "console console" "status status";
+}
+:root[data-ui="hq"] .hq-shell.is-icons { grid-template-columns: 76px minmax(0, 1fr); }
+/* Workspace Focus: the screen alone (Frame.tsx). */
+:root[data-ui="hq"] .hq-shell.is-focus { grid-template-columns: 0 minmax(0, 1fr); }
+
+/* ---------- sidebar ---------- */
+:root[data-ui="hq"] .hq-side {
+  grid-area: rail; display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow: auto;
+  padding: 12px 10px 10px; border-right: 1px solid var(--hq-line); color: var(--hq-text-2);
+  background: linear-gradient(180deg, var(--hq-side-a), var(--hq-side-b)); font-family: var(--hq-font);
+}
+:root[data-ui="hq"] .hq-brand { display: flex; align-items: center; gap: 11px; padding: 2px 8px 14px; color: var(--hq-text); text-decoration: none; }
+:root[data-ui="hq"] .hq-brand-t { display: grid; line-height: 1.15; white-space: nowrap; }
+:root[data-ui="hq"] .hq-brand b { font: 700 18px/1.1 var(--hq-font-display); letter-spacing: -.01em; }
+:root[data-ui="hq"] .hq-brand em { font-style: normal; color: var(--hq-accent-2); }
+:root[data-ui="hq"] .hq-brand small { color: var(--hq-muted); font-size: var(--hq-fs-xs); }
+:root[data-ui="hq"] .hq-nav { display: flex; flex-direction: column; gap: 2px; }
+:root[data-ui="hq"] .hq-nav-item {
+  display: flex; align-items: center; gap: 13px; padding: 9px 12px; border-radius: var(--hq-r-md);
+  color: var(--hq-text-2); font-size: 14.5px; font-weight: 500; text-decoration: none;
+  transition: background var(--hq-dur-1) var(--hq-ease), color var(--hq-dur-1) var(--hq-ease);
+}
+:root[data-ui="hq"] .hq-nav-item:hover { background: var(--hq-hover); color: var(--hq-text); }
+:root[data-ui="hq"] .hq-nav-item.is-current {
+  background: linear-gradient(90deg, var(--hq-nav-on-a), var(--hq-nav-on-b)); color: var(--hq-text-strong); font-weight: 650;
+  box-shadow: inset 3px 0 0 var(--hq-accent-line), var(--hq-hl);
+}
+:root[data-ui="hq"] .hq-nav-item svg { flex: none; }
+:root[data-ui="hq"] .hq-nav-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Count badges: the prototype's V12 badge red (#dc2f4c keeps white numbers at 4.5:1). It becomes --hq-badge when the
+ * V12 tokens are generated into hq/tokens.css. */
+:root[data-ui="hq"] .hq-badge {
+  min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--hq-r-pill); display: grid; place-items: center;
+  font: 700 11.5px/1 var(--hq-font); background: var(--hq-raise); color: var(--hq-text-2);
+}
+:root[data-ui="hq"] .hq-badge.is-jay { background: #dc2f4c; color: #fff; }
+:root[data-ui="hq"] .hq-badge.is-warn { background: var(--hq-warn); color: #1a1200; }
+:root[data-ui="hq"] .hq-side-fill { flex: 1; }
+:root[data-ui="hq"] .hq-nav-low .hq-nav-item { font-size: 14px; }
+:root[data-ui="hq"] .hq-side .hq-tag { margin: 4px 2px 0; padding: 8px 10px; border: 1px dashed var(--hq-line-2); border-radius: var(--hq-r-md); }
+:root[data-ui="hq"] .hq-side-foot { display: flex; justify-content: flex-end; padding: 6px 2px 0; border-top: 1px solid var(--hq-line); }
+:root[data-ui="hq"] .hq-icon-btn {
+  display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: var(--hq-r-sm);
+  background: none; color: var(--hq-muted); cursor: pointer;
+}
+:root[data-ui="hq"] .hq-icon-btn:hover { background: var(--hq-hover); color: var(--hq-text); }
+
+/* Icons only (Frame.tsx, is-icons): windows up to 1440px wide, as in the prototype, or the sidebar's toggle. */
+:root[data-ui="hq"] .hq-shell.is-icons .hq-brand { justify-content: center; padding: 2px 0 14px; }
+:root[data-ui="hq"] .hq-shell.is-icons .hq-brand-t,
+:root[data-ui="hq"] .hq-shell.is-icons .hq-nav-label { display: none; }
+:root[data-ui="hq"] .hq-shell.is-icons .hq-nav-item { position: relative; justify-content: center; padding: 10px 0; }
+:root[data-ui="hq"] .hq-shell.is-icons .hq-badge { position: absolute; top: 2px; right: 4px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; }
+:root[data-ui="hq"] .hq-shell.is-icons .hq-side-foot { justify-content: center; }
+:root[data-ui="hq"] .hq-shell.is-icons .hq-side .hq-tag { justify-content: center; margin: 4px 0 0; padding: 6px 0; border: 0; }
+
+/* ---------- main column: top bar, tabs, Classic's banners, the screen ---------- */
+:root[data-ui="hq"] .hq-main { grid-area: main; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+:root[data-ui="hq"] .hq-main > .screen { flex: 1 1 auto; min-height: 0; }
+:root[data-ui="hq"] .hq-top {
+  flex: none; display: flex; align-items: center; gap: 16px; height: 56px; padding: 0 18px 0 22px; min-width: 0;
+  border-bottom: 1px solid var(--hq-line); background: var(--hq-topbar-2); font-family: var(--hq-font);
+}
+:root[data-ui="hq"] .hq-top .page-title { flex: none; max-width: 28%; color: var(--hq-text-strong); font: 650 var(--hq-fs-xl)/1.2 var(--hq-font-display); }
+:root[data-ui="hq"] .hq-search {
+  flex: 1 1 auto; max-width: 640px; min-width: 0; display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 12px;
+  border: 1px solid var(--hq-line-2); border-radius: var(--hq-r-md); background: var(--hq-input); color: var(--hq-muted);
+  font: var(--hq-fs-md) var(--hq-font); text-align: left; cursor: pointer;
+  transition: border-color var(--hq-dur-1), background var(--hq-dur-1);
+}
+:root[data-ui="hq"] .hq-search:hover { background: var(--hq-field-hover); color: var(--hq-text-2); }
+:root[data-ui="hq"] .hq-search span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:root[data-ui="hq"] .hq-top-right { margin-left: auto; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+
+:root[data-ui="hq"] .hq-tabs { flex: none; border-bottom: 1px solid var(--hq-line); background: var(--hq-chrome); overflow-x: auto; }
+:root[data-ui="hq"] .hq-tabs ul { display: flex; align-items: flex-end; gap: 4px; margin: 0; padding: 5px 18px 0 22px; list-style: none; min-height: 36px; }
+:root[data-ui="hq"] .hq-tab {
+  display: flex; align-items: center; gap: 2px; padding: 0 4px 0 2px; margin-bottom: -1px; white-space: nowrap;
+  border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--hq-muted); font: var(--hq-fs-sm) var(--hq-font);
+}
+:root[data-ui="hq"] .hq-tab > a { padding: 7px 8px; color: inherit; text-decoration: none; }
+:root[data-ui="hq"] .hq-tab:hover { background: var(--hq-tab-hover); color: var(--hq-text-2); }
+:root[data-ui="hq"] .hq-tab.is-active { background: var(--hq-tab-on); border-color: var(--hq-line); color: var(--hq-text); }
+:root[data-ui="hq"] .hq-tab-x {
+  display: inline-grid; place-items: center; padding: 4px; border: 0; border-radius: var(--hq-r-2xs);
+  background: none; color: var(--hq-muted); cursor: pointer;
+}
+:root[data-ui="hq"] .hq-tab-x:hover { background: var(--hq-raise); color: var(--hq-text); }
+
+:root[data-ui="hq"] .hq-shell :is(a, button):focus-visible { outline: 2px solid var(--hq-focus); outline-offset: 2px; }

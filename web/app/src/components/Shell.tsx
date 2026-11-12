@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Component, Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from "react";
 import { app } from "../store/app";
 import { useSelector, shallowEqual } from "../lib/store";
 import { prefs, usePrefs } from "../lib/prefs";
@@ -13,6 +13,8 @@ import { DevDot, UnlockDialog } from "./DevMode";
 import { NotificationBell } from "./Notifications";
 import { HqPreviewTag } from "./HqPreview";
 import { hasUnsavedWork, staleBuild } from "../lib/stale";
+import { TITLES } from "../lib/titles";
+import { hqMedia } from "../hq/layout";
 
 // The six primary destinations of the control room (spec §3), in Jay's order. Everything that used to
 // be primary (Projects, Development, Agents, Server, Alerts, Pull requests) keeps its route and is one
@@ -36,9 +38,6 @@ export const NAV: { id: (typeof SCREENS)[number]; label: string; title: string; 
   { id: "files", label: "Files", title: "Files", key: "5" },
   { id: "settings", label: "Settings", title: "Settings", key: "6" },
 ];
-/** Screens reached from Settings / Activity (diagnostics) and the routes old links use. */
-const TITLES: Record<string, string> = { overview: "Dashboard", projects: "Projects", development: "Development",
-  agents: "Agents", server: "Server", alerts: "Alerts", prs: "Pull requests", workspaces: "herdr layout", console: "Files" };
 
 /** Keys typed into a field belong to the field. */
 export function typing(e: KeyboardEvent | React.KeyboardEvent): boolean {
@@ -182,7 +181,10 @@ export function AppShell({ children, flush = false, bare = false, chrome = "full
       // Ctrl+. focus (Workspace alone) · Ctrl+\ collapse the navigation rail. Neither is a shell key.
       if ((e.ctrlKey || e.metaKey) && e.key === ".") { e.preventDefault(); prefs.patch({ wsFocus: !prefs.get().wsFocus }); return; }
       if ((e.ctrlKey || e.metaKey) && e.key === "\\" && !(e.target as HTMLElement | null)?.closest?.(".xterm")) {
-        e.preventDefault(); prefs.patch({ railCollapsed: !prefs.get().railCollapsed }); return;
+        e.preventDefault();
+        // HQ's sidebar is icons only in a window up to 1440px wide either way: nothing to toggle there.
+        if (prefs.get().ui === "hq" && hqMedia()?.matches) return;
+        prefs.patch({ railCollapsed: !prefs.get().railCollapsed }); return;
       }
       // Inside a real terminal, Ctrl+K is the shell's (kill to end of line); the palette opens from anywhere else.
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && !(e.target as HTMLElement | null)?.closest?.(".xterm")) {
@@ -207,19 +209,76 @@ export function AppShell({ children, flush = false, bare = false, chrome = "full
   // Focus (the Workspace only): no rail, no top bar — the tree and the terminals get the whole window.
   const focus = wsFocus && route.screen === "workspace";
   const noChrome = bare || focus;
-  return <div className={`shell${noChrome ? " is-bare" : ""}${chrome === "dash" ? " is-dash" : ""}${railCollapsed ? " is-rail-mini" : ""}`}>
-    <a className="sr" href="#main">Skip to content</a>
-    {!noChrome && <Rail />}
-    <div className="main">
-      {!noChrome && chrome !== "dash" && <TopBar />}
-      <UpdatedBanner />
-      <OfflineBanner />
-      <main id="main" className={`screen${flush ? " is-flush" : ""}`} tabIndex={-1}>{children}</main>
-    </div>
+  const ui = usePrefs((p) => p.ui);
+  // Chosen once per mount: switching from the lazy wrapper to the loaded component later would be a new element type
+  // and remount the screen (and its terminals). A resolved lazy renders without suspending.
+  const [Frame] = useState(() => hqFrameLoaded ?? HqFrameLazy);
+  const banners = <><UpdatedBanner /><OfflineBanner /></>;
+  const screen = <main id="main" className={`screen${flush ? " is-flush" : ""}`} tabIndex={-1}>{children}</main>;
+  const overlays = <>
     {!bare && <FreshnessBar />}
     <Toast />
     {palette && <CommandPalette onClose={() => setPalette(false)} onNewTask={() => { setPalette(false); setNewProject(undefined); setNewTask(true); }} />}
     {newTask && <NewTicket onClose={() => setNewTask(false)} defaults={newProject ? { project: newProject } : undefined} />}
     {unlock && <UnlockDialog onClose={() => setUnlock(false)} />}
+  </>;
+  const classic = <div className={`shell${noChrome ? " is-bare" : ""}${chrome === "dash" ? " is-dash" : ""}${railCollapsed ? " is-rail-mini" : ""}`}>
+    <a className="sr" href="#main">Skip to content</a>
+    {!noChrome && <Rail />}
+    <div className="main">
+      {!noChrome && chrome !== "dash" && <TopBar />}
+      {banners}
+      {screen}
+    </div>
+    {overlays}
   </div>;
+  // The HQ preview puts its own frame around the same screen. Pop-outs have no frame in either mode. Workspace Focus
+  // keeps the frame mounted with its chrome hidden, so the screen (and every live terminal in it) is not remounted.
+  if (ui !== "hq" || bare) return classic;
+  return <HqBoundary fallback={classic}>
+    <Suspense fallback={null}><Frame dash={chrome === "dash"} focus={focus} banners={banners}
+      screen={<ScreenMark>{screen}</ScreenMark>} overlays={overlays} /></Suspense>
+  </HqBoundary>;
+}
+
+// The HQ frame is its own chunk (hq/frame), fetched only while the HQ preview is on, and fetched early so it is
+// usually ready before ccd answers. If that early fetch fails, React's own load tries again (a failure is not kept);
+// if that fails too, HqBoundary shows Classic until a reload.
+type HqFrameModule = typeof import("../hq/frame/Frame");
+let hqFrame: Promise<HqFrameModule> | null = null;
+let hqFrameLoaded: HqFrameModule["default"] | null = null;
+export function loadHqFrame() {
+  hqFrame ??= import("../hq/frame/Frame").then((m) => { hqFrameLoaded = m.default; return m; })
+    .catch((e: unknown) => { hqFrame = null; throw e; });
+  return hqFrame;
+}
+const HqFrameLazy = lazy(loadHqFrame);
+if (typeof window !== "undefined" && prefs.get().ui === "hq") void loadHqFrame().catch(() => { /* HqBoundary shows Classic */ });
+
+/** Errors thrown by the Classic screen inside HQ's frame, so HQ's boundaries pass them on instead of blaming HQ. */
+const screenErrors = new Set<unknown>();
+
+/** Around the Classic screen in HQ's frame: marks its errors as the screen's own and lets them go on up, so a broken
+ *  screen fails exactly as it does in Classic, not as an HQ failure. Adds no DOM. */
+export class ScreenMark extends Component<{ children: ReactNode }, { error: { e: unknown } | null }> {
+  state: { error: { e: unknown } | null } = { error: null };
+  static getDerivedStateFromError(e: unknown) { screenErrors.add(e); return { error: { e } }; }
+  render() { if (this.state.error) throw this.state.error.e; return this.props.children; }
+}
+
+/** If the HQ frame (or an HQ page) fails to load or throws, this shows the fallback and says so: Classic, or the Classic
+ *  screen at that address. A reload tries HQ again. An error from the Classic screen itself (ScreenMark) is not HQ's:
+ *  it is passed on unchanged. */
+export class HqBoundary extends Component<{ children: ReactNode; fallback: ReactNode; message?: string },
+  { failed: boolean; rethrow: { e: unknown } | null }> {
+  state: { failed: boolean; rethrow: { e: unknown } | null } = { failed: false, rethrow: null };
+  static getDerivedStateFromError(e: unknown) { return screenErrors.has(e) ? { rethrow: { e } } : { failed: true }; }
+  componentDidCatch(e: unknown) {
+    if (screenErrors.has(e)) return;
+    app.toast(this.props.message ?? "Engineering HQ could not be shown, so this window shows Classic. Reload to try HQ again.", "bad");
+  }
+  render() {
+    if (this.state.rethrow) throw this.state.rethrow.e;
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
 }

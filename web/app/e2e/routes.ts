@@ -16,6 +16,10 @@ export const SHOWS: Record<string, string> = {
   room: "pop-out", pane: "pop-out",
 };
 
+/** What the HQ preview's top bar names differently: its sidebar's names for the same screens (hq/frame/nav.ts). */
+export const SHOWS_HQ: Record<string, string> = { ...SHOWS, dashboard: "My Office", overview: "My Office", needs: "Decisions",
+  tasks: "Engineering", activity: "Activity" };
+
 /** Each must load clean. */
 export const LOAD = Object.keys(SHOWS);
 
@@ -36,9 +40,6 @@ export const slug = (route: string) => route.replace(/[^A-Za-z0-9]+/g, "-").repl
  *  entry fails. Anything listed here is not compared, so keep it to new elements and say why in the PR. Once the
  *  branch merges, its base has them too: the next branch starts this list empty. */
 export const ADDED: Record<string, string[]> = {};
-
-/** Added in the HQ preview only, on every screen with a rail: the label at the rail's foot. */
-export const ADDED_IN_HQ = [".rail .hq-tag"];
 
 /** Not new, but different in the HQ preview by design, by route: the preview's screenshots are compared with the
  *  base branch's Classic ones, so a control that shows which interface is on cannot match. Permanent, unlike ADDED.
