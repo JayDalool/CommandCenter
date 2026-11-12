@@ -21,7 +21,7 @@ So ccd adds, at no cost to Jay:
 | Threat | Control |
 |---|---|
 | another local user, or a stray local process | per-install token, `~/.config/command-center/ccd.token`, 0600, required on everything but `/api/health` |
-| DNS rebinding from a web page | `Host` must be `127.0.0.1:7777` / `localhost:7777` |
+| DNS rebinding from a web page | `Host` must be `127.0.0.1:7777` / `localhost:7777`, or a tailnet address Jay names (below) |
 | cross-site request from a web page (CSRF) | `Origin`, when present, must be the same origin; actions require `application/json`, which forces a CORS preflight ccd never approves; no CORS headers are ever sent |
 | cross-site WebSocket hijacking | same Host/Origin/token checks on the upgrade |
 | typing escape sequences into a pane | answers and notes must be printable, one line; control characters refused |
@@ -30,6 +30,23 @@ The token is never logged (uvicorn's access log is disabled because a WS token
 can be a query string) and never returned by the API. The legacy board reads
 the file directly; the Windows client will fetch it over the SSH connection
 that carries the tunnel.
+
+## Remote access over Tailscale (Jay, 2026-11-12)
+
+D-006 kept ccd off the public internet and left remote access to a later, separately approved design. Jay chose
+Tailscale Serve for it (HQ launch plan, question B1); a public tunnel such as Cloudflare is a separate decision.
+
+- ccd still listens on `127.0.0.1` only. `tailscale serve` on jay-server forwards
+  `https://<machine>.<tailnet>.ts.net` to it, and only devices signed in to Jay's tailnet can reach that name.
+- `config.json` `"remote_origins"` lists those addresses exactly (`https://`, a `*.ts.net` name, no port, no path).
+  Each adds one allowed `Host` and one allowed `Origin`; anything else in the list is refused and logged, never
+  widened. With the list absent, nothing changes.
+- A request carrying `Tailscale-Funnel-Request` (Tailscale adds it to traffic that arrives through Funnel, its public
+  mode) is refused on every address, `/api/health` included.
+- The token, Developer Unlock, the JSON-only rule and every other check are unchanged. A phone or laptop on the tailnet
+  still needs the ccd token, and Developer Unlock for anything that writes.
+
+Setup and undo: `docs/runbooks/remote-access-tailscale.md`.
 
 ## What leaves ccd
 

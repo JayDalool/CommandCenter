@@ -6,6 +6,10 @@ web page open in Jay's browser can aim requests at the tunnelled port. So:
 
   * Host must be 127.0.0.1:<port> or localhost:<port>  — defeats DNS rebinding
   * Origin, when a browser sends one, must be that same origin  — defeats CSRF
+  * the one exception: tailnet addresses Jay names in config.json "remote_origins"
+    (https://<machine>.<tailnet>.ts.net), for Tailscale Serve. ccd still listens
+    on 127.0.0.1 only, and a request Tailscale marks as coming through Funnel
+    (the public internet) is refused. See remote_origins() below.
   * every endpoint except /api/health needs the local token, in X-CCD-Token
     (or ?token= on the WebSocket, which browsers cannot give headers to)
   * actions additionally need Content-Type: application/json, which forces a
@@ -44,12 +48,35 @@ def token_ok(expected, presented):
     return bool(presented) and hmac.compare_digest(str(expected), str(presented))
 
 
-def allowed_hosts(port):
-    return {f"127.0.0.1:{port}", f"localhost:{port}"}
+def allowed_hosts(port, remote=()):
+    return {f"127.0.0.1:{port}", f"localhost:{port}"} | {o.removeprefix("https://") for o in remote}
 
 
-def allowed_origins(port):
-    return {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+def allowed_origins(port, remote=()):
+    return {f"http://127.0.0.1:{port}", f"http://localhost:{port}"} | set(remote)
+
+
+# Remote access through Tailscale Serve (Jay, 2026-11-12, plan question B1: Tailscale now, a public tunnel later and
+# separately). `tailscale serve` on jay-server forwards https://<machine>.<tailnet>.ts.net to 127.0.0.1:<port>, and only
+# devices signed in to Jay's tailnet can reach that name. Each address is named exactly: https, a *.ts.net host name,
+# no port, no path. Anything else (http, another domain, a wildcard) is refused and logged, never widened.
+TAILNET_ORIGIN = re.compile(r"^https://[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\.ts\.net$")
+# Tailscale adds this header to a request that arrived through Funnel, which publishes a Serve address to the internet.
+# D-006 keeps ccd off the public internet, so such a request is refused even if Funnel is switched on by mistake.
+FUNNEL_HEADER = "tailscale-funnel-request"
+
+
+def remote_origins(raw):
+    """(accepted, refused) from config.json's "remote_origins": a list of exact tailnet https origins."""
+    items = raw if isinstance(raw, list) else [] if raw in (None, "") else [raw]
+    ok, bad = [], []
+    for item in items:
+        o = item.strip().lower() if isinstance(item, str) else ""
+        if TAILNET_ORIGIN.match(o):
+            ok.append(o)
+        else:
+            bad.append(repr(item)[:120])
+    return sorted(set(ok)), bad
 
 
 # Patterns that look like credentials. Applied to pane tails before they leave

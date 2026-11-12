@@ -166,6 +166,7 @@ asserts this route table exactly, so adding one is a visible, reviewed change.
 import asyncio
 import contextvars
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -297,13 +298,14 @@ class BrokerContext:
 
 
 class Guard:
-    """Host, Origin, token and content-type checks, for HTTP and WebSocket alike."""
+    """Host, Origin, token and content-type checks, for HTTP and WebSocket alike. `remote` is the tailnet origins from
+    security.remote_origins(): each adds one Host and one Origin, and nothing else changes."""
 
-    def __init__(self, app, token, port):
+    def __init__(self, app, token, port, remote=()):
         self.app = app
         self.token = token
-        self.hosts = security.allowed_hosts(port)
-        self.origins = security.allowed_origins(port)
+        self.hosts = security.allowed_hosts(port, remote)
+        self.origins = security.allowed_origins(port, remote)
 
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
@@ -311,7 +313,9 @@ class Guard:
         headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
         path = scope.get("path", "")
         problem = None
-        if headers.get("host", "") not in self.hosts:
+        if security.FUNNEL_HEADER in headers:
+            problem = (403, "not served to the public internet")
+        elif headers.get("host", "") not in self.hosts:
             problem = (403, "bad Host header")
         elif headers.get("origin") and headers["origin"] not in self.origins:
             problem = (403, "cross-origin request refused")
@@ -1320,4 +1324,10 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         mounts.append(Mount("/", app=UiFiles(ui, port), name="ui"))
     app = Starlette(routes=routes + mounts, lifespan=lifespan)
     app.state.routes_table = routes
-    return Guard(BrokerContext(AuditTrail(app, daemon), daemon), token, port), app
+    remote, refused = security.remote_origins((daemon.cfg or {}).get("remote_origins") if isinstance(daemon.cfg, dict) else None)
+    if refused:
+        logging.getLogger("ccd").warning(json.dumps({"msg": "remote_origins entries refused: only exact "
+                                                     "https://<machine>.<tailnet>.ts.net origins are accepted",
+                                                     "refused": refused}))
+    app.state.remote_origins = remote
+    return Guard(BrokerContext(AuditTrail(app, daemon), daemon), token, port, remote), app
