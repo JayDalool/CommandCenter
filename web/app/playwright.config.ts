@@ -1,5 +1,5 @@
-// Browser tests for Classic (e2e/). They run against a production build served with ccd's headers (e2e/serve.mjs)
-// and fixture data, never a live ccd. See e2e/README.md.
+// Browser tests for the web app, Classic and the HQ preview (e2e/). They run against a production build served with
+// ccd's headers (e2e/serve.mjs) and fixture data, never a live ccd. See e2e/README.md.
 import { defineConfig } from "@playwright/test";
 import { env } from "./e2e/env";
 

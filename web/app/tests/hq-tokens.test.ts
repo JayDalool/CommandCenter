@@ -149,8 +149,8 @@ describe("HQ tokens match the approved design (4b72f3f)", () => {
   });
 });
 
-describe("nothing in Classic turns HQ on yet", () => {
-  it("no source file sets data-ui", () => {
+describe("only the Interface preference turns HQ on", () => {
+  it("no source file but lib/prefs.ts sets data-ui", () => {
     // A heuristic over the source; e2e/load.spec.ts checks the attribute itself on every route.
     const sources = { ...import.meta.glob("../src/**/*.{ts,tsx}", { query: "?raw", import: "default", eager: true }),
       "../index.html": readFileSync(`${here}/../index.html`, "utf8") } as Record<string, string>;
@@ -159,6 +159,6 @@ describe("nothing in Classic turns HQ on yet", () => {
     const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`\\])\/\/.*$/gm, "$1");
     const sets = /data-ui|dataset\s*(\.\s*ui\b|\[\s*["'`]ui["'`]\s*\])|Object\.assign\(\s*[\w.]*dataset\b/;
     const setters = Object.entries(sources).filter(([, src]) => sets.test(code(src))).map(([f]) => f);
-    expect(setters).toEqual([]);
+    expect(setters).toEqual(["../src/lib/prefs.ts"]);
   });
 });
