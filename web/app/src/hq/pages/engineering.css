@@ -2,15 +2,6 @@
  * tones come from office.css. Follows the prototype's Engineering page (styles/hq.css: .eng-*, .workbench, .grid). */
 
 :root[data-ui="hq"] .hq-eng-tools { display: flex; align-items: center; gap: 14px; }
-:root[data-ui="hq"] .hq-btn {
-  padding: 6px 14px; border: 1px solid var(--hq-line-2); border-radius: var(--hq-r-sm); background: var(--hq-panel-2);
-  color: var(--hq-text); font: 600 var(--hq-fs-sm) var(--hq-font); cursor: pointer;
-}
-:root[data-ui="hq"] .hq-btn:hover { background: var(--hq-hover); }
-:root[data-ui="hq"] .hq-btn.is-primary { border-color: var(--hq-accent); background: var(--hq-accent); color: #fff; }
-:root[data-ui="hq"] .hq-btn.is-primary:hover { filter: brightness(1.1); }
-:root[data-ui="hq"] .hq-dim { color: var(--hq-muted); }
-:root[data-ui="hq"] .hq-note { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
 
 :root[data-ui="hq"] .hq-eng-top { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr); gap: 18px; align-items: start; }
 :root[data-ui="hq"] .hq-stages { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }

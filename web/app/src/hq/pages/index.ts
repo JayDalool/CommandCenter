@@ -3,6 +3,7 @@
 import type { Route } from "../../lib/router";
 import { Office } from "./Office";
 import { Engineering } from "./Engineering";
+import { Decisions } from "./Decisions";
 
 export type HqPage = () => React.JSX.Element;
 
@@ -11,6 +12,7 @@ export type HqPage = () => React.JSX.Element;
 export function hqPageFor(r: Pick<Route, "screen" | "params">): HqPage | null {
   switch (r.screen) {
     case "dashboard": case "overview": return Office;
+    case "needs": return Decisions;
     case "tasks": return r.params.has("view") || r.params.has("status") ? null : Engineering;
     default: return null;
   }

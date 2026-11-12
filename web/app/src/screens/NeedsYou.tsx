@@ -34,22 +34,22 @@ export function actionOf(j: JayItem): string {
   return "Open";
 }
 
-const TYPE_ORDER = ["Blocked agent", "Blocker", "Failure", "Question", "Task check", "Plan approval", "Merge acceptance", "UI review",
+export const TYPE_ORDER = ["Blocked agent", "Blocker", "Failure", "Question", "Task check", "Plan approval", "Merge acceptance", "UI review",
   "Live deploy", "Decision", "Flagged task", "Pull request", "Action"];
 
-function until(at: number): string {
+export function until(at: number): string {
   const s = Math.round(at - Date.now() / 1000);
   if (s <= 0) return "overdue";
   return s < 5400 ? `expires in ${Math.max(1, Math.round(s / 60))}m` : `expires in ${Math.round(s / 3600)}h`;
 }
 
 /** Overdue by this browser's clock, so the highlight and order match the card's own "overdue" text between reloads. */
-function late(x?: InboxExtra): boolean {
+export function late(x?: InboxExtra): boolean {
   const a = x?.approval;
   return !!a && (a.overdue || (!!a.expiresAt && a.expiresAt <= Date.now() / 1000));
 }
 
-function day(at: number): string {
+export function day(at: number): string {
   return new Date(at * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
