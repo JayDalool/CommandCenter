@@ -34,15 +34,16 @@ from . import nightshift as nightshift_mod
 log = logging.getLogger("ccd")
 
 SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts")
-NUDGE_TEXT = ("Jay sent you a message in Command Center Messages (conversation: {conv}). Read it with "
+NUDGE_TEXT = ("There is a new message for you in Command Center Messages (conversation: {conv}). Read it with "
               "`{bin}/cc-inbox {conv}` and answer with `{bin}/cc-reply {conv} \"your answer\"` (add --file PATH to "
-              "send an image, PDF or Markdown file). Treat it as a request from Jay: your usual rules, gates and "
-              "approvals still apply.")
+              "send an image, PDF or Markdown file). Your usual rules, gates and approvals apply to anything it "
+              "asks for.")
 NUDGE_EVERY = 15 * 60
 NUDGE_MAX = 3
 CHAT_TICK = 20
 CTO_MODEL = "opus"
 AGENT_RE = re.compile(r"^agent:[a-z0-9_:-]{1,64}$")
+JAY_PER_MINUTE = 30        # Jay's messages per conversation per minute (a stuck client cannot flood a lead's inbox)
 
 
 class LeadChat:
@@ -104,7 +105,8 @@ class LeadChat:
 
     # ---------- reads ----------
 
-    def chat_overview(self):
+    def chat_overview(self, actor="jay"):
+        self._need_jay(actor)
         self._need_chat()
         summ = self.chat.summary()
         out = []
@@ -119,7 +121,8 @@ class LeadChat:
                                                                    "fileBytes": self.chat.max_bytes,
                                                                    "filesPerMessage": chat_mod.FILES_PER_MESSAGE}}
 
-    def chat_history(self, conv, before=None, limit=50):
+    def chat_history(self, conv, before=None, limit=50, actor="jay"):
+        self._need_jay(actor)
         self._need_chat(conv)
         return {"conversation": conv, "messages": self.chat.history(conv, before, limit),
                 "lead": self._lead_public(self.chat_lead(conv))}
@@ -134,19 +137,43 @@ class LeadChat:
 
     # ---------- Jay's side ----------
 
-    def _side_of(self, actor):
+    @staticmethod
+    def lead_actor(conv):
+        """The one agent actor that speaks for a conversation's lead (what cc-inbox and cc-reply send)."""
+        return "agent:cto" if conv == chat_mod.CTO else f"agent:lead-{conv}"
+
+    def _side_of(self, actor, conv):
+        """jay, or lead when actor is THIS conversation's lead. Any other agent is refused: a lead cannot read or
+        write another lead's conversation."""
         from .daemon import ActionError
         if actor == "jay":
             return "jay"
-        if isinstance(actor, str) and AGENT_RE.match(actor):
+        if isinstance(actor, str) and AGENT_RE.match(actor) and actor == self.lead_actor(conv):
             return "lead"
-        raise ActionError(403, "only Jay or an agent can write in Messages")
+        raise ActionError(403, f"only Jay or {self.lead_actor(conv)} can use this conversation")
+
+    def _need_jay(self, actor):
+        from .daemon import ActionError
+        if actor != "jay":
+            raise ActionError(403, "only Jay reads Messages here; a lead uses cc-inbox")
+
+    def _jay_rate(self, conv):
+        from .daemon import ActionError
+        now = time.monotonic()
+        recent = getattr(self, "_chat_sent", None)
+        if recent is None:
+            recent = self._chat_sent = {}
+        q = [t for t in recent.get(conv, ()) if now - t < 60]
+        if len(q) >= JAY_PER_MINUTE:
+            raise ActionError(429, f"at most {JAY_PER_MINUTE} messages a minute in one conversation; wait a moment")
+        q.append(now)
+        recent[conv] = q
 
     async def chat_send(self, conv, body, actor):
         """POST /api/chat/{conv}/messages. Jay: store and deliver. An agent: the lead's reply (cc-reply)."""
         from .daemon import ActionError
         self._need_chat(conv)
-        side = self._side_of(actor)
+        side = self._side_of(actor, conv)
         files = body.get("files") or []
         if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
             raise ActionError(400, "files must be a list of file ids")
@@ -159,6 +186,7 @@ class LeadChat:
                         data={"conversation": conv, "messageId": msg["id"], "author": actor,
                               "files": len(msg["files"])})
             return {"ok": True, "message": msg}
+        self._jay_rate(conv)
         msg = self._chat_add(conv, "jay", "jay", body.get("text") or "", via="app", reply_to=reply_to,
                              file_ids=files)
         delivery = await self._chat_deliver(conv)
@@ -176,6 +204,7 @@ class LeadChat:
             raise ActionError(403, "only Jay's words are delivered to a lead")
         if via not in ("slack", "app"):
             raise ActionError(400, "via must be slack or app")
+        self._jay_rate(conversation)
         msg = self._chat_add(conversation, "jay", "jay", text, via=via, ref=ref)
         delivery = await self._chat_deliver(conversation)
         self._event("chat", "chat.sent", f"Jay messaged {self.chat_lead(conversation)['name']} from {via} ({delivery})",
@@ -186,12 +215,12 @@ class LeadChat:
     def chat_seen(self, conv, body, actor):
         from .daemon import ActionError
         self._need_chat(conv)
-        if self._side_of(actor) != "jay":
+        if self._side_of(actor, conv) != "jay":
             raise ActionError(403, "agents read with cc-inbox")
-        up_to = body.get("upTo")
-        if up_to is not None and (not isinstance(up_to, int) or isinstance(up_to, bool)):
-            raise ActionError(400, "upTo must be a message id")
-        n = self.chat.mark_seen(conv, "lead", up_to)
+        try:
+            n = self.chat.mark_seen(conv, "lead", body.get("upTo"))
+        except chat_mod.ChatError as e:
+            raise ActionError(e.status, e.message)
         if n:
             self._event("chat", "chat.seen", f"Jay read {n} message(s) ({conv})", project=self._proj_key(conv),
                         data={"conversation": conv, "count": n})
@@ -203,8 +232,9 @@ class LeadChat:
         """GET /api/chat/{conv}/inbox, for cc-inbox: Jay's unread messages, oldest first, then marked read."""
         from .daemon import ActionError
         self._need_chat(conv)
-        if self._side_of(actor) != "lead":
+        if actor == "jay":
             raise ActionError(403, "the inbox is the lead's; Jay reads the conversation")
+        self._side_of(actor, conv)
         msgs = self.chat.unseen(conv, "jay")
         if msgs and not peek:
             self.chat.mark_seen(conv, "jay", msgs[-1]["id"])
@@ -230,16 +260,21 @@ class LeadChat:
     async def chat_upload(self, conv, name, chunks, actor, length=None):
         from .daemon import ActionError
         self._need_chat(conv)
-        side = self._side_of(actor)
+        side = self._side_of(actor, conv)
         try:
             row = await self.chat.upload(conv, side, actor, name, chunks, length=length)
         except chat_mod.ChatError as e:
             raise ActionError(e.status, e.message)
         return row
 
-    def chat_open_file(self, fid):
+    def chat_open_file(self, fid, actor="jay"):
+        """A file's bytes. Jay opens any; a lead only files in its own conversation (others look missing)."""
         from .daemon import ActionError
         self._need_chat()
+        if actor != "jay":
+            row = self.chat.file(fid) if chat_mod.ID_RE.match(fid or "") else None
+            if not row or actor != self.lead_actor(row["conversation"]):
+                raise ActionError(404, "no such file")
         try:
             return self.chat.open(fid)
         except chat_mod.ChatError as e:

@@ -117,6 +117,49 @@ class Store(unittest.TestCase):
             self.chat.file(left["id"])
 
 
+    def test_review_fixes_in_the_store(self):
+        # the saved name always ends in its type's extension
+        self.assertEqual(self.up(PNG, "renamed.pdf")["name"], "renamed.pdf.png")
+        self.assertEqual(self.up(PNG, "run.bat")["name"], "run.bat.png")
+        self.assertEqual(self.up(PNG, "Shot.JPG.png")["name"], "Shot.JPG.png")
+        self.assertEqual(self.up(b"# hi\n", "notes.markdown")["name"], "notes.markdown")
+        # secrets in a text file or a name, escape codes and bidi controls in text
+        for data, name, status in ((b"# conf\ntoken: abcdefgh\n", "c.md", 400), (PNG, "ghp_abcdefghijklmnop.png", 400),
+                                   (b"# red \x1b[31m text", "e.md", 415), ("a \u202e b".encode(), "b.txt", 415)):
+            with self.assertRaises(chat_mod.ChatError, msg=name) as e:
+                self.up(data, name)
+            self.assertEqual(e.exception.status, status, name)
+        self.assertEqual(self.up(b"line\r\nnext\r\n", "crlf.txt")["kind"], "markdown")
+        for text in ("evil \u202egnp.exe", "zero\u200bwidth", "esc \x1b[2J", "c1 \x9b"):
+            with self.assertRaises(chat_mod.ChatError, msg=repr(text)):
+                self.chat.add("samvision", "jay", "jay", text)
+        self.assertEqual(self.chat.add("samvision", "jay", "jay", "tabs\tand\nlines, émoji 👍")["text"],
+                         "tabs\tand\nlines, émoji 👍")
+        # ids are bounded
+        for bad in (-1, 0, 2 ** 63, True, "3"):
+            with self.assertRaises(chat_mod.ChatError, msg=repr(bad)):
+                self.chat.add("samvision", "jay", "jay", "x", reply_to=bad)
+            with self.assertRaises(chat_mod.ChatError, msg=repr(bad)):
+                self.chat.mark_seen("samvision", "jay", bad)
+
+    def test_pending_files_are_capped_and_orphan_blobs_swept(self):
+        for i in range(chat_mod.PENDING_MAX):
+            self.up(PNG, f"{i}.png", conv="gyst")
+        with self.assertRaises(chat_mod.ChatError) as e:
+            self.up(PNG, "one-more.png", conv="gyst")
+        self.assertEqual(e.exception.status, 429)
+        self.up(PNG, "other.png", side="lead", conv="gyst")                          # per side
+        orphan = os.path.join(self.base, "files", "f" * 32)
+        open(orphan, "wb").close()
+        keep = os.path.join(self.base, "files", "notes.txt")                          # not a blob name: left alone
+        open(keep, "wb").close()
+        self.chat.close()
+        self.chat = chat_mod.Chat(os.path.join(self.base, "chat.db"), os.path.join(self.base, "files"), 4096)
+        self.assertFalse(os.path.exists(orphan))
+        self.assertTrue(os.path.exists(keep))
+        self.assertEqual(len(os.listdir(os.path.join(self.base, "files"))), chat_mod.PENDING_MAX + 2)
+
+
 class ChatApi(ApiBase):
     LEAD = dict(JSON, **{"x-ccd-actor": "agent:lead-samvision"})
 
@@ -281,6 +324,36 @@ class ChatApi(ApiBase):
             self.client.portal.call(lambda: self.daemon.deliver_to_lead("samvision", "x", author="agent:x"))
 
 
+    def test_a_lead_is_bound_to_its_own_conversation(self):
+        self.send("samvision", "for samvision only")
+        other = dict(JSON, **{"x-ccd-actor": "agent:lead-gyst"})
+        merge = dict(JSON, **{"x-ccd-actor": "agent:merge-bot"})
+        for h in (other, merge):
+            self.assertEqual(self.get("/api/chat/samvision/inbox", headers=h).status_code, 403)
+            self.assertEqual(self.send("samvision", "spoof", headers=h).status_code, 403)
+            self.assertEqual(self.upload("samvision", "x.png", PNG, headers=dict(AUTH, **{"x-ccd-actor": h["x-ccd-actor"]}))
+                             .status_code, 403)
+        for h in (self.LEAD, other):                                                  # Jay's views are Jay's
+            self.assertEqual(self.get("/api/chat", headers=h).status_code, 403)
+            self.assertEqual(self.get("/api/chat/samvision", headers=h).status_code, 403)
+        f = self.upload("samvision", "a.png", PNG).json()["file"]["id"]
+        self.send("samvision", "with a file", files=[f])
+        self.assertEqual(self.get(f"/api/chat/files/{f}", headers=self.LEAD).status_code, 200)
+        self.assertEqual(self.get(f"/api/chat/files/{f}", headers=other).status_code, 404)
+        cto = dict(JSON, **{"x-ccd-actor": "agent:cto"})
+        self.assertEqual(self.get("/api/chat/cto/inbox", headers=cto).status_code, 200)
+        self.assertEqual(self.get("/api/chat/samvision/inbox", headers=cto).status_code, 403)
+
+    def test_jay_is_rate_limited_per_conversation_and_ids_are_bounded(self):
+        for i in range(leadchat.JAY_PER_MINUTE):
+            self.assertEqual(self.send("gyst", f"m{i}").status_code, 200)
+        self.assertEqual(self.send("gyst", "one too many").status_code, 429)
+        self.assertEqual(self.send("mfe", "another conversation").status_code, 200)
+        for q in ("before=9" * 1 + "9" * 30, "before=-1", "before=%C2%B2", "limit=1e3"):
+            self.assertEqual(self.get(f"/api/chat/mfe?{q}").status_code, 400, q)
+        self.assertEqual(self.post("/api/chat/mfe/seen", {"upTo": 2 ** 70}).status_code, 400)
+
+
 class Cli(unittest.TestCase):
     def test_conversation_from_the_folder_and_actor(self):
         from ccd import registry
@@ -289,6 +362,19 @@ class Cli(unittest.TestCase):
         self.assertIsNone(chat_cli.conversation_here("/"))
         self.assertEqual(chat_cli.actor_for("samvision"), "agent:lead-samvision")
         self.assertEqual(chat_cli.actor_for("cto"), "agent:cto")
+
+    def test_a_symlinked_cache_folder_is_refused(self):
+        base = tempfile.mkdtemp(prefix="chatcli-")
+        elsewhere = tempfile.mkdtemp(prefix="chatcli-x-")
+        os.symlink(elsewhere, os.path.join(base, "samvision"))
+        msg = {"id": 1, "files": [{"id": "b" * 32, "name": "x.png"}]}
+        with mock.patch.object(chat_cli, "CACHE", base), mock.patch.object(chat_cli, "_raw", return_value=(0, PNG)):
+            [(f, path, err)] = chat_cli.save_files("samvision", msg, "agent:lead-samvision")
+        self.assertIsNone(path)
+        self.assertIn("symlink", err)
+        self.assertEqual(os.listdir(elsewhere), [])
+        shutil.rmtree(base)
+        shutil.rmtree(elsewhere)
 
     def test_inbox_prints_messages_and_saves_files_under_the_cache(self):
         base = tempfile.mkdtemp(prefix="chatcli-")

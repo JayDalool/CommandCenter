@@ -216,15 +216,16 @@ starting a lead), `ccd/chat_cli.py` (`scripts/cc-inbox`, `scripts/cc-reply`). No
 
 | route | who | what |
 |---|---|---|
-| `GET /api/chat` | any token | conversations: `lead` {name, state, running, idle, paused}, `unread` (lead messages Jay has not read), `waiting` (Jay's messages the lead has not read), `last`, `canStart`, `limits` |
-| `GET /api/chat/{conv}` | any token | history, oldest first; `?before=<id>&limit=` (at most 200) |
-| `POST /api/chat/{conv}/messages` | Jay, or an agent as the lead | `{text, files?: [ids], replyTo?}`. Jay: `delivery` is `nudged` (the idle lead got the fixed nudge), `queued` (busy, or a draft in its input line: ccd nudges when it is free, then reminds at most 3 times, 15 minutes apart, until it reads), `lead-offline` or `lead-paused`. An agent: stored as the lead's reply, event `chat.reply` |
+| `GET /api/chat` | Jay | conversations: `lead` {name, state, running, idle, paused}, `unread` (lead messages Jay has not read), `waiting` (Jay's messages the lead has not read), `last`, `canStart`, `limits` |
+| `GET /api/chat/{conv}` | Jay | history, oldest first; `?before=<id>&limit=` (at most 200) |
+| `POST /api/chat/{conv}/messages` | Jay, or that conversation's lead | `{text, files?: [ids], replyTo?}`. Jay: at most 30 a minute per conversation (429). Jay: `delivery` is `nudged` (the idle lead got the fixed nudge), `queued` (busy, or a draft in its input line: ccd nudges when it is free, then reminds at most 3 times, 15 minutes apart, until it reads), `lead-offline` or `lead-paused`. An agent: stored as the lead's reply, event `chat.reply` |
 | `POST /api/chat/{conv}/seen` | Jay | marks the lead's messages read (`{upTo?}`) |
-| `GET /api/chat/{conv}/inbox` | an agent | Jay's unread messages, then marked read (`?peek=1` keeps them unread) |
+| `GET /api/chat/{conv}/inbox` | that conversation's lead | Jay's unread messages, then marked read (`?peek=1` keeps them unread) |
 | `POST /api/chat/{conv}/start` | Jay | starts the stopped lead when `config.json` sets `chat_start_leads: true` (409 otherwise). Budget check first: with the company's or the project's budget at its hold, it answers 409 `{needsApproval, overBudget}` and starts nothing until Jay sends `{overBudgetOk: true}` (event `chat.over_budget_start`). Never for a paused project, or when a Claude already sits in the lead's folder unidentified (adopt it instead) |
-| `POST /api/chat/files?conversation=&name=` | Jay, or an agent | `application/octet-stream`. PNG, JPEG, GIF, WebP, PDF, or UTF-8 `.md`/`.markdown`/`.txt`, read from the bytes; 415 otherwise; 413 over `chat_file_max_mb` (default 20). A file joins the next message of the same side in the same conversation; unsent files go after a day |
-| `GET /api/chat/files/{fid}` | any token | always `application/octet-stream` + `attachment` + `CSP: sandbox` |
+| `POST /api/chat/files?conversation=&name=` | Jay, or that conversation's lead | `application/octet-stream`. PNG, JPEG, GIF, WebP, PDF, or UTF-8 `.md`/`.markdown`/`.txt`, read from the bytes; 415 otherwise; 413 over `chat_file_max_mb` (default 20). A file joins the next message of the same side in the same conversation; the stored name always ends in its type's extension (`run.bat` → `run.bat.png`); text files are refused for control characters or anything that looks like a secret; at most 20 unsent files per side; unsent files go after a day |
+| `GET /api/chat/files/{fid}` | Jay, or the lead of the file's conversation | always `application/octet-stream` + `attachment` + `CSP: sandbox` |
 
 The nudge (`leadchat.NUDGE_TEXT`) names only the conversation and the two commands. Events carry the conversation,
-message id and delivery, never message text. `GET /api/state` carries `chat: {unread}`. Slack delivery calls
+message id and delivery, never message text. "That conversation's lead" is the actor `agent:lead-<conv>`, or
+`agent:cto` for `cto` (what cc-inbox and cc-reply send); every other agent actor is refused (403). `GET /api/state` carries `chat: {unread}`. Slack delivery calls
 `Daemon.deliver_to_lead(conversation, text, via="slack", ref=…)`, which stores and nudges the same way and never starts a lead.

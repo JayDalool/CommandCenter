@@ -900,16 +900,17 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         raw = q.get(name)
         if raw is None or raw == "":
             return default
-        if not raw.isdigit():
+        if not re.fullmatch(r"[0-9]{1,18}", raw):
             raise ActionError(400, f"{name} must be a whole number")
         return int(raw)
 
     async def chat_overview(request, _):
-        return daemon.chat_overview()
+        return daemon.chat_overview(request.state.actor)
 
     async def chat_history(request, _):
         q = request.query_params
-        return daemon.chat_history(request.path_params["conv"], _int_param(q, "before"), _int_param(q, "limit", 50))
+        return daemon.chat_history(request.path_params["conv"], _int_param(q, "before"), _int_param(q, "limit", 50),
+                                   request.state.actor)
 
     async def chat_send(request, body):
         return await daemon.chat_send(request.path_params["conv"], body, request.state.actor)
@@ -934,7 +935,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         return {"ok": True, "file": row}
 
     async def chat_file(request, _):
-        fd, row = await asyncio.to_thread(daemon.chat_open_file, request.path_params["fid"])
+        fd, row = await asyncio.to_thread(daemon.chat_open_file, request.path_params["fid"],
+                                            request.state.actor)
         return _stream_fd(fd, row["size"], row["name"])
 
     async def dev_status(request):

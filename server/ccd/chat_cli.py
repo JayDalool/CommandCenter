@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import sys
 import time
 import urllib.error
@@ -25,6 +26,19 @@ from .pipeline_cli import _actor_token, call
 
 CONV_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 CACHE = os.path.expanduser("~/.cache/command-center/chat")
+FILE_MAX = 64 * 1024 * 1024   # never read more than this into memory; ccd's own limit (chat_file_max_mb) is lower
+
+
+def _own_folder(path):
+    """Create path (0700) or accept it only as a real directory this account owns, never a symlink."""
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    st = os.lstat(path)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        raise OSError(f"{path} is not a folder of this account's (a symlink or someone else's)")
 
 
 def conversation_here(cwd=None):
@@ -81,7 +95,10 @@ def save_files(conv, msg, actor):
     """Download each file of a message into the cache. Returns [(file row, path or None, error)]."""
     out = []
     folder = os.path.join(CACHE, conv)
-    os.makedirs(folder, mode=0o700, exist_ok=True)
+    try:
+        _own_folder(folder)
+    except OSError as e:
+        return [(f, None, str(e)) for f in msg.get("files") or []]
     for f in msg.get("files") or []:
         path = os.path.join(folder, f"{msg['id']}-{f['id'][:8]}-{_safe_name(f['name'])}")
         code, data = _raw("GET", f"/api/chat/files/{f['id']}", actor=actor)
@@ -141,7 +158,14 @@ def reply(conv, text, files=(), reply_to=None, out=sys.stdout):
     for path in files or ():
         try:
             with open(path, "rb") as fh:
-                data = fh.read()
+                st = os.fstat(fh.fileno())
+                if not stat.S_ISREG(st.st_mode):
+                    print(f"cc-reply: {path} is not a regular file", file=sys.stderr)
+                    return 1
+                if st.st_size > FILE_MAX:
+                    print(f"cc-reply: {path} is too large to send", file=sys.stderr)
+                    return 1
+                data = fh.read(FILE_MAX + 1)
         except OSError as e:
             print(f"cc-reply: cannot read {path}: {e.strerror}", file=sys.stderr)
             return 1

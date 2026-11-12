@@ -15,12 +15,14 @@
 Storage: its own SQLite file (DATA_DIR/chat.db, 0600) and blob folder (0700), apart from tasks.db and ccd.db, which
 hold operational metadata only. Message text that looks like a credential is refused whole, as onboarding drafts are.
 """
+import codecs
 import hashlib
 import os
 import re
 import secrets
 import sqlite3
 import time
+import unicodedata
 
 from .attachments import display_name
 from .onboarding import SECRET_RE
@@ -32,6 +34,11 @@ ID_RE = re.compile(r"^[0-9a-f]{32}$")
 CONV_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 PENDING_TTL = 24 * 3600     # an uploaded file not attached to a message within a day is removed
 FILES_PER_MESSAGE = 10
+PENDING_MAX = 20            # uploaded but not yet sent, per conversation and side
+ID_MAX = 2 ** 62
+# The extension a saved file gets for its type: a name never says .bat, .hta or .html for bytes read as a PDF or image.
+EXTENSIONS = {"image/png": (".png",), "image/jpeg": (".jpg", ".jpeg"), "image/gif": (".gif",), "image/webp": (".webp",),
+              "application/pdf": (".pdf",), "text/markdown": (".md", ".markdown"), "text/plain": (".txt",)}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -98,6 +105,25 @@ def sniff(head, name):
     return None
 
 
+def ok_text_char(c, extra=""):
+    """No control or format characters (C0, C1, bidi overrides, zero-width), except newline, tab and `extra`."""
+    return c in "\n\t" or c in extra or unicodedata.category(c) not in ("Cc", "Cf")
+
+
+def with_extension(name, mime):
+    """The name, ending in an extension of its stored type (appended when it ends in anything else)."""
+    exts = EXTENSIONS[mime]
+    return name if name.lower().endswith(exts) else name + exts[0]
+
+
+def check_id(value, what):
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 < value < ID_MAX:
+        raise ChatError(400, f"{what} must be a message id")
+    return value
+
+
 def check_text(text, required=True):
     if not isinstance(text, str):
         raise ChatError(400, "text must be a string")
@@ -106,7 +132,7 @@ def check_text(text, required=True):
         raise ChatError(400, "a message needs some text or a file")
     if len(text) > TEXT_MAX:
         raise ChatError(413, f"a message is at most {TEXT_MAX} characters")
-    if any(ord(c) < 32 and c not in "\n\t" for c in text):
+    if not all(ok_text_char(c) for c in text):
         raise ChatError(400, "a message cannot hold control characters")
     if SECRET_RE.search(text):
         raise ChatError(400, "this looks like a password, token or key; never send credentials in a message")
@@ -128,6 +154,7 @@ class Chat:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.executescript(SCHEMA)
+        self.sweep_orphans()
 
     def close(self):
         self.db.close()
@@ -156,7 +183,7 @@ class Chat:
 
     def get(self, mid):
         r = self.db.execute(f"SELECT {self._MCOLS} FROM messages WHERE id=?", (mid,)).fetchone() \
-            if isinstance(mid, int) and not isinstance(mid, bool) else None
+            if isinstance(mid, int) and not isinstance(mid, bool) and 0 < mid < ID_MAX else None
         if not r:
             raise ChatError(404, "no such message")
         return self._rows([r])[0]
@@ -170,8 +197,8 @@ class Chat:
         if ref is not None and (not isinstance(ref, str) or len(ref) > 120):
             raise ChatError(400, "ref must be a short string")
         if reply_to is not None:
-            row = self.db.execute("SELECT conversation FROM messages WHERE id=?", (reply_to,)).fetchone() \
-                if isinstance(reply_to, int) and not isinstance(reply_to, bool) else None
+            row = self.db.execute("SELECT conversation FROM messages WHERE id=?",
+                                  (check_id(reply_to, "replyTo"),)).fetchone()
             if not row or row[0] != conversation:
                 raise ChatError(400, "replyTo must be a message in this conversation")
         for fid in file_ids:
@@ -198,6 +225,8 @@ class Chat:
 
     def history(self, conversation, before=None, limit=50):
         limit = max(1, min(int(limit), LIST_MAX))
+        if before is not None:
+            check_id(before, "before")
         if before is None:
             rows = self.db.execute(f"SELECT {self._MCOLS} FROM messages WHERE conversation=? ORDER BY id DESC LIMIT ?",
                                    (conversation, limit)).fetchall()
@@ -214,6 +243,7 @@ class Chat:
 
     def mark_seen(self, conversation, side, up_to=None):
         """The other side read `side`'s messages (all, or up to and including id up_to). Returns how many."""
+        check_id(up_to, "upTo")
         now = self.clock()
         if up_to is None:
             n = self.db.execute("UPDATE messages SET seen_at=? WHERE conversation=? AND side=? AND seen_at IS NULL",
@@ -283,13 +313,39 @@ class Chat:
             name = display_name(name)
         except Exception:  # noqa: BLE001 — FileError: same message either way
             raise ChatError(400, "bad file name")
+        if SECRET_RE.search(name):
+            raise ChatError(400, "this file name looks like a password, token or key")
         mb = self.max_bytes // (1024 * 1024)
         if length is not None and length > self.max_bytes:
             raise ChatError(413, f"a file is at most {mb} MB")
+        pending = self.db.execute("SELECT COUNT(*) FROM files WHERE conversation=? AND side=? AND message_id IS NULL",
+                                  (conversation, side)).fetchone()[0]
+        if pending >= PENDING_MAX:
+            raise ChatError(429, f"{PENDING_MAX} files are waiting to be sent; send or wait before adding more")
         fid = secrets.token_hex(16)
         path = self._blob(fid)
         h, size, head, kind = hashlib.sha256(), 0, b"", None
-        text_check = None
+        decoder, text = None, []
+        refused = ChatError(415, "only images (PNG, JPEG, GIF, WebP), PDF and Markdown or text files can be sent")
+
+        def feed(data, final=False):
+            try:
+                piece = decoder.decode(data, final)
+            except UnicodeDecodeError:
+                raise ChatError(415, "a Markdown or text file must be UTF-8 text")
+            if any(not ok_text_char(c, "\r") for c in piece):
+                raise ChatError(415, "a Markdown or text file cannot hold control characters")
+            text.append(piece)
+
+        def typed(data):
+            nonlocal kind, decoder
+            kind = sniff(data, name)
+            if kind is None:
+                raise refused
+            if kind[0] == "markdown":
+                decoder = codecs.getincrementaldecoder("utf-8")("strict")
+                feed(data)
+
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
         try:
             with os.fdopen(fd, "wb") as f:
@@ -302,32 +358,22 @@ class Chat:
                     if kind is None:
                         head += chunk
                         if len(head) >= 16:
-                            kind = sniff(head, name)
-                            if kind is None:
-                                raise ChatError(415, "only images (PNG, JPEG, GIF, WebP), PDF and Markdown or text "
-                                                     "files can be sent")
-                            if kind[0] == "markdown":
-                                import codecs
-                                text_check = codecs.getincrementaldecoder("utf-8")("strict")
-                            if text_check:
-                                self._text_ok(text_check, head)
-                    elif text_check:
-                        self._text_ok(text_check, chunk)
+                            typed(head)
+                    elif decoder:
+                        feed(chunk)
                     h.update(chunk)
                     f.write(chunk)
                 if kind is None:   # a file shorter than 16 bytes
-                    kind = sniff(head, name)
-                    if kind is None or size == 0:
-                        raise ChatError(415, "only images (PNG, JPEG, GIF, WebP), PDF and Markdown or text files "
-                                             "can be sent")
-                    if kind[0] == "markdown":
-                        import codecs
-                        text_check = codecs.getincrementaldecoder("utf-8")("strict")
-                        self._text_ok(text_check, head)
-                if text_check:
-                    self._text_ok(text_check, b"", final=True)
+                    if size == 0:
+                        raise refused
+                    typed(head)
+                if decoder:
+                    feed(b"", final=True)
+                    if SECRET_RE.search("".join(text)):
+                        raise ChatError(400, "this file looks like it holds a password, token or key")
                 f.flush()
                 os.fsync(f.fileno())
+            name = with_extension(name, kind[1])
             self.db.execute(f"INSERT INTO files({self._FCOLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                             (fid, conversation, None, side, name, kind[0], kind[1], size, h.hexdigest(),
                              self.clock(), author))
@@ -339,14 +385,18 @@ class Chat:
             raise
         return self.file(fid)
 
-    @staticmethod
-    def _text_ok(decoder, data, final=False):
-        try:
-            decoder.decode(data, final)
-        except UnicodeDecodeError:
-            raise ChatError(415, "a Markdown or text file must be UTF-8 text")
-        if b"\x00" in data:
-            raise ChatError(415, "a Markdown or text file must be UTF-8 text")
+    def sweep_orphans(self):
+        """Blobs with no row (ccd stopped between writing one and recording it). Run at start, before any upload."""
+        known = {r[0] for r in self.db.execute("SELECT id FROM files")}
+        n = 0
+        for entry in os.listdir(self.blob_dir):
+            if ID_RE.match(entry) and entry not in known:
+                try:
+                    os.unlink(os.path.join(self.blob_dir, entry))
+                    n += 1
+                except OSError:
+                    pass
+        return n
 
     def open(self, fid):
         """(fd, row). The caller streams and closes fd."""
