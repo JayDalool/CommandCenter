@@ -38,6 +38,22 @@ class RemoteOrigins(unittest.TestCase):
                          {f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}", TAILNET})
 
 
+class Csp(unittest.TestCase):
+    def test_each_tailnet_origin_adds_its_wss_address_and_nothing_else(self):
+        import tempfile
+        from pathlib import Path
+
+        from starlette.testclient import TestClient
+
+        from ccd import api
+        d = tempfile.mkdtemp()
+        Path(d, "index.html").write_text("<!doctype html><title>t</title>")
+        for remote, extra in (((), ""), ((TAILNET,), " wss://jay-server.tail1a2b3.ts.net")):
+            csp = TestClient(api.UiFiles(d, PORT, remote), base_url=f"http://127.0.0.1:{PORT}").get("/") \
+                .headers["content-security-policy"]
+            self.assertIn(f"connect-src 'self' ws://127.0.0.1:{PORT} ws://localhost:{PORT}{extra};", csp)
+
+
 class NotConfigured(ApiBase):
     def test_a_tailnet_address_is_refused_unless_named(self):
         self.assertEqual(self.client.get("/api/state", headers=REMOTE).status_code, 403)

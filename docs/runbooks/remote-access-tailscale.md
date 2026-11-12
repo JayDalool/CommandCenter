@@ -11,6 +11,13 @@ You run every step yourself. None of it is done by an agent.
 - Tailscale installed and signed in on jay-server and on each device you will use, with the same account.
 - In the Tailscale admin console, under DNS: **MagicDNS** on and **HTTPS Certificates** enabled. Serve needs both for
   an `https://…ts.net` address.
+- In the admin console, check who can reach jay-server. "Only my tailnet" is true only if the access rules say so:
+  - **Access controls** (ACLs or grants): only your own devices (your user) may reach jay-server on `tcp:443`. The
+    default "allow all" policy also lets any other member of the tailnet in. Today you are the only member; keep it
+    that way, or narrow the rule before adding anyone.
+  - **Machines › jay-server › Share**: jay-server is not shared with any other tailnet (node sharing).
+  This matters because the sign-in page and its one-time code endpoint answer anyone who can reach the address; the
+  ccd token and Developer Unlock are still needed for everything else.
 
 ## Steps
 
@@ -20,8 +27,10 @@ You run every step yourself. None of it is done by an agent.
    tailscale serve --bg 7777
    ```
 
-   Use `serve`. **Never `tailscale funnel`**: Funnel publishes the address to the internet. ccd refuses requests that
-   arrive through Funnel anyway, but do not rely on that.
+   Use plain `serve` exactly as above: HTTPS in front, HTTP to ccd. **Never `tailscale funnel`**: Funnel publishes the
+   address to the internet. Also never `--tcp` or `--tls-terminated-tcp`: in those modes Tailscale passes raw
+   connections through and adds no headers, so ccd's Funnel check (it looks for the `Tailscale-Funnel-Request` header
+   that Tailscale's HTTP proxy adds) cannot work. Do not rely on that check either way.
 
 2. Read the address it prints, or run:
 
@@ -49,13 +58,17 @@ You run every step yourself. None of it is done by an agent.
 
    ```sh
    tailscale serve status
+   tailscale funnel status
    curl -s https://jay-server.tail1a2b3.ts.net/api/health
    ```
 
-   The first should show `https://…ts.net` proxying to `http://127.0.0.1:7777`. The second should print ccd's health
-   report (JSON starting with `{"ok":`), not `bad Host header`.
+   `serve status` should show `https://…ts.net` proxying to `http://127.0.0.1:7777`, and nothing else for port 443.
+   `funnel status` should show no Funnel at all (nothing "available on the internet"). The `curl` should print ccd's
+   health report (JSON starting with `{"ok":`), not `bad Host header`.
 
-6. On the phone, open the address in the browser and sign in with the ccd token, the same way as on the desktop. That
+6. On the phone, open the address in the browser and sign in with the ccd token, the same way as on the desktop. Check
+   that the page shows live updates (the dashboard changes without a reload) and, if you use it there, that a terminal
+   opens: both run over `wss://` to the same address. That
    origin keeps its own sign-in, separate from `http://localhost:7777`. Bring the token over yourself; never paste it
    into a chat, a doc or Slack. Developer Unlock works the same as on the desktop.
 
@@ -64,11 +77,15 @@ You run every step yourself. None of it is done by an agent.
 
 ## Undo
 
+Switch off only this address:
+
 ```sh
-tailscale serve reset
+tailscale serve --https=443 off
 ```
 
-Then remove `remote_origins` from `config.json` and run `systemctl --user restart ccd`. After that, only
+(`tailscale serve reset` also works, but it removes every Serve and Funnel setting on jay-server, including any you
+add later for something else.) Then remove `remote_origins` from `config.json` and run
+`systemctl --user restart ccd`. After that, only
 `http://127.0.0.1:7777` (through the SSH tunnel) works again, as before.
 
 ## If it does not load
@@ -77,5 +94,6 @@ Then remove `remote_origins` from `config.json` and run `systemctl --user restar
 |---|---|
 | `{"ok": false, "error": "bad Host header"}` | The address is not in `remote_origins`, or is not written exactly as Serve shows it. Also check that ccd was restarted. |
 | `cross-origin request refused` | The page was opened from a different address than the one listed. |
-| `not served to the public internet` | The request came through Funnel. Run `tailscale funnel reset`. |
+| `not served to the public internet` | The request came through Funnel. Run `tailscale funnel --https=443 off`, then check `tailscale funnel status`. |
+| The page loads but never updates live | The browser refused the `wss://` connection. Tell an agent: it is the page's CSP (`connect-src`) or the Serve mode. |
 | The browser cannot connect at all | Tailscale is off on this device, or HTTPS certificates are not enabled for the tailnet. |

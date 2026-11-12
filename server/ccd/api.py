@@ -361,12 +361,15 @@ class UiFiles:
     a deleted chunk fails loudly as a module load error the UI can recognise, never as HTML
     parsed as JavaScript."""
 
-    def __init__(self, directory, port):
+    def __init__(self, directory, port, remote=()):
         self.files = StaticFiles(directory=str(directory), html=True)
+        # A tailnet origin (security.remote_origins) opens its live feed and terminals over wss:// to its own host.
+        # CSP 3 lets 'self' match that, but it is named as well so an older browser does not depend on it.
+        wss = "".join(f" wss://{o.removeprefix('https://')}" for o in remote)
         self.headers = [
             (b"content-security-policy", (
                 "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-                f"connect-src 'self' ws://127.0.0.1:{port} ws://localhost:{port}; font-src 'self'; "
+                f"connect-src 'self' ws://127.0.0.1:{port} ws://localhost:{port}{wss}; font-src 'self'; "
                 "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'").encode()),
             (b"x-frame-options", b"DENY"), (b"referrer-policy", b"no-referrer"),
             (b"x-content-type-options", b"nosniff"),
@@ -1318,16 +1321,16 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/desktop/launcher", launcher_info, methods=["GET"]),
         Route("/api/desktop/launcher/download", launcher_download, methods=["GET"]),
     ]
-    mounts = []
-    ui = ui_dir() if ui is None else ui
-    if ui and Path(ui, "index.html").is_file():
-        mounts.append(Mount("/", app=UiFiles(ui, port), name="ui"))
-    app = Starlette(routes=routes + mounts, lifespan=lifespan)
-    app.state.routes_table = routes
     remote, refused = security.remote_origins((daemon.cfg or {}).get("remote_origins") if isinstance(daemon.cfg, dict) else None)
     if refused:
         logging.getLogger("ccd").warning(json.dumps({"msg": "remote_origins entries refused: only exact "
                                                      "https://<machine>.<tailnet>.ts.net origins are accepted",
                                                      "refused": refused}))
+    mounts = []
+    ui = ui_dir() if ui is None else ui
+    if ui and Path(ui, "index.html").is_file():
+        mounts.append(Mount("/", app=UiFiles(ui, port, remote), name="ui"))
+    app = Starlette(routes=routes + mounts, lifespan=lifespan)
+    app.state.routes_table = routes
     app.state.remote_origins = remote
     return Guard(BrokerContext(AuditTrail(app, daemon), daemon), token, port, remote), app

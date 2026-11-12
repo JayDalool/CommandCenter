@@ -41,8 +41,17 @@ Tailscale Serve for it (HQ launch plan, question B1); a public tunnel such as Cl
 - `config.json` `"remote_origins"` lists those addresses exactly (`https://`, a `*.ts.net` name, no port, no path).
   Each adds one allowed `Host` and one allowed `Origin`; anything else in the list is refused and logged, never
   widened. With the list absent, nothing changes.
-- A request carrying `Tailscale-Funnel-Request` (Tailscale adds it to traffic that arrives through Funnel, its public
-  mode) is refused on every address, `/api/health` included.
+- A request carrying `Tailscale-Funnel-Request` (Tailscale's HTTP proxy adds it to traffic that arrives through
+  Funnel, its public mode) is refused on every address, `/api/health` included. It is a backstop, not the control: in
+  raw TCP modes (`--tcp`, `--tls-terminated-tcp`) no header is added, so the runbook allows plain HTTP Serve only and
+  checks `tailscale funnel status`.
+- "Only Jay's devices" depends on the tailnet's access rules and on jay-server not being shared to another tailnet;
+  the runbook checks both before setup. The sign-in redeem endpoint (no ccd token, a 256-bit one-time code) is the
+  only thing reachable without the token.
+- The page's CSP names each tailnet origin's `wss://` address in `connect-src`, so live updates and terminals do not
+  depend on a browser matching `'self'` to `wss:`.
+- Not done, on purpose: requiring Tailscale's identity header (`Tailscale-User-Login`) for the remote Host. Anything
+  that can reach ccd without Serve is already on jay-server's loopback, where it could send that header itself.
 - The token, Developer Unlock, the JSON-only rule and every other check are unchanged. A phone or laptop on the tailnet
   still needs the ccd token, and Developer Unlock for anything that writes.
 
