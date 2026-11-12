@@ -75,6 +75,9 @@ describe("Teams", () => {
     expect(page.querySelectorAll("a.hq-sess").length).toBeGreaterThan(0);
     expect(within(page).queryAllByText("Working")).toHaveLength(0);
     expect(within(page).getByText(/Feed not live/)).toBeInTheDocument();
+    // The Sessions figure reads Unknown, as on My Office, with the last count beside it.
+    const kpi = within(page).getByText("Sessions").closest(".hq-kpi")!;
+    expect(kpi).toHaveTextContent(`Unknown${app.store.get().state!.agents.length} last reported by herdr`);
   });
 
   it("keeps Classic's Agents screen for one session", async () => {

@@ -34,7 +34,7 @@ function TeamPanel({ t, extra, now, stale }: { t: Team; extra: Map<string, Extra
         : <div className="hq-sess is-empty"><b>No lead</b><small>{t.leadWhy}</small></div>}
       {t.members.map((m) => <Member key={m.id} m={m} x={extra.get(m.id)} now={now} />)}
     </div>
-    {defined.length > 0 && <p className="hq-note">The lead can also call {defined.map((d, i) => <span key={d.name}>{i ? ", " : ""}
+    {defined.length > 0 && <p className="hq-note">The lead can also call {defined.map((d, i) => <span key={`${d.name}:${d.model}`}>{i ? ", " : ""}
       <b>{d.name}</b>{d.model ? ` (${d.model})` : ""}</span>)}. They run only when called, so they have no status here.</p>}
   </section>;
 }
@@ -60,7 +60,8 @@ export function Teams() {
       {stale && <Pill tone="warn">Feed not live · status unknown</Pill>}</header>
 
     <section className="hq-kpis" aria-label="Summary">
-      <Kpi label="Sessions" value={s.total} sub={stale ? "Last reported by herdr" : `${s.working} working · ${s.offline} offline`} />
+      <Kpi label="Sessions" value={stale ? "Unknown" : s.total} tone={stale ? "idle" : undefined}
+        sub={stale ? `${s.total} last reported by herdr` : `${s.working} working · ${s.offline} offline`} />
       <Kpi label="Waiting for you" value={stale ? "Unknown" : s.waiting} tone={stale ? "idle" : s.waiting ? "jay" : undefined}
         sub={stale ? "Session feed not live" : "Sessions that asked you something"} to={href("needs")} />
       <Kpi label="Leads" value={`${leads} of ${v.teams.length}`} sub="Projects with a coordinator session" />
