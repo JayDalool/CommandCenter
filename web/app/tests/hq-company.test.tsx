@@ -1,5 +1,6 @@
 // Company (hq/pages/Topology.tsx) on the test fixture: projects, open work by pipeline stage, and hosts, from
-// buildTopology; worker nodes from GET /api/workers with status from their heartbeat; only filters, no actions.
+// buildTopology; worker nodes from GET /api/workers with status from their heartbeat. Graph view (the default) draws
+// them as nodes with an inspector; List view as three columns. Only filters and selection, no actions.
 import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
 import { vi } from "vitest";
 import { App } from "../src/App";
@@ -8,6 +9,7 @@ import { prefs } from "../src/lib/prefs";
 import { loadHqFrame } from "../src/components/Shell";
 import { href } from "../src/lib/router";
 import { buildTopology, evidence } from "../src/hq/data";
+import { hostId, layoutTopology, ALL_LAYERS, TASK_NODES } from "../src/hq/pages/topo-graph";
 import type { WorkerNode, WorkersState } from "../src/api/types";
 import { fixture, state, tasks } from "./helpers";
 
@@ -29,6 +31,16 @@ async function show(hash = "#/projects") {
   return document.querySelector<HTMLElement>("#main > .hq-topology");
 }
 
+/** Switch to List view, the three columns. */
+function list(page: HTMLElement) {
+  fireEvent.click(within(within(page).getByRole("group", { name: "View" })).getByRole("button", { name: "List" }));
+  return page;
+}
+const canvas = (page: HTMLElement) => within(page).getByTestId("topology-canvas");
+const nodes = (page: HTMLElement) => [...page.querySelectorAll<HTMLElement>("[data-node]")].map((n) => n.dataset.node);
+const edges = (page: HTMLElement) => [...page.querySelectorAll<SVGGElement>("[data-edge]")];
+const inspector = (page: HTMLElement) => within(page).getByRole("complementary", { name: "Inspector" });
+
 const view = (f = {}) => buildTopology(app.store.get(), evidence(app.store.get(), Date.now() / 1000), f);
 const taskKeys = (page: HTMLElement) => [...page.querySelectorAll(".hq-topo-tasks code")].map((c) => c.textContent);
 const shown = (v: ReturnType<typeof view>) => v.stages.flatMap((s) => s.tasks.slice(0, 5).map((t) => t.key));
@@ -44,10 +56,10 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); prefs.patch({ ui: "classic" }); });
 
-describe("Company", () => {
+describe("Company, List view", () => {
   it("shows every project, opening Classic's project screen, and the open work by stage", async () => {
     load();
-    const page = (await show())!;
+    const page = list((await show())!);
     const v = view();
     const projects = [...page.querySelectorAll<HTMLAnchorElement>("a.hq-topo-node")].map((a) => a.getAttribute("href"));
     expect(projects).toEqual(v.projects.map((p) => href("projects", p.key)));
@@ -56,9 +68,9 @@ describe("Company", () => {
     for (const s of v.stages) expect(within(page).getByRole("region", { name: s.label })).toHaveTextContent(`${s.tasks.length} task`);
   });
 
-  it("filters to blocked work and back, and has no buttons but its filters", async () => {
+  it("filters to blocked work and back", async () => {
     load();
-    const page = (await show())!;
+    const page = list((await show())!);
     const n = (v: ReturnType<typeof view>) => v.stages.reduce((k, s) => k + s.tasks.length, 0);
     expect(n(view({ status: "blocked" }))).toBeGreaterThan(0);
     expect(n(view({ status: "blocked" }))).toBeLessThan(n(view()));
@@ -72,7 +84,7 @@ describe("Company", () => {
 
   it("filters by project", async () => {
     load();
-    const page = (await show())!;
+    const page = list((await show())!);
     const p = view().projects[0];
     fireEvent.click(within(within(page).getByRole("group", { name: "Filter by project" })).getByRole("button", { name: p.name }));
     expect([...page.querySelectorAll("a.hq-topo-node")].map((a) => a.getAttribute("href"))).toEqual([href("projects", p.key)]);
@@ -83,14 +95,103 @@ describe("Company", () => {
     load();
     const w: WorkersState = { available: true, nodes: [node("laptop-a", 30), node("laptop-b", 3600)], events: [] };
     vi.spyOn(app.api, "workers").mockResolvedValue(w);
-    const page = (await show())!;
+    const page = list((await show())!);
     const hosts = within(page).getByRole("region", { name: /^Hosts/ });
     const card = (name: string) => within(hosts).getByText(name).closest(".hq-topo-host")!;
     expect(card("laptop-a")).toHaveTextContent("Online");
     expect(card("laptop-b")).toHaveTextContent("Unknown");
     expect(card("Server")).toBeTruthy();
   });
+});
 
+describe("Company, Graph view", () => {
+  it("draws Jay, every project, every stage with open work and every host, each once", async () => {
+    load();
+    const page = (await show())!;
+    const v = view();
+    expect(nodes(page).sort()).toEqual(["root", ...v.projects.map((p) => `p:${p.key}`), ...v.stages.map((s) => `s:${s.id}`),
+      ...v.hosts.map(hostId)].sort());
+    // One flow edge per project with work in a stage, red dashed where any of it is blocked.
+    const flows = v.stages.flatMap((s) => s.flows.map((f) => ({ id: `e:${f.project}:${s.id}`, blocked: f.blocked })));
+    const drawn = edges(page).filter((e) => e.classList.contains("ek-flow"));
+    expect(drawn.map((e) => e.dataset.edge).sort()).toEqual(flows.map((f) => f.id).sort());
+    for (const f of flows) expect(drawn.find((e) => e.dataset.edge === f.id)!.classList.contains("is-blocked")).toBe(f.blocked);
+    expect(flows.some((f) => f.blocked)).toBe(true);
+  });
+
+  it("opens with Jay in the inspector and shows a selected project's details and links", async () => {
+    load();
+    const page = (await show())!;
+    expect(inspector(page)).toHaveTextContent("Needs you");
+    const p = view().projects[0];
+    fireEvent.click(within(canvas(page)).getByRole("button", { name: new RegExp(`^${p.name},`) }));
+    const insp = inspector(page);
+    expect(within(insp).getByRole("heading", { name: p.name })).toBeInTheDocument();
+    expect(within(insp).getByRole("link", { name: "Open project" })).toHaveAttribute("href", href("projects", p.key));
+    expect(within(insp).getByRole("link", { name: "All in Engineering" })).toHaveAttribute("href", href("tasks", null, { project: p.key }));
+    fireEvent.click(within(insp).getByRole("button", { name: "Back to Jay" }));
+    expect(inspector(page)).toHaveTextContent("Needs you");
+  });
+
+  it("shows a stage's tasks as nodes, then a task's details", async () => {
+    load();
+    const page = (await show())!;
+    const s = view().stages.find((x) => x.tasks.length)!;
+    fireEvent.click(within(canvas(page)).getByRole("button", { name: `Show ${s.label} tasks` }));
+    const keys = s.tasks.slice(0, TASK_NODES).map((t) => `t:${t.key}`);
+    expect(nodes(page).filter((n) => n!.startsWith("t:"))).toEqual(keys);
+    const t = s.tasks[0];
+    fireEvent.click(page.querySelector<HTMLElement>(`[data-node="t:${t.key}"]`)!);
+    expect(within(inspector(page)).getByRole("link", { name: "Open task" })).toHaveAttribute("href", href("tasks", t.key));
+    fireEvent.click(within(canvas(page)).getByRole("button", { name: `Hide ${s.label} tasks` }));
+    expect(nodes(page).some((n) => n!.startsWith("t:"))).toBe(false);
+  });
+
+  it("filters the graph and hides a kind of line", async () => {
+    load();
+    const page = (await show())!;
+    const p = view().projects[0];
+    fireEvent.click(within(within(page).getByRole("group", { name: "Filter by project" })).getByRole("button", { name: p.name }));
+    expect(nodes(page).filter((n) => n!.startsWith("p:"))).toEqual([`p:${p.key}`]);
+    expect(edges(page).some((e) => e.classList.contains("ek-host"))).toBe(true);
+    fireEvent.click(within(within(page).getByRole("group", { name: "Show lines" })).getByRole("button", { name: "Runs on" }));
+    expect(edges(page).some((e) => e.classList.contains("ek-host"))).toBe(false);
+  });
+
+  it("shows a worker node's heartbeat status in the inspector", async () => {
+    load();
+    vi.spyOn(app.api, "workers").mockResolvedValue({ available: true, nodes: [node("laptop-b", 3600)], events: [] });
+    const page = (await show())!;
+    fireEvent.click(within(canvas(page)).getByRole("button", { name: "laptop-b, unknown" }));
+    expect(inspector(page)).toHaveTextContent("No recent heartbeat");
+  });
+
+  it("changes nothing: no form, and every button filters, zooms or selects", async () => {
+    load();
+    const page = (await show())!;
+    expect(page.querySelector("form")).toBeNull();
+    for (const b of page.querySelectorAll("button")) {
+      expect(b.closest('[role="group"], [role="toolbar"], [data-testid="topology-canvas"], [aria-label="Inspector"]')).not.toBeNull();
+    }
+  });
+});
+
+describe("Company layout", () => {
+  it("keeps every edge between drawn nodes and no two nodes in a row overlapping", () => {
+    load();
+    const v = view();
+    const g = layoutTopology(v, v.stages.map((s) => s.id), ALL_LAYERS);
+    const ids = new Set(g.nodes.map((n) => n.id));
+    expect(g.edges.every((e) => ids.has(e.from) && ids.has(e.to))).toBe(true);
+    for (const y of new Set(g.nodes.map((n) => n.y))) {
+      const row = g.nodes.filter((n) => n.y === y).sort((a, b) => a.x - b.x);
+      for (let i = 1; i < row.length; i++) expect(row[i].x).toBeGreaterThanOrEqual(row[i - 1].x + row[i - 1].w);
+    }
+    expect(g.nodes.every((n) => n.x >= 0 && n.x + n.w <= g.bounds.w && n.y + n.h <= g.bounds.h)).toBe(true);
+  });
+});
+
+describe("Company", () => {
   it("says when worker nodes are not enabled", async () => {
     load();
     vi.spyOn(app.api, "workers").mockResolvedValue({ available: false, nodes: [], events: [] });

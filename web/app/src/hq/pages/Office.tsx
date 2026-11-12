@@ -5,9 +5,9 @@ import { useMemo, useState } from "react";
 import "./office.css";
 import { href } from "../../lib/router";
 import { ago } from "../../lib/time";
-import { buildOffice, PRESENCE_LABEL, type DecisionItem, type Health, type OfficeProject, type Presence, type TeamMember } from "../data";
+import { buildOffice, PRESENCE_LABEL, type Health, type OfficeProject, type Presence, type TeamMember } from "../data";
 import { useHqData } from "./live";
-import { Kpi, Pill, PRESENCE_TONE, cx, plural } from "./ui";
+import { AttentionRow, Kpi, Pill, PRESENCE_TONE, cx, plural } from "./ui";
 import type { Alert } from "../../api/types";
 
 const HEALTH: Record<Health, { label: string; tone: string }> = {
@@ -33,13 +33,6 @@ function ProjectCard({ p, stale }: { p: OfficeProject; stale: boolean }) {
       <span>{p.lead ? `Lead: ${p.lead}` : "No lead session"}</span>
     </span>
   </a>;
-}
-
-function AttentionRow({ d, now }: { d: DecisionItem; now: number }) {
-  return <li><a href={d.ticket ? href("tasks", d.ticket) : href("needs")}>
-    <span className="hq-attn-body"><span className="hq-ellip" title={d.title}>{d.ticket && <code>{d.ticket}</code>} {d.title}</span>
-      <small>{d.sub}{d.since ? ` · ${ago(d.since, now)}` : ""}</small></span>
-    <Pill tone={d.pill[1]}>{d.pill[0]}</Pill></a></li>;
 }
 
 function AlertRow({ a, now }: { a: Alert; now: number }) {
