@@ -210,6 +210,9 @@ export function AppShell({ children, flush = false, bare = false, chrome = "full
   const focus = wsFocus && route.screen === "workspace";
   const noChrome = bare || focus;
   const ui = usePrefs((p) => p.ui);
+  // Chosen once per mount: switching from the lazy wrapper to the loaded component later would be a new element type
+  // and remount the screen (and its terminals). A resolved lazy renders without suspending.
+  const [Frame] = useState(() => hqFrameLoaded ?? HqFrameLazy);
   const banners = <><UpdatedBanner /><OfflineBanner /></>;
   const screen = <main id="main" className={`screen${flush ? " is-flush" : ""}`} tabIndex={-1}>{children}</main>;
   const overlays = <>
@@ -232,7 +235,6 @@ export function AppShell({ children, flush = false, bare = false, chrome = "full
   // The HQ preview puts its own frame around the same screen. Pop-outs have no frame in either mode. Workspace Focus
   // keeps the frame mounted with its chrome hidden, so the screen (and every live terminal in it) is not remounted.
   if (ui !== "hq" || bare) return classic;
-  const Frame = hqFrameLoaded ?? HqFrameLazy;   // loaded: no Suspense pass, so the screen mounts once
   return <HqBoundary fallback={classic}>
     <Suspense fallback={null}><Frame dash={chrome === "dash"} focus={focus} banners={banners}
       screen={<ScreenMark>{screen}</ScreenMark>} overlays={overlays} /></Suspense>
