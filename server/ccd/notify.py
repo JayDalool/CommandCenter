@@ -1,6 +1,6 @@
 """Slack and ntfy: what needs Jay reaches his phone, and his Slack replies reach the project leads.
 
-Off until Jay switches it on (Settings, or PUT /api/notify/settings with Developer Unlock). Both channels start off.
+Off until Jay switches it on (Settings, PUT /api/notify, or `python -m ccd.notify_cli on both`; Jay with Developer Unlock). Both channels start off.
 
     Slack   one bot in a workspace of Jay's own. Socket Mode: ccd opens an OUTBOUND WebSocket to Slack, so nothing
             listens and the loopback-only rule stands. Tokens live in ~/.config/command-center/slack.env (0600):
@@ -31,7 +31,7 @@ with the bot or a channel the bot is in, are read; everything else is ignored. A
     questions   it answers them (one question: the whole reply; several: numbered lines "1. …"), exactly as the
                 Answer button does, and the answers go to the task's own session.
     gate        "approve" (or yes / ok / go / lgtm) closes the gate ONLY for the Low-risk gates in SLACK_GATES, and
-                only while `reply_scope` is "answers_low_risk". Plans, merges, deploys and anything else open
+                only while `replyScope` is "answers_low_risk" (default "answers": off until Jay decides). Plans, merges, deploys and anything else open
                 CommandCenter from the link: a stolen Slack login cannot merge, deploy or change a plan.
     otherwise   the text goes to the project's lead (Daemon.deliver_to_lead, the in-app chat's store), and the
                 lead's reply comes back in the same thread.
@@ -75,7 +75,9 @@ SETTINGS_DEFAULTS = {
     "quietEnd": "07:00",
     "summaryAt": "07:00",           # owner's and technical summaries, daily
     "timezone": "America/Winnipeg",
-    "replyScope": "answers_low_risk",   # pending Jay's decision; "answers" makes every approval open CommandCenter
+    # "answers": every approval opens CommandCenter (D-024 clause 12 as it stands). "answers_low_risk" lets a Slack
+    # reply clear a blocker or accept a UI review; it waits on Jay's decision and is never the default.
+    "replyScope": "answers",
 }
 CONFIG_DEFAULTS = {
     "jay_member_id": "",            # Jay's Slack member ID: the only author whose messages are read

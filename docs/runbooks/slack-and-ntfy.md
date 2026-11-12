@@ -53,7 +53,7 @@ ccd reads only messages whose author is `jay_member_id`, never edits or bot mess
 - **Questions:** the reply is the answer (several questions: numbered lines `1. …`, `2. …`). It goes to the task's
   session, exactly like the Answer button.
 - **Gates:** `approve` (or yes, ok, go, lgtm) closes a gate only if it is a blocker (`failure`) or a UI review (`ui`),
-  and only while the scope is `answers_low_risk`. This list is fixed in code (`notify.SLACK_GATES`) and checked again
+  and only while the scope is `answers_low_risk`. The default is `answers`, so nothing is approvable from Slack until Jay runs `notify_cli scope answers_low_risk`. This list is fixed in code (`notify.SLACK_GATES`) and checked again
   in `Daemon.slack_confirm`. Plans, merges and deploys are approved in CommandCenter.
 - **Anything else** goes to the project's lead through Messages (`Daemon.deliver_to_lead`), and the lead's reply comes
   back in the same thread. Outside a thread, a project channel goes to its lead; `#cto` and the DM go to the CTO.

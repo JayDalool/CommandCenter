@@ -286,6 +286,7 @@ class Replies(unittest.TestCase):
         self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 1, "answer": "yes"}, {"id": 2, "answer": "blue"}])
 
     def test_approve_closes_only_low_risk_gates(self):
+        self.n.update_settings({"replyScope": "answers_low_risk"})
         for gate in ("failure", "ui"):
             ts = self.send(need(f"SV-{gate}", "gate", gate))
             self.assertEqual(self.reply("approve", ts)["did"], f"approved_{gate}")
@@ -295,8 +296,8 @@ class Replies(unittest.TestCase):
             self.assertEqual(r["did"], "approval_refused", gate)
         self.assertEqual(self.d.confirmed, [("SV-failure", "failure"), ("SV-ui", "ui")])
 
-    def test_answers_only_scope_approves_nothing(self):
-        self.n.update_settings({"replyScope": "answers"})
+    def test_answers_only_is_the_default_and_approves_nothing(self):
+        self.assertEqual(self.n.settings["replyScope"], "answers")
         ts = self.send(need("SV-5", "gate", "failure"))
         self.assertEqual(self.reply("yes", ts)["did"], "approval_refused")
         self.assertEqual(self.d.confirmed, [])
