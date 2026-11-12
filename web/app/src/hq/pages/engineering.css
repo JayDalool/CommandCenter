@@ -1,0 +1,78 @@
+/* Engineering. Scoped to :root[data-ui="hq"], no custom property declared here (parity.spec.ts). Panels, pills and
+ * tones come from office.css. Follows the prototype's Engineering page (styles/hq.css: .eng-*, .workbench, .grid). */
+
+:root[data-ui="hq"] .hq-eng-tools { display: flex; align-items: center; gap: 14px; }
+:root[data-ui="hq"] .hq-btn {
+  padding: 6px 14px; border: 1px solid var(--hq-line-2); border-radius: var(--hq-r-sm); background: var(--hq-panel-2);
+  color: var(--hq-text); font: 600 var(--hq-fs-sm) var(--hq-font); cursor: pointer;
+}
+:root[data-ui="hq"] .hq-btn:hover { background: var(--hq-hover); }
+:root[data-ui="hq"] .hq-btn.is-primary { border-color: var(--hq-accent); background: var(--hq-accent); color: #fff; }
+:root[data-ui="hq"] .hq-btn.is-primary:hover { filter: brightness(1.1); }
+:root[data-ui="hq"] .hq-dim { color: var(--hq-muted); }
+:root[data-ui="hq"] .hq-note { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+
+:root[data-ui="hq"] .hq-eng-top { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr); gap: 18px; align-items: start; }
+:root[data-ui="hq"] .hq-stages { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
+:root[data-ui="hq"] .hq-stages button {
+  display: grid; gap: 2px; justify-items: start; padding: 10px 12px; border: 1px solid var(--hq-line); border-radius: var(--hq-r-md);
+  background: var(--hq-tile); font: var(--hq-fs-sm) var(--hq-font); cursor: pointer; text-align: left;
+  transition: border-color var(--hq-dur-1), background var(--hq-dur-1);
+}
+:root[data-ui="hq"] .hq-stages button:hover { border-color: var(--hq-line-2); background: var(--hq-tile-on); }
+:root[data-ui="hq"] .hq-stages button[aria-pressed="true"] { border-color: currentColor; background: var(--hq-accent-soft); }
+:root[data-ui="hq"] .hq-stages b { font: 700 var(--hq-fs-xl)/1.2 var(--hq-font-display); }
+:root[data-ui="hq"] .hq-stages span { color: var(--hq-text-2); }
+
+:root[data-ui="hq"] .hq-eng-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
+:root[data-ui="hq"] .hq-eng-grid.has-detail { grid-template-columns: minmax(0, 1fr) minmax(420px, 40%); }
+/* Classic's task detail, unchanged, kept in view while the workbench scrolls. Top bar and tabs are about 93px. */
+:root[data-ui="hq"] .hq-eng-detail {
+  position: sticky; top: 0; display: grid; height: calc(100dvh - 120px); min-height: 360px; min-width: 0;
+  border: 1px solid var(--hq-line); border-radius: var(--hq-r-lg); overflow: hidden;
+  /* Classic's own type, as on its Tasks screen: the pane is Classic's, not restyled. */
+  color: var(--text); font: var(--fs)/var(--lh) var(--font-ui);
+}
+:root[data-ui="hq"] .hq-eng-detail > .td { border-left: 0; }
+@media (max-width: 1100px) {
+  :root[data-ui="hq"] .hq-eng-top, :root[data-ui="hq"] .hq-eng-grid.has-detail { grid-template-columns: minmax(0, 1fr); }
+  :root[data-ui="hq"] .hq-eng-detail { position: static; height: 70dvh; }
+}
+
+:root[data-ui="hq"] .hq-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+:root[data-ui="hq"] .hq-filters :is(select, input) {
+  height: 30px; padding: 0 10px; border: 1px solid var(--hq-line); border-radius: var(--hq-r-sm); background: var(--hq-input);
+  color: var(--hq-text); font: var(--hq-fs-sm) var(--hq-font);
+}
+:root[data-ui="hq"] .hq-filters input { width: 200px; }
+:root[data-ui="hq"] .hq-filters :is(select, input):focus-visible { outline: 2px solid var(--hq-focus); outline-offset: 1px; }
+
+:root[data-ui="hq"] .hq-table-wrap { overflow-x: auto; margin: 0 -16px -16px; }
+/* Fixed layout: the title takes what the other columns leave. With a task open, the columns the key or the detail
+ * already gives (project, assignee, session, updated) step aside so the title stays readable. */
+:root[data-ui="hq"] .hq-table { width: 100%; min-width: 640px; table-layout: fixed; border-collapse: collapse; font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-table th {
+  position: sticky; top: 0; padding: 8px 10px; border-bottom: 1px solid var(--hq-line); background: var(--hq-panel);
+  color: var(--hq-muted); font-weight: 600; text-align: left; white-space: nowrap;
+}
+:root[data-ui="hq"] .hq-table td { padding: 8px 10px; border-bottom: 1px solid var(--hq-line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:root[data-ui="hq"] .hq-table :is(th, td):first-child { padding-left: 16px; }
+:root[data-ui="hq"] .hq-table :is(th, td):last-child { padding-right: 16px; }
+:root[data-ui="hq"] .hq-table .c-key { width: 104px; }
+:root[data-ui="hq"] .hq-table .c-project { width: 124px; }
+:root[data-ui="hq"] .hq-table .c-stage { width: 150px; }
+:root[data-ui="hq"] .hq-table .c-priority { width: 82px; }
+:root[data-ui="hq"] .hq-table .c-assignee { width: 116px; }
+:root[data-ui="hq"] .hq-table .c-session { width: 124px; }
+:root[data-ui="hq"] .hq-table .c-pr { width: 60px; }
+:root[data-ui="hq"] .hq-table .c-updated { width: 82px; }
+:root[data-ui="hq"] .has-detail .hq-table :is(.c-project, .c-assignee, .c-session, .c-updated) { display: none; }
+:root[data-ui="hq"] .hq-table tbody tr { cursor: pointer; transition: background var(--hq-dur-1); }
+:root[data-ui="hq"] .hq-table tbody tr:hover { background: var(--hq-hover); }
+:root[data-ui="hq"] .hq-table tbody tr.is-sel { background: var(--hq-accent-soft); box-shadow: inset 3px 0 0 var(--hq-accent); }
+:root[data-ui="hq"] .hq-table code { font: 600 var(--hq-fs-sm) var(--hq-mono); color: var(--hq-text-2); }
+:root[data-ui="hq"] .hq-eng-t { display: flex; align-items: center; gap: 6px; min-width: 0; }
+:root[data-ui="hq"] .hq-eng-t > .hq-ellip { flex: 0 1 auto; }
+:root[data-ui="hq"] .hq-flag {
+  flex: none; padding: 1px 6px; border: 1px solid currentColor; border-radius: var(--hq-r-pill); font-size: var(--hq-fs-xs);
+}
