@@ -21,7 +21,7 @@ let tmp;
 let base;
 let failed = false;
 
-function run(label, cmd, argv, cwd = app, moreEnv = {}) {
+function run(label, cmd, argv, cwd = app, moreEnv = {}, skipOn = null) {
   console.log("\n=== " + label + " ===");
   const r = spawnSync(cmd, argv, {
     cwd,
@@ -29,6 +29,8 @@ function run(label, cmd, argv, cwd = app, moreEnv = {}) {
     stdio: "inherit",
     shell: process.platform === "win32", // npm/npx launch via .cmd on Windows
   });
+  // A step that cannot run here (skipOn: [exit code, reason]) is reported as SKIP, never as PASS.
+  if (skipOn && r.status === skipOn[0] && !r.error) { steps.push({ label, skip: skipOn[1] }); return; }
   const ok = r.status === 0 && !r.error;
   steps.push({ label, ok });
   if (!ok) throw new Error(label + ": " + (r.error?.message || "exit " + r.status));
@@ -36,6 +38,8 @@ function run(label, cmd, argv, cwd = app, moreEnv = {}) {
 try {
   run("TypeScript", "npm", ["run", "typecheck"]);
   run("Unit tests", "npm", ["test"]);
+  run("HQ tokens match the approved design", "node", [path.join(repo, "design/hq-tokens/generate.mjs"), "--check"],
+      app, {}, [3, "the approved design commit is not in this clone (git fetch origin claude/project-thread-gs2u2h)"]);
   run("Build", "npm", ["run", "build"]);
   run("Sealed Chromium browser suite", "npm",
       ["run", "test:e2e", "--", "--grep-invert", "@parity"]);
@@ -81,7 +85,7 @@ try {
     "Node: " + process.version,
     "Mode: " + (parity ? "sealed browser + base comparison" : "sealed browser"),
     "Result: " + (failed ? "FAIL" : "PASS"), "",
-    ...steps.map(s => "- " + (s.ok ? "PASS" : "FAIL") + ": " + s.label),
+    ...steps.map(s => "- " + (s.skip ? "SKIP" : s.ok ? "PASS" : "FAIL") + ": " + s.label + (s.skip ? " (" + s.skip + ")" : "")),
     "", "Runs only against fixture API data and a loopback test server.",
     "Reports: web/app/playwright-report*/ and test-results*/.", "",
   ].join("\n");

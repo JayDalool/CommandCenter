@@ -12,6 +12,8 @@ for (const theme of ["dark", "light"] as Theme[]) {
         await open(page, route);
         expect(await shown(page)).toBe(SHOWS[route]);
         await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+        // Nothing turns HQ on in Classic yet (its tokens are inert without this attribute).
+        await expect(page.locator("html")).not.toHaveAttribute("data-ui", /.*/);
         expect(await problems(page, watch)).toEqual([]);
       });
     }
