@@ -53,7 +53,9 @@ const needsOf = (c: Ctx, key: string) => c.needs.filter((d) => d.project === key
 
 // ---------- graph ----------
 
-function useFit(box: React.RefObject<HTMLDivElement | null>, bounds: { w: number; h: number }) {
+/** Fit the graph to its box on first paint, on a resize, and when `key` changes (what is drawn, not how far a stage
+ *  is expanded: showing a stage's tasks keeps the pan and zoom you had; 0 or the Fit button refits). */
+function useFit(box: React.RefObject<HTMLDivElement | null>, bounds: { w: number; h: number }, key: string) {
   const [t, setT] = useState({ x: 0, y: 0, k: 0.8 });
   const fit = useCallback(() => {
     const el = box.current; if (!el) return;
@@ -63,12 +65,14 @@ function useFit(box: React.RefObject<HTMLDivElement | null>, bounds: { w: number
     const k = Math.min(r.width / (bounds.w + 60), (r.height - legend) / (bounds.h + 30), 1.25);
     setT({ k, x: (r.width - bounds.w * k) / 2, y: Math.max(12, (r.height - legend - bounds.h * k) / 2) });
   }, [box, bounds.w, bounds.h]);
-  useLayoutEffect(() => { fit(); }, [fit]);
+  const latest = useRef(fit);
+  latest.current = fit;
+  useLayoutEffect(() => { latest.current(); }, [key]);
   useEffect(() => {
     const el = box.current; if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => fit()); ro.observe(el);
+    const ro = new ResizeObserver(() => latest.current()); ro.observe(el);
     return () => ro.disconnect();
-  }, [box, fit]);
+  }, [box]);
   return { t, setT, fit };
 }
 
@@ -90,7 +94,7 @@ function NodeBody({ n, c, v, expanded }: { n: GNode; c: Ctx; v: TopologyView; ex
     const p = v.projects.find((x) => x.key === n.ref)!;
     const [label, tone] = HEALTH[p.health];
     const need = needsOf(c, p.key);
-    const foot = [plural(openTasks(c, p.key), "task"), plural(p.sessions, "session"),
+    const foot = [plural(openTasks(c, p.key), "task"), `${plural(p.sessions, "session")}${c.stale ? " (last)" : ""}`,
       p.coordinator ? `Lead ${PRESENCE_LABEL[p.coordinator.presence].toLowerCase()}` : "No lead"].join(" · ");
     return <>
       <span className="hq-gn-row"><i className="hq-gn-dot" aria-hidden /><span className="hq-gn-body"><b>{p.name}</b>
@@ -146,7 +150,8 @@ function Canvas({ v, c, sel, setSel, layers, expanded, setExpanded }: { v: Topol
   const off = useMemo(() => ports(g.nodes, g.edges), [g]);
   const byId = useMemo(() => new Map(g.nodes.map((n) => [n.id, n])), [g]);
   const box = useRef<HTMLDivElement>(null);
-  const { t, setT, fit } = useFit(box, g.bounds);
+  const fitKey = [v.projects.map((p) => p.key), v.stages.map((s) => s.id), v.hosts.map(hostId)].join("|");
+  const { t, setT, fit } = useFit(box, g.bounds, fitKey);
   const [hover, setHover] = useState<string | null>(null);
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const linked = useMemo(() => hover ? neighbours(hover, g.edges) : null, [hover, g.edges]);

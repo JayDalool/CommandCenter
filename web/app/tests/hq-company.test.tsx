@@ -166,6 +166,38 @@ describe("Company, Graph view", () => {
     expect(inspector(page)).toHaveTextContent("No recent heartbeat");
   });
 
+  it("shows no Working, Online or vitals when the feed is not live", async () => {
+    load();
+    const now = Date.now() + 24 * 86_400_000;
+    vi.setSystemTime(now);
+    app.store.set({ ...app.store.get(), stateAt: now, conn: { status: "offline", lastMessageAt: null, attempt: 1 } });
+    const page = (await show())!;
+    const graph = canvas(page);
+    expect(within(graph).queryAllByText(/^(Working|Online)$/)).toHaveLength(0);
+    expect(graph.querySelector(".hq-gmeters")).toBeNull();
+    for (const p of view().projects) {
+      const n = page.querySelector(`[data-node="p:${p.key}"]`)!;
+      expect(n).toHaveTextContent("session");
+      expect(n).toHaveTextContent("(last)");
+      if (p.coordinator) expect(n).toHaveTextContent("Lead unknown");
+    }
+    expect(view().projects.some((p) => p.coordinator)).toBe(true);
+  });
+
+  it("keeps the pan and zoom when a stage's tasks are shown", async () => {
+    load();
+    // jsdom has no layout: give the canvas a size so the graph is fitted at all.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 640,
+      width: 1000, height: 640, toJSON: () => ({}) });
+    const page = (await show())!;
+    expect(page.querySelector<HTMLElement>(".hq-world")!.style.transform).not.toContain("scale(0.8)");
+    const world = page.querySelector<HTMLElement>(".hq-world")!;
+    fireEvent.click(within(page).getByRole("button", { name: "Zoom in" }));
+    const zoomed = world.style.transform;
+    fireEvent.click(within(canvas(page)).getAllByRole("button", { name: /^Show .* tasks$/ })[0]);
+    expect(world.style.transform).toBe(zoomed);
+  });
+
   it("changes nothing: no form, and every button filters, zooms or selects", async () => {
     load();
     const page = (await show())!;
