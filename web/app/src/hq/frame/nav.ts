@@ -4,11 +4,14 @@
 import type { Route } from "../../lib/router";
 import { TITLES } from "../../lib/titles";
 
-export interface HqNavItem { id: string; label: string; icon: string; key: string }
+/** key: the Classic digit shortcut, for items that are Classic sidebar screens. HQ-only items have none. */
+export interface HqNavItem { id: string; label: string; icon: string; key?: string }
 
 export const HQ_NAV: HqNavItem[] = [
   { id: "dashboard", label: "My Office", icon: "home", key: "1" },
   { id: "needs", label: "Decisions", icon: "shield", key: "0" },
+  { id: "agents", label: "Teams", icon: "users" },
+  { id: "projects", label: "Company", icon: "cube" },
   { id: "tasks", label: "Engineering", icon: "wrench", key: "3" },
   { id: "workspace", label: "Workspace", icon: "terminal", key: "2" },
   { id: "activity", label: "Activity", icon: "pulse", key: "4" },
@@ -18,7 +21,8 @@ export const HQ_NAV_LOW: HqNavItem[] = [{ id: "settings", label: "Settings & mor
 
 /** HQ's name for a screen, where it has one; every other screen keeps its Classic title. */
 const HQ_TITLES: Record<string, string> = { dashboard: "My Office", overview: "My Office", needs: "Decisions",
-  tasks: "Engineering", workspace: "Workspace", activity: "Activity", files: "Files", console: "Files", settings: "Settings" };
+  tasks: "Engineering", workspace: "Workspace", activity: "Activity", files: "Files", console: "Files", settings: "Settings",
+  agents: "Teams", projects: "Company" };
 
 const ALIAS: Record<string, string> = { overview: "dashboard", console: "files" };
 
@@ -31,6 +35,7 @@ export function sectionOf(screen: string): string {
 export function hqTitle(screen: string, id: string | null, projectName: string | null = null): string {
   if (screen === "projects" && projectName) return projectName;
   if (screen === "tasks" && id) return id;
+  if (screen === "agents" && id) return TITLES.agents ?? "Agents";   // one session opens Classic's Agents screen
   return HQ_TITLES[screen] ?? TITLES[screen] ?? "My Office";
 }
 

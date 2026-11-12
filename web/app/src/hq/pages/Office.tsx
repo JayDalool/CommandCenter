@@ -7,7 +7,7 @@ import { href } from "../../lib/router";
 import { ago } from "../../lib/time";
 import { buildOffice, PRESENCE_LABEL, type DecisionItem, type Health, type OfficeProject, type Presence, type TeamMember } from "../data";
 import { useHqData } from "./live";
-import { Pill, PRESENCE_TONE, cx, plural } from "./ui";
+import { Kpi, Pill, PRESENCE_TONE, cx, plural } from "./ui";
 import type { Alert } from "../../api/types";
 
 const HEALTH: Record<Health, { label: string; tone: string }> = {
@@ -15,11 +15,6 @@ const HEALTH: Record<Health, { label: string; tone: string }> = {
 };
 
 function greeting(d: Date) { const h = d.getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; }
-
-function Kpi({ label, value, sub, tone, to }: { label: string; value: string | number; sub: string; tone?: string; to?: string }) {
-  const body = <><small>{label}</small><b className={tone ? `t-${tone}` : undefined}>{value}</b><em>{sub}</em></>;
-  return to ? <a className="hq-kpi" href={to}>{body}</a> : <div className="hq-kpi">{body}</div>;
-}
 
 function ProjectCard({ p, stale }: { p: OfficeProject; stale: boolean }) {
   const h = HEALTH[p.health];

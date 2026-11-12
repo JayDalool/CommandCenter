@@ -1,7 +1,7 @@
 // Activity (roadmap P3.7): the same rows as Classic's Activity screen (hq/data/activity.ts: meaningful events, newest
 // first, Classic's filters, closed tasks hidden unless asked), grouped by day, with the alerts beside them. Older pages
 // load through the same GET /api/activity as Classic. Acknowledging an alert stays on Classic's Alerts screen.
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./office.css";
 import "./activity.css";
 import { app } from "../../store/app";
@@ -47,9 +47,12 @@ export function Activity() {
   const [busy, setBusy] = useState(false);
   useEffect(() => setOlder([]), [project]);
   const names = new Map(src.taskProjects.map((p) => [p.key, p.name]));
-  const opts = { project, withClosed, older };
-  const rows = buildActivity(src.activity, src.tickets, { ...opts, filter });
-  const count = (f: ActivityFilter) => f === filter ? rows.length : buildActivity(src.activity, src.tickets, { ...opts, filter: f }).length;
+  // One pass per filter, only when the feed or a setting changes, not on every tick.
+  const byFilter = useMemo(() => new Map((Object.keys(ACTIVITY_FILTERS) as ActivityFilter[])
+    .map((f) => [f, buildActivity(src.activity, src.tickets, { project, withClosed, older, filter: f })])),
+  [src.activity, src.tickets, older, project, withClosed]);
+  const rows = byFilter.get(filter) ?? [];
+  const count = (f: ActivityFilter) => byFilter.get(f)?.length ?? 0;
   const alerts = buildAlerts(src.state?.alerts);
   // Older pages start below the oldest event loaded, filtered or not, as in Classic.
   const seqs = [...src.activity, ...older].map((e) => e.seq);
@@ -87,7 +90,7 @@ export function Activity() {
       <div className="hq-office-side">
         <section className="hq-panel" aria-labelledby="hq-act-alerts">
           <header><h3 id="hq-act-alerts">Alerts <small>{alerts.unacked} not acknowledged</small></h3>
-            <a className="hq-link" href={href("alerts")}>Open Alerts</a></header>
+            <a className="hq-link" href={href("alerts")}>{alerts.rows.length > 6 ? `Open all ${alerts.rows.length}` : "Open Alerts"}</a></header>
           {alerts.rows.length ? <ul className="hq-attn">{alerts.rows.slice(0, 6).map((a) => <li key={a.id}><a href={href("alerts")}>
             <span className="hq-attn-body"><span className="hq-ellip" title={a.text}>{a.text}</span>
               <small>{a.source}{a.project ? ` · ${names.get(a.project) ?? a.project}` : ""} · {ago(a.since, ev.now)}{a.ack ? " · acknowledged" : ""}</small></span>

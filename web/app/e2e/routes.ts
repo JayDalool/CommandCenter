@@ -18,7 +18,7 @@ export const SHOWS: Record<string, string> = {
 
 /** What the HQ preview's top bar names differently: its sidebar's names for the same screens (hq/frame/nav.ts). */
 export const SHOWS_HQ: Record<string, string> = { ...SHOWS, dashboard: "My Office", overview: "My Office", needs: "Decisions",
-  tasks: "Engineering", activity: "Activity" };
+  tasks: "Engineering", activity: "Activity", agents: "Teams", projects: "Company" };
 
 /** Each must load clean. */
 export const LOAD = Object.keys(SHOWS);

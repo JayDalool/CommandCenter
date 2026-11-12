@@ -1,0 +1,31 @@
+/* Company (operations topology). Scoped to :root[data-ui="hq"], no custom property declared here (parity.spec.ts).
+ * Panels, pills, project and host cards come from office.css. */
+
+:root[data-ui="hq"] .hq-topo-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+:root[data-ui="hq"] .hq-topo {
+  display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.2fr) minmax(0, .9fr); gap: 18px; align-items: start;
+}
+@media (max-width: 1200px) { :root[data-ui="hq"] .hq-topo { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+@media (max-width: 760px) { :root[data-ui="hq"] .hq-topo { grid-template-columns: minmax(0, 1fr); } }
+:root[data-ui="hq"] .hq-topo-col { display: grid; gap: 10px; min-width: 0; }
+:root[data-ui="hq"] .hq-topo-node { min-width: 0; }
+
+:root[data-ui="hq"] .hq-topo-stage {
+  display: grid; gap: 8px; min-width: 0; padding: 10px 12px; border: 1px solid var(--hq-line); border-radius: var(--hq-r-md);
+  background: var(--hq-tile);
+}
+:root[data-ui="hq"] .hq-topo-stage h4 { margin: 0; font: 650 var(--hq-fs-md) var(--hq-font-display); color: var(--hq-text-strong); }
+:root[data-ui="hq"] .hq-topo-stage h4 small { margin-left: 6px; color: var(--hq-muted); font: var(--hq-fs-sm) var(--hq-font); }
+:root[data-ui="hq"] .hq-topo-flows, :root[data-ui="hq"] .hq-topo-tasks { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+:root[data-ui="hq"] .hq-topo-flows li {
+  display: grid; grid-template-columns: 8px minmax(0, 1fr) auto 24px; align-items: center; gap: 8px; min-height: 24px; font-size: var(--hq-fs-sm);
+}
+:root[data-ui="hq"] .hq-topo-flags { display: inline-flex; gap: 6px; }
+:root[data-ui="hq"] .hq-topo-flows > li > i { width: 8px; height: 8px; border-radius: 50%; background: var(--pj); }
+:root[data-ui="hq"] .hq-topo-flows b { color: var(--hq-text-strong); font-variant-numeric: tabular-nums; text-align: right; }
+:root[data-ui="hq"] .hq-topo-tasks a {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px 6px;
+  min-height: 28px; border-radius: var(--hq-r-sm); color: var(--hq-text-2); font-size: var(--hq-fs-sm);
+}
+:root[data-ui="hq"] .hq-topo-tasks a:hover { background: var(--hq-hover); color: var(--hq-text-strong); }
+:root[data-ui="hq"] .hq-topo-tasks code { color: var(--hq-accent-2); font: var(--hq-fs-xs) var(--hq-mono); }

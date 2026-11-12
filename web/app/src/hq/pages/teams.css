@@ -1,0 +1,9 @@
+/* Teams. Scoped to :root[data-ui="hq"], no custom property declared here (parity.spec.ts). Panels, KPI tiles, pills
+ * and session cards come from office.css. */
+
+:root[data-ui="hq"] .hq-team { box-shadow: inset 3px 0 0 var(--pj); }
+:root[data-ui="hq"] .hq-team-links { display: inline-flex; gap: 14px; }
+:root[data-ui="hq"] .hq-sess.is-lead { border-color: var(--pj); }
+:root[data-ui="hq"] .hq-sess.is-empty { border-style: dashed; background: none; }
+:root[data-ui="hq"] .hq-sess.is-empty b { color: var(--hq-text-2); font-weight: 600; }
+:root[data-ui="hq"] .hq-sess .t-jay { color: var(--hq-warn); }
