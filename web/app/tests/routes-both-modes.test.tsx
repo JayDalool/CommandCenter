@@ -11,9 +11,9 @@ import { SCREENS, parse } from "../src/lib/router";
 import { NAV, loadHqFrame } from "../src/components/Shell";
 import { HQ_NAV, HQ_NAV_LOW } from "../src/hq/frame/nav";
 import { hqPageFor } from "../src/hq/pages";
+import { state, tasks } from "./helpers";
 
 const hasPage = (route: string) => hqPageFor(parse(`#/${route}`)) !== null;
-import { state, tasks } from "./helpers";
 
 const BARE = ["room", "pane"];
 

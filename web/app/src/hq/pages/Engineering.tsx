@@ -2,7 +2,7 @@
 // gate and the task detail. The detail is Classic's TicketDetailPane, unchanged, so its actions, gates and Developer
 // Unlock checks are exactly Classic's. The release gate only lists what waits for Jay's merge; nothing here merges.
 // Classic's Tasks screen stays one link away (?view=board), and its own addresses with ?view or ?status still open it.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./office.css";
 import "./engineering.css";
 import { go, href, useRoute } from "../../lib/router";
@@ -48,7 +48,10 @@ function Row({ t, sel, now, name }: { t: EngTask; sel: boolean; now: number; nam
 export function Engineering() {
   const route = useRoute();
   const { src, ev } = useHqData();
-  const [project, setProject] = useState(() => route.params.get("project") ?? "");
+  const asked = route.params.get("project") ?? "";
+  const [project, setProject] = useState(asked);
+  // A new ?project= while the page stays mounted (the address changes, the page does not) applies too.
+  useEffect(() => { setProject(asked); }, [asked]);
   const [stage, setStage] = useState<VisibleStage | "">("");
   const [who, setWho] = useState("");
   const [q, setQ] = useState("");
@@ -83,7 +86,7 @@ export function Engineering() {
         {v.releaseGate.length ? <ul className="hq-attn">{v.releaseGate.map((t) => <li key={t.key}><a href={href("tasks", t.key)}>
           <span className="hq-attn-body"><span className="hq-ellip" title={t.title}><code>{t.key}</code> {t.title}</span>
             <small>{t.pr ? `Pull request #${t.pr.number}` : "No pull request recorded"} · {names.get(t.project) ?? t.project}</small></span>
-          <Pill tone="ok">Merge</Pill></a></li>)}</ul>
+          <Pill tone="ok">Awaiting merge</Pill></a></li>)}</ul>
           : <p className="hq-empty">Nothing is waiting for your merge.</p>}
         <p className="hq-note">You merge. Nothing on this page merges.</p>
       </section>
