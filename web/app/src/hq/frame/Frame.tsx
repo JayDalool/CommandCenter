@@ -19,6 +19,7 @@ import { HQ_NAV, HQ_NAV_LOW, hqTitle, sectionOf, viewKey, type HqNavItem } from 
 import { tabs, visit, close } from "./tabs";
 import { Icon, Logo } from "./icons";
 import { hqMedia } from "../layout";
+import { PopOutButton, PoppedPlaceholder, usePopped, usePoppedViews, useWindowsWatch, viewOfRoute } from "../windows/controls";
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
 
@@ -84,12 +85,15 @@ export function HqTop({ dash }: { dash: boolean }) {
   const route = useRoute();
   const theme = usePrefs((p) => p.theme);
   const projName = useSelector(app.store, (d) => d.state?.projects.find((p) => p.key === route.id)?.name ?? null);
+  const view = viewOfRoute(route);
+  const out = usePopped(view);
   return <header className="hq-top">
     <h1 className="page-title">{hqTitle(route.screen, route.id, projName)}</h1>
     <button type="button" className="hq-search" onClick={() => window.dispatchEvent(new Event("cc:palette"))}
       aria-keyshortcuts="Control+K">
       <Icon name="search" size={17} /><span>Search screens, tasks, projects and commands</span><Kbd>Ctrl</Kbd><Kbd>K</Kbd></button>
     <div className="hq-top-right">
+      {view && !out && <PopOutButton v={view} />}
       <button type="button" className="btn is-quiet is-sm" onClick={() => window.dispatchEvent(new Event("cc:new-task"))}
         aria-keyshortcuts="n"><Kbd>N</Kbd> New task</button>
       <button type="button" className="btn is-quiet is-sm" onClick={() => prefs.patch({ theme: looksDark(theme) ? "light" : "dark" })}
@@ -107,6 +111,10 @@ export function HqTabs() {
     (a, b) => JSON.stringify(a) === JSON.stringify(b));
   const key = viewKey(route);
   const hash = location.hash || "#/dashboard";
+  const outs = usePoppedViews();
+  // A tab whose page is open in its own window is shaded, as in the prototype.
+  const isOut = (k: string) => { const r = { screen: k.split("/")[0], id: k.includes("/") ? k.slice(k.indexOf("/") + 1) : null,
+    params: new URLSearchParams() }; const v = viewOfRoute(r); return !!v && outs.includes(v); };
   useEffect(() => { tabs.set((l) => visit(l, key, hash)); }, [key, hash]);
   const title = (k: string) => {
     const [screen, ...rest] = k.split("/");
@@ -121,8 +129,10 @@ export function HqTabs() {
   return <nav className="hq-tabs" aria-label="Open views">
     <ul>{list.map((t) => {
       const on = t.key === key, name = title(t.key);
-      return <li key={t.key} className={cx("hq-tab", on && "is-active")}>
-        <a href={t.hash} aria-current={on ? "page" : undefined}>{name}</a>
+      const out = isOut(t.key);
+      return <li key={t.key} className={cx("hq-tab", on && "is-active", out && "is-out")}>
+        <a href={t.hash} aria-current={on ? "page" : undefined} title={out ? `${name} is open in its own window` : undefined}>
+          {out && <Icon name="popout" size={12} />}{name}</a>
         {(list.length > 1 || !on) && <button type="button" className="hq-tab-x" aria-label={`Close ${name} tab`}
           onClick={() => shut(t.key)}><Icon name="x" size={12} /></button>}
       </li>;
@@ -140,6 +150,9 @@ export default function HqFrame({ dash, focus, banners, screen, overlays }: {
   const route = useRoute();
   const { icons } = useIconsOnly();
   const Page = hqPageFor(route);
+  useWindowsWatch();
+  const view = viewOfRoute(route);
+  const out = usePopped(view);
   // The screen whose HQ page fell back to Classic: that Classic screen brings its own header (the Dashboard's has the
   // bell), so the top bar leaves it out as it does in Classic. Cleared on leaving, so the page is tried again on return.
   const [fellBack, setFellBack] = useState<string | null>(null);
@@ -154,7 +167,7 @@ export default function HqFrame({ dash, focus, banners, screen, overlays }: {
       {Page
         ? <HqBoundary key={route.screen} fallback={screen} onFail={() => setFellBack(route.screen)}
             message="This HQ page could not be shown, so the Classic screen is shown instead. Reload to try again.">
-          <main id="main" className="screen hq-screen" tabIndex={-1}><Page /></main></HqBoundary>
+          <main id="main" className="screen hq-screen" tabIndex={-1}>{view && out ? <PoppedPlaceholder v={view} /> : <Page />}</main></HqBoundary>
         : screen}
     </div>
     {overlays}

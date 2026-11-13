@@ -5,7 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 import "./office.css";
 import "./activity.css";
 import { app } from "../../store/app";
-import { href, useRoute } from "../../lib/router";
+import { href } from "../../lib/router";
+import { usePageNav } from "./route";
 import { ago, hms } from "../../lib/time";
 import type { CcdEvent } from "../../api/types";
 import type { FeedCat } from "../../components/Feed";
@@ -38,7 +39,7 @@ function Row({ r, project }: { r: ActivityRowView; project: string }) {
 }
 
 export function Activity() {
-  const route = useRoute();
+  const { route } = usePageNav();
   const { src, ev } = useHqData();
   const project = route.params.get("project");
   const [filter, setFilter] = useState<ActivityFilter>("ALL");
