@@ -3,7 +3,7 @@
 // says how far along it is and what is in hand; Edit opens the lists. Jay changes anything; a project's lead adds and
 // moves its own technical ones through scripts/cc-milestone, and they appear here by themselves. Nothing here decides
 // a state: it shows what was set.
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import "./hqnext.css";
 import { app } from "../../store/app";
 import { ApiError } from "../../api/client";
@@ -36,33 +36,48 @@ function TrackLine({ title, s }: { title: string; s: TrackSummary }) {
 
 /** A milestone with the project it belongs to, so a row can name its own route. */
 type Row = Milestone & { projectKey: string };
+type Patch = Parameters<typeof app.api.milestoneChange>[2];
 
-function Item({ m, i, last, busy, today, now, run, move }: {
+/** A control that cannot act right now stays focusable: aria-disabled, never disabled. A write disables the row's
+ *  controls while it runs, and a disabled control drops the keyboard's focus to the top of the page. */
+const off = (is: boolean) => ({ "aria-disabled": is || undefined });
+
+function Item({ m, i, last, busy, today, now, run, move, onGone }: {
   m: Row; i: number; last: boolean; busy: boolean; today: string; now: number;
-  run: (fn: () => Promise<unknown>) => Promise<boolean>; move: (i: number, by: -1 | 1) => void;
+  run: (fn: () => Promise<unknown>) => Promise<boolean>; move: (i: number, by: -1 | 1) => void; onGone: () => void;
 }) {
   const [edit, setEdit] = useState(false);
   const [sure, setSure] = useState(false);
   const [title, setTitle] = useState(m.title), [due, setDue] = useState(m.due ?? ""), [note, setNote] = useState(m.note ?? "");
-  const open = () => { setTitle(m.title); setDue(m.due ?? ""); setNote(m.note ?? ""); setEdit(true); };
+  /** The milestone as it was when the form opened: what Jay's changes are measured against. */
+  const base = useRef(m);
+  const pencil = useRef<HTMLButtonElement>(null), wasEdit = useRef(false);
+  // closing the form puts focus back on the button that opened it
+  useEffect(() => { if (wasEdit.current && !edit) pencil.current?.focus(); wasEdit.current = edit; }, [edit]);
+  const open = () => { if (busy) return; base.current = m; setTitle(m.title); setDue(m.due ?? ""); setNote(m.note ?? ""); setEdit(true); };
   const save = async (e: FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) return;
-    if (await run(() => app.api.milestoneChange(m.projectKey, m.id, { title: title.trim(), due: due || null, note: note.trim() || null }))) setEdit(false);
+    if (busy || !title.trim()) return;
+    // Only what Jay changed in this form. A field he left alone may have been changed by the lead since it opened.
+    const was = base.current, patch: Patch = {};
+    if (title.trim() !== was.title) patch.title = title.trim();
+    if ((due || null) !== was.due) patch.due = due || null;
+    if ((note.trim() || null) !== was.note) patch.note = note.trim() || null;
+    if (!Object.keys(patch).length || await run(() => app.api.milestoneChange(m.projectKey, m.id, patch))) setEdit(false);
   };
   if (edit) return <li className="hq-ms-item is-edit">
     <form onSubmit={save}>
       <input className="hq-ms-in" aria-label="Title" maxLength={140} value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
       <input className="hq-ms-in is-date" type="date" aria-label="Due date" value={due} onChange={(e) => setDue(e.target.value)} />
       <textarea className="hq-ms-in" aria-label="Note" maxLength={500} rows={2} placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
-      <span className="hq-ms-acts"><button type="submit" className="hq-btn is-primary" disabled={busy || !title.trim()}>Save</button>
+      <span className="hq-ms-acts"><button type="submit" className="hq-btn is-primary" {...off(busy || !title.trim())}>Save</button>
         <button type="button" className="hq-btn" onClick={() => setEdit(false)}>Cancel</button></span>
     </form>
   </li>;
   const late = m.state !== "done" && !!m.due && m.due < today;
-  return <li className={cx("hq-ms-item", `is-${m.state}`)}>
-    <select aria-label={`State of ${m.title}`} value={m.state} disabled={busy}
-      onChange={(e) => void run(() => app.api.milestoneChange(m.projectKey, m.id, { state: e.target.value as MilestoneState }))}>
+  return <li className={cx("hq-ms-item", `is-${m.state}`)} data-ms={m.id}>
+    <select aria-label={`State of ${m.title}`} value={m.state} {...off(busy)}
+      onChange={(e) => { if (!busy) void run(() => app.api.milestoneChange(m.projectKey, m.id, { state: e.target.value as MilestoneState })); }}>
       {STATES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
     <span className="hq-ms-text"><b>{m.title}</b>
       {(m.due || m.doneAt || m.by.startsWith("agent:")) && <small>
@@ -72,12 +87,19 @@ function Item({ m, i, last, busy, today, now, run, move }: {
           .filter(Boolean).map((t, k) => <span key={k} className={late && t!.startsWith("Overdue") ? "t-bad" : undefined}>{t}</span>)}</small>}
       {m.note && <small className="hq-ms-note">{m.note}</small>}</span>
     <span className="hq-ms-acts">
-      <button type="button" className="hq-icon-btn" aria-label={`Move ${m.title} up`} disabled={busy || i === 0} onClick={() => move(i, -1)}><Icon name="up" size={16} /></button>
-      <button type="button" className="hq-icon-btn" aria-label={`Move ${m.title} down`} disabled={busy || last} onClick={() => move(i, 1)}><Icon name="down" size={16} /></button>
-      <button type="button" className="hq-icon-btn" aria-label={`Edit ${m.title}`} disabled={busy} onClick={open}><Icon name="pencil" size={16} /></button>
-      {sure ? <button type="button" className="hq-btn is-danger" disabled={busy} onBlur={() => setSure(false)}
-        onClick={() => void run(() => app.api.milestoneRemove(m.projectKey, m.id))}>Remove?</button>
-        : <button type="button" className="hq-icon-btn" aria-label={`Remove ${m.title}`} disabled={busy} onClick={() => setSure(true)}><Icon name="trash" size={16} /></button>}
+      <button type="button" className="hq-icon-btn" data-act="up" aria-label={`Move ${m.title} up`} {...off(busy || i === 0)}
+        onClick={() => { if (!busy && i > 0) move(i, -1); }}><Icon name="up" size={16} /></button>
+      <button type="button" className="hq-icon-btn" data-act="down" aria-label={`Move ${m.title} down`} {...off(busy || last)}
+        onClick={() => { if (!busy && !last) move(i, 1); }}><Icon name="down" size={16} /></button>
+      <button type="button" ref={pencil} className="hq-icon-btn" aria-label={`Edit ${m.title}`} {...off(busy)} onClick={open}><Icon name="pencil" size={16} /></button>
+      {/* One button for both steps, so the second press needs no hunting and focus never leaves it. */}
+      <button type="button" className={sure ? "hq-btn is-danger" : "hq-icon-btn"} {...off(busy)} onBlur={() => setSure(false)}
+        aria-label={sure ? `Confirm: remove ${m.title}` : `Remove ${m.title}`}
+        onClick={() => {
+          if (busy) return;
+          if (!sure) return setSure(true);
+          void run(() => app.api.milestoneRemove(m.projectKey, m.id)).then((ok) => { if (ok) onGone(); });
+        }}>{sure ? "Remove?" : <Icon name="trash" size={16} />}</button>
     </span>
   </li>;
 }
@@ -88,6 +110,14 @@ function Track({ project, t, list, revision, today, now, onChange }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState(""), [due, setDue] = useState("");
+  const col = useRef<HTMLElement>(null), newTitle = useRef<HTMLInputElement>(null);
+  /** The move button to put focus back on once ccd's list is on the page: reordering moves the row in the DOM. */
+  const refocus = useRef<string | null>(null);
+  useEffect(() => {
+    if (!refocus.current) return;
+    col.current?.querySelector<HTMLElement>(refocus.current)?.focus();
+    refocus.current = null;
+  }, [list]);
   /** One write, then ccd's list again whether it worked or not, so the page never shows a change ccd did not make. */
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -100,25 +130,30 @@ function Track({ project, t, list, revision, today, now, onChange }: {
   };
   const add = async (e: FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) return;
-    if (await run(() => app.api.milestoneAdd(project, { track: t.track, title: title.trim(), due: due || null }))) { setTitle(""); setDue(""); }
+    if (busy || !title.trim()) return;
+    if (await run(() => app.api.milestoneAdd(project, { track: t.track, title: title.trim(), due: due || null }))) {
+      setTitle(""); setDue("");
+      newTitle.current?.focus();   // ready for the next one; the Add button is about to be disabled (nothing typed)
+    }
   };
   const move = (i: number, by: -1 | 1) => {
     const ids = list.map((m) => m.id);
+    refocus.current = `[data-ms="${ids[i]}"] [data-act="${by < 0 ? "up" : "down"}"]`;
     [ids[i], ids[i + by]] = [ids[i + by], ids[i]];
     void run(() => app.api.milestoneOrder(project, t.track, ids, revision));
   };
   const rows: Row[] = list.map((m) => ({ ...m, projectKey: project }));
-  return <section className="hq-ms-col" aria-label={`${t.title} milestones`}>
+  return <section className="hq-ms-col" aria-label={`${t.title} milestones`} ref={col}>
     <h4>{t.title} <small>{t.hint}</small></h4>
-    {rows.length ? <ol>{rows.map((m, i) => <Item key={m.id} m={m} i={i} last={i === rows.length - 1} busy={busy} today={today} now={now} run={run} move={move} />)}</ol>
+    {rows.length ? <ol>{rows.map((m, i) => <Item key={m.id} m={m} i={i} last={i === rows.length - 1} busy={busy} today={today} now={now}
+      run={run} move={move} onGone={() => newTitle.current?.focus()} />)}</ol>
       : <p className="hq-empty">None yet.</p>}
     {error && <p className="hq-note t-bad" role="alert">{error}</p>}
     <form className="hq-ms-add" onSubmit={add}>
-      <input className="hq-ms-in" aria-label={`New ${t.title.toLowerCase()} milestone`} placeholder={`For example: ${t.example}`} maxLength={140}
+      <input ref={newTitle} className="hq-ms-in" aria-label={`New ${t.title.toLowerCase()} milestone`} placeholder={`For example: ${t.example}`} maxLength={140}
         value={title} onChange={(e) => setTitle(e.target.value)} />
       <input className="hq-ms-in is-date" type="date" aria-label="Due date (optional)" value={due} onChange={(e) => setDue(e.target.value)} />
-      <button type="submit" className="hq-btn" disabled={busy || !title.trim()}>Add</button>
+      <button type="submit" className="hq-btn" disabled={!title.trim()} {...off(busy)}>Add</button>
     </form>
   </section>;
 }
@@ -136,6 +171,7 @@ export function Milestones({ projects, now }: { projects: { key: string; name: s
   ] : [];
   return <section className="hq-panel hq-ms" aria-labelledby="hq-office-ms">
     <header><h3 id="hq-office-ms">Where we are <small>Technical and real-life milestones for each project</small></h3></header>
+    {error && data && <p className="hq-note" role="status">Not updated just now ({error.message}). Showing ccd's last answer.</p>}
     {error && !data ? <p className="hq-note" role={error.status === 404 ? undefined : "alert"}>{loadMessage(error, "milestones")}</p>
       : !data ? <p className="hq-empty">Loading…</p>
       : !rows.length ? <p className="hq-empty">No projects reported yet.</p>

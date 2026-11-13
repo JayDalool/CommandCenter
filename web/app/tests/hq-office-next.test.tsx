@@ -148,10 +148,39 @@ describe("My Office › Briefing", () => {
     load();
     const b = brief(await show());
     expect(app.api.briefing).toHaveBeenLastCalledWith(NOW.getTime() / 1000 - 12 * 3600);
+    // until ccd answers for the new window, the figures on screen are still named for the window they belong to
+    let answer!: (b: Briefing) => void;
+    vi.mocked(app.api.briefing).mockImplementationOnce(() => new Promise((r) => { answer = r; }));
     fireEvent.click(within(within(b).getByRole("group", { name: "Briefing window" })).getByRole("button", { name: "3 days" }));
     await settle();
     expect(app.api.briefing).toHaveBeenLastCalledWith(NOW.getTime() / 1000 - 72 * 3600);
+    expect(within(b).getByRole("list", { name: "Totals for the last 12 hours" })).toBeInTheDocument();
+    expect(within(b).getByRole("status")).toHaveTextContent("Loading the last 3 days…");
+    expect(b).toHaveAttribute("aria-busy", "true");
+    await act(async () => answer({ ...QUIET, quiet: true }));
+    await settle();
     expect(within(b).getByRole("list", { name: "Totals for the last 3 days" })).toBeInTheDocument();
+    expect(b).toHaveTextContent("Nothing happened in the last 3 days.");
+    expect(within(b).queryByRole("status")).toBeNull();
+    expect(b).not.toHaveAttribute("aria-busy");
+  });
+
+  it("keeps the last answer and says so when a later refresh fails", async () => {
+    load();
+    const page = await show();
+    vi.mocked(app.api.briefing).mockRejectedValueOnce(new ApiError(0, "ccd unreachable"));
+    vi.mocked(app.api.milestones).mockRejectedValueOnce(new ApiError(0, "ccd unreachable"));
+    act(() => app.store.set((d) => ({ ...d, activity: [ev(960, "milestone.done"), ...d.activity] })));
+    await settle();
+    expect(within(brief(page)).getByRole("status")).toHaveTextContent("Not updated just now (ccd unreachable). Showing ccd's last answer, for the last 12 hours.");
+    expect(brief(page).querySelectorAll(".hq-brief-proj")).toHaveLength(3);
+    expect(within(where(page)).getByRole("status")).toHaveTextContent("Not updated just now (ccd unreachable). Showing ccd's last answer.");
+    expect(where(page).querySelectorAll(".hq-ms-proj")).toHaveLength(5);
+    // the next good answer clears it
+    act(() => app.store.set((d) => ({ ...d, activity: [ev(961, "milestone.done"), ...d.activity] })));
+    await settle();
+    expect(within(brief(page)).queryByRole("status")).toBeNull();
+    expect(within(where(page)).queryByRole("status")).toBeNull();
   });
 
   it("says so when nothing happened, and still shows the zeros ccd sent", async () => {
@@ -224,9 +253,16 @@ describe("My Office › Where we are", () => {
       Object.assign(it, m, m.state === "done" ? { doneAt: at(9, 30) } : {});
       return { milestone: it, revision: ++view.projects.samvision.revision };
     });
-    fireEvent.change(within(tech).getByRole("combobox", { name: "State of Set up the front end" }), { target: { value: "done" } });
+    const sel = within(tech).getByRole("combobox", { name: "State of Set up the front end" });
+    sel.focus();
+    fireEvent.change(sel, { target: { value: "done" } });
+    // while ccd answers, the control is off for screen readers but is not disabled, so focus stays on it
+    expect(sel).toHaveAttribute("aria-disabled", "true");
+    expect(sel).not.toBeDisabled();
     await settle();
     expect(change).toHaveBeenCalledWith("samvision", "m_b", { state: "done" });
+    expect(document.activeElement).toBe(sel);
+    expect(sel).not.toHaveAttribute("aria-disabled");
     expect(row(page, "SamVision").querySelector(".hq-ms-track")).toHaveTextContent("Technical2 of 3Next Ship the mobile layout");
   });
 
@@ -255,6 +291,7 @@ describe("My Office › Where we are", () => {
     fireEvent.click(within(life).getByRole("button", { name: "Add" }));
     await settle();
     expect(input).toHaveValue("");
+    expect(document.activeElement).toBe(input);
     expect(within(life).queryByRole("alert")).toBeNull();
     expect(row(page, "GYST")).toHaveTextContent(`Real life0 of 1Next Contact the lawyer · due ${dueLabel("2026-12-01")}`);
   });
@@ -264,15 +301,35 @@ describe("My Office › Where we are", () => {
     const page = await show();
     fireEvent.click(within(row(page, "SamVision")).getByRole("button", { name: "Edit SamVision milestones" }));
     const tech = () => within(row(page, "SamVision")).getByRole("region", { name: "Technical milestones" });
-    expect(within(tech()).getByRole("button", { name: "Move Set up the back end up" })).toBeDisabled();
-    expect(within(tech()).getByRole("button", { name: "Move Ship the mobile layout down" })).toBeDisabled();
+    // at the ends a move button is switched off for screen readers but stays focusable, and pressing it sends nothing
+    const top = within(tech()).getByRole("button", { name: "Move Set up the back end up" });
+    expect(top).toHaveAttribute("aria-disabled", "true");
+    expect(top).not.toBeDisabled();
+    expect(within(tech()).getByRole("button", { name: "Move Ship the mobile layout down" })).toHaveAttribute("aria-disabled", "true");
+    expect(within(tech()).getByRole("button", { name: "Move Set up the front end up" })).not.toHaveAttribute("aria-disabled");
 
     const order = vi.spyOn(app.api, "milestoneOrder").mockRejectedValueOnce(Object.assign(new ApiError(409, "stale revision"), { data: {} }));
+    fireEvent.click(top);
+    expect(order).not.toHaveBeenCalled();
     fireEvent.click(within(tech()).getByRole("button", { name: "Move Ship the mobile layout up" }));
     await settle();
     expect(order).toHaveBeenCalledWith("samvision", "technical", ["m_a", "m_c", "m_b"], 7);
     expect(within(tech()).getByRole("alert")).toHaveTextContent("This list changed somewhere else. It has been reloaded; try again.");
     expect(app.api.milestones).toHaveBeenCalledTimes(2);
+
+    // a move that works: the row changes place and the keyboard stays on the button that was pressed
+    order.mockImplementationOnce(async (_p, track, ids) => {
+      const t = view.projects.samvision[track];
+      view.projects.samvision[track] = ids.map((id) => t.find((x) => x.id === id)!);
+      return { revision: ++view.projects.samvision.revision };
+    });
+    const down = within(tech()).getByRole("button", { name: "Move Set up the front end down" });
+    down.focus();
+    fireEvent.click(down);
+    await settle();
+    expect([...tech().querySelectorAll(".hq-ms-item b")].map((b) => b.textContent)).toEqual(["Set up the back end", "Ship the mobile layout", "Set up the front end"]);
+    expect(document.activeElement).toBe(within(tech()).getByRole("button", { name: "Move Set up the front end down" }));
+    expect(document.activeElement).toHaveAttribute("aria-disabled", "true");
 
     const change = vi.spyOn(app.api, "milestoneChange").mockImplementation(async (_p, id, m) => {
       const it = view.projects.samvision.technical.find((x) => x.id === id)!;
@@ -280,23 +337,48 @@ describe("My Office › Where we are", () => {
       return { milestone: it, revision: 8 };
     });
     fireEvent.click(within(tech()).getByRole("button", { name: "Edit Ship the mobile layout" }));
+    // meanwhile the lead adds a note; Jay only renames, so only the title is sent and the note survives
+    view.projects.samvision.technical.find((x) => x.id === "m_c")!.note = "The lead's note";
     fireEvent.change(within(tech()).getByRole("textbox", { name: "Title" }), { target: { value: "Ship the phone layout" } });
-    fireEvent.change(within(tech()).getByRole("textbox", { name: "Note" }), { target: { value: " " } });
     fireEvent.click(within(tech()).getByRole("button", { name: "Save" }));
     await settle();
-    expect(change).toHaveBeenCalledWith("samvision", "m_c", { title: "Ship the phone layout", due: null, note: null });
+    expect(change).toHaveBeenCalledWith("samvision", "m_c", { title: "Ship the phone layout" });
     expect(tech()).toHaveTextContent("Ship the phone layout");
+    expect(tech()).toHaveTextContent("The lead's note");
+    // the form closes and focus is back on the pencil it was opened with
+    expect(document.activeElement).toBe(within(tech()).getByRole("button", { name: "Edit Ship the phone layout" }));
+
+    // nothing changed: Save closes the form and sends nothing; a cleared note and a new date go as just those two
+    change.mockClear();
+    fireEvent.click(within(tech()).getByRole("button", { name: "Edit Ship the phone layout" }));
+    fireEvent.click(within(tech()).getByRole("button", { name: "Save" }));
+    await settle();
+    expect(change).not.toHaveBeenCalled();
+    fireEvent.click(within(tech()).getByRole("button", { name: "Edit Ship the phone layout" }));
+    fireEvent.change(within(tech()).getByRole("textbox", { name: "Note" }), { target: { value: " " } });
+    fireEvent.change(within(tech()).getByLabelText("Due date"), { target: { value: "2026-12-24" } });
+    fireEvent.click(within(tech()).getByRole("button", { name: "Save" }));
+    await settle();
+    expect(change).toHaveBeenCalledWith("samvision", "m_c", { due: "2026-12-24", note: null });
 
     const remove = vi.spyOn(app.api, "milestoneRemove").mockImplementation(async (_p, id) => {
       view.projects.samvision.technical = view.projects.samvision.technical.filter((x) => x.id !== id);
       return { ok: true, revision: 9 };
     });
-    fireEvent.click(within(tech()).getByRole("button", { name: "Remove Ship the phone layout" }));
+    // remove asks once more on the same button, which says what it is about to remove
+    const bin = within(tech()).getByRole("button", { name: "Remove Ship the phone layout" });
+    bin.focus();
+    fireEvent.click(bin);
     expect(remove).not.toHaveBeenCalled();
-    fireEvent.click(within(tech()).getByRole("button", { name: "Remove?" }));
+    expect(bin).toHaveAccessibleName("Confirm: remove Ship the phone layout");
+    expect(bin).toHaveTextContent("Remove?");
+    expect(document.activeElement).toBe(bin);
+    fireEvent.click(bin);
     await settle();
     expect(remove).toHaveBeenCalledWith("samvision", "m_c");
     expect(tech()).not.toHaveTextContent("Ship the phone layout");
+    // the row is gone, so focus goes to the field for the next one, not to the top of the page
+    expect(document.activeElement).toBe(within(tech()).getByRole("textbox", { name: "New technical milestone" }));
   });
 
   it("shows what a lead added when its event arrives, and nothing on a server without the route", async () => {

@@ -66,17 +66,21 @@ function Project({ p, now, tickets }: { p: BriefingProject; now: Date; tickets: 
 
 export function Briefing({ now }: { now: Date }) {
   const [hours, setHours] = useState(12);
-  const get = useCallback(() => app.api.briefing(Date.now() / 1000 - hours * 3600), [hours]);
-  const { data, error } = useLoad(get, usePulse(KINDS));
+  // The answer carries the window it was asked for, so figures are never shown under another window's name.
+  const get = useCallback(async () => ({ hours, b: await app.api.briefing(Date.now() / 1000 - hours * 3600) }), [hours]);
+  const { data: got, error } = useLoad(get, usePulse(KINDS));
   const keys = useSelector(app.store, (d) => d.tickets);
   const tickets = useMemo(() => new Set(keys.map((t) => t.key)), [keys]);
+  const data = got?.b ?? null, waiting = !!got && got.hours !== hours;
   const busy = data?.projects.filter(active) ?? [], still = data?.projects.filter((p) => !active(p)) ?? [];
-  const span = WINDOWS.find(([h]) => h === hours)![1];
-  return <section className="hq-panel hq-brief" aria-labelledby="hq-office-brief">
+  const span = WINDOWS.find(([h]) => h === (got?.hours ?? hours))![1];
+  return <section className="hq-panel hq-brief" aria-labelledby="hq-office-brief" aria-busy={waiting || undefined}>
     <header><h3 id="hq-office-brief">Briefing {data && <small>since {when(data.since, now)}</small>}</h3>
       <div className="hq-seg" role="group" aria-label="Briefing window">
         {WINDOWS.map(([h, l]) => <button key={h} type="button" aria-pressed={hours === h} onClick={() => setHours(h)}>{l}</button>)}
       </div></header>
+    {error && data && <p className="hq-note" role="status">Not updated just now ({error.message}). Showing ccd's last answer, for the last {span}.</p>}
+    {waiting && !error && <p className="hq-note" role="status">Loading the last {WINDOWS.find(([h]) => h === hours)![1]}…</p>}
     {error && !data ? <p className="hq-note" role={error.status === 404 ? undefined : "alert"}>{loadMessage(error, "the briefing")}</p>
       : !data ? <p className="hq-empty">Loading…</p> : <>
         <ul className="hq-brief-stats" aria-label={`Totals for the last ${span}`}>

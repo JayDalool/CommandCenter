@@ -96,6 +96,64 @@ test("a busy night and milestones: both panels fit, the lists open, and Add send
   expect(await problems(page, watch)).toEqual([]);
 });
 
+test("by keyboard: a change, a move and a removal each leave focus somewhere useful, never at the top of the page", async ({ page, watch }) => {
+  const list = [stone("m_a", "First"), stone("m_b", "Second"), stone("m_c", "Third")] as { id: string; title: string; state: string }[];
+  let revision = 1;
+  const view = () => ({ projects: { samvision: { revision, technical: list, business: [] } } });
+  await page.route("**/api/milestones", (r) => r.fulfill({ json: view() }));
+  await page.route("**/api/milestones/samvision/**", async (r) => {
+    const req = r.request(), id = new URL(req.url()).pathname.split("/").pop()!;
+    // ccd takes a moment: long enough for a disabled control to have dropped focus, if one were disabled
+    await new Promise((done) => setTimeout(done, 150));
+    if (req.method() === "PUT") {
+      const ids: string[] = req.postDataJSON().ids;
+      list.sort((x, y) => ids.indexOf(x.id) - ids.indexOf(y.id));
+      return r.fulfill({ json: { revision: ++revision } });
+    }
+    const at = list.findIndex((m) => m.id === id);
+    if (req.method() === "DELETE") { list.splice(at, 1); return r.fulfill({ json: { ok: true, revision: ++revision } }); }
+    Object.assign(list[at], req.postDataJSON());
+    return r.fulfill({ json: { milestone: list[at], revision: ++revision } });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page, "dashboard");
+  const sv = page.getByRole("region", { name: /^Where we are/ }).locator(".hq-ms-proj").filter({ hasText: "SamVision" });
+  await sv.getByRole("button", { name: "Edit SamVision milestones" }).click();
+  const tech = sv.getByRole("region", { name: "Technical milestones" });
+  const titles = () => tech.locator(".hq-ms-item b").allTextContents();
+
+  const state = tech.getByRole("combobox", { name: "State of First" });
+  await state.focus();
+  await state.selectOption("doing");
+  await expect(sv.locator(".hq-ms-track").first()).toContainText("Now First");
+  await expect(state).toBeFocused();
+
+  const down = tech.getByRole("button", { name: "Move First down" });
+  await down.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(titles).toEqual(["Second", "First", "Third"]);
+  await expect(down).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect.poll(titles).toEqual(["Second", "Third", "First"]);
+  // now at the end: still focused, marked off, and another press does nothing
+  await expect(down).toBeFocused();
+  await expect(down).toHaveAttribute("aria-disabled", "true");
+  await page.keyboard.press("Enter");
+  await expect.poll(titles).toEqual(["Second", "Third", "First"]);
+
+  await page.keyboard.press("Tab");
+  await expect(tech.getByRole("button", { name: "Edit First" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  const bin = tech.getByRole("button", { name: "Remove First" });
+  await expect(bin).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(tech.getByRole("button", { name: "Confirm: remove First" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect.poll(titles).toEqual(["Second", "Third"]);
+  await expect(tech.getByRole("textbox", { name: "New technical milestone" })).toBeFocused();
+  expect(await problems(page, watch)).toEqual([]);
+});
+
 test("an older ccd without the routes: each panel says so and shows no figure", async ({ page, watch }) => {
   await page.route("**/api/briefing**", (r) => r.fulfill({ status: 404, json: { ok: false, error: "not found" } }));
   await page.route("**/api/milestones", (r) => r.fulfill({ status: 404, json: { ok: false, error: "not found" } }));
