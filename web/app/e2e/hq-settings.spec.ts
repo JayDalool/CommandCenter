@@ -7,10 +7,6 @@ test.use({ ui: "hq" });
 const SECTIONS = ["general", "appearance", "notifications", "windows", "security", "connections", "profiles", "workers",
   "audit", "more", "help"];
 const wide = () => document.documentElement.scrollWidth <= window.innerWidth;
-/** Nothing in the page itself reaches past the window. (At phone width the HQ top bar still does: the phone layout's
- *  own change fixes that, and checks the whole document.) */
-const fits = () => [...document.querySelectorAll("#main *")].every((e) => e.getClientRects().length === 0
-  || e.getBoundingClientRect().right <= window.innerWidth + 1);
 
 test("every section opens clean, with nothing wider than the window", async ({ page, watch }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -29,13 +25,13 @@ test("on a phone: the list, one section with a way back, and focus that follows"
   const list = page.getByRole("navigation", { name: "Settings sections" });
   await expect(list).toBeVisible();
   await expect(page.locator("#hq-set-title")).toBeHidden();
-  expect(await page.evaluate(fits)).toBe(true);
+  expect(await page.evaluate(wide)).toBe(true);
 
   await list.getByRole("link", { name: /^Appearance/ }).click();
   await expect(page).toHaveURL(/#\/settings\?tab=appearance$/);
   await expect(list).toBeHidden();
   await expect(page.locator("#hq-set-title")).toBeFocused();
-  expect(await page.evaluate(fits)).toBe(true);
+  expect(await page.evaluate(wide)).toBe(true);
 
   await page.getByRole("link", { name: "Back to Settings" }).click();
   await expect(list).toBeVisible();
@@ -43,7 +39,7 @@ test("on a phone: the list, one section with a way back, and focus that follows"
 
   for (const s of SECTIONS) {
     await open(page, `settings?tab=${s}`);
-    expect(await page.evaluate(fits), s).toBe(true);
+    expect(await page.evaluate(wide), s).toBe(true);
   }
   expect(await problems(page, watch)).toEqual([]);
 });
