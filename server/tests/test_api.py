@@ -74,6 +74,12 @@ ALLOWED = {
     ("GET", "/api/chat"), ("GET", "/api/chat/{conv}"), ("POST", "/api/chat/{conv}/messages"),
     ("POST", "/api/chat/{conv}/seen"), ("GET", "/api/chat/{conv}/inbox"), ("POST", "/api/chat/{conv}/start"),
     ("POST", "/api/chat/files"), ("GET", "/api/chat/files/{fid}"),
+    # HQ next (ccd/hq.py): milestones are notes like Messages; the briefing is read-only; a logo upload is Jay +
+    # Developer Unlock, typed from its bytes and only ever served as an attachment
+    ("GET", "/api/milestones"), ("POST", "/api/milestones/{project}"), ("PUT", "/api/milestones/{project}/order"),
+    ("PATCH", "/api/milestones/{project}/{mid}"), ("DELETE", "/api/milestones/{project}/{mid}"),
+    ("GET", "/api/briefing"), ("GET", "/api/projects/logos"), ("PUT", "/api/projects/{project}/logo"),
+    ("GET", "/api/projects/{project}/logo"), ("DELETE", "/api/projects/{project}/logo"),
 }
 JAY_PRESSES = {"/api/jay/merge", "/api/jay/go-live"}
 FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec", "push",
