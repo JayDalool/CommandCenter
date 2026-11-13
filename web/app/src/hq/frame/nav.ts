@@ -9,10 +9,12 @@ export interface HqNavItem { id: string; label: string; icon: string; key?: stri
 
 export const HQ_NAV: HqNavItem[] = [
   { id: "dashboard", label: "My Office", icon: "home", key: "1" },
+  { id: "messages", label: "Messages", icon: "message" },
   { id: "needs", label: "Decisions", icon: "shield", key: "0" },
   { id: "agents", label: "Teams", icon: "users" },
   { id: "projects", label: "Company", icon: "cube" },
   { id: "tasks", label: "Engineering", icon: "wrench", key: "3" },
+  { id: "revenue", label: "Revenue", icon: "chart" },
   { id: "workspace", label: "Workspace", icon: "terminal", key: "2" },
   { id: "activity", label: "Activity", icon: "pulse", key: "4" },
   { id: "files", label: "Files", icon: "folder", key: "5" },

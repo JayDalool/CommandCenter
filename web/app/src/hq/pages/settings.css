@@ -1,0 +1,131 @@
+/* Settings: a section list beside grouped rows (the prototype's .set-*), and on a phone the list or one section.
+ * Scoped to :root[data-ui="hq"], no custom property declared here (parity.spec.ts). Panels, pills, .hq-seg and .hq-btn
+ * come from office.css. The theme thumbnails use fixed colours on purpose: each one shows a theme, whichever is on. */
+
+:root[data-ui="hq"] .hq-set { display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 24px; align-items: start; }
+
+/* the section list */
+:root[data-ui="hq"] .hq-set-nav {
+  position: sticky; top: 12px; padding: 6px; border: 1px solid var(--hq-line); border-radius: var(--hq-r-lg); background: var(--hq-panel);
+}
+:root[data-ui="hq"] .hq-set-nav ul { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
+:root[data-ui="hq"] .hq-set-nav a {
+  display: flex; align-items: center; gap: 10px; min-width: 0; padding: 7px 10px; border-radius: var(--hq-r-sm);
+  color: var(--hq-text-2); font-size: var(--hq-fs-md);
+}
+:root[data-ui="hq"] .hq-set-nav a > svg { flex: none; color: var(--hq-muted); }
+:root[data-ui="hq"] .hq-set-nav a > span:first-of-type { display: grid; min-width: 0; flex: 1; }
+:root[data-ui="hq"] .hq-set-nav b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:root[data-ui="hq"] .hq-set-nav small { display: none; color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-set-nav a:hover { background: var(--hq-hover); color: var(--hq-text); }
+:root[data-ui="hq"] .hq-set-nav a[aria-current="page"] { background: var(--hq-sel); color: var(--hq-text-strong); }
+:root[data-ui="hq"] .hq-set-nav a[aria-current="page"] > svg { color: var(--hq-accent-2); }
+:root[data-ui="hq"] .hq-set-nav a:focus-visible { outline-offset: -2px; }
+:root[data-ui="hq"] .hq-set-go { display: none; color: var(--hq-faint); }
+
+/* one section */
+:root[data-ui="hq"] .hq-set-body { display: grid; gap: 22px; align-content: start; min-width: 0; }
+:root[data-ui="hq"] .hq-set-back { display: none; }
+:root[data-ui="hq"] .hq-set-head { display: flex; align-items: center; gap: 14px; }
+:root[data-ui="hq"] .hq-set-head h3 { font: 650 var(--hq-fs-xl)/1.25 var(--hq-font-display); color: var(--hq-text-strong); }
+:root[data-ui="hq"] .hq-set-head h3:focus { outline: none; }
+:root[data-ui="hq"] .hq-set-head p { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-set-ico {
+  display: grid; place-items: center; flex: none; width: 40px; height: 40px; border: 1px solid var(--hq-line-2);
+  border-radius: var(--hq-r-md); background: var(--hq-panel-2); color: var(--hq-text-2);
+}
+
+:root[data-ui="hq"] .hq-set-group { display: grid; gap: 8px; max-width: 780px; }
+:root[data-ui="hq"] .hq-set-group h4 {
+  margin: 0; padding: 0 4px; color: var(--hq-muted); font: 600 var(--hq-fs-xs) var(--hq-font); letter-spacing: .06em;
+  text-transform: uppercase;
+}
+:root[data-ui="hq"] .hq-set-rows { border: 1px solid var(--hq-line); border-radius: var(--hq-r-lg); background: var(--hq-panel); }
+:root[data-ui="hq"] .hq-set-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; min-height: 48px; padding: 10px 16px;
+}
+:root[data-ui="hq"] .hq-set-row + .hq-set-row { border-top: 1px solid var(--hq-line); }
+:root[data-ui="hq"] .hq-set-row.is-block { display: grid; gap: 6px; }
+:root[data-ui="hq"] .hq-set-row.is-block > small { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-set-row-t { display: grid; gap: 2px; flex: 1 1 260px; min-width: 0; }
+:root[data-ui="hq"] .hq-set-row-t b { color: var(--hq-text); font-weight: 500; }
+:root[data-ui="hq"] .hq-set-row-t small { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-set-row-v {
+  display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px 10px; color: var(--hq-text-2);
+}
+:root[data-ui="hq"] .hq-set-row-v .hq-btn { display: inline-flex; align-items: center; gap: 6px; }
+:root[data-ui="hq"] .hq-set-foot { max-width: 72ch; padding: 0 4px; color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-settings code { font: var(--hq-fs-sm) var(--hq-mono); color: var(--hq-text-2); overflow-wrap: anywhere; }
+:root[data-ui="hq"] .hq-set-classic { min-width: 0; }
+/* Classic's panel header does not wrap; a long file name in it would push a phone-width page sideways. */
+:root[data-ui="hq"] .hq-set-classic .panel-head { flex-wrap: wrap; padding-block: 4px; }
+:root[data-ui="hq"] .hq-set-classic .panel-head > * { min-width: 0; overflow-wrap: anywhere; }
+
+:root[data-ui="hq"] .hq-input {
+  width: 200px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--hq-line-2); border-radius: var(--hq-r-sm);
+  background: var(--hq-input); color: var(--hq-text); font: var(--hq-fs-sm) var(--hq-mono);
+}
+:root[data-ui="hq"] .hq-input:hover { border-color: var(--hq-input-line-hover); }
+:root[data-ui="hq"] .hq-input:focus-visible { outline: 2px solid var(--hq-focus); outline-offset: 1px; }
+
+:root[data-ui="hq"] .hq-keys { display: inline-flex; align-items: center; gap: 4px; color: var(--hq-muted); white-space: nowrap; }
+:root[data-ui="hq"] .hq-keys kbd {
+  min-width: 22px; padding: 2px 6px; border: 1px solid var(--hq-line-2); border-bottom-width: 2px; border-radius: 5px;
+  background: var(--hq-panel-2); color: var(--hq-text-2); font: 600 var(--hq-fs-xs) var(--hq-mono); text-align: center;
+}
+
+/* the theme picker: a small window in each theme */
+:root[data-ui="hq"] .hq-theme { display: flex; flex-wrap: wrap; gap: 12px 20px; }
+:root[data-ui="hq"] .hq-theme button {
+  display: grid; justify-items: center; gap: 2px; padding: 6px; border: 0; border-radius: var(--hq-r-md); background: none;
+  color: var(--hq-text-2); font: var(--hq-fs-sm) var(--hq-font); cursor: pointer;
+}
+:root[data-ui="hq"] .hq-theme button b { margin-top: 6px; font-weight: 500; color: var(--hq-text); }
+:root[data-ui="hq"] .hq-theme button small { color: var(--hq-muted); font-size: var(--hq-fs-xs); }
+:root[data-ui="hq"] .hq-theme-thumb {
+  position: relative; display: block; width: 116px; height: 74px; border: 2px solid var(--hq-line-2); border-radius: var(--hq-r-lg); overflow: hidden;
+}
+:root[data-ui="hq"] .hq-theme button:hover .hq-theme-thumb { border-color: var(--hq-input-line-hover); }
+:root[data-ui="hq"] .hq-theme button[aria-checked="true"] .hq-theme-thumb { border-color: var(--hq-accent); box-shadow: 0 0 0 3px var(--hq-accent-soft); }
+:root[data-ui="hq"] .hq-theme-win { position: absolute; inset: 0; display: block; }
+:root[data-ui="hq"] .hq-theme-win + .hq-theme-win { clip-path: polygon(62% 0, 100% 0, 100% 100%, 38% 100%); }
+:root[data-ui="hq"] .hq-theme-win i { position: absolute; display: block; border-radius: 3px; }
+:root[data-ui="hq"] .hq-theme-win .s { inset: 0 auto 0 0; width: 24%; border-radius: 0; }
+:root[data-ui="hq"] .hq-theme-win .b { top: 10px; left: 32%; width: 40%; height: 5px; }
+:root[data-ui="hq"] .hq-theme-win .c { top: 22px; left: 32%; right: 8px; bottom: 10px; border: 1px solid; }
+:root[data-ui="hq"] .hq-theme-win .a { top: 30px; left: 38%; width: 22%; height: 5px; }
+:root[data-ui="hq"] .hq-theme-win.is-dark { background: #0f1012; }
+:root[data-ui="hq"] .hq-theme-win.is-dark .s { background: #0c0d0f; box-shadow: 1px 0 0 #25262a; }
+:root[data-ui="hq"] .hq-theme-win.is-dark .b { background: #b0b1b7; }
+:root[data-ui="hq"] .hq-theme-win.is-dark .c { background: #16171a; border-color: #25262a; }
+:root[data-ui="hq"] .hq-theme-win.is-light { background: #f5f5f3; }
+:root[data-ui="hq"] .hq-theme-win.is-light .s { background: #efefec; box-shadow: 1px 0 0 #e1e1dc; }
+:root[data-ui="hq"] .hq-theme-win.is-light .b { background: #5f6066; }
+:root[data-ui="hq"] .hq-theme-win.is-light .c { background: #ffffff; border-color: #e1e1dc; }
+:root[data-ui="hq"] .hq-theme-win .a { background: #ff7a45; }
+
+/* A phone: the list, or one section with a link back. */
+@media (max-width: 760px) {
+  :root[data-ui="hq"] .hq-set { grid-template-columns: minmax(0, 1fr); }
+  :root[data-ui="hq"] .hq-settings.is-index .hq-set-body,
+  :root[data-ui="hq"] .hq-settings.is-detail .hq-set-nav,
+  :root[data-ui="hq"] .hq-settings.is-detail .hq-set-hero { display: none; }
+  :root[data-ui="hq"] .hq-set-nav { position: static; padding: 0; overflow: hidden; }
+  :root[data-ui="hq"] .hq-set-nav ul { gap: 0; }
+  :root[data-ui="hq"] .hq-set-nav li + li { border-top: 1px solid var(--hq-line); }
+  :root[data-ui="hq"] .hq-set-nav a { min-height: 56px; padding: 8px 14px; border-radius: 0; }
+  :root[data-ui="hq"] .hq-set-nav a[aria-current="page"] { background: none; color: var(--hq-text-2); }
+  :root[data-ui="hq"] .hq-set-nav a[aria-current="page"] > svg { color: var(--hq-muted); }
+  :root[data-ui="hq"] .hq-set-nav small, :root[data-ui="hq"] .hq-set-go { display: block; }
+  :root[data-ui="hq"] .hq-set-nav b { color: var(--hq-text); }
+  :root[data-ui="hq"] .hq-set-back {
+    display: inline-flex; align-items: center; gap: 4px; justify-self: start; min-height: 44px; color: var(--hq-accent-2);
+    font-size: var(--hq-fs-md);
+  }
+  :root[data-ui="hq"] .hq-set-body { gap: 18px; }
+  :root[data-ui="hq"] .hq-set-row-t { flex-basis: 100%; }
+  :root[data-ui="hq"] .hq-set-row-v { justify-content: flex-start; }
+  :root[data-ui="hq"] .hq-theme { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  :root[data-ui="hq"] .hq-theme button { padding: 4px; text-align: center; }
+  :root[data-ui="hq"] .hq-theme-thumb { width: 100%; height: auto; aspect-ratio: 116 / 74; }
+}

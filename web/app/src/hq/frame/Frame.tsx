@@ -4,6 +4,7 @@
 // adds no data source and no action of its own; each control here calls the same code as its Classic counterpart.
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import "./frame.css";
+import "./classic-bridge.css";
 import { app } from "../../store/app";
 import { useSelector, shallowEqual } from "../../lib/store";
 import { prefs, usePrefs } from "../../lib/prefs";
@@ -18,7 +19,10 @@ import { hqPageFor } from "../pages";
 import { HQ_NAV, HQ_NAV_LOW, hqTitle, sectionOf, viewKey, type HqNavItem } from "./nav";
 import { tabs, visit, close } from "./tabs";
 import { Icon, Logo } from "./icons";
+import { JayMenu } from "./JayMenu";
+import { HqTabBar } from "./TabBar";
 import { hqMedia } from "../layout";
+import { PopOutButton, PoppedPlaceholder, usePopped, usePoppedViews, useWindowsWatch, viewOfRoute } from "../windows/controls";
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
 
@@ -31,9 +35,6 @@ function useNarrow(): boolean {
   }, () => hqMedia()?.matches ?? false, () => false);
 }
 
-/** The theme on screen: System resolves to what the OS asks for, so the toggle always offers the other one. */
-const looksDark = (theme: string) => theme === "dark"
-  || (theme === "system" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches);
 /** Icons only: a narrow window, or the sidebar's own toggle (Ctrl+\, the same preference as Classic's rail). */
 function useIconsOnly(): { icons: boolean; narrow: boolean; collapsed: boolean } {
   const collapsed = usePrefs((p) => p.railCollapsed);
@@ -55,12 +56,14 @@ export function HqSide() {
     jay: jayQueue(d.state).length,
     tasks: d.tickets.filter((t) => !t.archived && !["DONE", "DENIED", "CANCELLED"].includes(t.status)).length,
     alerts: d.state?.alerts.filter((a) => !a.ack).length ?? 0,
+    chat: d.state?.chat?.unread ?? 0,
   }), shallowEqual);
   const cur = sectionOf(route.screen);
   const badge: Partial<Record<string, ReactNode>> = {
     needs: counts.jay ? <span className="hq-badge is-jay" title="needs you">{counts.jay}</span> : null,
     tasks: counts.tasks ? <span className="hq-badge is-quiet" title="open tasks">{counts.tasks}</span> : null,
     activity: counts.alerts ? <span className="hq-badge is-warn" title="unacknowledged alerts">{counts.alerts}</span> : null,
+    messages: counts.chat ? <span className="hq-badge is-jay" title="unread messages from your leads">{counts.chat}</span> : null,
   };
   return <aside className="hq-side" aria-label="Navigation">
     <a className="hq-brand" href={href("dashboard")} aria-label="Command Center, My Office">
@@ -82,20 +85,23 @@ export function HqSide() {
 
 export function HqTop({ dash }: { dash: boolean }) {
   const route = useRoute();
-  const theme = usePrefs((p) => p.theme);
   const projName = useSelector(app.store, (d) => d.state?.projects.find((p) => p.key === route.id)?.name ?? null);
+  const view = viewOfRoute(route);
+  const out = usePopped(view);
   return <header className="hq-top">
+    {/* On a phone, where the sidebar is gone, the mark is the way home. */}
+    <a className="hq-top-brand" href={href("dashboard")} aria-label="Command Center, My Office"><Logo size={26} /></a>
     <h1 className="page-title">{hqTitle(route.screen, route.id, projName)}</h1>
     <button type="button" className="hq-search" onClick={() => window.dispatchEvent(new Event("cc:palette"))}
-      aria-keyshortcuts="Control+K">
+      aria-label="Search screens, tasks, projects and commands" aria-keyshortcuts="Control+K">
       <Icon name="search" size={17} /><span>Search screens, tasks, projects and commands</span><Kbd>Ctrl</Kbd><Kbd>K</Kbd></button>
     <div className="hq-top-right">
-      <button type="button" className="btn is-quiet is-sm" onClick={() => window.dispatchEvent(new Event("cc:new-task"))}
+      {view && !out && <PopOutButton v={view} />}
+      <button type="button" className="btn is-quiet is-sm hq-new" onClick={() => window.dispatchEvent(new Event("cc:new-task"))}
         aria-keyshortcuts="n"><Kbd>N</Kbd> New task</button>
-      <button type="button" className="btn is-quiet is-sm" onClick={() => prefs.patch({ theme: looksDark(theme) ? "light" : "dark" })}
-        aria-label="Toggle light and dark">{looksDark(theme) ? "Light" : "Dark"}</button>
       {/* The Dashboard has its own Developer Mode dot and bell in its header: not twice on one screen. */}
       {!dash && <><DevDot /><NotificationBell /></>}
+      <JayMenu />
     </div>
   </header>;
 }
@@ -107,6 +113,10 @@ export function HqTabs() {
     (a, b) => JSON.stringify(a) === JSON.stringify(b));
   const key = viewKey(route);
   const hash = location.hash || "#/dashboard";
+  const outs = usePoppedViews();
+  // A tab whose page is open in its own window is shaded, as in the prototype.
+  const isOut = (k: string) => { const r = { screen: k.split("/")[0], id: k.includes("/") ? k.slice(k.indexOf("/") + 1) : null,
+    params: new URLSearchParams() }; const v = viewOfRoute(r); return !!v && outs.includes(v); };
   useEffect(() => { tabs.set((l) => visit(l, key, hash)); }, [key, hash]);
   const title = (k: string) => {
     const [screen, ...rest] = k.split("/");
@@ -121,8 +131,10 @@ export function HqTabs() {
   return <nav className="hq-tabs" aria-label="Open views">
     <ul>{list.map((t) => {
       const on = t.key === key, name = title(t.key);
-      return <li key={t.key} className={cx("hq-tab", on && "is-active")}>
-        <a href={t.hash} aria-current={on ? "page" : undefined}>{name}</a>
+      const out = isOut(t.key);
+      return <li key={t.key} className={cx("hq-tab", on && "is-active", out && "is-out")}>
+        <a href={t.hash} aria-current={on ? "page" : undefined} title={out ? `${name} is open in its own window` : undefined}>
+          {out && <Icon name="popout" size={12} />}{name}</a>
         {(list.length > 1 || !on) && <button type="button" className="hq-tab-x" aria-label={`Close ${name} tab`}
           onClick={() => shut(t.key)}><Icon name="x" size={12} /></button>}
       </li>;
@@ -140,6 +152,9 @@ export default function HqFrame({ dash, focus, banners, screen, overlays }: {
   const route = useRoute();
   const { icons } = useIconsOnly();
   const Page = hqPageFor(route);
+  useWindowsWatch();
+  const view = viewOfRoute(route);
+  const out = usePopped(view);
   // The screen whose HQ page fell back to Classic: that Classic screen brings its own header (the Dashboard's has the
   // bell), so the top bar leaves it out as it does in Classic. Cleared on leaving, so the page is tried again on return.
   const [fellBack, setFellBack] = useState<string | null>(null);
@@ -154,9 +169,10 @@ export default function HqFrame({ dash, focus, banners, screen, overlays }: {
       {Page
         ? <HqBoundary key={route.screen} fallback={screen} onFail={() => setFellBack(route.screen)}
             message="This HQ page could not be shown, so the Classic screen is shown instead. Reload to try again.">
-          <main id="main" className="screen hq-screen" tabIndex={-1}><Page /></main></HqBoundary>
+          <main id="main" className="screen hq-screen" tabIndex={-1}>{view && out ? <PoppedPlaceholder v={view} /> : <Page />}</main></HqBoundary>
         : screen}
     </div>
+    {!focus && <HqTabBar />}
     {overlays}
   </div>;
 }

@@ -11,6 +11,12 @@ export function useDevActive() { return useSelector(developer, (d) => d.active);
 
 export function unlockDialogOpen() { window.dispatchEvent(new Event("cc:dev-unlock")); }
 
+/** Lock Developer Mode in this app session. The session ends here even when ccd cannot be reached. */
+export async function lockDevMode() {
+  try { await app.api.lock(); } catch { /* the session ends locally regardless */ }
+  setDevSession(null); app.toast("Developer Mode locked");
+}
+
 export function UnlockDialog({ onClose }: { onClose: () => void }) {
   const [value, setValue] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -55,7 +61,8 @@ export function UnlockDialog({ onClose }: { onClose: () => void }) {
   </Dialog>;
 }
 
-/** The one small indicator (spec §27): "Developer ●" when active, a click locks; "Developer ○" unlocks. */
+/** The one small indicator (spec §27): "Developer ●" when active, a click locks; "Developer ○" unlocks. HQ on a phone
+ * shows the short label ("Dev ●"); everywhere else the short one is hidden (control.css). */
 export function DevDot() {
   const active = useDevActive();
   return <button type="button" className={`dev-dot${active ? " is-on" : ""}`}
@@ -65,7 +72,7 @@ export function DevDot() {
       if (!active) { unlockDialogOpen(); return; }
       try { await app.api.lock(); } catch { /* the session ends locally regardless */ }
       setDevSession(null); app.toast("Developer Mode locked");
-    }}>Developer <i aria-hidden>{active ? "●" : "○"}</i></button>;
+    }}><span className="dev-dot-l">Developer</span><span className="dev-dot-s">Dev</span><i aria-hidden>{active ? "●" : "○"}</i></button>;
 }
 
 export function DevBadge() {
@@ -73,10 +80,7 @@ export function DevBadge() {
   return active
     ? <span className="row" style={{ gap: 6 }}>
       <span className="ro-tag is-live" title="Writes to project files are allowed in this tab">DEVELOPER MODE: ACTIVE</span>
-      <button type="button" className="btn is-quiet is-sm" onClick={async () => {
-        try { await app.api.lock(); } catch { /* the session ends locally regardless */ }
-        setDevSession(null); app.toast("Developer Mode locked");
-      }}>Lock</button></span>
+      <button type="button" className="btn is-quiet is-sm" onClick={() => void lockDevMode()}>Lock</button></span>
     : <span className="row" style={{ gap: 6 }}>
       <span className="ro-tag is-off" title="Browsing works; saving and uploading need Developer Unlock">DEVELOPER MODE: LOCKED</span>
       <button type="button" className="btn is-sm" onClick={unlockDialogOpen}>Unlock</button></span>;

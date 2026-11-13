@@ -45,7 +45,9 @@ CREATE TABLE IF NOT EXISTS alerts (
 
 # Keys of `data` that may be persisted with an event. Anything else is dropped.
 EVENT_DATA_KEYS = ("from", "to", "status", "number", "ci", "stage", "kind", "reason",
-                   "error", "count", "connected", "pane_id", "agent", "name", "cwd_project")
+                   "error", "count", "connected", "pane_id", "agent", "name", "cwd_project",
+                   # Messages (ccd/leadchat.py): which conversation and message, never its text
+                   "conversation", "messageId", "delivery", "via", "author", "files", "overBudget")
 
 
 class Store:

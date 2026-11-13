@@ -15,7 +15,7 @@ import { state, tasks } from "./helpers";
 
 const hasPage = (route: string) => hqPageFor(parse(`#/${route}`)) !== null;
 
-const BARE = ["room", "pane"];
+const BARE = ["room", "pane", "pop"];
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-27T15:00:00Z") });
@@ -105,8 +105,8 @@ describe("both modes", () => {
     const keyed = hq.filter((n) => n.key);
     expect(keyed.map((n) => n.id).sort()).toEqual(NAV.map((n) => n.id).sort());
     for (const n of keyed) expect(`${n.id}:${n.key}`).toBe(`${n.id}:${classic[n.id]}`);
-    // Teams and Company: Classic screens with no sidebar entry or key of their own.
-    expect(hq.filter((n) => !n.key).map((n) => n.id)).toEqual(["agents", "projects"]);
+    // Teams and Company: Classic screens with no sidebar entry or key of their own. Messages and Revenue: HQ pages only.
+    expect(hq.filter((n) => !n.key).map((n) => n.id)).toEqual(["messages", "agents", "projects", "revenue"]);
     for (const n of hq) expect(SCREENS).toContain(n.id);
   });
 });

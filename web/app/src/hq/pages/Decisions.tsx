@@ -25,7 +25,7 @@ const VERDICT = { auto: "go ahead", jay: "ask you", refuse: "refuse" } as const;
 
 /** GET /api/inbox, re-read when the queue changes and every minute (expiry, engine verdicts), as Classic's Needs You
  *  does. Only the newest answer counts. A failure leaves the list complete; it only lacks these details. */
-function useInbox(ids: string) {
+export function useInbox(ids: string) {
   const [inbox, setInbox] = useState<InboxState | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -42,7 +42,7 @@ function useInbox(ids: string) {
   return { inbox, failed };
 }
 
-function Item({ d, x, now, project }: { d: DecisionItem; x?: InboxExtra; now: number; project: string }) {
+export function Item({ d, x, now, project }: { d: DecisionItem; x?: InboxExtra; now: number; project: string }) {
   const j = d.source, a = x?.approval, overdue = late(x), to = jayHref(j);
   const out = /^https?:/.test(to) ? { target: "_blank", rel: "noopener noreferrer" } : {};
   return <li className={cx("hq-dec", overdue && "is-late")}>
@@ -81,7 +81,7 @@ export function Decisions() {
 
   return <div className="hq-page hq-decisions">
     <header className="hq-hero"><div><h2>Needs your attention</h2>
-      <p>Decisions, questions, reviews and approvals waiting for you. Each opens the place you act today. Nothing here answers, merges or deploys.</p></div></header>
+      <p>Everything waiting for you. Each opens where you act; nothing here answers, merges or deploys.</p></div></header>
 
     <section className="hq-kpis" role="group" aria-label="Filter by kind">
       {KINDS.map(({ k, label, hint }) => <button key={k} type="button" className="hq-kpi" aria-pressed={kind === k} onClick={() => setKind(kind === k ? null : k)}>

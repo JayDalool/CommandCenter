@@ -5,7 +5,7 @@
  * .side, .top, .tabs), scaled to sit around Classic's screens. */
 
 /* Areas as Classic's desktop shell (app.css), set here too: Classic's narrow-window rule (max-width: 760px) drops
- * its rail area, and HQ has no phone layout yet. */
+ * its rail area. HQ's own phone layout is at the end of this file. */
 :root[data-ui="hq"] .hq-shell {
   grid-template-columns: var(--hq-side-w) minmax(0, 1fr); background: var(--hq-bg);
   grid-template-areas: "rail main" "console console" "status status";
@@ -18,7 +18,7 @@
 :root[data-ui="hq"] .hq-side {
   grid-area: rail; display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow: auto;
   padding: 12px 10px 10px; border-right: 1px solid var(--hq-line); color: var(--hq-text-2);
-  background: linear-gradient(180deg, var(--hq-side-a), var(--hq-side-b)); font-family: var(--hq-font);
+  background: var(--hq-side); font-family: var(--hq-font);
 }
 :root[data-ui="hq"] .hq-brand { display: flex; align-items: center; gap: 11px; padding: 2px 8px 14px; color: var(--hq-text); text-decoration: none; }
 :root[data-ui="hq"] .hq-brand-t { display: grid; line-height: 1.15; white-space: nowrap; }
@@ -33,18 +33,17 @@
 }
 :root[data-ui="hq"] .hq-nav-item:hover { background: var(--hq-hover); color: var(--hq-text); }
 :root[data-ui="hq"] .hq-nav-item.is-current {
-  background: linear-gradient(90deg, var(--hq-nav-on-a), var(--hq-nav-on-b)); color: var(--hq-text-strong); font-weight: 650;
-  box-shadow: inset 3px 0 0 var(--hq-accent-line), var(--hq-hl);
+  background: var(--hq-nav-on-a); color: var(--hq-text-strong); font-weight: 650;
+  box-shadow: inset 2px 0 0 var(--hq-accent-line);
 }
 :root[data-ui="hq"] .hq-nav-item svg { flex: none; }
 :root[data-ui="hq"] .hq-nav-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* Count badges: the prototype's V12 badge red (#dc2f4c keeps white numbers at 4.5:1). It becomes --hq-badge when the
- * V12 tokens are generated into hq/tokens.css. */
+/* Count badges: square-cornered tags, not pills. --hq-badge keeps white numbers at 4.5:1 or better in both themes. */
 :root[data-ui="hq"] .hq-badge {
-  min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--hq-r-pill); display: grid; place-items: center;
-  font: 700 11.5px/1 var(--hq-font); background: var(--hq-raise); color: var(--hq-text-2);
+  min-width: 20px; height: 18px; padding: 0 5px; border-radius: var(--hq-r-xs); display: grid; place-items: center;
+  font: 600 11px/1 var(--hq-mono); font-variant-numeric: tabular-nums; background: var(--hq-raise); color: var(--hq-text-2);
 }
-:root[data-ui="hq"] .hq-badge.is-jay { background: #dc2f4c; color: #fff; }
+:root[data-ui="hq"] .hq-badge.is-jay { background: var(--hq-badge); color: #fff; }
 :root[data-ui="hq"] .hq-badge.is-warn { background: var(--hq-warn); color: #1a1200; }
 :root[data-ui="hq"] .hq-side-fill { flex: 1; }
 :root[data-ui="hq"] .hq-nav-low .hq-nav-item { font-size: 14px; }
@@ -70,6 +69,10 @@
   :root[data-ui="hq"] .hq-brand, :root[data-ui="hq"] .hq-shell.is-icons .hq-brand { padding-bottom: 6px; }
   :root[data-ui="hq"] .hq-nav-item { padding-block: 6px; }
   :root[data-ui="hq"] .hq-shell.is-icons .hq-nav-item { padding-block: 7px; }
+}
+/* Ten screens fit down to a 440 px window (ui-switch.spec.ts) with tighter rows. */
+@media (max-height: 540px) {
+  :root[data-ui="hq"] .hq-nav-item, :root[data-ui="hq"] .hq-shell.is-icons .hq-nav-item { padding-block: 4px; }
 }
 
 /* ---------- main column: top bar, tabs, Classic's banners, the screen ---------- */
@@ -108,3 +111,96 @@
 :root[data-ui="hq"] .hq-tab-x:hover { background: var(--hq-raise); color: var(--hq-text); }
 
 :root[data-ui="hq"] .hq-shell :is(a, button):focus-visible { outline: 2px solid var(--hq-focus); outline-offset: 2px; }
+
+/* A tablet or a small laptop: the search keeps its words, not the key hints (Ctrl+K still works). */
+@media (max-width: 1100px) { :root[data-ui="hq"] .hq-search kbd { display: none; } }
+
+/* ---------- phone (760px and narrower): a tab bar at the bottom and a More sheet (TabBar.tsx) ----------
+ * The sidebar and the tab strip go; pop-outs are a desktop feature, so their button goes too. The top bar keeps the
+ * title, search, the Developer Mode switch (short, "Dev ●", but always there: it says whether writes are allowed), the
+ * bell and Jay's menu. The tab bar is a grid row, not fixed, so nothing scrolls under it. dvh keeps
+ * it above a phone browser's own toolbar. */
+:root[data-ui="hq"] .hq-tabbar, :root[data-ui="hq"] .hq-top-brand { display: none; }
+@media (max-width: 760px) {
+  :root[data-ui="hq"] .hq-shell, :root[data-ui="hq"] .hq-shell.is-icons, :root[data-ui="hq"] .hq-shell.is-focus {
+    grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto var(--status-h) auto;
+    grid-template-areas: "main" "console" "status" "tabbar"; height: 100vh; height: 100dvh;
+  }
+  :root[data-ui="hq"] .hq-side, :root[data-ui="hq"] .hq-tabs { display: none; }
+
+  :root[data-ui="hq"] .hq-top { gap: 6px; height: 52px; padding: 0 8px 0 12px; }
+  :root[data-ui="hq"] .hq-top-brand { display: grid; place-items: center; flex: none; width: 34px; height: 34px; margin-right: 2px; }
+  :root[data-ui="hq"] .hq-top .page-title {
+    flex: 1 1 auto; min-width: 0; max-width: none; font-size: var(--hq-fs-lg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  :root[data-ui="hq"] .hq-search { flex: none; justify-content: center; width: 40px; height: 40px; padding: 0; border-color: transparent; background: none; }
+  :root[data-ui="hq"] .hq-search :is(span, kbd) { display: none; }
+  :root[data-ui="hq"] .hq-top-right { margin-left: 0; gap: 2px; }
+  :root[data-ui="hq"] .hq-top-right :is(.hq-new, .hq-pop) { display: none; }
+  :root[data-ui="hq"] .hq-top-right .dev-dot { flex: none; height: 32px; margin-right: 4px; padding: 0 10px; border-radius: 16px; }
+  :root[data-ui="hq"] .hq-top-right .dev-dot-l { display: none; }
+  :root[data-ui="hq"] .hq-top-right .dev-dot-s { display: inline; }
+  :root[data-ui="hq"] .hq-me-btn :is(.hq-me-name, svg) { display: none; }
+
+  :root[data-ui="hq"] .hq-tabbar {
+    grid-area: tabbar; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); z-index: 45;
+    padding: 6px max(6px, env(safe-area-inset-right, 0px)) calc(6px + env(safe-area-inset-bottom, 0px)) max(6px, env(safe-area-inset-left, 0px));
+    border-top: 1px solid var(--hq-material-line); background: var(--hq-material); font-family: var(--hq-font);
+  }
+  :root[data-ui="hq"] .hq-tabbar-i {
+    display: grid; justify-items: center; gap: 3px; min-height: 48px; padding: 4px 0 2px; border: 0; border-radius: var(--hq-r-md);
+    background: none; color: var(--hq-muted); font: 600 10.5px/1.2 var(--hq-font); letter-spacing: .01em; text-decoration: none;
+    cursor: pointer; -webkit-tap-highlight-color: transparent; transition: color var(--hq-dur-1) var(--hq-ease);
+  }
+  :root[data-ui="hq"] .hq-tabbar-i.is-current { color: var(--hq-accent-line); }
+  :root[data-ui="hq"] .hq-tabbar-i:focus-visible { outline-offset: -2px; }
+  :root[data-ui="hq"] .hq-tabbar-ico { position: relative; display: grid; place-items: center; height: 26px; }
+  :root[data-ui="hq"] .hq-tabbar-ico em {
+    position: absolute; top: -4px; left: calc(50% + 6px); min-width: 17px; height: 16px; padding: 0 4px; border-radius: var(--hq-r-xs);
+    background: var(--hq-badge); color: #fff; font: 600 10.5px/16px var(--hq-mono); font-style: normal; text-align: center;
+    box-shadow: 0 0 0 2px var(--hq-bg);
+  }
+
+  /* Classic's toast sits above the tab bar, across the width. */
+  :root[data-ui="hq"] .hq-shell .toast { left: 12px; right: 12px; max-width: none; bottom: calc(var(--status-h) + 76px + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* A Classic table's screen-reader text (.sr, position: absolute) inside a scrolled table took the whole document as its
+ * containing block, so a wide table made the page scroll sideways on a phone. Contained here; Classic has the same. */
+:root[data-ui="hq"] .hq-shell .tbl-wrap { position: relative; }
+
+/* the More sheet */
+:root[data-ui="hq"] .hq-sheet-veil {
+  position: fixed; inset: 0; z-index: 130; display: grid; align-items: end; background: var(--hq-veil-3);
+  animation: hq-sheet-fade var(--hq-dur-2) var(--hq-ease) backwards;
+}
+:root[data-ui="hq"] .hq-sheet {
+  display: grid; gap: 14px; max-height: 86vh; overflow: auto; padding: 6px 14px calc(18px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--hq-material-line); border-radius: var(--hq-r-xl) var(--hq-r-xl) 0 0; background: var(--hq-panel); box-shadow: var(--hq-e3);
+  color: var(--hq-text); font: var(--hq-fs-base)/1.4 var(--hq-font); animation: hq-sheet-in var(--hq-dur-3) var(--hq-ease-out) backwards;
+}
+@keyframes hq-sheet-fade { from { opacity: 0; } }
+@keyframes hq-sheet-in { from { transform: translateY(40px); opacity: .6; } }
+:root[data-ui="hq"] .hq-sheet-grab { justify-self: center; width: 38px; height: 5px; margin-top: 2px; border-radius: var(--hq-r-pill); background: var(--hq-line-2); }
+:root[data-ui="hq"] .hq-sheet-h { display: flex; align-items: center; justify-content: space-between; padding: 0 4px; }
+:root[data-ui="hq"] .hq-sheet-h b { font: 650 var(--hq-fs-xl)/1.2 var(--hq-font-display); color: var(--hq-text-strong); }
+:root[data-ui="hq"] .hq-sheet-done {
+  min-height: 40px; padding: 6px 4px; border: 0; background: none; color: var(--hq-link); font: 650 var(--hq-fs-base) var(--hq-font); cursor: pointer;
+}
+:root[data-ui="hq"] .hq-sheet-group { display: grid; gap: 6px; }
+:root[data-ui="hq"] .hq-sheet-group > h3 { margin: 0; padding: 0 12px; color: var(--hq-muted); font: 650 var(--hq-fs-sm) var(--hq-font); }
+:root[data-ui="hq"] .hq-sheet-rows { border: 1px solid var(--hq-line); border-radius: var(--hq-r-lg); background: var(--hq-panel-2); overflow: hidden; }
+:root[data-ui="hq"] .hq-sheet-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 12px; border: 0; background: none;
+  color: var(--hq-text-2); font: inherit; text-align: left; text-decoration: none; cursor: pointer;
+}
+:root[data-ui="hq"] .hq-sheet-row + .hq-sheet-row { border-top: 1px solid var(--hq-line); }
+:root[data-ui="hq"] .hq-sheet-row:is(:hover, :active) { background: var(--hq-hover); }
+:root[data-ui="hq"] .hq-sheet-row.is-current { background: var(--hq-accent-soft); }
+:root[data-ui="hq"] .hq-sheet-row > svg:first-child { flex: none; color: var(--hq-muted); }
+:root[data-ui="hq"] .hq-sheet-row > svg:last-child { flex: none; color: var(--hq-faint); }
+:root[data-ui="hq"] .hq-sheet-row-t { display: grid; gap: 1px; flex: 1; min-width: 0; }
+:root[data-ui="hq"] .hq-sheet-row-t b { color: var(--hq-text); font-weight: 550; }
+:root[data-ui="hq"] .hq-sheet-row-t small { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-sheet :is(a, button):focus-visible { outline: 2px solid var(--hq-focus); outline-offset: -2px; }
+@media (prefers-reduced-motion: reduce) { :root[data-ui="hq"] :is(.hq-sheet, .hq-sheet-veil) { animation: none; } }

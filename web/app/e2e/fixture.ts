@@ -47,6 +47,7 @@ function answer(path: string): unknown {
     case "/api/developer": return { active: false, expiresIn: null };
     case "/api/pty": return { sessions: [], enabled: false };
     case "/api/attachments": return { attachments: [] };
+    case "/api/chat": return { conversations: [], canStart: false, unread: 0, limits: { text: 16000, fileBytes: 20971520, filesPerMessage: 10 } };
   }
   const task = /^\/api\/tasks\/([^/]+)(\/work)?$/.exec(path);
   const t = task && fx.tasks.tickets.find((x) => x.key === decodeURIComponent(task[1]));
@@ -65,6 +66,11 @@ function answer(path: string): unknown {
   }
   return undefined;
 }
+
+/** Routes a server with its switch off answers 404, as ccd does: /api/onboarding/* while the onboarding groundwork is off
+ *  (config.json "onboarding_groundwork"). The page is expected to say Not enabled; the browser's own console line for
+ *  that 404 is not a problem. */
+const OFF = new Set(["/api/onboarding/budgets"]);
 
 /** What went wrong in the browser context (every page, pop-outs and popups included), collected as it happens. */
 export interface Watch {
@@ -91,7 +97,12 @@ export const test = base.extend<{ theme: Theme; ui: Ui; watch: Watch }>({
     const w: Watch = { console: [], pageErrors: [], blocked: [], unanswered: [], writes: [], badAuth: [], tokenInUrl: [],
       sockets: [], popups: [] };
     // Everything below is set on the browser context, so a pop-out or a popup is sealed and watched like the first page.
-    context.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") w.console.push(`${m.type()}: ${m.text()}`); });
+    context.on("console", (m) => {
+      if (m.type() !== "error" && m.type() !== "warning") return;
+      const at = m.location().url;
+      if (at && OFF.has(new URL(at, ORIGIN).pathname) && m.text().startsWith("Failed to load resource")) return;
+      w.console.push(`${m.type()}: ${m.text()}`);
+    });
     context.on("weberror", (e) => w.pageErrors.push(String(e.error())));
     context.on("request", (r) => { if (r.url().includes(TOKEN)) w.tokenInUrl.push(r.url()); });
     const watchPage = (p: Page) => {
@@ -131,6 +142,7 @@ export const test = base.extend<{ theme: Theme; ui: Ui; watch: Watch }>({
       if (!url.pathname.startsWith("/api/")) return route.continue();
       if (req.headers()["x-ccd-token"] !== TOKEN) w.badAuth.push(`${req.method()} ${url.pathname}`);
       if (req.method() !== "GET") { w.writes.push(`${req.method()} ${url.pathname}`); return route.fulfill({ status: 405, json: { ok: false, error: "read-only test" } }); }
+      if (OFF.has(url.pathname)) return route.fulfill({ status: 404, json: { ok: false, error: "not found" } });
       const body = answer(url.pathname);
       if (body === undefined) { w.unanswered.push(`GET ${url.pathname}`); return route.fulfill({ status: 404, json: { ok: false, error: "no fixture" } }); }
       return route.fulfill({ json: body, headers: { "cache-control": "no-store" } });
@@ -178,7 +190,9 @@ export async function shown(page: Page): Promise<string> {
     const hq = document.querySelector(".hq-top h1.page-title")?.textContent;   // the HQ frame's top bar, on every screen
     if (!hq && document.querySelector(".shell.is-dash .dash-top")) return "Dashboard";
     const title = hq ?? document.querySelector("h1.page-title")?.textContent ?? "(no title)";
-    const section = document.querySelector('[aria-label="Settings section"] [aria-pressed="true"]')?.textContent;
+    // Classic's Settings marks its section with a pressed button, HQ's with the current link in its section list.
+    const section = document.querySelector('[aria-label="Settings section"] [aria-pressed="true"]')?.textContent
+      ?? document.querySelector('[aria-label="Settings sections"] [aria-current="page"] b')?.textContent;
     return section ? `${title} › ${section}` : title;
   });
 }

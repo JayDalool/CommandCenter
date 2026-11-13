@@ -7,3 +7,65 @@
 :root[data-ui="hq"] .hq-sess.is-empty { border-style: dashed; background: none; }
 :root[data-ui="hq"] .hq-sess.is-empty b { color: var(--hq-text-2); font-weight: 600; }
 :root[data-ui="hq"] .hq-sess .t-jay { color: var(--hq-warn); }
+
+/* Org chart: Jay, then one branch per project (its lead, then the sessions working with it, then who can be called).
+ * Nested lists with lines drawn by borders, as in the prototype's hierarchy. Scrolls sideways inside its panel when
+ * the window is too narrow for every branch. */
+:root[data-ui="hq"] .hq-teams-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+:root[data-ui="hq"] .hq-teams .hq-hero .hq-seg button { display: inline-flex; align-items: center; gap: 6px; }
+:root[data-ui="hq"] .hq-org-wrap { padding: 22px 20px; }
+:root[data-ui="hq"] .hq-org { overflow-x: auto; padding-bottom: 6px; }
+:root[data-ui="hq"] .hq-org ul { margin: 0; padding: 0; list-style: none; }
+:root[data-ui="hq"] .hq-org-root > li { display: flex; flex-direction: column; align-items: center; }
+:root[data-ui="hq"] .hq-org-jay {
+  display: inline-flex; align-items: center; gap: 12px; padding: 10px 18px 10px 12px; border: 1px solid var(--hq-line-2);
+  border-radius: var(--hq-r-lg); background: var(--hq-tile);
+}
+:root[data-ui="hq"] .hq-org-jay:hover { background: var(--hq-tile-on); }
+:root[data-ui="hq"] .hq-org-jay b { display: block; color: var(--hq-text-strong); font: 650 var(--hq-fs-md) var(--hq-font-display); }
+:root[data-ui="hq"] .hq-org-jay small { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-org-av {
+  display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 50%;
+  background: var(--hq-accent); color: var(--hq-bg); font: 700 15px/1 var(--hq-font);
+}
+
+:root[data-ui="hq"] .hq-org .hq-org-projects { position: relative; display: flex; justify-content: center; gap: 16px; width: 100%; min-width: min-content; padding-top: 18px; }
+:root[data-ui="hq"] .hq-org-projects::before { content: ""; position: absolute; top: 0; left: 50%; height: 18px; border-left: 1px solid var(--hq-line-2); }
+:root[data-ui="hq"] .hq-org-branch { position: relative; display: flex; flex-direction: column; gap: 12px; flex: 1 1 0; min-width: 196px; max-width: 280px; padding-top: 18px; }
+:root[data-ui="hq"] .hq-org-branch::before, :root[data-ui="hq"] .hq-org-branch::after {
+  content: ""; position: absolute; top: 0; width: calc(50% + 8px); border-top: 1px solid var(--hq-line-2);
+}
+:root[data-ui="hq"] .hq-org-branch::before { right: 50%; }
+:root[data-ui="hq"] .hq-org-branch::after { left: 50%; height: 18px; border-left: 1px solid var(--hq-line-2); }
+:root[data-ui="hq"] .hq-org-branch:first-child::before { display: none; }
+:root[data-ui="hq"] .hq-org-branch:last-child::after { border-top: 0; }
+
+:root[data-ui="hq"] .hq-org-proj {
+  display: grid; gap: 2px; padding: 9px 12px; border: 1px solid var(--hq-line); border-radius: var(--hq-r-md);
+  background: var(--hq-panel-2); box-shadow: inset 0 2px 0 var(--pj);
+}
+:root[data-ui="hq"] .hq-org-proj-t { display: flex; align-items: center; gap: 8px; min-width: 0; }
+:root[data-ui="hq"] .hq-org-proj-t i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--pj); }
+:root[data-ui="hq"] .hq-org-proj-t b { color: var(--hq-text-strong); font-weight: 650; }
+:root[data-ui="hq"] .hq-org-proj small { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-org-proj .hq-team-links { font-size: var(--hq-fs-sm); }
+/* the line from the project down to its lead */
+:root[data-ui="hq"] .hq-org-proj + * { position: relative; }
+:root[data-ui="hq"] .hq-org-proj + *::before { content: ""; position: absolute; left: 50%; top: -13px; height: 12px; border-left: 1px solid var(--hq-line-2); }
+
+/* the sessions working with the lead hang from a rail on its left */
+:root[data-ui="hq"] .hq-org .hq-org-reports { display: grid; gap: 8px; margin-left: 14px; padding-left: 14px; border-left: 1px solid var(--hq-line-2); }
+:root[data-ui="hq"] .hq-org-reports > li { position: relative; }
+:root[data-ui="hq"] .hq-org-reports > li::before { content: ""; position: absolute; left: -14px; top: 22px; width: 12px; border-top: 1px solid var(--hq-line-2); }
+:root[data-ui="hq"] .hq-org-reports > li > .hq-sess { display: grid; }
+:root[data-ui="hq"] .hq-org-defined {
+  padding: 7px 10px; border: 1px dashed var(--hq-line-2); border-radius: var(--hq-r-md); color: var(--hq-text-2); font-size: var(--hq-fs-sm);
+}
+:root[data-ui="hq"] .hq-org-defined summary { color: var(--hq-muted); cursor: pointer; }
+:root[data-ui="hq"] .hq-org-defined summary:focus-visible { outline: 2px solid var(--hq-focus); outline-offset: 2px; border-radius: 4px; }
+:root[data-ui="hq"] .hq-org-defined ul { display: grid; gap: 2px; margin-top: 6px; }
+:root[data-ui="hq"] .hq-org-defined b { color: var(--hq-text); font-weight: 600; }
+
+:root[data-ui="hq"] .hq-org-loose { display: grid; gap: 10px; margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--hq-line); }
+:root[data-ui="hq"] .hq-org-loose h4 { margin: 0; color: var(--hq-text-strong); font: 650 var(--hq-fs-md) var(--hq-font-display); }
+:root[data-ui="hq"] .hq-org-loose h4 small { margin-left: 6px; color: var(--hq-muted); font: var(--hq-fs-sm) var(--hq-font); }

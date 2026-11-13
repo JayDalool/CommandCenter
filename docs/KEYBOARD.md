@@ -7,6 +7,9 @@
 | 1–9, 0 | anywhere, not typing | jump to a screen in the rail order |
 | / | lists | focus search |
 | Esc | dialogs, menus, palette | close |
+| Ctrl+\ | anywhere (not inside a terminal) | collapse the navigation rail; in the HQ preview, only in a window wider than 1440px (narrower, its sidebar is icons already) |
+| Ctrl+. | Workspace | Workspace Focus: no rail or top bar |
+| Alt+Shift+O | an HQ page with Pop out | open the page in its own window |
 | Ctrl+P | Workspace (not inside a terminal) | go to file |
 | Ctrl+Shift+F | Workspace (not inside a terminal) | open the sidebar in Search mode and focus the query |
 | Ctrl+S | Workspace editor | save (Developer Mode) |

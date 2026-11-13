@@ -1,0 +1,48 @@
+/* HQ pop-out windows: the Pop out menu, the placeholder where a popped page was, the shaded tab, and the pop-out
+ * window's own header. Scoped to :root[data-ui="hq"], no custom property declared here (parity.spec.ts). Follows the
+ * prototype's .popbtn and .detached (styles/hq.css). */
+
+:root[data-ui="hq"] .hq-pop { position: relative; }
+:root[data-ui="hq"] .hq-pop-btn { display: inline-flex; align-items: center; gap: 6px; }
+:root[data-ui="hq"] .hq-pop-menu {
+  position: absolute; z-index: 60; top: calc(100% + 6px); right: 0; display: grid; gap: 2px; width: 320px; padding: 6px; white-space: normal;
+  border: 1px solid var(--hq-material-line); border-radius: var(--hq-r-md); background: var(--hq-material); box-shadow: var(--hq-e3);
+}
+:root[data-ui="hq"] .hq-pop-menu button {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 2px 10px; padding: 8px 10px; border: 0;
+  border-radius: var(--hq-r-sm); background: none; color: var(--hq-text); font: 600 var(--hq-fs-sm) var(--hq-font); text-align: left; cursor: pointer;
+}
+:root[data-ui="hq"] .hq-pop-menu button:hover, :root[data-ui="hq"] .hq-pop-menu button:focus-visible { background: var(--hq-hover); outline: none; }
+:root[data-ui="hq"] .hq-pop-menu button small { grid-column: 2; color: var(--hq-muted); font-weight: 400; font-size: var(--hq-fs-xs); }
+:root[data-ui="hq"] .hq-pop-note { margin: 0; padding: 8px 10px; color: var(--hq-warn); font-size: var(--hq-fs-xs); }
+
+:root[data-ui="hq"] .hq-detached {
+  display: grid; place-items: center; min-height: min(560px, 70vh); margin: 20px 24px; padding: 24px; border: 1px dashed var(--hq-line-2);
+  border-radius: var(--hq-r-lg); color: var(--hq-text); font: var(--hq-fs-base)/1.45 var(--hq-font); background: var(--hq-well);
+}
+:root[data-ui="hq"] .hq-detached-card { display: flex; flex-direction: column; align-items: center; gap: 12px; max-width: 520px; text-align: center; }
+:root[data-ui="hq"] .hq-detached-card h3 { margin: 0; font: 650 var(--hq-fs-xl)/1.3 var(--hq-font-display); color: var(--hq-text-strong); }
+:root[data-ui="hq"] .hq-detached-card p { margin: 0; color: var(--hq-text-2); }
+:root[data-ui="hq"] .hq-detached-ico {
+  display: grid; place-items: center; width: 56px; height: 56px; border: 1px solid var(--hq-detached-line); border-radius: var(--hq-r-xl);
+  background: var(--hq-accent-soft); color: var(--hq-violet-ink-6);
+}
+:root[data-ui="hq"] .hq-detached-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+:root[data-ui="hq"] .hq-detached-actions .hq-btn { display: inline-flex; align-items: center; gap: 6px; }
+:root[data-ui="hq"] .hq-detached .hq-detached-hint { color: var(--hq-warn); font-size: var(--hq-fs-sm); }
+
+:root[data-ui="hq"] .hq-tab.is-out > a { display: inline-flex; align-items: center; gap: 5px; opacity: .7; font-style: italic; }
+:root[data-ui="hq"] .hq-tab.is-out > a svg { color: var(--hq-violet); }
+
+/* the pop-out window */
+:root[data-ui="hq"] .hq-popwin { display: flex; flex-direction: column; min-height: 100%; background: var(--hq-bg); color: var(--hq-text); }
+:root[data-ui="hq"] .hq-popwin-head {
+  position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 6px 16px;
+  border-bottom: 1px solid var(--hq-line); background: var(--hq-chrome); font: var(--hq-fs-sm) var(--hq-font);
+}
+:root[data-ui="hq"] .hq-popwin-head b { font: 650 var(--hq-fs-lg) var(--hq-font-display); color: var(--hq-text-strong); }
+:root[data-ui="hq"] .hq-popwin-head small { color: var(--hq-muted); }
+:root[data-ui="hq"] .hq-popwin-head .hq-btn { display: inline-flex; align-items: center; gap: 6px; }
+:root[data-ui="hq"] .hq-popwin-fill { flex: 1; }
+:root[data-ui="hq"] .hq-popwin > .hq-screen { flex: 1; min-height: 0; }
+:root[data-ui="hq"] .hq-popwin-empty { margin: 0; padding: 24px; color: var(--hq-muted); }

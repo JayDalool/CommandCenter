@@ -5,7 +5,8 @@
 import { useEffect, useMemo, useState } from "react";
 import "./office.css";
 import "./engineering.css";
-import { go, href, useRoute } from "../../lib/router";
+import { href } from "../../lib/router";
+import { usePageNav, type PageNav } from "./route";
 import { ago } from "../../lib/time";
 import { PRIORITY_META } from "../../tickets/model";
 import { TicketDetailPane } from "../../screens/TicketDetail";
@@ -29,7 +30,7 @@ function matches(t: EngTask, q: string) {
 const COLS = [["key", "Key"], ["title", "Title"], ["project", "Project"], ["stage", "Stage"], ["priority", "Priority"],
   ["assignee", "Assignee"], ["session", "Session"], ["pr", "PR"], ["updated", "Updated"]] as const;
 
-function Row({ t, sel, now, name }: { t: EngTask; sel: boolean; now: number; name: string }) {
+function Row({ t, sel, now, name, go }: { t: EngTask; sel: boolean; now: number; name: string; go: PageNav["go"] }) {
   return <tr className={cx(sel && "is-sel")} onClick={() => go("tasks", t.key)}>
     <td className="c-key"><a href={href("tasks", t.key)} aria-current={sel ? "true" : undefined} onClick={(e) => e.stopPropagation()}><code>{t.key}</code></a></td>
     <td className="c-title"><span className="hq-eng-t"><span className="hq-ellip" title={t.title}>{t.title}</span>
@@ -46,7 +47,7 @@ function Row({ t, sel, now, name }: { t: EngTask; sel: boolean; now: number; nam
 }
 
 export function Engineering() {
-  const route = useRoute();
+  const { route, go } = usePageNav();
   const { src, ev } = useHqData();
   const asked = route.params.get("project") ?? "";
   const [project, setProject] = useState(asked);
@@ -108,7 +109,7 @@ export function Engineering() {
         {!src.ticketsLoaded ? <p className="hq-empty">Loading tasks…</p>
           : rows.length ? <div className="hq-table-wrap"><table className="hq-table">
             <thead><tr>{COLS.map(([c, h]) => <th key={c} scope="col" className={`c-${c}`}>{h}</th>)}</tr></thead>
-            <tbody>{rows.map((t) => <Row key={t.key} t={t} sel={open === t.key} now={ev.now} name={names.get(t.project) ?? t.project} />)}</tbody></table></div>
+            <tbody>{rows.map((t) => <Row key={t.key} t={t} sel={open === t.key} now={ev.now} name={names.get(t.project) ?? t.project} go={go} />)}</tbody></table></div>
           : <p className="hq-empty">{all.length ? "No open task matches these filters." : "No open tasks."}</p>}
       </section>
       {open && <div className="hq-eng-detail"><TicketDetailPane ticketKey={open} onClose={() => go("tasks")} /></div>}

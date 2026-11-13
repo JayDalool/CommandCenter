@@ -208,6 +208,8 @@ export interface State {
   workspaces?: Workspace[];
   worktrees?: Record<string, string[]>;
   health: HealthShort;
+  /** Messages (ccd/leadchat.py): lead messages Jay has not read. Absent when Messages is not configured. */
+  chat?: { unread: number };
 }
 
 export interface CcdEvent {
@@ -596,3 +598,43 @@ export interface UsageState {
   bySource?: UsageRow[];
   budgets?: { project: string; monthlyUsd: number | null; monthlyTokens: number | null; spentUsd: number; spentTokens: number }[];
 }
+/** GET /api/onboarding/budgets (D-033 in shadow, ccd/budgets.py). 404 while the onboarding groundwork is off. */
+export interface BudgetLine {
+  scope: "company" | "project" | "agent"; key: string; period: "day" | "month";
+  limitUsd: number | null; limitTokens: number | null; spentUsd: number; spentTokens: number;
+  unpricedReplies: number; unpricedUsdAtFallback: number; assessedUsd: number; unattributedUsd?: number;
+  alerts: number[]; source: "measured" | "reported"; state: "none" | "ok" | "alert" | "unknown" | "hold";
+  holdReason: "limit" | "stale-meter" | null; pct: number | null; threshold: number | null; onCourseToHold: boolean;
+}
+export interface BudgetsState {
+  mode: "shadow"; enforced: boolean; lines: BudgetLine[]; wouldHold: { scope: string; key: string }[];
+  safetyKinds: string[]; meter: { lastReadAt: number | null; stale: boolean; staleAfterSeconds: number };
+  prices: { asOf: string; ageDays: number; maxAgeDays: number }; dataAlerts: { kind: string; detail: string }[]; note?: string;
+}
+
+/** Messages (ccd/chat.py, ccd/leadchat.py): Jay's conversations with the CTO and each project lead. */
+export interface ChatFile {
+  id: string; conversation: string; messageId: number | null; side: "jay" | "lead"; name: string;
+  kind: "image" | "pdf" | "markdown"; mime: string; size: number; sha256: string; uploadedAt: number; uploadedBy: string;
+}
+export interface ChatMessage {
+  id: number; conversation: string; side: "jay" | "lead"; author: string; text: string; via: "app" | "slack" | "cli";
+  ref: string | null; replyTo: number | null; at: number; seenAt: number | null; files: ChatFile[];
+}
+export interface ChatLead {
+  name: string; state: "ready" | "none" | "found" | "multiple" | "unknown"; status: string | null;
+  running: boolean; idle: boolean; paused: boolean;
+}
+export interface ChatConversation {
+  id: string; name: string; kind: "cto" | "project"; lead: ChatLead; unread: number; waiting: number;
+  last: { id: number; side: "jay" | "lead"; author: string; at: number; via: string; text: string; files: number } | null;
+  nudges: { count: number; lastAt: number | null };
+}
+export interface ChatOverview {
+  conversations: ChatConversation[]; canStart: boolean; unread: number;
+  limits: { text: number; fileBytes: number; filesPerMessage: number };
+}
+export type ChatDelivery = "nudged" | "queued" | "lead-offline" | "lead-paused";
+export interface ChatSendResult { ok: true; message: ChatMessage; delivery: ChatDelivery }
+export interface ChatOverBudget { scope: string; key: string; period: string; limitUsd: number | null; assessedUsd: number; pct: number | null; holdReason: string | null }
+export interface ChatStartResult { ok: boolean; started?: boolean; lead?: ChatLead; delivery?: ChatDelivery; needsApproval?: boolean; overBudget?: ChatOverBudget[]; error?: string }
