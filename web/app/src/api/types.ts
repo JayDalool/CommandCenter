@@ -678,3 +678,5 @@ export interface BriefingProject extends BriefingCounts {
   key: string; name: string; mainChecks: "passing" | "failing" | "unknown"; spendUsd: number | null; highlights: BriefingHighlight[];
 }
 export interface Briefing { since: number; until: number; totals: BriefingCounts; projects: BriefingProject[]; quiet: boolean }
+/** A project's logo as ccd lists it (GET /api/projects/logos). The bytes are fetched apart and shown from a blob:. */
+export interface ProjectLogo { mime: string; sha256: string; updatedAt: number }

@@ -4,7 +4,7 @@ import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeRe
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
   Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, InboxState, WorkersState, WorkerNode, AuditState, ActorsState, ActorToken, UsageState, BudgetsState, NotifyState, NotifySettings,
   ChatOverview, ChatMessage, ChatLead, ChatSendResult, ChatStartResult, ChatFile,
-  Briefing, MilestoneResult, MilestoneState, MilestoneTrack, MilestonesView } from "./types";
+  Briefing, MilestoneResult, MilestoneState, MilestoneTrack, MilestonesView, ProjectLogo } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -319,6 +319,41 @@ export class Api {
     return this.req<{ revision: number }>("PUT", `/api/milestones/${encodeURIComponent(project)}/order`, { track, ids, revision });
   }
   briefing(since?: number) { return this.req<Briefing>("GET", `/api/briefing${since ? `?since=${Math.floor(since)}` : ""}`); }
+
+  // ---------- Project logos (ccd/hq.py) ----------
+  logos() { return this.req<Record<string, ProjectLogo>>("GET", "/api/projects/logos"); }
+  /** The logo's bytes. ccd always sends octet-stream; `mime` is the type it stored (from the list), for the blob. */
+  async logoBlob(project: string, mime: string): Promise<Blob> {
+    const headers: Record<string, string> = {};
+    const token = getToken();
+    if (token) headers["X-CCD-Token"] = token;
+    const res = await this.fetchImpl(this.base + `/api/projects/${encodeURIComponent(project)}/logo`,
+      { headers, cache: "no-store", credentials: "omit" });
+    if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+    return new Blob([await res.arrayBuffer()], { type: mime });
+  }
+  /** Replace a project's logo with these bytes (Developer Unlock). ccd reads the type from the bytes themselves. */
+  async logoPut(project: string, file: Blob): Promise<{ ok: true } & ProjectLogo> {
+    const headers: Record<string, string> = { "Content-Type": "application/octet-stream" };
+    const token = getToken();
+    if (token) headers["X-CCD-Token"] = token;
+    const dev = devSession();
+    if (dev) headers["X-CCD-Developer"] = dev;
+    let res: Response;
+    try {
+      res = await this.fetchImpl(this.base + `/api/projects/${encodeURIComponent(project)}/logo`,
+        { method: "PUT", headers, body: file, cache: "no-store", credentials: "omit" });
+    } catch { throw new ApiError(0, "ccd unreachable"); }
+    let data: unknown = null;
+    try { data = await res.json(); } catch { /* empty body */ }
+    if (!res.ok) {
+      const msg = data && typeof data === "object" && "error" in data ? String((data as { error: unknown }).error) : `HTTP ${res.status}`;
+      if (res.status === 403 && msg.startsWith("Developer Unlock")) devExpired();
+      throw new ApiError(res.status, msg);
+    }
+    return data as { ok: true } & ProjectLogo;
+  }
+  logoRemove(project: string) { return this.req<{ ok: true }>("DELETE", `/api/projects/${encodeURIComponent(project)}/logo`, {}); }
 
   /** GET a file with the token header and hand it to the browser as a download. */
   async download(path: string, fallbackName: string) {

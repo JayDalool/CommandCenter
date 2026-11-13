@@ -13,6 +13,7 @@ import { href } from "../../lib/router";
 import { commands, prefs, usePrefs, type Prefs } from "../../lib/prefs";
 import "../persona/persona.css";
 import { CAST, Face } from "../persona/characters";
+import { LOGO_MAX, LOGO_TYPES, ProjectLogo, logos, refreshLogos, useLogos } from "../logos";
 import { isRemembered } from "../../api/auth";
 import { jayQueue } from "../../tickets/model";
 import { lockDevMode, unlockDialogOpen, useDevActive } from "../../components/DevMode";
@@ -115,6 +116,57 @@ function ThemePicker() {
   </div>;
 }
 
+const KIND: Record<string, string> = { "image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WebP" };
+
+/** One logo per project, kept by ccd so every window and device shows it. Changing one is an upload, so it needs
+ *  Developer Unlock; ccd reads the type from the bytes and refuses anything but PNG, JPEG or WebP. While a change is
+ *  on its way the controls are aria-disabled, not disabled, so the keyboard's focus stays where it was. */
+function ProjectLogos() {
+  useLogos();
+  const active = useDevActive();
+  const projects = useSelector(app.store, (d) => d.taskProjects);
+  const l = useSelector(logos, (x) => x);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState<{ project: string; text: string } | null>(null);
+  const inputs = useRef<Record<string, HTMLInputElement | null>>({});
+  const run = async (project: string, fn: () => Promise<unknown>) => {
+    setBusy(project); setNote(null);
+    try { await fn(); } catch (e) { setNote({ project, text: e instanceof Error ? e.message : String(e) }); }
+    await refreshLogos();
+    setBusy(null);
+  };
+  /** False when the press should do nothing: locked (the Unlock dialog opens instead) or another change is running. */
+  const may = () => { if (!active) unlockDialogOpen(); return active && busy === null; };
+  const pick = (project: string, file: File | undefined) => {
+    if (!file || !may()) return;   // a file can also arrive by drag and drop, without the click that checks the lock
+    if (!LOGO_TYPES.includes(file.type)) return setNote({ project, text: "Choose a PNG, JPEG or WebP image." });
+    if (file.size > LOGO_MAX) return setNote({ project, text: `That image is ${Math.ceil(file.size / 1024)} KB. The limit is 512 KB.` });
+    void run(project, () => app.api.logoPut(project, file));
+  };
+  if (l.state === "none") return <Group title="Project logos"><Row label="This server does not have project logos yet" hint="They arrive with the next server update" /></Group>;
+  return <Group id="logos" title="Project logos" foot={<>Kept on the server, so every window and device shows them. PNG, JPEG or WebP, up to 512 KB.
+    {!active && <> Changing one needs Developer Unlock. <button type="button" className="hq-link" onClick={unlockDialogOpen}>Unlock…</button></>}</>}>
+    {projects.length === 0 && <Row label="No projects reported yet" />}
+    {projects.map((p) => {
+      const m = l.meta[p.key];
+      return <Row key={p.key} label={<span className="hq-with-logo"><ProjectLogo project={p.key} size={28} />{p.name}</span>}
+        hint={note?.project === p.key ? <span className="t-bad" role="alert">{note.text}</span>
+          : busy === p.key ? "Saving…"
+          : m ? `${KIND[m.mime] ?? m.mime}, added ${new Date(m.updatedAt * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : "No logo"}>
+        <label className={cx("hq-btn", busy !== null && "is-busy")}>
+          {m ? "Replace…" : "Choose image…"}
+          <input type="file" className="hq-file" accept={LOGO_TYPES.join(",")} aria-label={`${m ? "Replace" : "Choose"} the ${p.name} logo`}
+            aria-disabled={busy !== null || undefined} ref={(el) => { inputs.current[p.key] = el; }}
+            onClick={(e) => { if (!may()) e.preventDefault(); }}
+            onChange={(e) => { pick(p.key, e.target.files?.[0]); e.target.value = ""; }} />
+        </label>
+        {m && <button type="button" className="hq-btn" aria-disabled={busy !== null || undefined} aria-label={`Remove the ${p.name} logo`}
+          onClick={() => { if (may()) void run(p.key, () => app.api.logoRemove(p.key)).then(() => { if (!logos.get().meta[p.key]) inputs.current[p.key]?.focus(); }); }}>Remove</button>}
+      </Row>;
+    })}
+  </Group>;
+}
+
 function Appearance() {
   const p = usePrefs((x) => x);
   const dark = useMedia("(prefers-color-scheme: dark)");
@@ -130,6 +182,7 @@ function Appearance() {
       {p.style === "childish" && <div className="hq-set-row is-block"><ul className="hq-cast" aria-label={`The cast: ${CAST.length} characters`}>
         {CAST.map((c) => <li key={c.id}><Face who={c} size={44} /><span>{c.name}</span></li>)}</ul></div>}
     </Group>
+    <ProjectLogos />
     <Group title="Density">
       <Row label="Table rows" hint="In the Classic screens and panels"><Seg label="Row density" value={p.density}
         onChange={(v) => prefs.patch({ density: v })} options={[["comfortable", "Comfortable"], ["compact", "Compact"]]} /></Row>

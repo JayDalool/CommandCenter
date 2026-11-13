@@ -11,6 +11,7 @@ import type { Milestone, MilestoneState, MilestoneTrack, ProjectMilestones } fro
 import { ago } from "../../lib/time";
 import { dueLabel, isoDay, trackSummary, type TrackSummary } from "../data";
 import { Icon } from "../frame/icons";
+import { ProjectLogo } from "../logos";
 import { loadMessage, useLoad, usePulse } from "./load";
 import { cx } from "./ui";
 
@@ -179,7 +180,7 @@ export function Milestones({ projects, now }: { projects: { key: string; name: s
         const on = open === key, total = m.technical.length + m.business.length;
         return <li key={key} className={cx("hq-ms-proj", on && "is-open")} style={{ ["--pj" as string]: `var(--hq-pj-${key}, var(--hq-accent))` }}>
           <div className="hq-ms-row">
-            <b className="hq-ms-name hq-ellip">{name}</b>
+            <b className="hq-ms-name hq-with-logo"><ProjectLogo project={key} /><span className="hq-ellip">{name}</span></b>
             {TRACKS.map((t) => <TrackLine key={t.track} title={t.title} s={trackSummary(m[t.track], today)} />)}
             <button type="button" className="hq-btn" aria-expanded={on} aria-controls={`hq-ms-${key}`}
               aria-label={`${on ? "Close" : total ? "Edit" : "Add"} ${name} milestones`} onClick={() => setOpen(on ? null : key)}>

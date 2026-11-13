@@ -108,4 +108,8 @@
 :root[data-ui="hq"] .hq-sess-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 :root[data-ui="hq"] .hq-sess small { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
 
+/* A project's logo beside its name (hq/logos.tsx). Shown as it was uploaded: no tile behind it, no crop. */
+:root[data-ui="hq"] .hq-logo { flex: none; display: inline-block; vertical-align: -.25em; border-radius: var(--hq-r-xs); object-fit: contain; }
+:root[data-ui="hq"] .hq-with-logo { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+
 :root[data-ui="hq"] .hq-page :is(a, button):focus-visible { outline: 2px solid var(--hq-focus); outline-offset: 2px; }
