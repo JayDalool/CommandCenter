@@ -130,7 +130,12 @@ describe("the floor on My Office", () => {
     expect([...sv.children].map((li) => [li.classList.contains("is-empty"), li.getAttribute("aria-hidden"), li.textContent])).toEqual([
       [true, "true", "samvisionin the lounge"], [false, null, "SIsv-056-implclaude"],
       [true, "true", "sv-071in the lounge"], [true, "true", "sv-082-planat your door"]]);
-    expect(within(panel).getByRole("list", { name: "No project desks" })).toHaveTextContent("scratchin the lounge");
+    // a team with nobody at a desk is not read out as an empty list
+    const loose = panel.querySelector<HTMLElement>("ul[aria-label='No project desks']")!;
+    expect(loose).toHaveTextContent("scratchin the lounge");
+    expect(loose).toHaveAttribute("aria-hidden", "true");
+    expect(sv).not.toHaveAttribute("aria-hidden");
+    expect(within(panel).getAllByRole("list").map((l) => l.getAttribute("aria-label")).filter(Boolean)).toEqual(["SamVision desks", "GauzeMate desks"]);
   });
 
   it("Professional shows two letters and no face or emoji; Childish gives every session its own face", async () => {
@@ -246,6 +251,29 @@ describe("walking", () => {
     // someone leaving the middle of a row: the ones after it close the gap, and all of them are seen moving
     await set("x1", { status: "working" });   // sv-071 leaves the lounge for its desk; gm-012-impl and scratch move up
     expect(walking(panel).sort()).toEqual(["x1", "x3", "x5"]);
+  });
+
+  it("a second walk of the same session replaces the first: the first one's timer does not cut it short", async () => {
+    layout();
+    load();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"], now: Date.now() });
+    const panel = await show();
+    const scratch = () => panel.querySelector<HTMLElement>("[data-who='x5']")!;
+    await set("x1", { status: "working" });      // scratch moves up one place in the lounge: 450 + 108 * 1.6 = 623 ms
+    const el = scratch();
+    expect(el.style.transition).toBe("transform 623ms cubic-bezier(.45, .05, .25, 1)");
+    vi.advanceTimersByTime(600);
+    await set("wE:p2", { status: "working" });   // and again before it arrived
+    expect(scratch()).toBe(el);
+    vi.advanceTimersByTime(300);                 // the first walk's timer (at 773 ms) would have ended it here
+    expect(el.classList.contains("is-walking")).toBe(true);
+    expect(el.style.transition).toMatch(/^transform /);
+    // something inside it finishing a transition is not its arrival
+    fireEvent.transitionEnd(el.querySelector("b")!);
+    expect(el.classList.contains("is-walking")).toBe(true);
+    vi.advanceTimersByTime(600);
+    expect(el.classList.contains("is-walking")).toBe(false);
+    expect(el.style.transition).toBe("");
   });
 
   it("moves nobody when the reader asked for less motion, or when the floor was resized", async () => {
