@@ -1,7 +1,8 @@
 // Decisions (roadmap P3.6): everything waiting for Jay. The items are Classic's Needs You queue (jayQueue, labelled by
 // hq/data/decisions.ts), in Classic's order, with the same read-only extras from GET /api/inbox: the pending approval
 // and when it expires, the shadow engine's verdict, and earlier answers to the same question. Each item opens the
-// place Jay acts today (jayHref). Nothing here answers, approves, merges or deploys.
+// place Jay acts today (jayHref). A ticket's questions are also answered in place (DecisionAnswer.tsx, contracts.md §4);
+// nothing here approves, merges or deploys.
 import { useEffect, useMemo, useState } from "react";
 import "./office.css";
 import "./decisions.css";
@@ -13,6 +14,7 @@ import type { InboxExtra, InboxState } from "../../api/types";
 import { buildDecisions, type DecisionItem, type DecisionKind } from "../data";
 import { useHqData } from "./live";
 import { Pill, cx, plural } from "./ui";
+import { AnswerInPlace } from "./DecisionAnswer";
 
 const KINDS: { k: DecisionKind; label: string; hint: string }[] = [
   { k: "Decision", label: "Decisions", hint: "Plans, blockers, flagged tasks" },
@@ -42,16 +44,24 @@ export function useInbox(ids: string) {
   return { inbox, failed };
 }
 
-export function Item({ d, x, now, project }: { d: DecisionItem; x?: InboxExtra; now: number; project: string }) {
+/** A ticket's open questions, which Decisions answers in place. A blocked agent's prompt ("answer") still opens its pane. */
+export const answerable = (d: DecisionItem) => d.source.kind === "questions" && !!d.ticket;
+
+export function Item({ d, x, now, project, answer = false }: { d: DecisionItem; x?: InboxExtra; now: number; project: string; answer?: boolean }) {
   const j = d.source, a = x?.approval, overdue = late(x), to = jayHref(j);
   const out = /^https?:/.test(to) ? { target: "_blank", rel: "noopener noreferrer" } : {};
-  return <li className={cx("hq-dec", overdue && "is-late")}>
+  const inPlace = answer && answerable(d);
+  const [open, setOpen] = useState(false);
+  return <li className={cx("hq-dec", overdue && "is-late", open && "is-open")}>
     <div className="hq-dec-main">
       <Pill tone={d.tone}>{d.pill[0]}</Pill>
       <span className="hq-attn-body"><span className="hq-ellip" title={d.title}><code>{jayRef(j)}</code> {d.title}</span>
         <small>{typeOf(j)} · {project}{d.since ? ` · ${ago(d.since, now)}` : ""}</small></span>
-      <a className="hq-btn" href={to} {...out}>{actionOf(j)}</a>
+      {inPlace && <button type="button" className={cx("hq-btn", !open && "is-primary")} aria-expanded={open}
+        onClick={() => setOpen(!open)}>{open ? "Close" : "Answer here"}</button>}
+      <a className="hq-btn" href={to} {...out}>{inPlace ? "Open task" : actionOf(j)}</a>
     </div>
+    {inPlace && open && d.ticket && <AnswerInPlace ticket={d.ticket} project={d.project} projectName={project} />}
     {(a || x?.engine) && <p className="hq-dec-meta">
       {a && <span title={`Approval #${a.id}, bound to ${a.subjectHash}`}>Approval #{a.id} · bound to {a.subjectHash.slice(0, 8) || "—"} ·{" "}
         <span className={overdue ? "t-bad" : undefined}>{a.expiresAt ? until(a.expiresAt) : "no expiry"}</span></span>}
@@ -81,7 +91,7 @@ export function Decisions() {
 
   return <div className="hq-page hq-decisions">
     <header className="hq-hero"><div><h2>Needs your attention</h2>
-      <p>Everything waiting for you. Each opens where you act; nothing here answers, merges or deploys.</p></div></header>
+      <p>Everything waiting for you. Answer questions right here; everything else opens where you act. Nothing here merges or deploys.</p></div></header>
 
     <section className="hq-kpis" role="group" aria-label="Filter by kind">
       {KINDS.map(({ k, label, hint }) => <button key={k} type="button" className="hq-kpi" aria-pressed={kind === k} onClick={() => setKind(kind === k ? null : k)}>
@@ -92,7 +102,7 @@ export function Decisions() {
       <section className="hq-panel" aria-labelledby="hq-dec-list">
         <header><h3 id="hq-dec-list">Waiting for you <small>{kind ? `${shown.length} of ${s.total}` : s.total} · overdue first, then by type and age</small></h3>
           {kind && <button type="button" className="hq-btn" onClick={() => setKind(null)}>Show all</button>}</header>
-        {shown.length ? <ul className="hq-dec-list">{shown.map((d) => <Item key={d.id} d={d} x={extra[d.id]} now={ev.now}
+        {shown.length ? <ul className="hq-dec-list">{shown.map((d) => <Item key={d.id} d={d} x={extra[d.id]} now={ev.now} answer
           project={names.get(d.project) ?? (projectName(src.state, d.project) || d.project)} />)}</ul>
           : <p className="hq-empty">{s.total ? "Nothing of this kind is waiting." : "Nothing waits on you."}</p>}
       </section>

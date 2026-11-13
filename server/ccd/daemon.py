@@ -87,7 +87,8 @@ TASK_CHECK_TEMPLATE = (
     "2. Work still needed that is listed in a .md file but has no task here: add it (it lands in the Inbox):\n"
     "   python -m ccd.pipeline_cli add {project} --role coordinator --title \"…\" --note \"<source file:line>\"\n"
     "3. A task you cannot judge: ask Jay one clear question on it:\n"
-    "   python -m ccd.pipeline_cli ask <KEY> --role coordinator --question \"…\"\n"
+    "   python -m ccd.pipeline_cli ask <KEY> --role coordinator --question \"…\" "
+    "[--option A --option B --recommend 1 --why \"…\"]\n"
     "Copy no licensed data, records, addresses or secrets into a task, reason or question.\n"
     "This check changes no code: do not plan, start or implement anything, and do not edit, move or delete files.\n"
     "Not authorized by this message: merge, deploy, production, --apply, secrets, rule changes.\n"
@@ -1398,7 +1399,8 @@ class Daemon(LeadChat):
             ctx["brief"] += (f"\n\nTask session: work {t['key']} in its own Claude session whose herdr pane is named "
                              f"{t['key'].lower()} (e.g. herdr pane rename to {t['key'].lower()}); Command Center's Task "
                              f"Room attaches to that name. Ask Jay questions with python -m ccd.pipeline_cli ask "
-                             f"{t['key']} --role coordinator --question \"…\" — his answers come back into that session.")
+                             f"{t['key']} --role coordinator --question \"…\" — his answers come back into that session. For a "
+                                 f"decision, give 2 or 3 --option values and recommend one: --recommend N --why \"…\".")
             held = self.pipeline.held(t["key"])
             if held:
                 ctx["brief"] += (f"\n\nWaits for Jay: open question(s) or decision(s) on "
@@ -1635,9 +1637,10 @@ class Daemon(LeadChat):
             self._pipeline_result(*self._wrap(pl.replan, key, "Jay's answers change the approved scope", actor))
             replanned = True
         latest = max(q["batch"] for q in answered)
-        lines = [f"Jay answered your questions on {work['key']}:", ""]
+        qa = []
         for i, q in enumerate([q for q in answered if q["batch"] == latest], 1):
-            lines += [f"{i}. {q['text']}", f"   → {q['answer']}", ""]
+            qa += [f"{i}. {q['text']}", f"   → {q['answer']}", ""]
+        lines = [f"Jay answered your questions on {work['key']}:", ""] + qa
         if replanned:
             lines.append(f"Jay marked these answers as changing the approved scope. {work['key']} is back in Planning: "
                          f"re-plan with Opus, record the revised plan and acceptance criteria "
@@ -1651,13 +1654,46 @@ class Daemon(LeadChat):
         text = "\n".join(lines)
         if len(text) > 7900:
             text = text[:7880] + "\n[…truncated]"
-        delivered, reason = await self._nudge_task(work["key"], text)
-        if delivered:
-            self._event("tasks", "task.pipeline", f"{work['key']} answers delivered to its Claude session",
-                        project=work.get("project") or self.tasks.get(key)["project"], ref=work["key"],
-                        data={"kind": "pipeline.answers_delivered"})
+        project = work.get("project") or self.tasks.get(key)["project"]
+        delivered_to = None
+        if self.task_session(work["key"])["state"] == "none":
+            # No task session: the questions came from the lead (asked with --role coordinator) or the session has
+            # ended. The answers go to the project's lead through Messages instead of nowhere.
+            delivered, reason, delivered_to = await self._answers_to_lead(work, project, qa, lines[len(qa) + 2:], via)
+        else:
+            delivered, reason = await self._nudge_task(work["key"], text)
+            delivered_to = "task" if delivered else None
+        if delivered_to:
+            self._event("tasks", "task.pipeline", f"{work['key']} answers delivered to "
+                        + ("its Claude session" if delivered_to == "task" else "the project's lead in Messages"),
+                        project=project, ref=work["key"],
+                        data={"kind": "pipeline.answers_delivered", "deliveredTo": delivered_to,
+                              "delivered": delivered})
         return {"work": self.task_work(key), "complete": True, "delivered": delivered, "reason": reason,
-                "replanned": replanned}
+                "deliveredTo": delivered_to, "replanned": replanned}
+
+    async def _answers_to_lead(self, work, project, qa, guard, via):
+        """Jay's answers for a ticket with no task session, as a Messages message to the project's lead (the same
+        store and fixed nudge as anything Jay sends a lead). Returns (delivered, reason, deliveredTo)."""
+        key = work["key"]
+        text = "\n".join([f"Jay answered the questions on {key} ({str(self.tasks.get(key).get('title') or '')[:120]}). No task Claude "
+                          f"session named {key.lower()} is running, so they come to you as the project's lead:", ""]
+                         + qa + [f"Carry them into {key}: continue it yourself, or hand them to the session that "
+                                 f"picks it up."] + list(guard))
+        if len(text) > 7900:
+            text = text[:7880] + "\n[…truncated]"
+        deliver = getattr(self, "deliver_to_lead", None)
+        if deliver is None or getattr(self, "chat", None) is None:
+            return False, f"no task Claude session is running for {key}, and Messages is off, so the lead was not told", None
+        try:
+            r = await deliver(project, text, via="slack" if via == "slack" else "app", ref=key, author="jay")
+        except ActionError as e:
+            return False, f"no task Claude session is running for {key}; the lead was not told: {e.message}", None
+        d = r.get("delivery")
+        if d in ("nudged", "queued"):
+            return True, None, "lead"
+        why = {"lead-offline": "the lead is not running", "lead-paused": "the project is paused"}.get(d, d or "not delivered")
+        return False, f"saved in Messages for the {project} lead, but {why}; it reads them when it runs", "lead"
 
     async def slack_confirm(self, key, gate):
         """Jay approves a Low-risk gate by replying in Slack (ccd/notify.py). Only the gates in notify.SLACK_GATES,

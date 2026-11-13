@@ -10,6 +10,8 @@
     python -m ccd.pipeline_cli role     SV-056 --role implementer --model sonnet --session sv-056
     python -m ccd.pipeline_cli finding  SV-056 --role reviewer --scope out --category perf --summary "…"
     python -m ccd.pipeline_cli ask      SV-056 --role coordinator --question "Same layout on mobile?" --question "…"
+    python -m ccd.pipeline_cli ask      SV-056 --role coordinator --question "Export format?" --option CSV --option XLSX \
+                                        --option Both --recommend 2 --why "clients open it in Excel"
     python -m ccd.pipeline_cli replan   SV-056 --role coordinator --reason "the answer changes the auth model"
     python -m ccd.pipeline_cli rework   SV-056 --role coordinator --reason "buttons overlap on narrow screens"
     python -m ccd.pipeline_cli evidence SV-056 --role verifier --kind screenshot --ref mobile-375.png [--note …]
@@ -22,7 +24,10 @@
 
 The task check: `stale` asks Jay "Cancel it / Keep it" (only his answer cancels anything); `add` puts a
 missing task in the project's Inbox.
-Questions wait for Jay without ending the task session; his answers come back into the same session.
+Questions wait for Jay without ending the task session; his answers come back into the same session (or, when
+no task session is running, to the project's lead in Messages).
+A decision question has 2 or 3 --option values, and one of them recommended: --recommend N (1 = the first --option)
+with --why "one line". Jay sees your recommendation first, plus "Something else" and "Talk it through".
 A live deployment waits for Jay's approval (`deployed --env live` is refused until he gives it).
 
 It talks to the loopback ccd (127.0.0.1:7777) with the ccd token this account already
@@ -84,6 +89,23 @@ def _json_file(path):
         return json.load(f)
 
 
+def _questions(p, a):
+    """--question …, or ONE --question with its --option list and an optional --recommend N --why …"""
+    qs = a.question or []
+    if not a.option:
+        if a.recommend is not None:
+            p.error("--recommend needs --option values")
+        return qs
+    if len(qs) != 1:
+        p.error("--option belongs to exactly one --question (use --questions-file for several)")
+    q = {"text": qs[0], "kind": "choice", "options": a.option}
+    if a.recommend is not None:
+        if not 1 <= a.recommend <= len(a.option):
+            p.error(f"--recommend is 1–{len(a.option)}")
+        q.update(recommended=a.recommend - 1, why=a.why)
+    return [q]
+
+
 def build(argv):
     p = argparse.ArgumentParser(prog="ccd.pipeline_cli", description="Record a ticket pipeline step in Command Center.")
     p.add_argument("op", choices=("work", "plan", "start", "review", "verify", "handoff", "block", "role", "finding",
@@ -105,6 +127,8 @@ def build(argv):
         p.add_argument(f"--{f}")
     p.add_argument("--question", action="append")
     p.add_argument("--questions-file")
+    p.add_argument("--option", action="append", help="an option for the one --question (2–8)")
+    p.add_argument("--recommend", type=int, help="which --option you recommend, 1 = the first")
     p.add_argument("--kind")
     p.add_argument("--ref")
     p.add_argument("--note")
@@ -137,7 +161,7 @@ def build(argv):
         "role": lambda: {"role": a.role, **meta},
         "finding": lambda: {"finding": {"scope": a.scope, "category": a.category, "summary": a.summary},
                             "source": a.source},
-        "ask": lambda: {"questions": _json_file(a.questions_file) if a.questions_file else (a.question or [])},
+        "ask": lambda: {"questions": _json_file(a.questions_file) if a.questions_file else _questions(p, a)},
         "replan": lambda: {"reason": a.reason},
         "rework": lambda: {"reason": a.reason},
         "evidence": lambda: {"kind": a.kind, "ref": a.ref, "note": a.note, **({"stage": a.stage} if a.stage else {})},

@@ -326,6 +326,38 @@ class Replies(ReplyBase):
         self.assertEqual(self.reply("1. yes\n2) blue", ts)["did"], "answered")
         self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 1, "answer": "yes"}, {"id": 2, "answer": "blue"}])
 
+    def test_options_are_numbered_with_the_recommended_one_and_a_number_answers(self):
+        q = {"id": 21, "text": "Export format?", "kind": "choice", "options": ["CSV", "XLSX", "Both"],
+             "recommended": 1, "why": "clients open it in Excel", "answer": None}
+        ts = self.send(need("SV-5", "questions", None), [q])
+        dm = self.slack.posts[-1]["text"]
+        self.assertIn("*1*  CSV", dm)
+        self.assertIn("*2*  XLSX  ⭐ _recommended_: clients open it in Excel", dm)
+        self.assertIn("an option's number, or your own answer", dm)
+        self.assertEqual(self.reply("2", ts)["did"], "answered")
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 21, "answer": "XLSX"}])
+
+    def test_with_several_questions_options_are_lettered_and_own_words_still_count(self):
+        qs = [{"id": 31, "text": "Format?", "kind": "choice", "options": ["CSV", "XLSX"], "recommended": 0,
+               "why": "simplest", "answer": None},
+              {"id": 32, "text": "Who first?", "kind": "choice", "options": ["Admins", "Everyone"], "answer": None}]
+        ts = self.send(need("SV-6", "questions", None), qs)
+        dm = self.slack.posts[-1]["text"]
+        self.assertIn("*a*  CSV  ⭐ _recommended_: simplest", dm)
+        self.assertIn("*b*  Everyone", dm)
+        self.assertEqual(self.reply("1. b\n2. only the pilot group", ts)["did"], "answered")
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 31, "answer": "XLSX"},
+                                                             {"id": 32, "answer": "only the pilot group"}])
+
+    def test_a_number_out_of_range_or_on_a_text_question_is_kept_as_written(self):
+        ts = self.send(need("SV-7", "questions", None), [{"id": 41, "text": "How many?", "kind": "text", "answer": None}])
+        self.reply("3", ts)
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 41, "answer": "3"}])
+        ts = self.send(need("SV-8", "questions", None), [{"id": 42, "text": "Pick", "kind": "choice",
+                                                          "options": ["x", "y"], "answer": None}])
+        self.reply("5", ts)
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 42, "answer": "5"}])
+
     def test_approve_closes_only_low_risk_gates(self):
         self.n.update_settings({"replyScope": "answers_low_risk"})
         for gate in ("failure", "ui"):

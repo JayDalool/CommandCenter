@@ -438,6 +438,41 @@ class TaskCheck(Base):
         finally:
             registry.PROJECTS["samvision"]["pipeline"] = old
 
+    def test_a_choice_question_can_recommend_one_option_with_why(self):
+        k = self.ticket()
+        self.pl.ask(k, [{"text": "Which export format?", "options": ["CSV", "XLSX", "Both"], "recommended": 1,
+                         "why": "Clients open it in Excel"}, "Anything else?"], "agent:coordinator")
+        qs = self.pl.work(k)["questions"]
+        self.assertEqual([(q["recommended"], q["why"]) for q in qs], [(1, "Clients open it in Excel"), (None, None)])
+        self.pl.ask(k, [{"text": "Ship today?", "options": ["Yes", "No"]}], "agent:coordinator")
+        self.assertEqual(self.pl.work(k)["questions"][-1]["recommended"], None)       # a later batch has its own
+
+    def test_a_malformed_recommendation_is_refused(self):
+        k = self.ticket()
+        bad = [{"text": "A?", "options": ["x", "y"], "recommended": 2, "why": "w"},
+               {"text": "A?", "options": ["x", "y"], "recommended": 0},
+               {"text": "A?", "options": ["x", "y"], "recommended": True, "why": "w"},
+               {"text": "A?", "options": ["x", "", "y"], "recommended": 0, "why": "w"},
+               {"text": "A?", "kind": "yesno", "recommended": 0, "why": "w"},
+               {"text": "A?", "options": ["x", "y"], "why": "orphan"}]
+        for q in bad:
+            with self.assertRaises(TaskError, msg=q):
+                self.pl.ask(k, [q], "agent:coordinator")
+        self.assertEqual(self.pl.work(k)["questions"], [])
+
+    def test_the_cli_asks_one_question_with_options_and_a_recommendation(self):
+        from ccd import pipeline_cli
+        body = pipeline_cli.build(["ask", "SV-1", "--role", "coordinator", "--question", "Format?", "--option", "CSV",
+                                   "--option", "XLSX", "--recommend", "2", "--why", "Excel users"])[2]
+        self.assertEqual(body, {"questions": [{"text": "Format?", "kind": "choice", "options": ["CSV", "XLSX"],
+                                               "recommended": 1, "why": "Excel users"}]})
+        with self.assertRaises(SystemExit):
+            pipeline_cli.build(["ask", "SV-1", "--role", "coordinator", "--question", "a", "--question", "b",
+                                "--option", "x", "--option", "y"])
+        with self.assertRaises(SystemExit):
+            pipeline_cli.build(["ask", "SV-1", "--role", "coordinator", "--question", "a", "--option", "x",
+                                "--option", "y", "--recommend", "3", "--why", "w"])
+
     def test_a_merge_gate_does_not_hold_new_work(self):
         a, b = self.ticket(), self.ticket()
         self.to_review(a)
@@ -518,7 +553,54 @@ class ControlRoomApi(PipelineApi):
             {"answers": [{"id": q["id"], "answer": "ok"}]}), headers=dict(JSON, **self.dev())).json()
         self.assertEqual((out["complete"], out["delivered"]), (True, False))
         self.assertIn("no task Claude session", out["reason"])
+        self.assertIsNone(out["deliveredTo"])
         self.assertEqual(self.get("/api/tasks/SV-056/work").json()["questions"][0]["answer"], "ok")
+
+    def test_answers_with_no_task_session_go_to_the_projects_lead(self):
+        # A question asked from the lead's own pane (--role coordinator): there is no session named sv-056, and the
+        # lead pane is a coordinator, never a task session. The answers reach the lead through Messages.
+        from ccd import chat as chat_mod
+        from .test_chat import EMPTY_PROMPT
+        base = tempfile.mkdtemp(prefix="answers-lead-")
+        self.daemon.chat = chat_mod.Chat(os.path.join(base, "chat.db"), os.path.join(base, "files"), 1 << 20)
+        try:
+            self.ticket("INBOX")
+            q = self.step("ask", {"questions": [{"text": "Format?", "options": ["CSV", "XLSX"], "recommended": 1,
+                                                 "why": "Excel"}]}).json()["questions"][0]
+            self.assertEqual((q["recommended"], q["why"]), (1, "Excel"))
+            self.fake.tails["wE:p2"] = EMPTY_PROMPT
+            out = self.client.post("/api/tasks/SV-056/answers", content=json.dumps(
+                {"answers": [{"id": q["id"], "answer": "XLSX"}]}), headers=dict(JSON, **self.dev())).json()
+            self.assertEqual((out["complete"], out["delivered"], out["deliveredTo"]), (True, True, "lead"), out)
+            msgs = self.daemon.chat.history("samvision")
+            self.assertEqual(len(msgs), 1)
+            self.assertEqual((msgs[0]["side"], msgs[0]["ref"], msgs[0]["via"]), ("jay", "SV-056", "app"))
+            self.assertIn("Format?\n   → XLSX", msgs[0]["text"])
+            sent = [p for m, p in self.fake.calls if m == "agent.prompt"]
+            self.assertEqual([p["target"] for p in sent], ["wE:p2"])                 # the lead, with the fixed nudge
+            self.assertIn("cc-inbox samvision", sent[0]["text"])
+            self.assertNotIn("XLSX", sent[0]["text"])
+        finally:
+            self.daemon.chat.close()
+            self.daemon.chat = None
+            import shutil
+            shutil.rmtree(base)
+
+    def test_answers_with_no_task_session_and_messages_off_say_so(self):
+        self.ticket("INBOX")
+        q = self.step("ask", {"questions": ["One?"]}).json()["questions"][0]
+        out = self.client.post("/api/tasks/SV-056/answers", content=json.dumps(
+            {"answers": [{"id": q["id"], "answer": "ok"}]}), headers=dict(JSON, **self.dev())).json()
+        self.assertEqual((out["delivered"], out["deliveredTo"]), (False, None))
+        self.assertIn("Messages is off", out["reason"])
+
+    def test_a_task_session_still_gets_the_answers_first(self):
+        self.ticket("INBOX")
+        self.task_agent()
+        q = self.step("ask", {"questions": ["One?"]}).json()["questions"][0]
+        out = self.client.post("/api/tasks/SV-056/answers", content=json.dumps(
+            {"answers": [{"id": q["id"], "answer": "ok"}]}), headers=dict(JSON, **self.dev())).json()
+        self.assertEqual((out["delivered"], out["deliveredTo"]), (True, "task"))
 
     def test_lists_carry_the_visible_stage_and_the_record_renders(self):
         self.ticket("IN_PROGRESS")

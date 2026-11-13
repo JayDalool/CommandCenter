@@ -40,7 +40,8 @@ For every open task decide:
 6. Start (READY_TO_IMPLEMENT) when `pipeline_cli start` accepts it — at most 2 lanes in this project, each in its
    own worktree. One concern per PR. Then back to 1.
 
-Need an answer? Ask once (pipeline_cli ask <KEY> --role coordinator --question "…") and take another task.
+Need an answer? Ask once (pipeline_cli ask <KEY> --role coordinator --question "…"; for a decision add 2 or 3
+--option values and recommend one with --recommend N --why "…") and take another task.
 Broken and not safely fixable? pipeline_cli block <KEY> --role coordinator --reason "…" --what … --why …
 --action … --impact … in plain words. Record every stage change as you go, so Jay's Dashboard shows it.
 

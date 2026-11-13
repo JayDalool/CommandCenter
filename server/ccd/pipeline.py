@@ -249,11 +249,31 @@ class Pipeline:
         return out
 
     def questions(self, tid):
-        return [{"id": i, "batch": b, "position": pos, "text": tx, "kind": k, "options": json.loads(o or "[]"),
-                 "askedAt": aa, "askedBy": ab, "answer": an, "answeredAt": at, "answeredBy": by, "purpose": pu}
-                for i, b, pos, tx, k, o, aa, ab, an, at, by, pu in self.db.execute(
-                    "SELECT id, batch, position, text, kind, options, asked_at, asked_by, answer, answered_at, answered_by, "
-                    "purpose FROM ticket_questions WHERE ticket_id=? ORDER BY batch, position", (tid,)).fetchall()]
+        rec = self.recommendations(tid)
+        out = []
+        for i, b, pos, tx, k, o, aa, ab, an, at, by, pu in self.db.execute(
+                "SELECT id, batch, position, text, kind, options, asked_at, asked_by, answer, answered_at, answered_by, "
+                "purpose FROM ticket_questions WHERE ticket_id=? ORDER BY batch, position", (tid,)).fetchall():
+            options = json.loads(o or "[]")
+            r = rec.get((b, pos)) or {}
+            ok = k == "choice" and isinstance(r.get("index"), int) and 0 <= r["index"] < len(options)
+            out.append({"id": i, "batch": b, "position": pos, "text": tx, "kind": k, "options": options,
+                        "recommended": r["index"] if ok else None, "why": r.get("why") if ok else None,
+                        "askedAt": aa, "askedBy": ab, "answer": an, "answeredAt": at, "answeredBy": by, "purpose": pu})
+        return out
+
+    def recommendations(self, tid):
+        """{(batch, position): {index, why}} from the ticket's pipeline.questions events."""
+        out = {}
+        for (data,) in self.db.execute("SELECT data FROM ticket_events WHERE ticket_id=? AND kind='pipeline.questions' "
+                                       "AND data LIKE '%\"recommended\"%'", (tid,)):
+            try:
+                d = json.loads(data or "{}")
+                for pos, r in (d.get("recommended") or {}).items():
+                    out[(int(d["batch"]), int(pos))] = r
+            except (ValueError, TypeError, KeyError, AttributeError):
+                continue
+        return out
 
     def compact(self, ids):
         """{ticket id: {gate, openQuestions, deploy}} for the ticket list, in two queries."""
@@ -845,19 +865,45 @@ class Pipeline:
             options = _list(q.get("options"), "options", 8, 200) if kind == "choice" else []
             if kind == "choice" and len(options) < 2:
                 raise TaskError(400, "a choice question needs at least two options")
-            rows.append((text, kind, options))
+            rows.append((text, kind, options, self._recommendation(q, kind, options)))
 
         def fn(tid, t, w, at):
             self._open(t, "a question")
             batch = (self.db.execute("SELECT MAX(batch) FROM ticket_questions WHERE ticket_id=?", (tid,)).fetchone()[0]
                      or 0) + 1
-            for i, (text, kind, options) in enumerate(rows):
+            for i, (text, kind, options, _rec) in enumerate(rows):
                 self.db.execute("INSERT INTO ticket_questions(ticket_id, batch, position, text, kind, options, asked_at, "
                                 "asked_by) VALUES (?,?,?,?,?,?,?,?)", (tid, batch, i, text, kind, json.dumps(options), at, actor))
             n = len(rows)
-            return {}, {}, [("pipeline.questions", f"Claude needs {n} answer{'s' if n > 1 else ''}",
-                             {"batch": batch, "count": n})]
+            data = {"batch": batch, "count": n}
+            # The recommendation lives in this append-only event (no schema change): position -> {index, why}.
+            rec = {str(i): r for i, (*_, r) in enumerate(rows) if r}
+            if rec:
+                data["recommended"] = rec
+            return {}, {}, [("pipeline.questions", f"Claude needs {n} answer{'s' if n > 1 else ''}", data)]
         return self._tx(key, actor, fn)
+
+    @staticmethod
+    def _recommendation(q, kind, options):
+        """{index, why} for a choice question that recommends one of its options, else None. The rule for agents is
+        2 or 3 options, one recommended, with why; ccd enforces only that a recommendation is well formed."""
+        idx, why = q.get("recommended"), q.get("why")
+        if idx is None:
+            if why not in (None, ""):
+                raise TaskError(400, "why explains a recommended option; set recommended too")
+            return None
+        if kind != "choice":
+            raise TaskError(400, "only a choice question recommends an option")
+        if isinstance(idx, bool) or not isinstance(idx, int):
+            raise TaskError(400, "recommended is the index of an option (0 is the first)")
+        if len(options) != len(q.get("options") or []):
+            raise TaskError(400, "options cannot be empty when one is recommended")
+        if not 0 <= idx < len(options):
+            raise TaskError(400, f"recommended must be 0–{len(options) - 1}")
+        why = _text(why, 300, "why", multiline=False)
+        if not why:
+            raise TaskError(400, "say why that option is recommended (why, at most 300 characters)")
+        return {"index": idx, "why": why}
 
     def stale(self, key, reason, actor):
         """The task check: Claude thinks this task is no longer needed. Jay gets one question — Cancel it or
