@@ -44,7 +44,8 @@
 :root[data-ui="hq"] .hq-chat-head h3 { font: 600 var(--hq-fs-lg) var(--hq-font-display); color: var(--hq-text-strong); }
 :root[data-ui="hq"] .hq-chat-head small { color: var(--hq-muted); font: var(--hq-fs-xs) var(--hq-mono); }
 :root[data-ui="hq"] .hq-chat-back { display: none; padding: 6px 8px; }
-:root[data-ui="hq"] .hq-chat-banner {
+/* .hq-page in front of these two: office.css zeroes `.hq-page p` margins, and both can be a <p>. */
+:root[data-ui="hq"] .hq-page .hq-chat-banner {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 10px 16px 0; padding: 10px 12px;
   border: 1px solid var(--hq-line-2); border-radius: var(--hq-r-md); background: var(--hq-panel-2); color: var(--hq-text-2);
   font-size: var(--hq-fs-sm);
@@ -63,7 +64,7 @@
 :root[data-ui="hq"] .hq-page .hq-chat-card:hover { background: var(--hq-hover); }
 :root[data-ui="hq"] .hq-chat-card > span { flex: 1; }
 :root[data-ui="hq"] .hq-chat-log { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 16px; overflow-y: auto; }
-:root[data-ui="hq"] .hq-chat-notice { margin: 0 16px 6px; color: var(--hq-muted); font-size: var(--hq-fs-xs); }
+:root[data-ui="hq"] .hq-page .hq-chat-notice { margin: 0 16px 6px; color: var(--hq-muted); font-size: var(--hq-fs-xs); }
 
 /* one message */
 :root[data-ui="hq"] .hq-msg { display: grid; gap: 3px; max-width: min(640px, 82%); }
