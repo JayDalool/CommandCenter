@@ -29,7 +29,9 @@ Jay's replies. Only messages from the one Slack member ID in config.json (`notif
 with the bot or a channel the bot is in, are read; everything else is ignored. A reply in the thread of an item:
 
     questions   it answers them (one question: the whole reply; several: numbered lines "1. …"), exactly as the
-                Answer button does, and the answers go to the task's own session.
+                Answer button does, and the answers go to the task's own session (or, with none running, to the
+                project's lead). A choice question's options are listed numbered (lettered when there are several
+                questions) with the recommended one marked; a reply of just "2" (or "1. b") picks that option.
     gate        "approve" (or yes / ok / go / lgtm) closes the gate ONLY for the Low-risk gates in SLACK_GATES, and
                 only while `replyScope` is "answers_low_risk" (default "answers": off until Jay decides). Plans, merges, deploys and anything else open
                 CommandCenter from the link: a stolen Slack login cannot merge, deploy or change a plan.
@@ -267,6 +269,39 @@ def item_key(n):
     return f"{n.get('project')}:{n.get('kind')}:{n.get('ref')}:{n.get('gate') or ''}:{extra}"
 
 
+LETTERS = "abcdefgh"
+
+
+def option_lines(q, letters=False):
+    """A choice question's options for the DM: numbered (one question) or lettered (several), the recommended one
+    marked with why."""
+    if q.get("kind") != "choice" or not q.get("options"):
+        return []
+    out = []
+    for j, o in enumerate(q["options"]):
+        mark = LETTERS[j] if letters else str(j + 1)
+        rec = q.get("recommended") == j
+        line = f"      *{mark}*  {esc(str(o)[:200])}"
+        if rec:
+            line += "  ⭐ _recommended_" + (f": {esc(str(q.get('why') or '')[:300])}" if q.get("why") else "")
+        out.append(line)
+    return out
+
+
+def pick_option(q, text):
+    """A reply of just an option's number or letter ("2", "b", "2.") answers with that option's text. Anything else
+    is Jay's own answer, as written."""
+    opts = q.get("options") or []
+    if any(str(o).strip().lower() == (text or "").strip().lower() for o in opts):
+        return text            # the option's own text ("2" when the options are 2 / 4 / 8)
+    m = re.fullmatch(r"\s*([1-8]|[a-hA-H])[.)]?\s*", text or "")
+    if q.get("kind") != "choice" or not opts or not m:
+        return text
+    t = m.group(1).lower()
+    j = int(t) - 1 if t.isdigit() else LETTERS.index(t)
+    return opts[j] if 0 <= j < len(opts) else text
+
+
 def need_label(n):
     return NEED_LABEL.get(n.get("gate") or n.get("kind"), "Needs you")
 
@@ -450,10 +485,17 @@ class Notifier:
         if n.get("kind") == "questions" and is_ticket(n.get("ref")) and not n.get("stale"):
             shown = set(n.get("qids") or [])
             qs = [q for q in self.open_questions(n["ref"]) if q["id"] in shown]
-            lines += [f"{i}. {esc(q['text'][:400])}" + (f"  _({esc(' / '.join(q['options']))})_" if q.get("options") else "")
-                      for i, q in enumerate(qs, 1)]
-            lines.append("_Reply in this thread to answer" + (" (number your answers 1., 2., …)" if len(qs) > 1 else "")
-                         + "._")
+            several = len(qs) > 1
+            for i, q in enumerate(qs, 1):
+                lines.append(f"{i}. {esc(q['text'][:400])}")
+                lines += option_lines(q, letters=several)
+            choice = any(q.get("kind") == "choice" and q.get("options") for q in qs)
+            if several:
+                lines.append("_Reply in this thread with numbered lines (1. …, 2. …): "
+                             + ("an option's letter, or your own answer" if choice else "one answer each") + "._")
+            else:
+                lines.append("_Reply in this thread with " + ("an option's number, or your own answer" if choice
+                                                              else "your answer") + "._")
         elif n.get("kind") == "gate" and n.get("gate") in SLACK_GATES and self.settings["replyScope"] == "answers_low_risk":
             lines.append("_Reply *approve* to " + ("clear the blocker" if n["gate"] == "failure" else "accept the UI")
                          + ", or write to the lead._")
@@ -715,6 +757,7 @@ class Notifier:
             if not all(parts):
                 return {"did": "answer_incomplete",
                         "say": f"There are {len(qs)} questions. Reply with numbered lines (1. …, 2. …), one per question."}
+        parts = [pick_option(q, a) for q, a in zip(qs, parts)]
         for q, a in zip(qs, parts):
             if q.get("kind") == "yesno" and a.strip().lower() not in ("yes", "no") and not a.lower().startswith("other:"):
                 return {"did": "answer_invalid", "say": f"“{esc(q['text'][:120])}” is yes or no (or Other: …)."}
@@ -727,8 +770,14 @@ class Notifier:
         if r.get("complete") is False:
             said = "Answered. Another question on this task is still open in CommandCenter."
         else:
-            said = "Answered." + (" Sent to the task's session." if r.get("delivered") else
-                                   " The task session gets it when it is running.")
+            to = r.get("deliveredTo")
+            if r.get("delivered"):
+                said = "Answered." + (" Sent to the project's lead (no task session is running)." if to == "lead"
+                                      else " Sent to the task's session.")
+            elif to == "lead":
+                said = "Answered. Saved for the project's lead in Messages; it reads it when it runs."
+            else:
+                said = "Answered. Not delivered yet: " + esc(str(r.get("reason") or "no session was reached")) + "."
         return {"did": "answered", "say": said}
 
     async def approve(self, key, gate, item=None):

@@ -7,6 +7,12 @@ import type { AnswersResult, Question, TicketWork } from "../api/types";
 import { unlockDialogOpen, useDevActive } from "../components/DevMode";
 import { Ago } from "../components/ui";
 
+const OTHER = "\u0000other";
+/** The option the agent recommends (multiple-choice questions; older ccds send none), and why. */
+const rec = (q: Question) => { const r = (q as Question & { recommended?: number | null }).recommended;
+  return typeof r === "number" && r >= 0 && r < q.options.length ? r : null; };
+const why = (q: Question) => (q as Question & { why?: string | null }).why ?? null;
+
 export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
   ticketKey: string; work: TicketWork; onDone: (w: TicketWork) => void; compact?: boolean;
 }) {
@@ -16,11 +22,12 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
   const open = pending.filter((q) => q.purpose !== "stale");
   const [vals, setVals] = useState<Record<number, string>>({});
   const [other, setOther] = useState<Record<number, boolean>>({});
+  const [own, setOwn] = useState<Record<number, boolean>>({});      // a choice question answered in Jay's own words
   const [scope, setScope] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<AnswersResult | null>(null);
   // Another ticket: nothing typed or ticked for the previous one carries over (least of all the scope tick).
-  useEffect(() => { setResult(null); setVals({}); setOther({}); setScope(false); }, [ticketKey]);
+  useEffect(() => { setResult(null); setVals({}); setOther({}); setOwn({}); setScope(false); }, [ticketKey]);
 
   const set = (id: number, v: string) => setVals((m) => ({ ...m, [id]: v }));
   const value = (q: Question) => (other[q.id] ? `Other: ${vals[q.id] ?? ""}`.trim() : (vals[q.id] ?? "")).trim();
@@ -33,7 +40,7 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
     try {
       const r = await app.api.answers(ticketKey, filled.map((q) => ({ id: q.id, answer: value(q) })), scope);
       // The scope tick belongs to the batch: it stays until the last answer goes in with it.
-      setResult(r); setVals({}); setOther({}); if (r.complete) setScope(false);
+      setResult(r); setVals({}); setOther({}); setOwn({}); if (r.complete) setScope(false);
       onDone(r.work);
       app.toast(r.complete ? (r.delivered ? `Answers sent — ${ticketKey.toLowerCase()} continues${r.replanned ? " (back to planning)" : ""}`
         : "Answers saved — Claude was not reached") : `${filled.length} answer${filled.length === 1 ? "" : "s"} saved`, r.complete && !r.delivered ? "bad" : "ok");
@@ -86,8 +93,17 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
     <div className="qs-head"><b>Claude needs {open.length} answer{open.length === 1 ? "" : "s"}</b></div>
     {open.map((q, i) => <div key={q.id} className="qs-item">
       <label className="qs-q" htmlFor={`q-${q.id}`}><span className="qs-n">{i + 1}</span>{q.text}</label>
-      {q.kind === "choice" ? <select id={`q-${q.id}`} className="select" value={vals[q.id] ?? ""} onChange={(e) => set(q.id, e.target.value)}>
-        <option value="">Select an option…</option>{q.options.map((o) => <option key={o} value={o}>{o}</option>)}</select>
+      {q.kind === "choice" ? <>
+        <select id={`q-${q.id}`} className="select" value={own[q.id] ? OTHER : vals[q.id] ?? ""} onChange={(e) => {
+          const own = e.target.value === OTHER;
+          setOther((m) => ({ ...m, [q.id]: false })); setOwn((m) => ({ ...m, [q.id]: own })); set(q.id, own ? "" : e.target.value);
+        }}>
+          <option value="">Select an option…</option>
+          {q.options.map((o, j) => <option key={o} value={o}>{o}{rec(q) === j ? " (recommended)" : ""}</option>)}
+          <option value={OTHER}>Something else…</option></select>
+        {rec(q) !== null && <div className="mono-xs muted">Recommended: {q.options[rec(q)!]}{why(q) ? ` — ${why(q)}` : ""}</div>}
+        {own[q.id] && <input className="input" value={vals[q.id] ?? ""} onChange={(e) => set(q.id, e.target.value)}
+          placeholder="Your answer…" aria-label={`${q.text} — your own answer`} />}</>
         : q.kind === "yesno" ? <div className="qs-yn" role="radiogroup" aria-label={q.text}>
           {["Yes", "No"].map((o) => <label key={o} className="qs-radio"><input type="radio" name={`q-${q.id}`} checked={!other[q.id] && vals[q.id] === o}
             onChange={() => { setOther((m) => ({ ...m, [q.id]: false })); set(q.id, o); }} />{o}</label>)}
