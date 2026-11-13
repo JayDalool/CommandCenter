@@ -8,6 +8,8 @@ import { app, initial } from "../src/store/app";
 import { prefs } from "../src/lib/prefs";
 import { loadHqFrame } from "../src/components/Shell";
 import type { ChatConversation, ChatMessage, ChatOverview } from "../src/api/types";
+import { dayLabel } from "../src/hq/pages/Messages";
+import { castLeads, leadKeys } from "../src/hq/persona/assign";
 import { state, tasks } from "./helpers";
 
 const lead = (o: Partial<ChatConversation["lead"]> = {}): ChatConversation["lead"] =>
@@ -53,9 +55,9 @@ beforeEach(() => {
   vi.spyOn(app.api, "chatFileBlob").mockResolvedValue(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }));
   URL.createObjectURL = vi.fn(() => "blob:img-1");
   URL.revokeObjectURL = vi.fn();
-  prefs.patch({ ui: "hq", theme: "dark" });
+  prefs.patch({ ui: "hq", theme: "dark", style: "professional" });
 });
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); prefs.patch({ ui: "classic", theme: "dark" }); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); prefs.patch({ ui: "classic", theme: "dark", style: "professional" }); });
 
 describe("Messages", () => {
   it("lists the CTO and each lead, with unread counts and who is running", async () => {
@@ -81,6 +83,40 @@ describe("Messages", () => {
     expect(img).toHaveAttribute("src", "blob:img-1");
     expect(app.api.chatFileBlob).toHaveBeenCalledWith(PNG);
     expect(app.api.chatSeen).toHaveBeenCalledWith("samvision", 2);
+  });
+
+  it("the open conversation shows who it is with, and a line for each new day", async () => {
+    load();
+    // 2026-10-27 15:00 UTC is "now": one message two days before, two yesterday, two today
+    const NOW = Date.now() / 1000, DAY = 86400;
+    const m = (id: number, side: "jay" | "lead", at: number): ChatMessage => ({ ...MSGS[0], id, side, author: side, text: `message ${id}`, at, seenAt: at, files: [] });
+    vi.mocked(app.api.chatHistory).mockResolvedValue({ conversation: "samvision", lead: lead(),
+      messages: [m(1, "lead", NOW - 2 * DAY), m(2, "jay", NOW - DAY), m(3, "lead", NOW - DAY + 60), m(4, "lead", NOW - 600), m(5, "lead", NOW - 300)] });
+    let c = await show("#/messages?c=samvision");
+    let thread = within(c).getByRole("region", { name: "Conversation with the SamVision lead" });
+    // Professional: the same two letters as the list, no face, and no gutter beside the lead's messages
+    expect(thread.querySelector(".hq-chat-head .hq-chat-av")).toHaveTextContent("Sa");
+    expect(thread.querySelector(".hq-chat-head .hq-chat-av")).toHaveAttribute("aria-hidden", "true");
+    expect(thread.querySelectorAll(".hq-face, .hq-msg-face")).toHaveLength(0);
+    const log = within(thread).getByRole("log");
+    expect([...log.children].filter((x) => x.matches(".hq-chat-day, .hq-msg")).map((x) => x.matches(".hq-chat-day") ? x.textContent : x.querySelector("p")!.textContent)).toEqual([
+      new Date((NOW - 2 * DAY) * 1000).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }), "message 1",
+      "Yesterday", "message 2", "message 3", "Today", "message 4", "message 5"]);
+    expect(dayLabel(NOW - 400 * DAY, NOW)).toMatch(/2025/);
+    cleanup();
+
+    // Childish: the lead's face at the top and beside the first message of each run of its messages
+    prefs.patch({ style: "childish" });
+    c = await show("#/messages?c=samvision");
+    thread = within(c).getByRole("region", { name: "Conversation with the SamVision lead" });
+    const face = thread.querySelector<SVGElement>(".hq-chat-head .hq-face")!.dataset.character;
+    expect(face).toBe(castLeads(leadKeys(app.store.get())).get("samvision")!.id);
+    const msgs = [...thread.querySelectorAll<HTMLElement>(".hq-msg")];
+    expect(msgs.map((x) => [x.classList.contains("has-face"), x.querySelector<SVGElement>(".hq-msg-face .hq-face")?.dataset.character ?? null])).toEqual([
+      [true, face], [false, null], [true, face], [true, face], [true, null]]);
+    thread.querySelectorAll(".hq-face").forEach((f) => expect(f).toHaveAttribute("aria-hidden", "true"));
+    // a face adds nothing to what a message is called
+    expect(msgs[0].getAttribute("aria-label")).toMatch(/^SamVision lead, /);
   });
 
   it("sends with Enter and says how it was delivered", async () => {

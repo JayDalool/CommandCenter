@@ -3,7 +3,7 @@
 // typed into a terminal. Files: images, PDF and Markdown. The server sends every file as a download; an image is shown
 // by fetching its bytes and making a blob of the type the server read from them. A lead that is not running waits;
 // Start asks the server, which checks the budgets first and says when starting would go over.
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import "./office.css";
 import "./governance.css";
 import "./messages.css";
@@ -78,18 +78,24 @@ export function Messages() {
   </div>;
 }
 
-function ConvRow({ c, on, onPick }: { c: ChatConversation; on: boolean; onPick: () => void }) {
+/** Who a conversation is with, in the list and at the top of the open one: the lead's face in Childish mode, else the
+ *  project's logo, else letters on the project's colour. Decoration: the name is beside it. */
+function ConvAvatar({ c }: { c: ChatConversation }) {
   const fun = useFun();
   useLogos();
   const logo = useSelector(logos, (l) => c.kind === "project" && !!l.urls[c.id]);
+  if (fun) return <Persona lead={c.id} size={36} />;
+  if (logo) return <ProjectLogo project={c.id} size={36} />;
+  return <span className={cx("hq-chat-av", c.kind === "cto" && "is-cto")} aria-hidden
+    style={c.kind === "project" ? { background: `var(--hq-pj-${c.id}, var(--hq-node-neutral))` } : undefined}>
+    {c.kind === "cto" ? "CTO" : c.name.slice(0, 2)}</span>;
+}
+
+function ConvRow({ c, on, onPick }: { c: ChatConversation; on: boolean; onPick: () => void }) {
   const [label, tone] = leadPill(c.lead);
   const now = Date.now() / 1000;
   return <button type="button" className={cx("hq-chat-row", on && "is-on")} aria-current={on ? "true" : undefined} onClick={onPick}>
-    {fun ? <Persona lead={c.id} size={36} />
-      : logo ? <ProjectLogo project={c.id} size={36} />
-      : <span className={cx("hq-chat-av", c.kind === "cto" && "is-cto")} aria-hidden
-        style={c.kind === "project" ? { background: `var(--hq-pj-${c.id}, var(--hq-node-neutral))` } : undefined}>
-        {c.kind === "cto" ? "CTO" : c.name.slice(0, 2)}</span>}
+    <ConvAvatar c={c} />
     <span className="hq-chat-row-main">
       <span className="hq-chat-row-top"><b>{c.kind === "cto" ? "CTO" : `${c.name} lead`}</b>
         {c.last && <time>{ago(c.last.at, now)}</time>}</span>
@@ -130,6 +136,7 @@ function Thread({ conv, canStart, pulse, limits, onBack, onChange }: {
   return <section className="hq-chat-thread" aria-label={`Conversation with ${who}`}>
     <header className="hq-chat-head">
       <button type="button" className="hq-chat-back hq-btn" onClick={onBack} aria-label="All conversations"><Icon name="chevl" size={16} /></button>
+      <ConvAvatar c={conv} />
       <div><h3>{conv.kind === "cto" ? "CTO" : `${conv.name} lead`}</h3>
         <small>{conv.kind === "cto" ? "Across every active repository" : conv.lead.name}</small></div>
       <Pill tone={leadPill(conv.lead)[1]}>{leadPill(conv.lead)[0]}</Pill>
@@ -141,7 +148,16 @@ function Thread({ conv, canStart, pulse, limits, onBack, onChange }: {
     <div className="hq-chat-log" role="log" aria-live="polite" aria-label="Messages">
       {err && <p className="hq-note" role="alert">Could not load the conversation: {err}</p>}
       {msgs && msgs.length === 0 && <p className="hq-empty">No messages yet. What you write here is kept, and {who} reads it when told.</p>}
-      {msgs?.map((m) => <Bubble key={m.id} m={m} who={conv.kind === "cto" ? "CTO" : `${conv.name} lead`} />)}
+      {msgs?.map((m, i) => {
+        // A line for each new day, so a time under a message is never read as today's. In Childish mode the lead's
+        // face stands beside the first message of each run of its messages.
+        const prev = msgs[i - 1], day = dayKey(m.at), newDay = !prev || dayKey(prev.at) !== day;
+        return <Fragment key={m.id}>
+          {newDay && <p className="hq-chat-day"><span>{dayLabel(m.at, Date.now() / 1000)}</span></p>}
+          <Bubble m={m} who={conv.kind === "cto" ? "CTO" : `${conv.name} lead`}
+            face={m.side === "lead" && (newDay || prev?.side !== "lead") ? conv.id : null} />
+        </Fragment>;
+      })}
       <div ref={end} />
     </div>
     {notice && <p className="hq-chat-notice" role="status">{notice}</p>}
@@ -184,10 +200,24 @@ function LeadBanner({ conv, canStart, onDone }: { conv: ChatConversation; canSta
 
 function fmtSize(n: number) { return n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`; }
 
-function Bubble({ m, who }: { m: ChatMessage; who: string }) {
+const dayKey = (at: number) => { const d = new Date(at * 1000); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
+
+/** Today, Yesterday, or the date (with the year when it is not this one), in the reader's own time zone. */
+export function dayLabel(at: number, now: number): string {
+  const d = new Date(at * 1000), n = new Date(now * 1000);
+  if (dayKey(at) === dayKey(now)) return "Today";
+  if (dayKey(at) === dayKey(new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1).getTime() / 1000)) return "Yesterday";
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", ...(d.getFullYear() !== n.getFullYear() && { year: "numeric" }) });
+}
+
+/** `face`: the conversation whose lead's face goes beside this message (Childish mode, first of a run). Every one of
+ *  the lead's messages keeps the same indent then, so a run lines up under its face. */
+function Bubble({ m, who, face }: { m: ChatMessage; who: string; face: string | null }) {
+  const fun = useFun();
   const mine = m.side === "jay";
   const at = new Date(m.at * 1000);
-  return <article className={cx("hq-msg", mine ? "is-me" : "is-lead")} aria-label={`${mine ? "You" : who}, ${at.toLocaleString()}`}>
+  return <article className={cx("hq-msg", mine ? "is-me" : "is-lead", fun && !mine && "has-face")} aria-label={`${mine ? "You" : who}, ${at.toLocaleString()}`}>
+    {fun && !mine && <span className="hq-msg-face">{face && <Persona lead={face} size={26} />}</span>}
     <div className="hq-msg-bubble">
       {m.text && <p>{m.text}</p>}
       {m.files.length > 0 && <div className="hq-msg-files">{m.files.map((f) => <FileChip key={f.id} f={f} />)}</div>}

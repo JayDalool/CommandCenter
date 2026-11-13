@@ -22,7 +22,7 @@
 :root[data-ui="hq"] .hq-chat-row.is-on { background: var(--hq-conv-sel-a); border-color: var(--hq-conv-sel-line); }
 :root[data-ui="hq"] .hq-chat-row:focus-visible { outline: 2px solid var(--hq-focus); outline-offset: 1px; }
 :root[data-ui="hq"] .hq-chat-av {
-  display: grid; place-items: center; width: 36px; height: 36px; border-radius: var(--hq-r-md); color: #fff;
+  flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: var(--hq-r-md); color: #fff;
   font: 700 var(--hq-fs-xs) var(--hq-font); letter-spacing: .02em; text-transform: uppercase;
 }
 :root[data-ui="hq"] .hq-chat-av.is-cto { background: var(--hq-accent); }
@@ -69,6 +69,13 @@
 :root[data-ui="hq"] .hq-msg { display: grid; gap: 3px; max-width: min(640px, 82%); }
 :root[data-ui="hq"] .hq-msg.is-me { justify-self: end; align-self: flex-end; justify-items: end; }
 :root[data-ui="hq"] .hq-msg.is-lead { align-self: flex-start; }
+/* Childish mode: the lead's face in a gutter left of its messages; the bubble and the time line share the next column. */
+:root[data-ui="hq"] .hq-msg.has-face { grid-template-columns: 26px minmax(0, 1fr); column-gap: 8px; }
+:root[data-ui="hq"] .hq-msg-face { grid-row: 1 / span 2; }
+:root[data-ui="hq"] .hq-msg.has-face > :is(.hq-msg-bubble, footer) { grid-column: 2; }
+/* a new day: its name between two rules */
+:root[data-ui="hq"] .hq-chat-day { display: flex; align-items: center; gap: 12px; color: var(--hq-muted); font-size: var(--hq-fs-xs); font-weight: 600; }
+:root[data-ui="hq"] .hq-chat-day::before, :root[data-ui="hq"] .hq-chat-day::after { content: ""; flex: 1; height: 1px; background: var(--hq-line); }
 :root[data-ui="hq"] .hq-msg-bubble {
   display: grid; gap: 8px; padding: 10px 13px; border: 1px solid var(--hq-line-2); border-radius: var(--hq-r-lg);
   background: var(--hq-bubble); color: var(--hq-bubble-ink);
