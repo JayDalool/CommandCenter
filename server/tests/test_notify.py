@@ -410,7 +410,7 @@ class ReviewFindings(ReplyBase):
 
         class Chat:
             def get(self, mid):
-                return {"id": 9, "conversation": "samvision", "reply_to": 7,
+                return {"id": 9, "conversation": "samvision", "replyTo": 7,
                         "text": "token=abcdef1234567890 <!channel> <https://evil.example|Open in CommandCenter>"}
         self.d.chat = Chat()
         run(self.n.on_event({"source": "chat", "kind": "chat.reply", "data": {"messageId": 9}}))
@@ -448,11 +448,47 @@ class LeadReplies(unittest.TestCase):
 
         class Chat:
             def get(self, mid):
-                return {"id": 8, "conversation": "samvision", "text": "It touches the importer.", "reply_to": 7}
+                return {"id": 8, "conversation": "samvision", "text": "It touches the importer.", "replyTo": 7}
         d.chat = Chat()
         run(n.on_event({"source": "chat", "kind": "chat.reply", "data": {"messageId": 8, "conversation": "samvision"}}))
         self.assertEqual((slack.posts[-1]["channel"], slack.posts[-1]["thread"]), ("DJAY", ts))
         self.assertIn("It touches the importer.", slack.posts[-1]["text"])
+
+
+class LeadRepliesWithoutReplyTo(unittest.TestCase):
+    def test_an_unthreaded_reply_goes_under_jays_latest_slack_message_to_that_lead(self):
+        n, d, slack, _ = make(settings={"slack": True})
+        run(n.tick())
+        d.needs_list = [need("SV-30", "gate", "merge")]
+        run(n.tick())
+        ts = slack.posts[-1]["ts"]
+        run(n.on_slack({"event": {"type": "message", "user": JAY, "text": "why?", "channel": "DJAY", "ts": "51.0",
+                                  "thread_ts": ts}}))
+
+        class Chat:
+            def get(self, mid):
+                return {"id": 10, "conversation": "samvision", "text": "Because of the importer.", "replyTo": None}
+        d.chat = Chat()
+        run(n.on_event({"source": "chat", "kind": "chat.reply", "data": {"messageId": 10}}))
+        self.assertEqual((slack.posts[-1]["channel"], slack.posts[-1]["thread"]), ("DJAY", ts))
+        d.chat = type("C", (), {"get": lambda self, mid: {"id": 11, "conversation": "gyst", "text": "hi", "replyTo": None}})()
+        run(n.on_event({"source": "chat", "kind": "chat.reply", "data": {"messageId": 11}}))
+        self.assertEqual((slack.posts[-1]["channel"], slack.posts[-1]["thread"]), ("CGY", None))
+
+
+class RealChatShape(unittest.TestCase):
+    def test_a_real_lead_reply_threads_back_under_its_slack_message(self):
+        from ccd import chat as chat_mod
+        base = tempfile.mkdtemp()
+        store = chat_mod.Chat(os.path.join(base, "chat.db"), os.path.join(base, "files"), 4096)
+        jay = store.add("samvision", "jay", "jay", "why?", via="slack")
+        lead = store.add("samvision", "lead", "samvision", "Because of the importer.", reply_to=jay["id"])
+        n, d, slack, _ = make(settings={"slack": True})
+        d.chat = store
+        n.threads[f"msg:{jay['id']}"] = {"type": "origin", "channel": "DJAY", "ts": "42.0", "conversation": "samvision",
+                                         "at": n.clock()}
+        run(n.on_event({"source": "chat", "kind": "chat.reply", "data": {"messageId": lead["id"]}}))
+        self.assertEqual((slack.posts[-1]["channel"], slack.posts[-1]["thread"]), ("DJAY", "42.0"))
 
 
 class Socket(unittest.TestCase):

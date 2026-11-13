@@ -664,7 +664,8 @@ class Notifier:
         if result.get("say"):
             await self._reply(cid, here, result["say"])
         if result.get("message_id") is not None:
-            self.threads[f"msg:{result['message_id']}"] = {"type": "origin", "channel": cid, "ts": here, "at": self.clock()}
+            self.threads[f"msg:{result['message_id']}"] = {"type": "origin", "channel": cid, "ts": here,
+                                                         "conversation": result.get("project"), "at": self.clock()}
             self.store.put("notify:threads", self.threads)
         return result
 
@@ -780,7 +781,14 @@ class Notifier:
         if not msg:
             return
         conv = msg.get("conversation") or data.get("conversation")
-        origin = self.threads.get(f"msg:{msg.get('reply_to')}") if msg.get("reply_to") is not None else None
+        reply_to = msg.get("replyTo")
+        origin = self.threads.get(f"msg:{reply_to}") if reply_to is not None else None
+        if origin is None:
+            # Leads usually answer without --reply-to: thread it under Jay's latest Slack message to this
+            # conversation from the last day, if there is one.
+            recent = [v for k, v in self.threads.items() if k.startswith("msg:") and v.get("conversation") == conv
+                      and (v.get("at") or 0) > self.clock() - 86400]
+            origin = max(recent, key=lambda v: v.get("at") or 0) if recent else None
         who = "CTO" if conv == "cto" else f"{self.name(conv)} lead"
         if self.client(conv):
             body = f"*{who}* replied. Client project: read it in CommandCenter."
