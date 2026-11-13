@@ -80,15 +80,31 @@ function useWalk(root: RefObject<HTMLElement | null>) {
       for (let n: HTMLElement | null = who; n && n !== floor; n = n.offsetParent as HTMLElement | null) { x += n.offsetLeft; y += n.offsetTop; }
       const id = who.dataset.who!, was = last.current.at.get(id);
       at.set(id, [x, y]);
-      if (!still && was && (Math.abs(was[0] - x) >= 2 || Math.abs(was[1] - y) >= 2)) walk(who, was[0] - x, was[1] - y);
+      if (!still && was && (Math.abs(was[0] - x) >= 2 || Math.abs(was[1] - y) >= 2)) {
+        const [ax, ay] = adrift(who);   // moved again before it arrived: carry on from where it is drawn
+        walk(who, was[0] - x + ax, was[1] - y + ay);
+      }
       if (id === held && !floor.contains(document.activeElement)) who.focus({ preventScroll: true });
     }
     last.current = { width, at };
   });
 }
 
-/** First-last-invert-play with one CSS transition: put the element back where it was, then let go. */
+/** What ends each walk under way, so a second walk of the same element replaces the first instead of being cut
+ *  short by the first one's timer. */
+const ending = new WeakMap<HTMLElement, () => void>();
+
+/** How far from its place an element is drawn right now: not zero only while it is walking. */
+function adrift(el: HTMLElement): [number, number] {
+  const t = typeof DOMMatrixReadOnly === "function" ? getComputedStyle(el).transform : "";
+  if (!t || t === "none") return [0, 0];
+  const m = new DOMMatrixReadOnly(t);
+  return [m.m41, m.m42];
+}
+
+/** First-last-invert-play with one CSS transition: put the element back where it was drawn, then let go. */
 function walk(el: HTMLElement, dx: number, dy: number) {
+  ending.get(el)?.();
   const ms = Math.round(Math.min(1800, 450 + Math.hypot(dx, dy) * 1.6));
   el.style.transition = "none";
   el.style.transform = `translate(${dx}px, ${dy}px)`;
@@ -96,9 +112,13 @@ function walk(el: HTMLElement, dx: number, dy: number) {
   void el.offsetWidth;   // the browser has to see the starting place before the transition is switched on
   el.style.transition = `transform ${ms}ms cubic-bezier(.45, .05, .25, 1)`;
   el.style.transform = "";
-  const done = () => { el.classList.remove("is-walking"); el.style.transition = ""; el.removeEventListener("transitionend", done); };
-  el.addEventListener("transitionend", done);
-  window.setTimeout(done, ms + 150);   // a transition that never runs (a hidden tab) still ends
+  const stop = () => { window.clearTimeout(timer); el.removeEventListener("transitionend", arrived); ending.delete(el); };
+  const done = () => { stop(); el.classList.remove("is-walking"); el.style.transition = ""; };
+  // only its own walk ends it, not a transition of something inside it
+  const arrived = (e: TransitionEvent) => { if (e.target === el && (!e.propertyName || e.propertyName === "transform")) done(); };
+  const timer = window.setTimeout(done, ms + 150);   // a transition that never runs (a hidden tab) still ends
+  el.addEventListener("transitionend", arrived);
+  ending.set(el, stop);
 }
 
 export function Floor({ src, ev }: { src: HqSource; ev: Evidence }) {
@@ -125,7 +145,9 @@ export function Floor({ src, ev }: { src: HqSource; ev: Evidence }) {
       <Zone area="desks" icon="desk" title="At their desks" emoji="🔨" sub={count(working, "working")}>
         <div className="hq-floor-teams">{v.teams.map((t) => <div className="hq-floor-team" key={t.key ?? ""} style={tint(t.key)}>
           <span className="hq-floor-team-name hq-with-logo" aria-hidden>{t.key && <ProjectLogo project={t.key} size={16} />}{t.name}</span>
-          <ul aria-label={`${t.name} desks`}>{t.desks.map((m) => <Desk key={m.id} m={m} now={ev.now} />)}</ul>
+          {/* With nobody at a desk the whole list is decoration, so it is not read out as an empty list. */}
+          <ul aria-label={`${t.name} desks`} aria-hidden={t.desks.every((m) => m.spot !== "desk") || undefined}>
+            {t.desks.map((m) => <Desk key={m.id} m={m} now={ev.now} />)}</ul>
         </div>)}</div>
       </Zone>
       <Zone area="lounge" icon="sofa" title="In the lounge" emoji="☕" sub={count(v.lounge.length, "idle")}>
