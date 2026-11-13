@@ -46,7 +46,7 @@ sys.path[:0] = [str(ROOT / "server")]
 
 import uvicorn  # noqa: E402
 
-from ccd import attachments, config, files, gitops, pty, registry, search, security  # noqa: E402
+from ccd import attachments, chat, config, files, gitops, pty, registry, search, security  # noqa: E402
 from ccd.api import create_app  # noqa: E402
 from ccd.daemon import Daemon, host_snapshot  # noqa: E402
 from ccd.herdr import Herdr  # noqa: E402
@@ -290,6 +290,7 @@ async def main(reseed):
     daemon.files = files.Roots(sandbox)
     daemon.attachments = attachments.Attachments(config.DATA_DIR / "attachments.db", config.ATTACH_DIR,
                                                  50 * 1024 * 1024)
+    daemon.chat = chat.Chat(config.DATA_DIR / "chat.db", DEV / "chat-files", 20 * 1024 * 1024)
     daemon.dev_gate = security.DeveloperGate(security.load_or_create_token(config.DEV_TOKEN_PATH))
     daemon.dev_token_hint = str(config.DEV_TOKEN_PATH).replace(str(Path.home()), "~", 1)
     daemon.launcher_dir = Path.home() / ".local" / "share" / "command-center" / "launcher"
@@ -328,6 +329,7 @@ async def main(reseed):
     finally:
         store.close()
         tasks.close()
+        daemon.chat.close()
         await fake.stop()
 
 

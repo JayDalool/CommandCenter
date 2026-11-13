@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 
 /** ccd's UI policy for a given port (server/ccd/api.py, UiFiles.__init__). */
 export function csp(port) {
-  return "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+  return "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; " +
     `connect-src 'self' ws://127.0.0.1:${port} ws://localhost:${port}; font-src 'self'; ` +
     "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'";
 }

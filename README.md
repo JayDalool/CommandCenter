@@ -33,6 +33,10 @@ own; when ccd is down, it builds locally exactly as before.
   last run, kept in the repo, findings for Jay to Fix it / Skip. ccd then reminds an
   idle night-shift coordinator to continue until its morning report says
   `Status: complete` (or nothing moves after 3 reminders). A coordinator is never a task session.
+  **Messages** (Jay's answers C1-C8): Jay's message to a project lead or the CTO is stored, and the idle lead gets one
+  fixed nudge to read it with `scripts/cc-inbox` (never Jay's words in the pane). The one place ccd STARTS a Claude:
+  Jay's Start in Messages, while `chat_start_leads` is true, after a budget check (`herdr workspace create` +
+  `herdr agent start` in a new workspace; nothing in Jay's layout is split, moved or closed).
 - **Waiting for Jay is per task.** A task does not start while it, or a task it
   is blocked by, has an open question, plan or blocker for Jay; everything else
   keeps moving (tasks that need a lawyer never hold anything).

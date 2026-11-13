@@ -2,7 +2,8 @@ import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
 import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
-  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, InboxState, WorkersState, WorkerNode, AuditState, ActorsState, ActorToken, UsageState, BudgetsState, NotifyState, NotifySettings } from "./types";
+  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, InboxState, WorkersState, WorkerNode, AuditState, ActorsState, ActorToken, UsageState, BudgetsState, NotifyState, NotifySettings,
+  ChatOverview, ChatMessage, ChatLead, ChatSendResult, ChatStartResult, ChatFile } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -264,6 +265,39 @@ export class Api {
     try { data = await res.json(); } catch { /* empty */ }
     if (!res.ok) throw new ApiError(res.status, data && typeof data === "object" && "error" in data ? String((data as { error: unknown }).error) : `HTTP ${res.status}`);
     return data as T;
+  }
+
+  // ---------- Messages (ccd/leadchat.py) ----------
+  chat() { return this.req<ChatOverview>("GET", "/api/chat"); }
+  chatHistory(conv: string, before?: number) {
+    return this.req<{ conversation: string; messages: ChatMessage[]; lead: ChatLead }>("GET",
+      `/api/chat/${encodeURIComponent(conv)}${before ? `?before=${before}` : ""}`);
+  }
+  chatSend(conv: string, text: string, files: string[] = []) {
+    return this.req<ChatSendResult>("POST", `/api/chat/${encodeURIComponent(conv)}/messages`, { text, files });
+  }
+  chatSeen(conv: string, upTo?: number) {
+    return this.req<{ ok: true; seen: number }>("POST", `/api/chat/${encodeURIComponent(conv)}/seen`, upTo ? { upTo } : {});
+  }
+  /** Start the stopped lead. Over budget answers 409 with needsApproval until overBudgetOk is sent. */
+  async chatStart(conv: string, overBudgetOk = false): Promise<ChatStartResult> {
+    try {
+      return await this.req<ChatStartResult>("POST", `/api/chat/${encodeURIComponent(conv)}/start`, overBudgetOk ? { overBudgetOk: true } : {});
+    } catch (e) {
+      const data = (e as { data?: ChatStartResult }).data;
+      if (e instanceof ApiError && e.status === 409 && data?.needsApproval) return data;
+      throw e;
+    }
+  }
+  /** A file's bytes, fetched with the token header. The server always sends octet-stream; the caller types the blob. */
+  async chatFileBlob(file: ChatFile): Promise<Blob> {
+    const headers: Record<string, string> = {};
+    const token = getToken();
+    if (token) headers["X-CCD-Token"] = token;
+    const res = await this.fetchImpl(this.base + `/api/chat/files/${encodeURIComponent(file.id)}`,
+      { headers, cache: "no-store", credentials: "omit" });
+    if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+    return new Blob([await res.arrayBuffer()], { type: file.mime });
   }
 
   /** GET a file with the token header and hand it to the browser as a download. */

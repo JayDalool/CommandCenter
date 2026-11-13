@@ -28,6 +28,7 @@ DEV_TOKEN_PATH = Path(os.environ.get("CCD_DEV_TOKEN_FILE",
                                    Path.home() / ".config" / "command-center" / "developer.token"))
 SHARE_DIR = Path(os.environ.get("CCD_SHARE_DIR", Path.home() / ".local" / "share" / "command-center"))
 ATTACH_DIR = SHARE_DIR / "attachments"
+CHAT_FILES_DIR = SHARE_DIR / "chat-files"
 LAUNCHER_DIR = Path(os.environ.get("CCD_LAUNCHER_DIR", SHARE_DIR / "launcher"))
 HERDR_SOCKET = Path(os.environ.get("CCD_HERDR_SOCKET", Path.home() / ".config" / "herdr" / "herdr.sock"))
 
@@ -78,6 +79,13 @@ DEFAULTS = {
     # (merge, Go Live approval, deploy request/record, pane input, repository writes, worktree removal), the eight
     # checks and whether Phase 2 would refuse it. Off until Jay sets it true; read at start. Records only.
     "phase2_broker_shadow": False,
+    # Messages (ccd/chat.py, ccd/leadchat.py): files per message are capped at this size. Leads are started from
+    # Messages only when chat_start_leads is true (Jay presses Start; budget check first). The CTO is the herdr agent
+    # named `cto`, started at chat_cto_root (default: the home folder) with chat_cto_model.
+    "chat_file_max_mb": 20,
+    "chat_start_leads": False,
+    "chat_cto_root": "",
+    "chat_cto_model": "opus",
 }
 
 # The only project fields that may leave the server.
