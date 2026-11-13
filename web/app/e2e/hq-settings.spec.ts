@@ -105,3 +105,31 @@ test("Style: Professional has no faces; Childish puts them on Teams and My Offic
   }
   expect(await problems(page, watch)).toEqual([]);
 });
+
+// A 1x1 PNG, served as ccd serves a logo: octet-stream, typed by the page from ccd's list. Buffer is reached through
+// globalThis so the type check needs no @types/node (as env.ts does for process.env).
+const DOT = (globalThis as unknown as { Buffer: { from(s: string, enc: "base64"): never } }).Buffer
+  .from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+
+test("Project logos: shown from a blob beside the name on My Office, Teams and Settings, with no CSP violation", async ({ page, watch }) => {
+  await page.route("**/api/projects/logos", (r) => r.fulfill({ json: { samvision: { mime: "image/png", sha256: "a".repeat(64), updatedAt: 1794549789 } } }));
+  await page.route("**/api/projects/samvision/logo", (r) => r.fulfill({ body: DOT, contentType: "application/octet-stream",
+    headers: { "content-disposition": "attachment", "x-content-type-options": "nosniff", "content-security-policy": "sandbox" } }));
+  await page.setViewportSize({ width: 1280, height: 900 });
+  for (const r of ["dashboard", "agents", "settings?tab=appearance"]) {
+    await open(page, r);
+    const logo = page.locator("#main img.hq-logo[data-project=samvision]").first();
+    await expect(logo).toBeVisible();
+    await expect(logo).toHaveAttribute("src", /^blob:/);
+    // the picture really decoded: a blob of the wrong type, or one CSP refused, has no size
+    expect(await logo.evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth), r).toBe(1);
+    expect(await page.evaluate(wide), r).toBe(true);
+  }
+  // locked: the row offers the change, and choosing opens Developer Unlock instead of the file dialog
+  const row = page.locator("#set-logos .hq-set-row").filter({ hasText: "SamVision" });
+  await expect(row).toContainText("PNG, added");
+  await row.locator("label.hq-btn").click();
+  await expect(page.getByRole("dialog", { name: "Developer Unlock" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  expect(await problems(page, watch)).toEqual([]);
+});

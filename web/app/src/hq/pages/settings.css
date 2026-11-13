@@ -132,3 +132,9 @@
   :root[data-ui="hq"] .hq-theme button { padding: 4px; text-align: center; }
   :root[data-ui="hq"] .hq-theme-thumb { width: 100%; height: auto; aspect-ratio: 116 / 74; }
 }
+
+/* A file input inside its label-button: there for the keyboard and screen readers, not drawn. The label shows focus. */
+:root[data-ui="hq"] .hq-file { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; clip-path: inset(50%); }
+:root[data-ui="hq"] label.hq-btn { position: relative; }
+:root[data-ui="hq"] label.hq-btn:focus-within { outline: 2px solid var(--hq-focus); outline-offset: 2px; }
+:root[data-ui="hq"] label.hq-btn.is-busy, :root[data-ui="hq"] .hq-set-row-v .hq-btn[aria-disabled="true"] { opacity: .6; cursor: default; }

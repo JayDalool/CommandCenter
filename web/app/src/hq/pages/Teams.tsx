@@ -15,6 +15,7 @@ import { buildTeams, PRESENCE_LABEL, type Team, type TeamMember } from "../data"
 import { useHqData } from "./live";
 import { Kpi, Pill, PRESENCE_TONE, cx, plural } from "./ui";
 import { Icon } from "../frame/icons";
+import { ProjectLogo } from "../logos";
 import { Fun, Persona, PRESENCE_EMOJI, useFun } from "../persona/mode";
 
 interface Extra { model: string; last: { at: number; text: string } | null }
@@ -37,7 +38,7 @@ function TeamPanel({ t, extra, now, stale }: { t: Team; extra: Map<string, Extra
   const n = t.members.length + (t.lead ? 1 : 0);
   const defined = t.defined.filter((d, i) => t.defined.findIndex((x) => x.name === d.name && x.model === d.model) === i);
   return <section className="hq-panel hq-team" aria-labelledby={`hq-team-${t.key}`} style={{ ["--pj" as string]: `var(--hq-pj-${t.key}, var(--hq-accent))` }}>
-    <header><h3 id={`hq-team-${t.key}`}>{t.name} <small>{plural(n, "session")}{stale ? " last reported" : ""} · {plural(t.openTasks, "open task")}</small></h3>
+    <header><h3 id={`hq-team-${t.key}`}><ProjectLogo project={t.key} /> {t.name} <small>{plural(n, "session")}{stale ? " last reported" : ""} · {plural(t.openTasks, "open task")}</small></h3>
       <span className="hq-team-links"><a className="hq-link" href={href("tasks", null, { project: t.key })}>Tasks</a>
         <a className="hq-link" href={href("projects", t.key)}>Project</a></span></header>
     <div className="hq-sess-grid">
@@ -55,7 +56,7 @@ function OrgBranch({ t, extra, now }: { t: Team; extra: Map<string, Extra>; now:
   const defined = t.defined.filter((d, i) => t.defined.findIndex((x) => x.name === d.name && x.model === d.model) === i);
   return <li className="hq-org-branch" style={{ ["--pj" as string]: `var(--hq-pj-${t.key}, var(--hq-accent))` }}>
     <div className="hq-org-proj">
-      <span className="hq-org-proj-t"><i aria-hidden /><b className="hq-ellip">{t.name}</b></span>
+      <span className="hq-org-proj-t"><i aria-hidden /><ProjectLogo project={t.key} size={18} /><b className="hq-ellip">{t.name}</b></span>
       <small>{plural(t.openTasks, "open task")}</small>
       <span className="hq-team-links"><a className="hq-link" href={href("tasks", null, { project: t.key })}>Tasks</a>
         <a className="hq-link" href={href("projects", t.key)}>Project</a></span>

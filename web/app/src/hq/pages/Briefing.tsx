@@ -7,6 +7,7 @@ import { app } from "../../store/app";
 import { useSelector } from "../../lib/store";
 import { href } from "../../lib/router";
 import type { BriefingCounts, BriefingHighlight, BriefingProject } from "../../api/types";
+import { ProjectLogo } from "../logos";
 import { loadMessage, useLoad, usePulse } from "./load";
 import { Pill, cx, plural } from "./ui";
 
@@ -50,7 +51,7 @@ function Project({ p, now, tickets }: { p: BriefingProject; now: Date; tickets: 
   const more = p.highlights.length - SHOWN;
   return <li className="hq-brief-proj" style={{ ["--pj" as string]: `var(--hq-pj-${p.key}, var(--hq-accent))` }}>
     <div className="hq-brief-top">
-      <a className="hq-brief-name" href={href("projects", p.key)}>{p.name}</a>
+      <a className="hq-brief-name hq-with-logo" href={href("projects", p.key)}><ProjectLogo project={p.key} />{p.name}</a>
       <Pill tone={tone}>{label}</Pill>
       <span className="hq-brief-counts">{counted(p) || "Nothing counted"}</span>
       {p.needsYou > 0 && <a className="hq-brief-needs" href={href("needs")}>{p.needsYou} waiting on you</a>}

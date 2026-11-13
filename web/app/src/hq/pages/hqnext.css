@@ -17,7 +17,7 @@
   display: grid; gap: 6px; min-width: 0; padding: 10px 12px; border: 1px solid var(--hq-line); border-radius: var(--hq-r-md);
   background: var(--hq-tile); box-shadow: inset 3px 0 0 var(--pj);
 }
-:root[data-ui="hq"] .hq-brief-top { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; min-width: 0; }
+:root[data-ui="hq"] .hq-brief-top { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; min-width: 0; }
 :root[data-ui="hq"] .hq-page .hq-brief-name { font-weight: 650; font-size: var(--hq-fs-md); color: var(--hq-text-strong); }
 :root[data-ui="hq"] .hq-page .hq-brief-name:hover { text-decoration: underline; }
 :root[data-ui="hq"] .hq-brief-counts { flex: 1; min-width: 0; color: var(--hq-text-2); font-size: var(--hq-fs-sm); }

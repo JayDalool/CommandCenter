@@ -16,6 +16,7 @@ import { jayQueue } from "../../tickets/model";
 import { ago } from "../../lib/time";
 import { Icon } from "../frame/icons";
 import { Persona, useFun } from "../persona/mode";
+import { ProjectLogo, logos, useLogos } from "../logos";
 import { usePageNav } from "./route";
 import { Pill, cx, plural } from "./ui";
 
@@ -79,10 +80,13 @@ export function Messages() {
 
 function ConvRow({ c, on, onPick }: { c: ChatConversation; on: boolean; onPick: () => void }) {
   const fun = useFun();
+  useLogos();
+  const logo = useSelector(logos, (l) => c.kind === "project" && !!l.urls[c.id]);
   const [label, tone] = leadPill(c.lead);
   const now = Date.now() / 1000;
   return <button type="button" className={cx("hq-chat-row", on && "is-on")} aria-current={on ? "true" : undefined} onClick={onPick}>
     {fun ? <Persona lead={c.id} size={36} />
+      : logo ? <ProjectLogo project={c.id} size={36} />
       : <span className={cx("hq-chat-av", c.kind === "cto" && "is-cto")} aria-hidden
         style={c.kind === "project" ? { background: `var(--hq-pj-${c.id}, var(--hq-node-neutral))` } : undefined}>
         {c.kind === "cto" ? "CTO" : c.name.slice(0, 2)}</span>}
