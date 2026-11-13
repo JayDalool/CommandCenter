@@ -36,6 +36,7 @@ from . import budgets as budgets_mod
 from . import onboarding as onboarding_mod
 from . import herdr as herdr_mod
 from . import importer
+from .hq import HqDaemon
 from .leadchat import LeadChat
 # A ticket key in an /api/tasks path, in any case (tasks._id_of upper-cases it), for the shadow identity record.
 TICKET_PATH_RE = re.compile(r"/api/tasks/([A-Za-z][A-Za-z0-9-]{0,20}-\d{1,6})(?:/|$)")
@@ -281,7 +282,7 @@ def oom_kills_24h():
     return sum(1 for l in r.stdout.splitlines() if "Out of memory: Killed process" in l)
 
 
-class Daemon(LeadChat):
+class Daemon(LeadChat, HqDaemon):
     def __init__(self, cfg, store, herdr, *, github_fn=None, host_fn=None, git_fn=None, oom_fn=None, tasks=None,
                  gh_cli=None, policy=None):
         self.cfg = cfg

@@ -173,6 +173,20 @@
                                      its type is read from its bytes; anything else is refused (415)
     GET   /api/chat/files/{fid}      always application/octet-stream + attachment
 
+  HQ next (ccd/hq.py; contracts.md 1-3): milestones per project (technical and business tracks), the overnight briefing,
+  project logos. Milestones are notes, like Messages: normal sign-in for Jay; a project's lead (agent:lead-<project>)
+  adds and changes its own technical milestones only. Logo uploads are Jay with Developer Unlock.
+    GET    /api/milestones                    every task project: {technical, business, revision}
+    POST   /api/milestones/{project}          {track, title, due?, note?}
+    PATCH  /api/milestones/{project}/{id}     {title?, state?, due?, note?}
+    DELETE /api/milestones/{project}/{id}     Jay
+    PUT    /api/milestones/{project}/order    Jay. {track, ids, revision}: 409 if the revision moved
+    GET    /api/briefing                      ?since=<unix seconds> (default 12 h ago): counts and highlights per project
+    GET    /api/projects/logos                {project: {mime, sha256, updatedAt}}
+    PUT    /api/projects/{project}/logo       JAY + DEVELOPER UNLOCK. octet-stream: PNG, JPEG or WebP from its bytes, <= 512 KB
+    GET    /api/projects/{project}/logo       always application/octet-stream + attachment
+    DELETE /api/projects/{project}/logo       JAY + DEVELOPER UNLOCK
+
   DEVELOPER routes need the ccd token AND `X-CCD-Developer: <session>` from
   /api/developer/unlock. The ordinary ccd token alone can never write a file.
 
@@ -217,6 +231,8 @@ WRITE_METHODS = ("POST", "PATCH", "PUT", "DELETE")
 # The only routes that take a raw byte body instead of JSON. application/octet-stream
 # is not a CORS-safelisted type either, so a cross-site page still needs a preflight.
 STREAM_PATHS = ("/api/files/upload", "/api/attachments", "/api/chat/files")
+# The one raw-byte PUT: a project's logo (ccd/hq.py).
+LOGO_PATH = re.compile(r"^/api/projects/[a-z][a-z0-9_-]{0,31}/logo$")
 DEV_HEADER = "x-ccd-developer"
 SCM_OPS = ("stage", "unstage", "stage-all", "discard", "commit", "branch")
 # SSH sign-in: the browser trades a one-time code (minted over Jay's SSH login) for the ccd token and a
@@ -353,7 +369,8 @@ class Guard:
                 problem = (401, "token required")
             elif scope["type"] == "http" and scope.get("method") in WRITE_METHODS and \
                     headers.get("content-type", "").split(";")[0].strip() != "application/json" and not (
-                        path in STREAM_PATHS and scope.get("method") == "POST" and
+                        ((path in STREAM_PATHS and scope.get("method") == "POST") or
+                         (LOGO_PATH.match(path) and scope.get("method") == "PUT")) and
                         headers.get("content-type", "").split(";")[0].strip() == "application/octet-stream"):
                 problem = (415, "actions take application/json")
         elif scope["type"] == "http" and scope.get("method") not in ("GET", "HEAD"):
@@ -799,6 +816,64 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
 
     async def link_task(request, body):
         return daemon.task_link(request.path_params["key"], body, request.state.actor)
+
+    # ---------- HQ next: milestones, briefing, project logos (ccd/hq.py) ----------
+
+    def hq_route(fn, raw=False):
+        async def handler(request):
+            try:
+                body = await _body(request) if request.method in ("POST", "PATCH", "PUT") and not raw else None
+                _note(body=body)
+                request.state.actor = actor_of(request)
+                _note(claimed=request.state.actor)
+                result = await fn(request, body)
+                return result if not isinstance(result, dict) else _json(result)
+            except ActionError as e:
+                return _json({"ok": False, "error": e.message}, e.status)
+        return handler
+
+    async def milestones_list(request, _):
+        return daemon.milestones_state(request.state.actor)
+
+    async def milestone_add(request, body):
+        return daemon.milestone_add(request.path_params["project"], body, request.state.actor)
+
+    async def milestone_patch(request, body):
+        return daemon.milestone_update(request.path_params["project"], request.path_params["mid"], body,
+                                       request.state.actor)
+
+    async def milestone_remove(request, body):
+        return daemon.milestone_remove(request.path_params["project"], request.path_params["mid"],
+                                       request.state.actor)
+
+    async def milestone_order(request, body):
+        return daemon.milestone_order(request.path_params["project"], body, request.state.actor)
+
+    async def briefing(request, _):
+        q = request.query_params
+        raw = q.get("since")
+        if raw is not None and not re.fullmatch(r"[0-9]{1,12}(\.[0-9]{1,6})?", raw):
+            raise ActionError(400, "since must be unix seconds")
+        return daemon.briefing(float(raw) if raw is not None else None)
+
+    async def logos_list(request, _):
+        return daemon.logos_state()
+
+    async def logo_put(request, _):
+        _jay_dev(request, "a logo is an upload")
+        return await daemon.logo_put(request.path_params["project"], request.stream(), request.state.actor,
+                                     length=_length(request))
+
+    async def logo_get(request, _):
+        fd, meta = await asyncio.to_thread(daemon.logo_open, request.path_params["project"])
+        ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}[meta["mime"]]
+        resp = _stream_fd(fd, meta["size"], request.path_params["project"] + "-logo" + ext)
+        resp.headers["X-CCD-Logo-Type"] = meta["mime"]
+        return resp
+
+    async def logo_remove(request, body):
+        _jay_dev(request, "removing a logo")
+        return daemon.logo_remove(request.path_params["project"])
 
     # ---------- workspace, files, attachments, developer unlock ----------
 
@@ -1428,6 +1503,16 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/chat/{conv}/seen", chat_route(chat_seen), methods=["POST"]),
         Route("/api/chat/{conv}/inbox", chat_route(chat_inbox), methods=["GET"]),
         Route("/api/chat/{conv}/start", chat_route(chat_start), methods=["POST"]),
+        Route("/api/milestones", hq_route(milestones_list), methods=["GET"]),
+        Route("/api/milestones/{project}", hq_route(milestone_add), methods=["POST"]),
+        Route("/api/milestones/{project}/order", hq_route(milestone_order), methods=["PUT"]),
+        Route("/api/milestones/{project}/{mid}", hq_route(milestone_patch), methods=["PATCH"]),
+        Route("/api/milestones/{project}/{mid}", hq_route(milestone_remove), methods=["DELETE"]),
+        Route("/api/briefing", hq_route(briefing), methods=["GET"]),
+        Route("/api/projects/logos", hq_route(logos_list), methods=["GET"]),
+        Route("/api/projects/{project}/logo", hq_route(logo_put, raw=True), methods=["PUT"]),
+        Route("/api/projects/{project}/logo", hq_route(logo_get), methods=["GET"]),
+        Route("/api/projects/{project}/logo", hq_route(logo_remove), methods=["DELETE"]),
         Route("/api/developer", dev_status, methods=["GET"]),
         Route("/api/developer/unlock", dev_unlock, methods=["POST"]),
         Route("/api/developer/lock", dev_lock, methods=["POST"]),

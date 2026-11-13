@@ -15,8 +15,8 @@ import sys
 
 import uvicorn
 
-from . import (__version__, attachments, chat, config, files, gitops, nightshift, notify, pty, records, search, security,
-               uitests)
+from . import (__version__, attachments, chat, config, files, gitops, hq, nightshift, notify, pty, records, search,
+               security, uitests)
 from .api import create_app
 from .daemon import Daemon
 from .herdr import Herdr
@@ -89,6 +89,7 @@ def build(cfg=None):
     daemon.attachments = attachments.Attachments(config.DATA_DIR / "attachments.db", config.ATTACH_DIR, upload_max)
     daemon.chat = chat.Chat(config.DATA_DIR / "chat.db", config.CHAT_FILES_DIR,
                             int(cfg.get("chat_file_max_mb") or 20) * 1024 * 1024)
+    daemon.hq = hq.HqStore(config.DATA_DIR / "hq.db", config.LOGO_DIR)   # milestones and project logos
     dev_secret = security.load_or_create_token(config.DEV_TOKEN_PATH)
     if hmac.compare_digest(dev_secret, token):
         sys.exit("developer.token must differ from ccd.token")
@@ -121,6 +122,7 @@ def build(cfg=None):
             tasks.close()
             daemon.attachments.close()
             daemon.chat.close()
+            daemon.hq.close()
             logging.getLogger("ccd").info(json.dumps({"msg": "stopped"}))
 
     guarded, _ = create_app(daemon, token, config.PORT, lifespan=lifespan)

@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""cc-milestone: a lead's side of HQ milestones. See server/ccd/milestone_cli.py."""
+import os
+import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "server"))
+
+from ccd import milestone_cli  # noqa: E402
+
+sys.exit(milestone_cli.main())

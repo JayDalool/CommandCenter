@@ -46,7 +46,8 @@ Kinds: `agent.started|exited|state_changed|blocked`, `pr.opened|closed|ci_change
 `task.pipeline` (ref = ticket key; data.kind = the pipeline step, e.g. `pipeline.started`,
 `pipeline.worktree_removed` — the DONE ticket's worktree was removed after ccd's git poll found it
 clean and fully pushed; `pipeline.worktree_kept` — it was kept, data.reason says why, recorded once
-per reason, not every poll).
+per reason, not every poll), `milestone.added|changed|done|removed` (data `{id, track, state}`, never the title),
+`logo.changed|removed` (project only).
 
 Client recipe: `GET /api/state` → keep `{state, seq}` → `WS ?since=seq` →
 apply events; on `events_lost` or disconnect, repeat.
@@ -229,3 +230,82 @@ The nudge (`leadchat.NUDGE_TEXT`) names only the conversation and the two comman
 message id and delivery, never message text. "That conversation's lead" is the actor `agent:lead-<conv>`, or
 `agent:cto` for `cto` (what cc-inbox and cc-reply send); every other agent actor is refused (403). `GET /api/state` carries `chat: {unread}`. Slack delivery calls
 `Daemon.deliver_to_lead(conversation, text, via="slack", ref=…)`, which stores and nudges the same way and never starts a lead.
+
+## HQ next: milestones, briefing, project logos (contracts.md 1-3, 2026-11-13)
+
+`ccd/hq.py` (store and builders), `ccd/milestone_cli.py` (`scripts/cc-milestone`). Storage: its own SQLite file
+`DATA_DIR/hq.db` (0600) and `SHARE_DIR/project-logos/` (0700); no existing table changes. `{project}` is any task
+project key (the polled projects plus `task_projects`, e.g. `commandcenter`); anything else is 404. Every write needs
+`Content-Type: application/json` (a DELETE too, with or without a body), except the logo PUT. 503 when ccd runs
+without the HQ store.
+
+### Milestones
+
+Per project, two tracks: `technical` (set up the backend, ship the mobile layout) and `business` (real-life: contact
+the lawyer, send the email to the client).
+
+    Milestone = { id: "m_<12 hex>", title: string (1-140), state: "todo" | "doing" | "done",
+                  due: "YYYY-MM-DD" | null, note: string | null (<=500), doneAt: number | null, by: string }
+
+| route | who | what |
+|---|---|---|
+| `GET /api/milestones` | Jay; a lead sees only its own project's `technical` track (no `business` key) | `{projects: {[key]: {technical: Milestone[], business: Milestone[], revision}}}`. Every task project appears, with empty lists when it has none. List order is display order (new ones go last) |
+| `POST /api/milestones/{project}` | Jay; the project's lead for `technical` | `{track, title, due?, note?}` → `{milestone, revision}`. New milestones start `todo`. `by` is the actor that added it |
+| `PATCH /api/milestones/{project}/{id}` | Jay; the project's lead on a `technical` one | `{title?, state?, due?, note?}` (at least one; `due`/`note` null or "" clears) → `{milestone, revision}`. Moving to `done` sets `doneAt`; moving out of it clears it. The track never changes |
+| `DELETE /api/milestones/{project}/{id}` | Jay | → `{ok, revision}` |
+| `PUT /api/milestones/{project}/order` | Jay | `{track, ids, revision}`: `ids` lists every milestone of that track once, in the new order → `{revision}`. 409 when `revision` is not the project's current one (someone changed it since you loaded); 400 when `ids` is not exactly the track's ids |
+
+Who: Jay with normal sign-in, no Developer Unlock (notes, like Messages). "The project's lead" is the actor
+`agent:lead-<project>` (as in Messages, what `cc-milestone` sends); it never writes `business`, never removes and never
+reorders. Every other agent actor is refused (403). `revision` is one number per project that every change moves.
+A title or note that looks like a password, token or key, or holds control characters, is refused (400). At most 200
+milestones per track per project.
+
+Events: `milestone.added|changed|done|removed` (source `milestones`), `project` set, `data: {id, track, state}`, text
+`"<project>: <track> milestone <verb>"`: never the title or note. A PATCH that moves a milestone into `done` is
+`milestone.done`; every other PATCH is `milestone.changed`. A reorder is `milestone.changed` with `id: null`.
+
+Leads: `scripts/cc-milestone list|add|start|done <project> …` (`add PROJECT "title" [--due] [--note]`, `start|done
+PROJECT ID`), as `agent:lead-<project>` (or `$CCD_ACTOR`).
+
+### Briefing
+
+`GET /api/briefing?since=<unix seconds>` (anyone with the token; read-only). Default since: 12 hours ago. It is clamped
+to the event log's retention (`retention_days`, default 30) and never later than now.
+
+    { since, until,
+      totals: { merged, done, failedChecks, opened, questionsAsked, questionsAnswered, deploys, needsYou },
+      projects: [ { key, name, merged, done, failedChecks, opened, questionsAsked, questionsAnswered, deploys, needsYou,
+                    mainChecks: "passing" | "failing" | "unknown", spendUsd: number | null,
+                    highlights: [ { at, kind, text, ref } ] } ],
+      quiet: boolean }
+
+Every task project appears, in the registry's order. In the window:
+
+- `merged`, `deploys`: tickets with `pipeline.merged`/`pipeline.auto_merged` and `pipeline.deployed` (tasks.db, the same
+  ticket events as the Slack owner's and technical summaries); `done`: tickets with `pipeline.done` or a status change
+  to DONE. Each counts distinct tickets.
+- `opened`: PRs opened (`pr.opened`); `failedChecks`: a PR's checks or main's checks turning failing (`pr.ci_changed`
+  / `ci.main_changed` to ✗).
+- `questionsAsked`, `questionsAnswered`: questions Claude asked Jay, and Jay's answers (tasks.db `ticket_questions`).
+
+Now, not in the window: `needsYou` (the Needs You queue plus agents waiting on Jay), `mainChecks` (main's last run).
+`spendUsd`: measured spend in the window from the usage meter; `null` until the meter has read a log, and `null` for a
+project with any unpriced reply in the window (a partial sum would read as exact) (no data is never shown as $0). `highlights`: the newest 8 events of the
+window for that project, newest first: merges, deploys, done, gates and questions opened, answers, blocks, failed
+auto-merges, re-plans, PRs opened and closed, checks turning failing, main checks changing, lead replies in Messages,
+milestones done. `kind` is the pipeline step (`pipeline.merged`) or the event kind (`pr.opened`); `text` is ccd's own
+event wording; `ref` the ticket key or `#<PR>`. Client projects (notify `client_projects`, default gauzemate): `text`
+is `"<ref> · <short label>"` only (`GM-9 · merged`, `GM-9 · waiting on you`). `quiet` is true when nothing at all
+happened in the window (every count but `needsYou` is 0 and there are no highlights).
+
+### Project logos
+
+| route | who | what |
+|---|---|---|
+| `PUT /api/projects/{project}/logo` | Jay + Developer Unlock | raw body, `Content-Type: application/octet-stream`. PNG, JPEG or WebP read from the bytes (never SVG, never GIF); 415 otherwise; 413 over 512 KB. Replaces any earlier one → `{ok, mime, sha256, updatedAt}`. Event `logo.changed` |
+| `GET /api/projects/{project}/logo` | anyone with the token | the bytes, always `application/octet-stream` + `attachment` + `CSP: sandbox` + `nosniff`; `X-CCD-Logo-Type` names the stored type, so HQ builds a `blob:` of that type (as for chat images). 404 when none |
+| `DELETE /api/projects/{project}/logo` | Jay + Developer Unlock | → `{ok}`; 404 when none. Event `logo.removed` |
+| `GET /api/projects/logos` | anyone with the token | `{[key]: {mime, sha256, updatedAt}}` for the projects that have one, so the UI can cache by sha (the logo GET itself is `no-store`) |
+
+Logos work for project keys of the form `^[a-z][a-z0-9_-]{0,31}$` (every registered key today).

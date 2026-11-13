@@ -29,6 +29,7 @@ DEV_TOKEN_PATH = Path(os.environ.get("CCD_DEV_TOKEN_FILE",
 SHARE_DIR = Path(os.environ.get("CCD_SHARE_DIR", Path.home() / ".local" / "share" / "command-center"))
 ATTACH_DIR = SHARE_DIR / "attachments"
 CHAT_FILES_DIR = SHARE_DIR / "chat-files"
+LOGO_DIR = SHARE_DIR / "project-logos"
 LAUNCHER_DIR = Path(os.environ.get("CCD_LAUNCHER_DIR", SHARE_DIR / "launcher"))
 HERDR_SOCKET = Path(os.environ.get("CCD_HERDR_SOCKET", Path.home() / ".config" / "herdr" / "herdr.sock"))
 

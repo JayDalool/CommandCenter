@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS alerts (
 EVENT_DATA_KEYS = ("from", "to", "status", "number", "ci", "stage", "kind", "reason",
                    "error", "count", "connected", "pane_id", "agent", "name", "cwd_project",
                    # Messages (ccd/leadchat.py): which conversation and message, never its text
-                   "conversation", "messageId", "delivery", "via", "author", "files", "overBudget")
+                   "conversation", "messageId", "delivery", "via", "author", "files", "overBudget",
+                   # Milestones (ccd/hq.py): which milestone, its track and state, never its title or note
+                   "id", "track", "state")
 
 
 class Store:
