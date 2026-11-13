@@ -181,6 +181,7 @@ asserts this route table exactly, so adding one is a visible, reviewed change.
 import asyncio
 import contextvars
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -312,13 +313,14 @@ class BrokerContext:
 
 
 class Guard:
-    """Host, Origin, token and content-type checks, for HTTP and WebSocket alike."""
+    """Host, Origin, token and content-type checks, for HTTP and WebSocket alike. `remote` is the tailnet origins from
+    security.remote_origins(): each adds one Host and one Origin, and nothing else changes."""
 
-    def __init__(self, app, token, port):
+    def __init__(self, app, token, port, remote=()):
         self.app = app
         self.token = token
-        self.hosts = security.allowed_hosts(port)
-        self.origins = security.allowed_origins(port)
+        self.hosts = security.allowed_hosts(port, remote)
+        self.origins = security.allowed_origins(port, remote)
 
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
@@ -326,7 +328,9 @@ class Guard:
         headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
         path = scope.get("path", "")
         problem = None
-        if headers.get("host", "") not in self.hosts:
+        if security.FUNNEL_HEADER in headers:
+            problem = (403, "not served to the public internet")
+        elif headers.get("host", "") not in self.hosts:
             problem = (403, "bad Host header")
         elif headers.get("origin") and headers["origin"] not in self.origins:
             problem = (403, "cross-origin request refused")
@@ -372,7 +376,7 @@ class UiFiles:
     a deleted chunk fails loudly as a module load error the UI can recognise, never as HTML
     parsed as JavaScript."""
 
-    def __init__(self, directory, port):
+    def __init__(self, directory, port, remote=()):
         self.files = StaticFiles(directory=str(directory), html=True)
         self.headers = [
             (b"content-security-policy", (
@@ -382,6 +386,13 @@ class UiFiles:
             (b"x-frame-options", b"DENY"), (b"referrer-policy", b"no-referrer"),
             (b"x-content-type-options", b"nosniff"),
         ]
+        if remote:
+            # A tailnet origin (security.remote_origins) opens its live feed and terminals over wss:// to its own host.
+            # CSP 3 lets 'self' match that; it is named as well so an older browser does not depend on it. Added here,
+            # after the literal, so the policy above stays the one e2e/serve.mjs mirrors (tests/e2e-serve.test.ts).
+            wss = "".join(f" wss://{o.removeprefix('https://')}" for o in remote)
+            name, value = self.headers[0]
+            self.headers[0] = (name, value.replace(f"ws://localhost:{port};".encode(), f"ws://localhost:{port}{wss};".encode(), 1))
 
     async def __call__(self, scope, receive, send):
         immutable = bool(HASHED_ASSET.match(scope.get("path", "")))
@@ -1396,10 +1407,16 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/desktop/launcher", launcher_info, methods=["GET"]),
         Route("/api/desktop/launcher/download", launcher_download, methods=["GET"]),
     ]
+    remote, refused = security.remote_origins((daemon.cfg or {}).get("remote_origins") if isinstance(daemon.cfg, dict) else None)
+    if refused:
+        logging.getLogger("ccd").warning(json.dumps({"msg": "remote_origins entries refused: only exact "
+                                                     "https://<machine>.<tailnet>.ts.net origins are accepted",
+                                                     "refused": refused}))
     mounts = []
     ui = ui_dir() if ui is None else ui
     if ui and Path(ui, "index.html").is_file():
-        mounts.append(Mount("/", app=UiFiles(ui, port), name="ui"))
+        mounts.append(Mount("/", app=UiFiles(ui, port, remote), name="ui"))
     app = Starlette(routes=routes + mounts, lifespan=lifespan)
     app.state.routes_table = routes
-    return Guard(BrokerContext(AuditTrail(app, daemon), daemon), token, port), app
+    app.state.remote_origins = remote
+    return Guard(BrokerContext(AuditTrail(app, daemon), daemon), token, port, remote), app

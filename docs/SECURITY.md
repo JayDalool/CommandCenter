@@ -21,7 +21,7 @@ So ccd adds, at no cost to Jay:
 | Threat | Control |
 |---|---|
 | another local user, or a stray local process | per-install token, `~/.config/command-center/ccd.token`, 0600, required on everything but `/api/health` |
-| DNS rebinding from a web page | `Host` must be `127.0.0.1:7777` / `localhost:7777` |
+| DNS rebinding from a web page | `Host` must be `127.0.0.1:7777` / `localhost:7777`, or a tailnet address Jay names (below) |
 | cross-site request from a web page (CSRF) | `Origin`, when present, must be the same origin; actions require `application/json`, which forces a CORS preflight ccd never approves; no CORS headers are ever sent |
 | cross-site WebSocket hijacking | same Host/Origin/token checks on the upgrade |
 | typing escape sequences into a pane | answers and notes must be printable, one line; control characters refused |
@@ -30,6 +30,32 @@ The token is never logged (uvicorn's access log is disabled because a WS token
 can be a query string) and never returned by the API. The legacy board reads
 the file directly; the Windows client will fetch it over the SSH connection
 that carries the tunnel.
+
+## Remote access over Tailscale (Jay, 2026-11-12)
+
+D-006 kept ccd off the public internet and left remote access to a later, separately approved design. Jay chose
+Tailscale Serve for it (HQ launch plan, question B1); a public tunnel such as Cloudflare is a separate decision.
+
+- ccd still listens on `127.0.0.1` only. `tailscale serve` on jay-server forwards
+  `https://<machine>.<tailnet>.ts.net` to it, and only devices signed in to Jay's tailnet can reach that name.
+- `config.json` `"remote_origins"` lists those addresses exactly (`https://`, a `*.ts.net` name, no port, no path).
+  Each adds one allowed `Host` and one allowed `Origin`; anything else in the list is refused and logged, never
+  widened. With the list absent, nothing changes.
+- A request carrying `Tailscale-Funnel-Request` (Tailscale's HTTP proxy adds it to traffic that arrives through
+  Funnel, its public mode) is refused on every address, `/api/health` included. It is a backstop, not the control: in
+  raw TCP modes (`--tcp`, `--tls-terminated-tcp`) no header is added, so the runbook allows plain HTTP Serve only and
+  checks `tailscale funnel status`.
+- "Only Jay's devices" depends on the tailnet's access rules and on jay-server not being shared to another tailnet;
+  the runbook checks both before setup. The sign-in redeem endpoint (no ccd token, a 256-bit one-time code) is the
+  only thing reachable without the token.
+- The page's CSP names each tailnet origin's `wss://` address in `connect-src`, so live updates and terminals do not
+  depend on a browser matching `'self'` to `wss:`.
+- Not done, on purpose: requiring Tailscale's identity header (`Tailscale-User-Login`) for the remote Host. Anything
+  that can reach ccd without Serve is already on jay-server's loopback, where it could send that header itself.
+- The token, Developer Unlock, the JSON-only rule and every other check are unchanged. A phone or laptop on the tailnet
+  still needs the ccd token, and Developer Unlock for anything that writes.
+
+Setup and undo: `docs/runbooks/remote-access-tailscale.md`.
 
 ## What leaves ccd
 
