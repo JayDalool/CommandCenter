@@ -32,3 +32,18 @@ test("Jay's menu opens Budgets and switches the theme", async ({ page, watch }) 
   await expect(page.locator("#main .hq-budgets")).toBeVisible();
   expect(await problems(page, watch)).toEqual([]);
 });
+
+test("a conversation's banner keeps its inset (office.css zeroes .hq-page p margins)", async ({ page, watch }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const lead = { name: "cto", state: "ready", status: null, running: false, idle: false, paused: true };
+  await page.route("**/api/chat", (r) => r.fulfill({ json: { conversations: [{ id: "cto", name: "CTO", kind: "cto", lead, unread: 0,
+    waiting: 0, last: null, nudges: { count: 0, lastAt: null } }], canStart: false, unread: 0,
+    limits: { text: 16000, fileBytes: 20971520, filesPerMessage: 10 } } }));
+  await page.route("**/api/chat/cto", (r) => r.fulfill({ json: { conversation: "cto", messages: [], lead } }));
+  await open(page, "messages");
+  await page.getByRole("button", { name: /^CTO/ }).click();
+  const banner = page.locator("p.hq-chat-banner");
+  await expect(banner).toContainText("is paused");
+  expect(await banner.evaluate((n) => getComputedStyle(n).marginLeft)).toBe("16px");
+  expect(await problems(page, watch)).toEqual([]);
+});
