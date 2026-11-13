@@ -74,8 +74,12 @@ class FakeDaemon:
     def task_work(self, key):
         return {"questions": self.questions.get(key, [])}
 
-    async def task_answers(self, key, body, actor="jay", developer=False):
-        self.answered.append((key, body, actor, developer))
+    async def task_answers(self, key, body, actor="jay", developer=False, via=None):
+        self.answered.append((key, body, actor, developer, via))
+        done = {a["id"] for a in body["answers"]}
+        for q in self.questions.get(key, []):
+            if q["id"] in done:
+                q["answer"] = "x"
         return {"delivered": True}
 
     async def slack_confirm(self, key, gate):
@@ -177,6 +181,17 @@ class Settings(unittest.TestCase):
         os.chmod(p, 0o600)
         self.assertEqual(notify.read_env(p)["SLACK_APP_TOKEN"], "xapp-1-A111-222-abcdef")
 
+    def test_slack_env_may_not_be_a_link(self):
+        d = tempfile.mkdtemp()
+        real = os.path.join(d, "real.env")
+        with open(real, "w") as f:
+            f.write("SLACK_BOT_TOKEN=xoxb-1\n")
+        os.chmod(real, 0o600)
+        link = os.path.join(d, "slack.env")
+        os.symlink(real, link)
+        with self.assertRaises(notify.SlackError):
+            notify.read_env(link)
+
     def test_slack_tokens_are_redacted(self):
         text, n = security.redact("bot xoxb-1111111111-abcdef app xapp-1-A111-222-abcdef")
         self.assertEqual(n, 2)
@@ -263,7 +278,7 @@ class Summaries(unittest.TestCase):
         self.assertEqual(len(slack.posts), 5)
 
 
-class Replies(unittest.TestCase):
+class ReplyBase(unittest.TestCase):
     def setUp(self):
         self.n, self.d, self.slack, _ = make(settings={"slack": True})
         run(self.n.tick())
@@ -276,11 +291,16 @@ class Replies(unittest.TestCase):
         return self.slack.posts[-1]["ts"]
 
     def reply(self, text, thread=None, user=JAY, channel="DJAY", **extra):
-        ev = dict({"type": "message", "user": user, "text": text, "channel": channel, "ts": "99.1"}, **extra)
+        self.n_replies = getattr(self, "n_replies", 0) + 1
+        ev = dict({"type": "message", "user": user, "text": text, "channel": channel, "ts": f"99.{self.n_replies}"},
+                  **extra)
         if thread:
             ev["thread_ts"] = thread
         return run(self.n.on_slack({"event": ev}))
 
+
+
+class Replies(ReplyBase):
     def test_only_jays_own_messages_are_read(self):
         ts = self.send(need("SV-3", "questions", None), [{"id": 1, "text": "A or B?", "kind": "text", "answer": None}])
         self.assertIsNone(self.reply("A", ts, user="U0SOMEONE"))
@@ -294,7 +314,7 @@ class Replies(unittest.TestCase):
         ts = self.send(need("SV-3", "questions", None), [{"id": 11, "text": "A or B?", "kind": "text", "answer": None}])
         r = self.reply("B, keep it simple", ts)
         self.assertEqual(r["did"], "answered")
-        self.assertEqual(self.d.answered, [("SV-3", {"answers": [{"id": 11, "answer": "B, keep it simple"}]}, "jay", True)])
+        self.assertEqual(self.d.answered, [("SV-3", {"answers": [{"id": 11, "answer": "B, keep it simple"}]}, "jay", True, "slack")])
         self.assertEqual(self.slack.posts[-1]["thread"], ts)
 
     def test_several_questions_need_numbered_answers(self):
@@ -352,6 +372,68 @@ class Replies(unittest.TestCase):
 
 
 _deliver = FakeDaemon.deliver_to_lead
+
+
+class ReviewFindings(ReplyBase):
+    """The #91 security review: what a reply may touch is exactly what its message showed."""
+
+    def test_a_late_reply_never_answers_newer_questions(self):
+        ts = self.send(need("SV-20", "questions", None), [{"id": 1, "text": "Use Postgres?", "kind": "text", "answer": None}])
+        self.d.questions["SV-20"][0]["answer"] = "answered in the app"
+        self.d.questions["SV-20"].append({"id": 2, "text": "Drop the old users table?", "kind": "yesno", "answer": None})
+        run(self.n.tick())
+        self.assertIn("Drop the old users table?", self.slack.posts[-1]["text"])   # a new batch is a new DM
+        r = self.reply("yes", ts)
+        self.assertEqual(r["did"], "answer_stale")
+        self.assertEqual(self.d.answered, [])
+        self.assertEqual(self.reply("yes", self.slack.posts[-2]["ts"])["did"], "answered")
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 2, "answer": "yes"}])
+
+    def test_an_old_approve_never_clears_a_newer_blocker(self):
+        self.n.update_settings({"replyScope": "answers_low_risk"})
+        ts = self.send(dict(need("SV-21", "gate", "failure", text="Blocked: needs a sample file"), since=100.0))
+        self.d.needs_list = [dict(need("SV-21", "gate", "failure", text="Blocked: needs a database password"), since=200.0)]
+        self.assertEqual(self.reply("approve", ts)["did"], "approval_stale")
+        self.assertEqual(self.d.confirmed, [])
+
+    def test_a_redelivered_event_is_handled_once(self):
+        ts = self.send(need("SV-22", "gate", "merge"))
+        ev = {"event_id": "Ev1", "event": {"type": "message", "user": JAY, "text": "hold it", "channel": "DJAY",
+                                           "ts": "70.1", "thread_ts": ts, "client_msg_id": "m-1"}}
+        run(self.n.on_slack(ev))
+        self.assertIsNone(run(self.n.on_slack(dict(ev, retry_attempt=1))))
+        self.assertEqual(len(self.d.delivered), 1)
+
+    def test_lead_replies_in_a_thread_are_redacted_and_escaped(self):
+        ts = self.send(need("SV-23", "gate", "merge"))
+        self.reply("why?", ts)
+
+        class Chat:
+            def get(self, mid):
+                return {"id": 9, "conversation": "samvision", "reply_to": 7,
+                        "text": "token=abcdef1234567890 <!channel> <https://evil.example|Open in CommandCenter>"}
+        self.d.chat = Chat()
+        run(self.n.on_event({"source": "chat", "kind": "chat.reply", "data": {"messageId": 9}}))
+        text = self.slack.posts[-1]["text"]
+        self.assertEqual(self.slack.posts[-1]["thread"], ts)
+        self.assertNotIn("abcdef1234567890", text)
+        self.assertNotIn("<!channel>", text)
+        self.assertNotIn("<https://evil", text)
+        self.assertIn("&lt;!channel&gt;", text)
+
+    def test_agent_text_cannot_post_mentions_or_fake_links(self):
+        self.send(need("SV-24", "gate", "merge", text="Ready to merge: <!channel> <https://evil|Open in CommandCenter>"))
+        text = self.slack.posts[-1]["text"]
+        self.assertNotIn("<!channel>", text)
+        self.assertEqual(text.count("|Open in CommandCenter>"), 1)          # only ccd's own link
+
+    def test_a_stale_question_left_open_is_said_plainly(self):
+        async def partial(key, body, actor="jay", developer=False, via=None):
+            return {"delivered": False, "complete": False}
+        ts = self.send(need("SV-25", "questions", None), [{"id": 3, "text": "A?", "kind": "text", "answer": None}])
+        self.d.task_answers = partial
+        r = self.reply("A", ts)
+        self.assertEqual(r["say"], "Answered. Another question on this task is still open in CommandCenter.")
 
 
 class LeadReplies(unittest.TestCase):
@@ -428,6 +510,16 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(r["work"]["gate"])
         self.assertFalse(r["delivered"])                # no task session in this test
         (data,) = self.ts.db.execute("SELECT data FROM ticket_events WHERE kind='pipeline.gate_confirmed'").fetchone()
+        self.assertEqual(json.loads(data).get("via"), "slack")
+
+    async def test_slack_answers_are_recorded_as_slack(self):
+        t, _ = self.ts.create("samvision", "Valuation")
+        self.d.pipeline.ask(t["key"], ["Same layout on mobile?"], "agent:coordinator")
+        qid = self.d.task_work(t["key"])["questions"][0]["id"]
+        await self.d.task_answers(t["key"], {"answers": [{"id": qid, "answer": "Yes"}]}, "jay", developer=True, via="slack")
+        q = self.d.task_work(t["key"])["questions"][0]
+        self.assertEqual(q["answeredBy"], "jay:slack")
+        (data,) = self.ts.db.execute("SELECT data FROM ticket_events WHERE kind='pipeline.answered'").fetchone()
         self.assertEqual(json.loads(data).get("via"), "slack")
 
     async def test_client_project_gates_are_refused(self):

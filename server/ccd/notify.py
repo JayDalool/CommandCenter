@@ -39,7 +39,9 @@ with the bot or a channel the bot is in, are read; everything else is ignored. A
 A message outside a thread goes to the lead of that channel's project; in #cto or the DM, to the CTO.
 """
 import asyncio
+import collections
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -89,6 +91,7 @@ CONFIG_DEFAULTS = {
 }
 HELD_MAX = 50
 THREADS_MAX = 1000
+SEEN_EVENTS_MAX = 500
 ALERT_KINDS = ("pr.opened", "pr.closed", "ci.main_changed", "pr.ci_changed", "task.pipeline")
 PIPELINE_ALERTS = {"pipeline.merged": "merged", "pipeline.auto_merged": "auto-merged", "pipeline.deployed": "deployed",
                    "pipeline.done": "done", "pipeline.auto_merge_failed": "auto-merge failed"}
@@ -157,9 +160,14 @@ def due(settings, hhmm, last_day, now):
 def read_env(path):
     """KEY=VALUE lines from slack.env. Refused unless the file is the owner's only (0600 or stricter)."""
     p = Path(path)
-    if not p.exists():
+    if not p.exists() and not p.is_symlink():
         return {}
-    mode = stat.S_IMODE(p.stat().st_mode)
+    if p.is_symlink():
+        raise SlackError(f"{p.name} must be a plain file, not a link")
+    st = p.stat()
+    if st.st_uid != os.getuid():
+        raise SlackError(f"{p.name} must belong to the user ccd runs as")
+    mode = stat.S_IMODE(st.st_mode)
     if mode & 0o077:
         raise SlackError(f"{p.name} must be readable by its owner only (chmod 600)")
     out = {}
@@ -239,8 +247,24 @@ def ntfy_send(url, title, link=None, priority="default", opener=None):
 
 # ---------- formatting ----------
 
+def esc(text):
+    """Untrusted text (agent-set reasons, question text, lead replies, PR titles) as plain Slack text: no
+    <!channel>, no mentions, no links that look like ccd's own."""
+    return str(text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _digest(text):
+    return hashlib.sha256(str(text or "").encode()).hexdigest()[:16]
+
+
 def item_key(n):
-    return f"{n.get('project')}:{n.get('kind')}:{n.get('ref')}:{n.get('gate') or ''}"
+    """One DM per item. A new batch of questions (other open ids) or a gate with another reason is a new item."""
+    extra = ""
+    if n.get("kind") == "questions":
+        extra = ",".join(str(i) for i in n.get("qids") or [])
+    elif n.get("kind") == "gate":
+        extra = _digest(n.get("text"))
+    return f"{n.get('project')}:{n.get('kind')}:{n.get('ref')}:{n.get('gate') or ''}:{extra}"
 
 
 def need_label(n):
@@ -282,6 +306,8 @@ class Notifier:
         self.threads = dict(self.store.get("notify:threads", {})[0] or {})
         self.daily = dict(self.store.get("notify:daily", {})[0] or {})
         self._queue = None
+        seen_ev, _ = self.store.get("notify:events", [])
+        self.seen_events = collections.deque(seen_ev or [], maxlen=SEEN_EVENTS_MAX)
         self.was_quiet = None
 
     # ----- settings and status -----
@@ -403,6 +429,9 @@ class Notifier:
     def needs(self):
         st = self.d.state()
         items = [dict(n) for n in st.get("needs") or []]
+        for n in items:
+            if n.get("kind") == "questions" and is_ticket(n.get("ref")) and not self.client(n.get("project")):
+                n["qids"] = [q["id"] for q in self.open_questions(n["ref"])]
         for b in st.get("blocked") or []:
             items.append({"project": b.get("project"), "kind": "blocked", "ref": b.get("pane_id"),
                           "text": f"{b.get('name') or 'an agent'} is waiting for you"})
@@ -415,12 +444,13 @@ class Notifier:
         link = self.link(n)
         open_ = f"\n<{link}|Open in CommandCenter>" if link else ""
         if self.client(proj):
-            return (f"*{self.name(proj)}* · {n.get('ref')} · {label}\nClient project: details stay in CommandCenter. "
+            return (f"*{self.name(proj)}* · {esc(n.get('ref'))} · {label}\nClient project: details stay in CommandCenter. "
                     f"Risk: waiting on you; nothing moves until you act.{open_}")
-        lines = [f"*{self.name(proj)}* · {n.get('ref')} · {label}", str(n.get("text") or "")[:300]]
+        lines = [f"*{self.name(proj)}* · {esc(n.get('ref'))} · {label}", esc(str(n.get("text") or "")[:300])]
         if n.get("kind") == "questions" and is_ticket(n.get("ref")) and not n.get("stale"):
-            qs = self.open_questions(n["ref"])
-            lines += [f"{i}. {q['text'][:400]}" + (f"  _({' / '.join(q['options'])})_" if q.get("options") else "")
+            shown = set(n.get("qids") or [])
+            qs = [q for q in self.open_questions(n["ref"]) if q["id"] in shown]
+            lines += [f"{i}. {esc(q['text'][:400])}" + (f"  _({esc(' / '.join(q['options']))})_" if q.get("options") else "")
                       for i, q in enumerate(qs, 1)]
             lines.append("_Reply in this thread to answer" + (" (number your answers 1., 2., …)" if len(qs) > 1 else "")
                          + "._")
@@ -440,7 +470,9 @@ class Notifier:
     async def send_need(self, n):
         await self.post("dm", self.need_text(n), item={"type": "need", "project": n.get("project"),
                                                         "kind": n.get("kind"), "gate": n.get("gate"),
-                                                        "ref": n.get("ref"), "stale": bool(n.get("stale"))})
+                                                        "ref": n.get("ref"), "stale": bool(n.get("stale")),
+                                                        "qids": list(n.get("qids") or []),
+                                                        "textHash": _digest(n.get("text")), "since": n.get("since")})
         await self.push(self.push_title(n), self.link(n))
 
     async def check_needs(self):
@@ -483,11 +515,11 @@ class Notifier:
             if not what:
                 return None
             if self.client(proj):
-                return f"{ev.get('ref')} {what}"
-            return f"{ev.get('text')}"
+                return f"{esc(ev.get('ref'))} {what}"
+            return esc(ev.get("text"))
         if self.client(proj):
-            return f"{ev.get('ref') or ''} {kind}".strip()
-        return ev.get("text")
+            return f"{esc(ev.get('ref') or '')} {kind}".strip()
+        return esc(ev.get("text"))
 
     async def on_event(self, ev):
         kind = ev.get("kind")
@@ -495,7 +527,7 @@ class Notifier:
             await self.relay_reply(ev)
             return
         if kind == "alert.raised" and ev.get("source") == "alerts" and not ev.get("project"):
-            await self.post(self.conf["cto_channel"], f":warning: {ev.get('text')}")
+            await self.post(self.conf["cto_channel"], f":warning: {esc(ev.get('text'))}")
             return
         if kind not in ALERT_KINDS:
             return
@@ -563,13 +595,13 @@ class Notifier:
                  f"Open PRs: {len(prs)}"]
         for pr in prs[:10]:
             review = pr.get("review") or pr.get("reviewDecision") or "no review"
-            lines.append(f"  • #{pr.get('number')} {str(pr.get('title') or '')[:80]} · checks {pr.get('ci') or '?'} · {review}")
+            lines.append(f"  • #{pr.get('number')} {esc(str(pr.get('title') or '')[:80])} · checks {pr.get('ci') or '?'} · {review}")
         merged = sorted(set(day.get("pipeline.merged", []) + day.get("pipeline.auto_merged", [])))
         lines.append(f"Merged in 24 h: {', '.join(merged) if merged else 'none'}")
         deployed = sorted(set(day.get("pipeline.deployed", [])))
         lines.append(f"Deployed in 24 h: {', '.join(deployed) if deployed else 'none'}")
         waiting = [n for n in self.needs() if n.get("project") == key]
-        lines.append(f"Waiting on Jay: {len(waiting)}" + (" (" + ", ".join(str(n.get('ref')) for n in waiting[:8]) + ")"
+        lines.append(f"Waiting on Jay: {len(waiting)}" + (" (" + ", ".join(esc(n.get('ref')) for n in waiting[:8]) + ")"
                                                           if waiting else ""))
         return "\n".join(lines)
 
@@ -615,6 +647,12 @@ class Notifier:
         ev = (payload or {}).get("event") or {}
         if not self.settings["slack"] or not self.from_jay(ev, payload.get("team_id")):
             return None
+        # Slack redelivers an event after a missed ack or a reconnect: act on each message once.
+        mark = ev.get("client_msg_id") or payload.get("event_id") or f"{ev.get('channel')}:{ev.get('ts')}"
+        if mark in self.seen_events:
+            return None
+        self.seen_events.append(mark)
+        self.store.put("notify:events", list(self.seen_events))
         cid, text = ev.get("channel"), ev["text"].strip()
         thread = ev.get("thread_ts")
         here = thread or ev.get("ts")
@@ -626,7 +664,7 @@ class Notifier:
         if result.get("say"):
             await self._reply(cid, here, result["say"])
         if result.get("message_id") is not None:
-            self.threads[f"msg:{result['message_id']}"] = {"type": "chat", "channel": cid, "ts": here, "at": self.clock()}
+            self.threads[f"msg:{result['message_id']}"] = {"type": "origin", "channel": cid, "ts": here, "at": self.clock()}
             self.store.put("notify:threads", self.threads)
         return result
 
@@ -634,7 +672,7 @@ class Notifier:
         if not self.settings["slack"]:
             return
         try:
-            await self._call(self.slack().post, cid, text, ts)
+            await self._call(self.slack().post, cid, redact(text)[0][:3900], ts)
         except SlackError as e:
             self._fail("slack reply", e)
 
@@ -645,14 +683,12 @@ class Notifier:
             proj, ref = item.get("project"), item.get("ref")
             if not self.client(proj):
                 if item.get("kind") == "questions" and not item.get("stale"):
-                    r = await self.answer(ref, text)
+                    r = await self.answer(ref, text, item.get("qids") or [])
                     if r:
                         return dict(r, project=proj)
                 if (item.get("kind") == "gate" and APPROVE_RE.match(text)):
-                    return dict(await self.approve(ref, item.get("gate")), project=proj)
+                    return dict(await self.approve(ref, item.get("gate"), item), project=proj)
             return await self.to_lead(proj, text, ref)
-        if item and item.get("type") == "chat":
-            return await self.to_lead(item.get("project"), text, item.get("ref"))
         if cid == self._dm or self._ids.get(self.conf["cto_channel"]) == cid:
             return await self.to_lead("cto", text, None)
         proj = self.project_of_channel(cid)
@@ -660,10 +696,16 @@ class Notifier:
             return await self.to_lead(proj, text, None)
         return {"did": "ignored"}
 
-    async def answer(self, key, text):
-        qs = self.open_questions(key)
-        if not qs:
-            return None
+    async def answer(self, key, text, qids):
+        """Answers exactly the questions that message showed. If any of them was answered since, or there are
+        newer ones, nothing is recorded: a late reply never answers a question Jay did not see in Slack."""
+        open_ = {q["id"]: q for q in self.open_questions(key)}
+        if not qids or any(i not in open_ for i in qids):
+            link = self.link({"ref": key})
+            return {"did": "answer_stale",
+                    "say": "These questions have changed since this message, so nothing was recorded. Answer the newer "
+                           "message, or in CommandCenter." + (f" <{link}|Open it>" if link else "")}
+        qs = [open_[i] for i in qids]
         if len(qs) == 1:
             parts = [text]
         else:
@@ -674,26 +716,35 @@ class Notifier:
                         "say": f"There are {len(qs)} questions. Reply with numbered lines (1. …, 2. …), one per question."}
         for q, a in zip(qs, parts):
             if q.get("kind") == "yesno" and a.strip().lower() not in ("yes", "no") and not a.lower().startswith("other:"):
-                return {"did": "answer_invalid", "say": f"“{q['text'][:120]}” is yes or no (or Other: …)."}
+                return {"did": "answer_invalid", "say": f"“{esc(q['text'][:120])}” is yes or no (or Other: …)."}
         answers = [{"id": q["id"], "answer": a.strip()} for q, a in zip(qs, parts)]
         try:
             # Jay, identified by his Slack member ID: answering is within what a Slack reply may do (C3, D4).
-            r = await self.d.task_answers(key, {"answers": answers}, actor="jay", developer=True)
+            r = await self.d.task_answers(key, {"answers": answers}, actor="jay", developer=True, via="slack")
         except Exception as e:  # noqa: BLE001
-            return {"did": "answer_failed", "say": f"Could not record that: {getattr(e, 'message', None) or e}"}
-        said = "Answered." + (" Sent to the task's session." if r.get("delivered") else
-                               f" The task session will get it when it is running ({r.get('reason') or 'not delivered'}).")
+            return {"did": "answer_failed", "say": f"Could not record that: {esc(getattr(e, 'message', None) or e)}"}
+        if r.get("complete") is False:
+            said = "Answered. Another question on this task is still open in CommandCenter."
+        else:
+            said = "Answered." + (" Sent to the task's session." if r.get("delivered") else
+                                   " The task session gets it when it is running.")
         return {"did": "answered", "say": said}
 
-    async def approve(self, key, gate):
+    async def approve(self, key, gate, item=None):
+        link = self.link({"ref": key})
         if gate not in SLACK_GATES or self.settings["replyScope"] != "answers_low_risk":
-            link = self.link({"ref": key})
             return {"did": "approval_refused",
                     "say": "That one is approved in CommandCenter, not from Slack." + (f" <{link}|Open it>" if link else "")}
+        # Only the gate that message showed: same ticket, gate, reason and time. Anything else is refused.
+        now = [n for n in self.needs() if n.get("kind") == "gate" and n.get("ref") == key and n.get("gate") == gate]
+        if not item or not any(_digest(n.get("text")) == item.get("textHash") and n.get("since") == item.get("since")
+                               for n in now):
+            return {"did": "approval_stale",
+                    "say": "This has changed since this message, so nothing was approved." + (f" <{link}|Open it>" if link else "")}
         try:
             r = await self.d.slack_confirm(key, gate)
         except Exception as e:  # noqa: BLE001
-            return {"did": "approve_failed", "say": f"Could not approve: {getattr(e, 'message', None) or e}"}
+            return {"did": "approve_failed", "say": f"Could not approve: {esc(getattr(e, 'message', None) or e)}"}
         return {"did": f"approved_{gate}",
                 "say": ("Blocker cleared; the task resumes." if gate == "failure" else "UI accepted.")
                 + ("" if (r or {}).get("delivered", True) else " The task session was not running to hear it.")}
@@ -708,7 +759,7 @@ class Notifier:
             r = await deliver(conversation, text, via="slack", ref=ref, author="jay")
         except Exception as e:  # noqa: BLE001
             return {"did": "lead_failed", "project": conversation,
-                    "say": f"Could not pass that on: {getattr(e, 'message', None) or e}"}
+                    "say": f"Could not pass that on: {esc(getattr(e, 'message', None) or e)}"}
         delivery = (r or {}).get("delivery")
         say = {"nudged": f"Sent to {who}.", "queued": f"Sent; {who} sees it when it finishes what it is doing.",
                "lead-offline": f"Saved, but {who} is not running. Open Messages in CommandCenter to start it.",
@@ -734,7 +785,7 @@ class Notifier:
         if self.client(conv):
             body = f"*{who}* replied. Client project: read it in CommandCenter."
         else:
-            body = f"*{who}*: {str(msg.get('text') or '')[:3000]}"
+            body = f"*{who}*: {esc(str(msg.get('text') or '')[:3000])}"
         if origin:
             await self._reply(origin["channel"], origin["ts"], body)
         elif conv == "cto":

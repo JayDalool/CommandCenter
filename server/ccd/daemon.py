@@ -1594,7 +1594,7 @@ class Daemon:
             return False, e.message
         return True, None
 
-    async def task_answers(self, key, body, actor="jay", developer=False):
+    async def task_answers(self, key, body, actor="jay", developer=False, via=None):
         """Jay answers Claude's questions. When the last open one is answered, the SAME task Claude session
         is resumed with the answers (and the scope guard); a scope change sends the ticket back to planning."""
         if actor != "jay" or not developer:
@@ -1606,7 +1606,7 @@ class Daemon:
         pl = self.pipeline
         before = {q["id"]: q for q in self.task_work(key)["questions"]}
         if answers:
-            self._pipeline_result(*self._wrap(pl.answer, key, answers, actor))
+            self._pipeline_result(*self._wrap(pl.answer, key, answers, actor, via))
         # The task check: Jay's answer to a stale proposal. "Cancel it" cancels the ticket (and ends its
         # sessions); "Keep it" keeps it. Neither is typed into any Claude session.
         stale = [a for a in answers if isinstance(a, dict) and (before.get(a.get("id")) or {}).get("purpose") == "stale"]

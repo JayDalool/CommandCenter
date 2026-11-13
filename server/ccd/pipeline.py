@@ -880,8 +880,9 @@ class Pipeline:
             return {}, {}, [("pipeline.stale", f"proposed as stale: {reason}", {"batch": batch})]
         return self._tx(key, actor, fn)
 
-    def answer(self, key, answers, actor):
-        """Jay's answers. Only Jay; each question once. Returns (ticket, changes, events)."""
+    def answer(self, key, answers, actor, via=None):
+        """Jay's answers. Only Jay; each question once. Returns (ticket, changes, events). `via` ("slack") is kept
+        with the answer (answered_by "jay:slack") and on the event."""
         if actor != "jay":
             raise TaskError(403, "only Jay answers questions")
         if not isinstance(answers, list) or len(answers) > 50:
@@ -907,11 +908,11 @@ class Pipeline:
                 if row[0] == "yesno" and text.lower() not in ("yes", "no") and not text.lower().startswith("other:"):
                     raise TaskError(400, f"question {qid} is yes / no (or Other: …)")
                 self.db.execute("UPDATE ticket_questions SET answer=?, answered_at=?, answered_by=? WHERE id=?",
-                                (text, at, actor, qid))
+                                (text, at, f"{actor}:{via}" if via else actor, qid))
             left = self.db.execute("SELECT COUNT(*) FROM ticket_questions WHERE ticket_id=? AND answered_at IS NULL",
                                    (tid,)).fetchone()[0]
             ev = [("pipeline.answered", f"Jay answered {len(clean)} question{'s' if len(clean) != 1 else ''}"
-                   + ("" if left else " — all answered"), {"count": len(clean), "left": left})] if clean else []
+                   + ("" if left else " — all answered"), dict({"count": len(clean), "left": left}, **({"via": via} if via else {})))] if clean else []
             return {}, {}, ev
         return self._tx(key, actor, fn)
 

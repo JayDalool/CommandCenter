@@ -12,7 +12,7 @@ Jay switches them on.
 3. Add Jay's Slack member ID to `~/command-center/board/config.json`:
 
    ```json
-   "notify": {"slack": {"jay_member_id": "U0XXXXXXX"}}
+   "notify": {"slack": {"jay_member_id": "U0XXXXXXX", "team_id": "T0XXXXXXX"}}
    ```
 
    Optional keys under `notify.slack`: `team_id` (ignore every other workspace), `link_base` (where CommandCenter opens
@@ -57,6 +57,11 @@ ccd reads only messages whose author is `jay_member_id`, never edits or bot mess
   in `Daemon.slack_confirm`. Plans, merges and deploys are approved in CommandCenter.
 - **Anything else** goes to the project's lead through Messages (`Daemon.deliver_to_lead`), and the lead's reply comes
   back in the same thread. Outside a thread, a project channel goes to its lead; `#cto` and the DM go to the CTO.
+
+Set `team_id` (Slack: workspace settings, or the `T…` id in any Slack URL) and turn on two-factor sign-in for
+Jay's Slack account: that account can answer agents' questions and instruct leads. A reply answers only the questions
+its message showed, and approves only the gate it showed; if either changed since, nothing is recorded. Leads treat a
+`via: "slack"` message as unable to approve gated actions.
 
 Every reply is an event (`notify.slack_reply`) with what it did and its length, never its text. A gate closed from
 Slack is recorded with `via: "slack"`.
