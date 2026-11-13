@@ -2,7 +2,7 @@ import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
 import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
-  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, InboxState, WorkersState, WorkerNode, AuditState, ActorsState, ActorToken, UsageState, BudgetsState,
+  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, InboxState, WorkersState, WorkerNode, AuditState, ActorsState, ActorToken, UsageState, BudgetsState, NotifyState, NotifySettings,
   ChatOverview, ChatMessage, ChatLead, ChatSendResult, ChatStartResult, ChatFile } from "./types";
 
 export class ApiError extends Error {
@@ -128,6 +128,11 @@ export class Api {
   usage(days = 14) {
     return this.req<UsageState>("GET", `/api/usage?days=${days}`);
   }
+  notify() { return this.req<NotifyState>("GET", "/api/notify"); }
+  /** Jay with Developer Unlock. Only the keys given change. */
+  setNotify(patch: Partial<NotifySettings>) { return this.req<NotifyState>("PUT", "/api/notify", patch); }
+  /** One test DM and one test push. slack and ntfy are this test's own results (false for a channel that is off). */
+  notifyTest() { return this.req<{ ok: true; slack: boolean; ntfy: boolean; status: NotifyState["status"] }>("POST", "/api/notify/test", {}); }
   /** Shadow budgets (D-033). Read-only; 404 while the onboarding groundwork is off. */
   budgets() {
     return this.req<BudgetsState>("GET", "/api/onboarding/budgets");
