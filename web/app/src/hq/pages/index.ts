@@ -10,6 +10,7 @@ import { Topology } from "./Topology";
 import { Approvals } from "./Approvals";
 import { Budgets } from "./Budgets";
 import { Messages, Revenue } from "./NotConnected";
+import { Settings } from "./Settings";
 
 export type HqPage = () => React.JSX.Element;
 
@@ -28,6 +29,7 @@ export function hqPageFor(r: Pick<Route, "screen" | "id" | "params">): HqPage | 
     case "budgets": return Budgets;
     case "messages": return Messages;
     case "revenue": return Revenue;
+    case "settings": return Settings;
     default: return null;
   }
 }

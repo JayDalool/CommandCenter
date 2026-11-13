@@ -14,9 +14,19 @@ import { Policies } from "../components/Policies";
 import { Panel, Seg, Command, DetailRow, EmptyState, Project } from "../components/ui";
 import { stamp } from "../lib/time";
 
+/** Classic's sections. HQ's Settings has its own (hq/pages/Settings.tsx); each one opens here as the Classic section
+ *  that holds it, so a link from either interface lands somewhere sensible in both. */
+const TABS = ["general", "desktop", "developer", "connection", "policies", "decisions", "workers", "audit", "usage", "import",
+  "diagnostics"] as const;
+const FROM_HQ: Record<string, (typeof TABS)[number]> = { appearance: "general", notifications: "general", windows: "general",
+  security: "developer", connections: "connection", profiles: "policies", more: "diagnostics", help: "general" };
+export function classicTab(t: string | null): (typeof TABS)[number] {
+  return (TABS as readonly string[]).includes(t ?? "") ? t as (typeof TABS)[number] : FROM_HQ[t ?? ""] ?? "general";
+}
+
 export function Settings() {
   const route = useRoute();
-  const tab = route.params.get("tab") ?? "general";
+  const tab = classicTab(route.params.get("tab"));
   return <div className="stack">
     <Seg label="Settings section" value={tab} onChange={(v) => go("settings", null, { tab: v === "general" ? undefined : v })}
       options={[{ v: "general", label: "General" }, { v: "desktop", label: "Desktop app" }, { v: "developer", label: "Developer mode" },
@@ -35,19 +45,21 @@ export function Settings() {
   </div>;
 }
 
-/** Server and agent diagnostics: out of the primary navigation (spec §3), never gone. */
+/** The ops screens out of the primary navigation (spec §3), never gone. HQ's Other destinations lists them too. */
+export const DIAGNOSTICS: [string, string][] = [["projects", "Projects"], ["development", "Development"], ["agents", "Agents"],
+  ["server", "Server"], ["alerts", "Alerts"], ["prs", "Pull requests"], ["workspaces", "herdr layout"]];
+
+/** Server and agent diagnostics. */
 function Diagnostics() {
   return <Panel title="Diagnostics" pad>
     <p className="text2">Ops views for when something needs looking into. Every old link still works.</p>
     <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 10 }}>
-      {([["projects", "Projects"], ["development", "Development"], ["agents", "Agents"], ["server", "Server"], ["alerts", "Alerts"],
-        ["prs", "Pull requests"], ["workspaces", "herdr layout"]] as [string, string][]).map(([id, label]) =>
-        <a key={id} className="btn is-sm" href={href(id)}>{label}</a>)}
+      {DIAGNOSTICS.map(([id, label]) => <a key={id} className="btn is-sm" href={href(id)}>{label}</a>)}
     </div>
   </Panel>;
 }
 
-function DesktopApp() {
+export function DesktopApp() {
   const [info, setInfo] = useState<LauncherInfo | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { app.api.launcher().then(setInfo).catch((e) => setErr((e as Error).message)); }, []);
@@ -137,7 +149,7 @@ function Connection() {
   </div>;
 }
 
-function ImportPreviewView() {
+export function ImportPreviewView() {
   const [pv, setPv] = useState<ImportPreview | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
