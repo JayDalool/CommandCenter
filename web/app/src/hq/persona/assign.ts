@@ -23,5 +23,12 @@ export function castLeads(projectKeys: readonly string[]): Map<string, Character
   return out;
 }
 
+/** Every project key the server names, from its three lists (the task registry, the config, the polled projects):
+ *  the one list every page casts leads from, so a lead has the same face in My Office, Teams and Messages. */
+export function leadKeys(src: { taskProjects: readonly { key: string }[];
+  state: { projectsConfig?: readonly { key: string }[]; projects?: readonly { key: string }[] } | null }): string[] {
+  return [...src.taskProjects, ...(src.state?.projectsConfig ?? []), ...(src.state?.projects ?? [])].map((p) => p.key);
+}
+
 /** Any other session, by its name. */
 export const castFor = (name: string): Character => CAST[hash(`agent:${name.toLowerCase()}`) % CAST.length];

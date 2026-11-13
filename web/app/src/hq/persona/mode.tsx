@@ -6,7 +6,7 @@ import "./persona.css";
 import { app } from "../../store/app";
 import { useSelector } from "../../lib/store";
 import { usePrefs } from "../../lib/prefs";
-import { castFor, castLeads } from "./assign";
+import { castFor, castLeads, leadKeys } from "./assign";
 import { Face } from "./characters";
 import type { Presence } from "../data";
 
@@ -19,12 +19,10 @@ export function Fun({ e }: { e: string }) {
 
 export const PRESENCE_EMOJI: Record<Presence, string> = { working: "🔨", waiting: "🙋", idle: "💤", offline: "🌙", unknown: "❔" };
 
-/** Every project key the server names, from the store: the one list all pages cast leads from, so a lead has the same
- *  face in My Office, Teams and Messages. */
 function useLeadCast() {
   const tasks = useSelector(app.store, (d) => d.taskProjects);
   const state = useSelector(app.store, (d) => d.state);
-  return useMemo(() => castLeads([...tasks, ...(state?.projectsConfig ?? []), ...(state?.projects ?? [])].map((p) => p.key)), [tasks, state]);
+  return useMemo(() => castLeads(leadKeys({ taskProjects: tasks, state })), [tasks, state]);
 }
 
 /** An agent's face, in Childish mode only. `lead` is a project key (or "cto") for that project's lead; any other

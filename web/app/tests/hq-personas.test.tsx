@@ -8,7 +8,7 @@ import { app, initial } from "../src/store/app";
 import { parsePrefs, prefs } from "../src/lib/prefs";
 import { loadHqFrame } from "../src/components/Shell";
 import { CAST, Face } from "../src/hq/persona/characters";
-import { castFor, castLeads, hash } from "../src/hq/persona/assign";
+import { castFor, castLeads, hash, leadKeys } from "../src/hq/persona/assign";
 import type { ChatConversation, ChatOverview } from "../src/api/types";
 import { fixture, state, tasks } from "./helpers";
 
@@ -51,16 +51,19 @@ describe("the cast", () => {
     expect(new Set(CAST.map((c) => [c.hue, c.head, c.top, c.eyes, c.mouth].join())).size).toBe(30);
   });
 
-  it("draws every character as one labelled picture", () => {
+  it("draws every character as a picture screen readers skip, with a tooltip when it is given one", () => {
     for (const c of CAST) {
       const { container, unmount } = render(<Face who={c} size={40} title={`${c.name}, the face of the CTO`} />);
       const svg = container.querySelector("svg.hq-face")!;
-      expect(svg, c.id).toHaveAttribute("role", "img");
-      expect(svg, c.id).toHaveAttribute("aria-label", `${c.name}, the face of the CTO`);
+      expect(svg, c.id).toHaveAttribute("aria-hidden", "true");
+      expect(svg.hasAttribute("role") || svg.hasAttribute("aria-label"), c.id).toBe(false);
+      expect(svg.querySelector("title")?.textContent, c.id).toBe(`${c.name}, the face of the CTO`);
       expect(svg.getAttribute("width"), c.id).toBe("40");
       expect(svg.children.length, c.id).toBeGreaterThan(3);
       unmount();
     }
+    const { container } = render(<Face who={CAST[0]} />);
+    expect(container.querySelector("title")).toBeNull();
   });
 });
 
@@ -79,6 +82,14 @@ describe("who gets which character", () => {
     const more = castLeads(Array.from({ length: 45 }, (_, i) => `project-${i}`));
     expect(more.size).toBe(46);
     expect([...more.values()].every((c) => CAST.includes(c))).toBe(true);
+  });
+
+  it("casts leads from every project list the server sends, each key once", () => {
+    const keys = leadKeys({ taskProjects: [{ key: "samvision" }, { key: "commandcenter" }],
+      state: { projectsConfig: [{ key: "samvision" }, { key: "gyst" }], projects: [{ key: "gyst" }, { key: "mfe" }] } });
+    expect(keys).toEqual(["samvision", "commandcenter", "samvision", "gyst", "gyst", "mfe"]);
+    expect([...castLeads(keys).keys()].sort()).toEqual(["commandcenter", "cto", "gyst", "mfe", "samvision"]);
+    expect(leadKeys({ taskProjects: [], state: null })).toEqual([]);
   });
 
   it("gives any other session the same face every time, by its name", () => {
@@ -140,7 +151,7 @@ describe("faces on the pages", () => {
   it("a lead has the same face in My Office, Teams and Messages", async () => {
     load();
     prefs.patch({ style: "childish" });
-    const expected = castLeads(app.store.get().taskProjects.map((p) => p.key));
+    const expected = castLeads(leadKeys(app.store.get()));
     let main = await show("#/agents");
     const team = who(main.querySelector(".hq-sess.is-lead")!);
     const key = [...expected].find(([, c]) => c.id === team)![0];
@@ -158,5 +169,18 @@ describe("faces on the pages", () => {
     expect(rows.map(who)).toEqual(["cto", "samvision", "gauzemate"].map((k) => expected.get(k)!.id));
     expect(who(rows[["cto", "samvision", "gauzemate"].indexOf(key)])).toBe(team);
     expect(main.querySelector(".hq-chat-av")).toBeNull();
+    // a face adds nothing to the name a screen reader gives the row
+    expect(within(main).getByRole("button", { name: /^SamVision lead/ })).toBe(rows[1]);
+    expect(rows.some((r) => /face of/.test(r.getAttribute("aria-label") ?? ""))).toBe(false);
+  });
+
+  it("a lead keeps its own face when it is only in the polled list, not the task registry", async () => {
+    load();
+    prefs.patch({ style: "childish" });
+    app.store.set((d) => ({ ...d, taskProjects: d.taskProjects.filter((p) => p.key !== "samvision") }));
+    expect(app.store.get().state!.projects.some((p) => p.key === "samvision")).toBe(true);
+    const main = await show("#/agents");
+    const expected = castLeads(leadKeys(app.store.get())).get("samvision")!.id;
+    expect(faces(main.querySelector(".hq-teams")!).map((f) => f.dataset.character)).toContain(expected);
   });
 });

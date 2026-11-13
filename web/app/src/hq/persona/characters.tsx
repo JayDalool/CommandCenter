@@ -128,13 +128,14 @@ function mouth(m: Mouth, y: number, fg: string): ReactNode {
   }
 }
 
-/** One character on its tile. Decorative: the caller names the agent in text beside it. */
+/** One character on its tile. Decoration: hidden from screen readers, because the caller names the agent in text
+ *  beside it and a face inside a link or button would otherwise be read out as part of its name. `title` is the
+ *  tooltip a mouse shows. */
 export function Face({ who, size = 32, title }: { who: Character; size?: number; title?: string }) {
   const [tile, body, ink] = HUES[who.hue], g = GEO[who.head];
   // On the TV head the features sit on the dark screen, so they are drawn in the body colour.
   const fg = who.head === "tv" ? body : ink, other = who.head === "tv" ? ink : body;
-  return <svg className="hq-face" viewBox="0 0 64 64" width={size} height={size} role="img" aria-hidden={title ? undefined : true}
-    aria-label={title} data-character={who.id}>
+  return <svg className="hq-face" viewBox="0 0 64 64" width={size} height={size} aria-hidden data-character={who.id}>
     {title && <title>{title}</title>}
     <rect width="64" height="64" rx="14" fill={tile} />
     <path d="M15 64c2-6 9-9 17-9s15 3 17 9z" fill={ink} opacity=".3" />
