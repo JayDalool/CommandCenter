@@ -1,7 +1,7 @@
 // Answering a ticket's questions in place, in Decisions (contracts.md §4). Each open question shows its options as
 // cards with the agent's recommended one first-class (marked, its reason under it, and picked to start with), plus two
 // choices HQ always adds: "Something else" (Jay's own words) and "Talk it through" (a note to the project's lead in
-// Messages, the question quoted; nothing is answered). Sending is the same POST /api/tasks/{key}/answers as the Task
+// Messages naming the ticket, never the agent's text; nothing is answered). Sending is the same POST /api/tasks/{key}/answers as the Task
 // Room's form, so Developer Unlock is needed as today. ccd delivers to the task's session, or to the lead when none
 // is running, and the result says which.
 import { useEffect, useState } from "react";
@@ -128,18 +128,18 @@ function Ask({ q, n, pick, text, onPick, onText, ticket, project, projectName, o
     </div>
     {pick === OTHER && <textarea className="hq-ans-input" rows={2} value={text} placeholder="Your answer…"
       aria-label={`Your answer to: ${q.text}`} onChange={(e) => onText(e.target.value)} />}
-    {pick === TALK && <Talk q={q} ticket={ticket} project={project} onSent={onTalked} />}
+    {pick === TALK && <Talk q={q} n={n} ticket={ticket} project={project} onSent={onTalked} />}
   </fieldset>;
 }
 
-/** A note to the project's lead about one question. It answers nothing: the question stays open. */
-function Talk({ q, ticket, project, onSent }: { q: AskedQuestion; ticket: string; project: string; onSent: () => void }) {
+/** A note to the project's lead about one question: fixed text, the ticket and Jay's own words. It answers nothing. */
+function Talk({ q, n, ticket, project, onSent }: { q: AskedQuestion; n: number | null; ticket: string; project: string; onSent: () => void }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const choices = choicesOf(q);
-  const body = [`About ${ticket}: “${q.text}”`,
-    ...(choices.length ? [`Options: ${choices.map((o, j) => `${j + 1}. ${o}${q.recommended === j ? " (recommended)" : ""}`).join("  ")}`] : []),
+  // Stored as Jay's message, so it carries only fixed text and Jay's own note: the question and its options were
+  // written by an agent and stay in the ticket, where the lead reads them as data.
+  const body = [`About the open question${n !== null ? ` ${n}` : ""} on ${ticket} (read it with \`python -m ccd.pipeline_cli work ${ticket}\`):`,
     "", note.trim() || "I'd like to talk this through before I answer."].join("\n");
   const send = async () => {
     setBusy(true); setErr(null);

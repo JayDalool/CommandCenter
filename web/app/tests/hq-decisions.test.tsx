@@ -177,7 +177,9 @@ describe("Decisions", () => {
       fireEvent.change(within(r).getByLabelText("Talk through: Question 1?"), { target: { value: "What about Google Sheets?" } });
       fireEvent.click(within(r).getByRole("button", { name: "Send to the lead and open Messages" }));
       await act(async () => {});
-      expect(chat).toHaveBeenCalledWith("samvision", "About SV-056: “Question 1?”\nOptions: 1. CSV (recommended)  2. XLSX\n\nWhat about Google Sheets?");
+      expect(chat).toHaveBeenCalledWith("samvision",
+        "About the open question on SV-056 (read it with `python -m ccd.pipeline_cli work SV-056`):\n\nWhat about Google Sheets?");
+      expect(chat.mock.calls[0][1]).not.toContain("Question 1?");             // agent text never sent as Jay's words
       expect(answers).not.toHaveBeenCalled();
       expect(location.hash).toBe("#/messages?c=samvision");
     });

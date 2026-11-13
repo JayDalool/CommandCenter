@@ -1656,7 +1656,8 @@ class Daemon(LeadChat):
             text = text[:7880] + "\n[…truncated]"
         project = work.get("project") or self.tasks.get(key)["project"]
         delivered_to = None
-        if self.task_session(work["key"])["state"] == "none":
+        # Only when herdr answers: with herdr down every session looks absent, and the task session may be running.
+        if self.herdr_state.get("ok") and self.task_session(work["key"])["state"] == "none":
             # No task session: the questions came from the lead (asked with --role coordinator) or the session has
             # ended. The answers go to the project's lead through Messages instead of nowhere.
             delivered, reason, delivered_to = await self._answers_to_lead(work, project, answered, latest, replanned, via)
