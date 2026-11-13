@@ -3,7 +3,8 @@ import { devExpired, devSession } from "./developer";
 import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
   Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, InboxState, WorkersState, WorkerNode, AuditState, ActorsState, ActorToken, UsageState, BudgetsState, NotifyState, NotifySettings,
-  ChatOverview, ChatMessage, ChatLead, ChatSendResult, ChatStartResult, ChatFile } from "./types";
+  ChatOverview, ChatMessage, ChatLead, ChatSendResult, ChatStartResult, ChatFile,
+  Briefing, MilestoneResult, MilestoneState, MilestoneTrack, MilestonesView } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -299,6 +300,25 @@ export class Api {
     if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
     return new Blob([await res.arrayBuffer()], { type: file.mime });
   }
+
+  // ---------- Milestones and the briefing (ccd/hq.py) ----------
+  milestones() { return this.req<MilestonesView>("GET", "/api/milestones"); }
+  milestoneAdd(project: string, m: { track: MilestoneTrack; title: string; due?: string | null; note?: string | null }) {
+    return this.req<MilestoneResult>("POST", `/api/milestones/${encodeURIComponent(project)}`, m);
+  }
+  /** due and note: null clears. */
+  milestoneChange(project: string, id: string, m: { title?: string; state?: MilestoneState; due?: string | null; note?: string | null }) {
+    return this.req<MilestoneResult>("PATCH", `/api/milestones/${encodeURIComponent(project)}/${encodeURIComponent(id)}`, m);
+  }
+  /** The empty body is on purpose: ccd wants a JSON content type on every write, a DELETE included. */
+  milestoneRemove(project: string, id: string) {
+    return this.req<{ ok: true; revision: number }>("DELETE", `/api/milestones/${encodeURIComponent(project)}/${encodeURIComponent(id)}`, {});
+  }
+  /** Every id of the track, in the new order. 409 when the project changed since `revision` was read. */
+  milestoneOrder(project: string, track: MilestoneTrack, ids: string[], revision: number) {
+    return this.req<{ revision: number }>("PUT", `/api/milestones/${encodeURIComponent(project)}/order`, { track, ids, revision });
+  }
+  briefing(since?: number) { return this.req<Briefing>("GET", `/api/briefing${since ? `?since=${Math.floor(since)}` : ""}`); }
 
   /** GET a file with the token header and hand it to the browser as a download. */
   async download(path: string, fallbackName: string) {

@@ -298,6 +298,9 @@ export interface Question {
   askedAt: number; askedBy: string; answer: string | null; answeredAt: number | null; answeredBy: string | null;
   /** "stale": the task check — Claude thinks this task is no longer needed; Jay answers Cancel it / Keep it. */
   purpose?: "stale" | null;
+  /** A choice question: the index into options Claude recommends, and why (ccd pipeline.ask). */
+  recommended?: number | null;
+  why?: string | null;
 }
 export interface Evidence { id: number; at: number; actor: string; stage: string | null; kind: string; ref: string; note: string | null }
 export interface Checkpoint {
@@ -311,7 +314,9 @@ export interface DeployState {
 export interface TaskSession { state: "ready" | "multiple" | "none"; paneId: string | null; sessionId: string | null; status: string }
 export interface AnswersResult { work: TicketWork; complete: boolean; delivered: boolean; reason: string | null; replanned?: boolean;
   /** A task-check answer: true when "Cancel it" cancelled the ticket, false when Jay kept it. */
-  cancelled?: boolean }
+  cancelled?: boolean;
+  /** Who got the answers: the task's own session, the project's lead through Messages, or nobody. */
+  deliveredTo?: "task" | "lead" | null }
 export interface TaskCheckResult { ok: boolean; project: string; coordinator: string | null; openTasks?: number;
   /** With copy: the message itself, nothing sent (a project without a coordinator Claude). */
   text?: string }
@@ -650,3 +655,26 @@ export type ChatDelivery = "nudged" | "queued" | "lead-offline" | "lead-paused";
 export interface ChatSendResult { ok: true; message: ChatMessage; delivery: ChatDelivery }
 export interface ChatOverBudget { scope: string; key: string; period: string; limitUsd: number | null; assessedUsd: number; pct: number | null; holdReason: string | null }
 export interface ChatStartResult { ok: boolean; started?: boolean; lead?: ChatLead; delivery?: ChatDelivery; needsApproval?: boolean; overBudget?: ChatOverBudget[]; error?: string }
+
+/** Milestones, the briefing and project logos (ccd/hq.py). Two tracks per project: technical is engineering work,
+ *  business is real-life work (contact the lawyer, send the email to the client). */
+export type MilestoneTrack = "technical" | "business";
+export type MilestoneState = "todo" | "doing" | "done";
+export interface Milestone {
+  id: string; title: string; state: MilestoneState; due: string | null; note: string | null; doneAt: number | null; by: string;
+}
+export interface ProjectMilestones { technical: Milestone[]; business: Milestone[]; revision: number }
+export interface MilestonesView { projects: Record<string, ProjectMilestones> }
+export interface MilestoneResult { milestone: Milestone; revision: number }
+
+/** What happened in a window of time. needsYou and mainChecks are now, not in the window; spendUsd is null when the
+ *  meter has no data (never a guessed $0). */
+export interface BriefingCounts {
+  merged: number; done: number; failedChecks: number; opened: number; questionsAsked: number; questionsAnswered: number;
+  deploys: number; needsYou: number;
+}
+export interface BriefingHighlight { at: number; kind: string; text: string; ref: string | null }
+export interface BriefingProject extends BriefingCounts {
+  key: string; name: string; mainChecks: "passing" | "failing" | "unknown"; spendUsd: number | null; highlights: BriefingHighlight[];
+}
+export interface Briefing { since: number; until: number; totals: BriefingCounts; projects: BriefingProject[]; quiet: boolean }

@@ -40,6 +40,10 @@ const P: Record<string, React.ReactNode> = {
   help: <><circle cx="12" cy="12" r="8.5" /><path d="M9.6 9.5a2.5 2.5 0 1 1 3.4 2.3c-.7.3-1 .8-1 1.5v.7M12 16.8v.1" /></>,
   grid: <><rect x="4" y="4" width="6.5" height="6.5" rx="1.8" /><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8" /><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8" /><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8" /></>,
   more: <><circle cx="5.5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="18.5" cy="12" r="1" /></>,
+  up: <><path d="M12 19V5M6 11l6-6 6 6" /></>,
+  down: <><path d="M12 5v14M6 13l6 6 6-6" /></>,
+  pencil: <><path d="M4 20l.8-4L16 4.8a1.8 1.8 0 0 1 2.6 0l.6.6a1.8 1.8 0 0 1 0 2.6L8 19.2z" /><path d="m14 7 3 3" /></>,
+  trash: <><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l.8 12.5h9.4L17.5 7M10 11v5M14 11v5" /></>,
 };
 
 export function Icon({ name, size = 18 }: { name: string; size?: number }) {

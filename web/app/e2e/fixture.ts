@@ -56,6 +56,14 @@ function answer(path: string): unknown {
     case "/api/pty": return { sessions: [], enabled: false };
     case "/api/attachments": return { attachments: [] };
     case "/api/chat": return { conversations: [], canStart: false, unread: 0, limits: { text: 16000, fileBytes: 20971520, filesPerMessage: 10 } };
+    // A ccd that has the HQ store and nothing in it: every task project with no milestones, and a quiet window.
+    case "/api/milestones":
+      return { projects: Object.fromEntries(fx.tasks.projects.map((p) => [p.key, { technical: [], business: [], revision: 0 }])) };
+    case "/api/briefing": {
+      const zero = { merged: 0, done: 0, failedChecks: 0, opened: 0, questionsAsked: 0, questionsAnswered: 0, deploys: 0, needsYou: 0 };
+      return { since: Math.floor(NOW / 1000) - 12 * 3600, until: Math.floor(NOW / 1000), totals: zero, quiet: true,
+        projects: fx.tasks.projects.map((p) => ({ key: p.key, name: p.name, ...zero, mainChecks: "unknown", spendUsd: null, highlights: [] })) };
+    }
   }
   const task = /^\/api\/tasks\/([^/]+)(\/work)?$/.exec(path);
   const t = task && fx.tasks.tickets.find((x) => x.key === decodeURIComponent(task[1]));
