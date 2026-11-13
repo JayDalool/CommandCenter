@@ -66,6 +66,11 @@ function answer(path: string): unknown {
   return undefined;
 }
 
+/** Routes a server with its switch off answers 404, as ccd does: /api/onboarding/* while the onboarding groundwork is off
+ *  (config.json "onboarding_groundwork"). The page is expected to say Not enabled; the browser's own console line for
+ *  that 404 is not a problem. */
+const OFF = new Set(["/api/onboarding/budgets"]);
+
 /** What went wrong in the browser context (every page, pop-outs and popups included), collected as it happens. */
 export interface Watch {
   console: string[];       // console.error and console.warn
@@ -91,7 +96,12 @@ export const test = base.extend<{ theme: Theme; ui: Ui; watch: Watch }>({
     const w: Watch = { console: [], pageErrors: [], blocked: [], unanswered: [], writes: [], badAuth: [], tokenInUrl: [],
       sockets: [], popups: [] };
     // Everything below is set on the browser context, so a pop-out or a popup is sealed and watched like the first page.
-    context.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") w.console.push(`${m.type()}: ${m.text()}`); });
+    context.on("console", (m) => {
+      if (m.type() !== "error" && m.type() !== "warning") return;
+      const at = m.location().url;
+      if (at && OFF.has(new URL(at, ORIGIN).pathname) && m.text().startsWith("Failed to load resource")) return;
+      w.console.push(`${m.type()}: ${m.text()}`);
+    });
     context.on("weberror", (e) => w.pageErrors.push(String(e.error())));
     context.on("request", (r) => { if (r.url().includes(TOKEN)) w.tokenInUrl.push(r.url()); });
     const watchPage = (p: Page) => {
@@ -131,6 +141,7 @@ export const test = base.extend<{ theme: Theme; ui: Ui; watch: Watch }>({
       if (!url.pathname.startsWith("/api/")) return route.continue();
       if (req.headers()["x-ccd-token"] !== TOKEN) w.badAuth.push(`${req.method()} ${url.pathname}`);
       if (req.method() !== "GET") { w.writes.push(`${req.method()} ${url.pathname}`); return route.fulfill({ status: 405, json: { ok: false, error: "read-only test" } }); }
+      if (OFF.has(url.pathname)) return route.fulfill({ status: 404, json: { ok: false, error: "not found" } });
       const body = answer(url.pathname);
       if (body === undefined) { w.unanswered.push(`GET ${url.pathname}`); return route.fulfill({ status: 404, json: { ok: false, error: "no fixture" } }); }
       return route.fulfill({ json: body, headers: { "cache-control": "no-store" } });

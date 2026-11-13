@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { app } from "./store/app";
 import { useSelector } from "./lib/store";
-import { useRoute } from "./lib/router";
+import { href, useRoute } from "./lib/router";
+import { TITLES } from "./lib/titles";
 import { AppShell } from "./components/Shell";
 import { Connect } from "./screens/Connect";
 import { Dashboard } from "./screens/Dashboard";
@@ -26,10 +27,18 @@ import { EmptyState } from "./components/ui";
 
 const SCREENS: Record<string, () => React.JSX.Element> = { dashboard: Dashboard, overview: Dashboard, projects: Projects,
   agents: Agents, tasks: Tasks, development: Development, workspace: Workspace, files: Files, console: Files, prs: PullRequests,
-  workspaces: Workspaces, server: Server, activity: Activity, alerts: Alerts, settings: Settings, needs: NeedsYou };
+  workspaces: Workspaces, server: Server, activity: Activity, alerts: Alerts, settings: Settings, needs: NeedsYou,
+  approvals: HqOnly, budgets: HqOnly, messages: HqOnly, revenue: HqOnly };
 const FLUSH = new Set(["tasks", "workspaces", "console", "workspace", "files"]);
 /** Pop-out windows: one room, one terminal or one HQ page, no navigation around them. */
 const BARE: Record<string, () => React.JSX.Element> = { room: RoomWindow, pane: PaneWindow, pop: PopWindow };
+
+/** Approvals, Budgets, Messages and Revenue are HQ pages only (hq/pages): Classic says where they are. */
+function HqOnly() {
+  const route = useRoute();
+  return <EmptyState title={`${TITLES[route.screen] ?? "This page"} is in the HQ preview`}
+    hint="Turn it on in Settings › General › Interface."><a href={href("dashboard")}>Back to the Dashboard</a></EmptyState>;
+}
 
 /** A pop-out or second window gets the token and the Developer session from the open windows. */
 export async function start() {

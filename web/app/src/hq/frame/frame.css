@@ -71,6 +71,10 @@
   :root[data-ui="hq"] .hq-nav-item { padding-block: 6px; }
   :root[data-ui="hq"] .hq-shell.is-icons .hq-nav-item { padding-block: 7px; }
 }
+/* Ten screens fit down to a 440 px window (ui-switch.spec.ts) with tighter rows. */
+@media (max-height: 540px) {
+  :root[data-ui="hq"] .hq-nav-item, :root[data-ui="hq"] .hq-shell.is-icons .hq-nav-item { padding-block: 4px; }
+}
 
 /* ---------- main column: top bar, tabs, Classic's banners, the screen ---------- */
 :root[data-ui="hq"] .hq-main { grid-area: main; display: flex; flex-direction: column; min-width: 0; min-height: 0; }

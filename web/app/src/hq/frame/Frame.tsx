@@ -18,6 +18,7 @@ import { hqPageFor } from "../pages";
 import { HQ_NAV, HQ_NAV_LOW, hqTitle, sectionOf, viewKey, type HqNavItem } from "./nav";
 import { tabs, visit, close } from "./tabs";
 import { Icon, Logo } from "./icons";
+import { JayMenu } from "./JayMenu";
 import { hqMedia } from "../layout";
 import { PopOutButton, PoppedPlaceholder, usePopped, usePoppedViews, useWindowsWatch, viewOfRoute } from "../windows/controls";
 
@@ -32,9 +33,6 @@ function useNarrow(): boolean {
   }, () => hqMedia()?.matches ?? false, () => false);
 }
 
-/** The theme on screen: System resolves to what the OS asks for, so the toggle always offers the other one. */
-const looksDark = (theme: string) => theme === "dark"
-  || (theme === "system" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches);
 /** Icons only: a narrow window, or the sidebar's own toggle (Ctrl+\, the same preference as Classic's rail). */
 function useIconsOnly(): { icons: boolean; narrow: boolean; collapsed: boolean } {
   const collapsed = usePrefs((p) => p.railCollapsed);
@@ -83,7 +81,6 @@ export function HqSide() {
 
 export function HqTop({ dash }: { dash: boolean }) {
   const route = useRoute();
-  const theme = usePrefs((p) => p.theme);
   const projName = useSelector(app.store, (d) => d.state?.projects.find((p) => p.key === route.id)?.name ?? null);
   const view = viewOfRoute(route);
   const out = usePopped(view);
@@ -96,10 +93,9 @@ export function HqTop({ dash }: { dash: boolean }) {
       {view && !out && <PopOutButton v={view} />}
       <button type="button" className="btn is-quiet is-sm" onClick={() => window.dispatchEvent(new Event("cc:new-task"))}
         aria-keyshortcuts="n"><Kbd>N</Kbd> New task</button>
-      <button type="button" className="btn is-quiet is-sm" onClick={() => prefs.patch({ theme: looksDark(theme) ? "light" : "dark" })}
-        aria-label="Toggle light and dark">{looksDark(theme) ? "Light" : "Dark"}</button>
       {/* The Dashboard has its own Developer Mode dot and bell in its header: not twice on one screen. */}
       {!dash && <><DevDot /><NotificationBell /></>}
+      <JayMenu />
     </div>
   </header>;
 }
