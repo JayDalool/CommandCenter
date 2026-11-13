@@ -1,0 +1,82 @@
+/* The office floor (pages/Floor.tsx). Scoped to :root[data-ui="hq"], no custom property declared here (parity.spec.ts):
+ * --pj is set on the element itself, as on a project card. */
+:root[data-ui="hq"] .hq-floor { position: relative; container: hq-floor / inline-size; display: grid; gap: 10px; min-width: 0; }
+/* Wide: the desks on the left, the door above the lounge on the right, then whoever is out along the bottom. */
+:root[data-ui="hq"] .hq-floor-plan { display: grid; grid-template-columns: minmax(0, 1fr) minmax(230px, 32%); grid-template-rows: auto 1fr; gap: 10px; }
+:root[data-ui="hq"] .hq-zone {
+  display: grid; gap: 10px; align-content: start; min-width: 0; padding: 10px 12px 12px;
+  border: 1px solid var(--hq-line); border-radius: var(--hq-r-md); background: var(--hq-tile);
+}
+:root[data-ui="hq"] .hq-zone.is-desks { grid-area: 1 / 1 / span 2 / auto; }
+:root[data-ui="hq"] .hq-zone.is-door { grid-area: 1 / 2; }
+:root[data-ui="hq"] .hq-zone.is-lounge { grid-area: 2 / 2; }
+:root[data-ui="hq"] .hq-zone:is(.is-out, .is-unseen) { grid-column: 1 / -1; }
+/* Somebody at the door is the one thing here that asks for Jay, so the room says so before he reads a name. */
+:root[data-ui="hq"] .hq-zone.is-door:has(.hq-who) { border-color: var(--hq-warn); }
+:root[data-ui="hq"] .hq-zone > header { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--hq-text-2); }
+:root[data-ui="hq"] .hq-zone > header svg { flex: none; }
+:root[data-ui="hq"] .hq-zone h4 { flex: 1; min-width: 0; margin: 0; font: 650 var(--hq-fs-sm)/1.3 var(--hq-font-display); color: var(--hq-text-strong); }
+:root[data-ui="hq"] .hq-zone h4 small { margin-left: 4px; color: var(--hq-muted); font: var(--hq-fs-xs) var(--hq-font); white-space: nowrap; }
+:root[data-ui="hq"] .hq-zone .hq-empty { padding: 0; font-size: var(--hq-fs-sm); }
+
+:root[data-ui="hq"] .hq-floor-teams { display: flex; flex-wrap: wrap; gap: 14px 18px; }
+:root[data-ui="hq"] .hq-floor-team { display: grid; gap: 6px; align-content: start; min-width: 0; }
+:root[data-ui="hq"] .hq-floor-team-name { gap: 6px; color: var(--hq-text-2); font-size: var(--hq-fs-xs); font-weight: 600; }
+:root[data-ui="hq"] .hq-floor-team-name::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 2px; background: var(--pj); }
+:root[data-ui="hq"] .hq-floor-team > ul,
+:root[data-ui="hq"] .hq-floor-people { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+
+/* A desk is a tile with its team's colour along the front edge. Its owner sits on it; an empty one is an outline. */
+:root[data-ui="hq"] .hq-desk {
+  display: grid; justify-items: center; align-content: start; gap: 2px; width: 100px; min-height: 100px; padding: 9px 6px 10px;
+  border: 1px solid var(--hq-line); border-radius: var(--hq-r-md); background: var(--hq-panel-2); box-shadow: inset 0 -3px 0 var(--pj);
+  text-align: center;
+}
+:root[data-ui="hq"] .hq-desk.is-empty { border-style: dashed; background: none; box-shadow: none; color: var(--hq-muted); }
+:root[data-ui="hq"] .hq-desk.is-empty b { max-width: 100%; font-size: var(--hq-fs-xs); font-weight: 600; }
+:root[data-ui="hq"] .hq-desk.is-empty small { font-size: var(--hq-fs-xs); }
+
+/* One session. Above its neighbours while it walks, so it passes in front of the rooms it crosses. */
+:root[data-ui="hq"] .hq-who { position: relative; display: grid; justify-items: center; align-content: start; gap: 2px; width: 100%; border-radius: var(--hq-r-sm); text-align: center; }
+:root[data-ui="hq"] .hq-floor-people .hq-who { width: 100px; }
+:root[data-ui="hq"] .hq-who.is-walking { z-index: 2; pointer-events: none; }
+:root[data-ui="hq"] .hq-who b { max-width: 100%; font-size: var(--hq-fs-xs); font-weight: 650; color: var(--hq-text-strong); }
+:root[data-ui="hq"] .hq-who:hover b { text-decoration: underline; }
+:root[data-ui="hq"] .hq-who small { max-width: 100%; color: var(--hq-muted); font-size: var(--hq-fs-xs); line-height: 1.25; overflow-wrap: anywhere; }
+:root[data-ui="hq"] .hq-who-av { position: relative; display: grid; place-items: center; width: 40px; height: 40px; margin-bottom: 2px; }
+:root[data-ui="hq"] .hq-who-av.is-seat { border: 1px dashed var(--hq-line-2); border-radius: 50%; }
+:root[data-ui="hq"] .hq-who-mono {
+  display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--hq-raise);
+  color: var(--hq-text-strong); font: 700 var(--hq-fs-sm) var(--hq-font-display); box-shadow: inset 0 0 0 2px var(--pj);
+}
+/* The same dot and colours as a status pill, on the corner of the face. The zone's heading has the word. */
+:root[data-ui="hq"] .hq-who .hq-who-av::after {
+  content: ""; position: absolute; right: -2px; bottom: -2px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--hq-idle); box-shadow: 0 0 0 2px var(--hq-tile);
+}
+:root[data-ui="hq"] .hq-desk .hq-who-av::after { box-shadow: 0 0 0 2px var(--hq-panel-2); }
+:root[data-ui="hq"] .hq-who[data-spot="desk"] .hq-who-av::after { background: var(--hq-ok); }
+:root[data-ui="hq"] .hq-who[data-spot="door"] .hq-who-av::after { background: var(--hq-warn); }
+:root[data-ui="hq"] .hq-who[data-spot="lounge"] .hq-who-av::after { background: var(--hq-info); }
+:root[data-ui="hq"] .hq-zone:is(.is-out, .is-unseen) .hq-who-av { opacity: .55; }
+:root[data-ui="hq"] .hq-zone:is(.is-out, .is-unseen) .hq-face { filter: grayscale(.85); }
+
+/* Childish mode only (a face is only drawn then): the walker bobs, and a working face's dot rings like a ping. */
+@keyframes hq-floor-bob { 0%, 100% { transform: translateY(0) rotate(-5deg); } 50% { transform: translateY(-3px) rotate(5deg); } }
+@keyframes hq-floor-ping { 0% { transform: scale(1); opacity: .7; } 70%, 100% { transform: scale(2.6); opacity: 0; } }
+:root[data-ui="hq"] .hq-who.is-walking .hq-face { animation: hq-floor-bob .34s ease-in-out infinite; }
+:root[data-ui="hq"] .hq-who[data-spot="desk"] .hq-who-av:has(.hq-face)::before {
+  content: ""; position: absolute; right: -2px; bottom: -2px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--hq-ok); animation: hq-floor-ping 2.4s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-ui="hq"] .hq-who.is-walking .hq-face,
+  :root[data-ui="hq"] .hq-who[data-spot="desk"] .hq-who-av:has(.hq-face)::before { animation: none; }
+}
+
+@container hq-floor (max-width: 640px) {
+  :root[data-ui="hq"] .hq-floor-plan { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
+  :root[data-ui="hq"] .hq-zone:is(.is-desks, .is-door, .is-lounge) { grid-area: auto; }
+  :root[data-ui="hq"] .hq-desk, :root[data-ui="hq"] .hq-floor-people .hq-who { width: 84px; }
+  :root[data-ui="hq"] .hq-desk { min-height: 96px; padding-inline: 4px; }
+}

@@ -31,6 +31,8 @@ export interface Prefs {
   ui: "classic" | "hq";
   /** HQ only: Childish gives agents a character and adds emoji. Professional (the default) shows neither. */
   style: "professional" | "childish";
+  /** HQ only: My Office shows its sessions on the office floor (the default) or as a list. */
+  sessions: "floor" | "list";
 }
 const KEY = "cc.prefs";
 const DEFAULTS: Prefs = { theme: "dark", density: "comfortable", sshHost: "jay-server",
@@ -38,7 +40,7 @@ const DEFAULTS: Prefs = { theme: "dark", density: "comfortable", sshHost: "jay-s
   lastProject: null, wsExplorerW: 260, wsExplorerOpen: true, wsTermH: 300, wsTermOpen: true, wsMax: "none",
   wsSide: "explorer", wsCollapsed: [], wsDetailOpen: true,
   wsTreeOpen: true, wsLeft: "projects", wsTasksW: 640, wsFocus: false, railCollapsed: false,
-  ui: "classic", style: "professional" };
+  ui: "classic", style: "professional", sessions: "floor" };
 
 const SIDES = ["explorer", "scm", "search"];
 
@@ -56,6 +58,7 @@ export function parsePrefs(raw: string | null): Prefs {
     if (typeof p.wsTasksW !== "number" || !Number.isFinite(p.wsTasksW)) p.wsTasksW = DEFAULTS.wsTasksW;
     if (p.ui !== "hq") p.ui = "classic";
     if (p.style !== "childish") p.style = "professional";
+    if (p.sessions !== "list") p.sessions = "floor";
     return p;
   } catch { return { ...DEFAULTS }; }
 }

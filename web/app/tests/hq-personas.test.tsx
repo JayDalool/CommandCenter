@@ -8,7 +8,7 @@ import { app, initial } from "../src/store/app";
 import { parsePrefs, prefs } from "../src/lib/prefs";
 import { loadHqFrame } from "../src/components/Shell";
 import { CAST, Face } from "../src/hq/persona/characters";
-import { castFor, castLeads, hash, leadKeys } from "../src/hq/persona/assign";
+import { castFor, castLeads, castSessions, hash, leadKeys } from "../src/hq/persona/assign";
 import type { ChatConversation, ChatOverview } from "../src/api/types";
 import { fixture, state, tasks } from "./helpers";
 
@@ -41,7 +41,7 @@ beforeEach(() => {
   vi.spyOn(app.api, "chat").mockResolvedValue(OVERVIEW);
   prefs.patch({ ui: "hq", style: "professional" });
 });
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); prefs.patch({ ui: "classic", style: "professional" }); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); prefs.patch({ ui: "classic", style: "professional", sessions: "floor" }); });
 
 describe("the cast", () => {
   it("has 30 characters, each with its own id, name and look", () => {
@@ -92,10 +92,26 @@ describe("who gets which character", () => {
     expect(leadKeys({ taskProjects: [], state: null })).toEqual([]);
   });
 
-  it("gives any other session the same face every time, by its name", () => {
+  it("gives a name that is not a session the same face every time", () => {
     expect(castFor("sv-071")).toBe(castFor("SV-071"));
     expect(castFor("sv-071")).toBe(CAST[hash("agent:sv-071") % CAST.length]);
     expect(hash("")).toBe(0x811c9dc5);
+  });
+
+  it("gives every other session a face no lead and no other session has, while there are faces left", () => {
+    const leads = castLeads(["samvision", "gauzemate", "gyst", "mfe", "commandcenter"]);
+    const names = Array.from({ length: 24 }, (_, i) => `sv-${String(i).padStart(3, "0")}-impl`);
+    const a = castSessions(leads, names), b = castSessions(leads, [...names].reverse().map((n) => n.toUpperCase()));
+    // 6 leads and 24 sessions: all 30 faces, each once, whatever order or case the names come in
+    expect(new Set([...leads.values(), ...a.values()].map((c) => c.id)).size).toBe(30);
+    for (const n of names) expect(b.get(n)!.id, n).toBe(a.get(n)!.id);
+    // a session keeps the face its name lands on when nobody has it
+    const alone = castSessions(new Map(), ["sv-071"]);
+    expect(alone.get("sv-071")).toBe(castFor("sv-071"));
+    // more sessions than faces: everyone still gets one
+    const crowd = castSessions(leads, Array.from({ length: 40 }, (_, i) => `lane-${i}`));
+    expect(crowd.size).toBe(40);
+    expect([...crowd.values()].every((c) => CAST.includes(c))).toBe(true);
   });
 });
 
@@ -161,6 +177,8 @@ describe("faces on the pages", () => {
     main = await show("#/dashboard");
     const card = [...main.querySelectorAll<HTMLElement>(".hq-proj")].find((p) => who(p) === team);
     expect(card?.querySelector(".hq-proj-lead")).toHaveTextContent(`Lead: ${key}`);
+    expect(faces(main.querySelector(".hq-floor")!).map((f) => f.dataset.character)).toContain(team);
+    fireEvent.click(within(main).getByRole("button", { name: "List" }));
     expect(faces(main.querySelector(".hq-sess-grid")!).map((f) => f.dataset.character)).toContain(team);
     cleanup();
 

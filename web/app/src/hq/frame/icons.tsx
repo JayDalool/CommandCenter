@@ -44,6 +44,12 @@ const P: Record<string, React.ReactNode> = {
   down: <><path d="M12 5v14M6 13l6 6 6-6" /></>,
   pencil: <><path d="M4 20l.8-4L16 4.8a1.8 1.8 0 0 1 2.6 0l.6.6a1.8 1.8 0 0 1 0 2.6L8 19.2z" /><path d="m14 7 3 3" /></>,
   trash: <><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l.8 12.5h9.4L17.5 7M10 11v5M14 11v5" /></>,
+  // The office floor's zones (pages/Floor.tsx).
+  desk: <><rect x="8" y="4" width="8" height="5" rx="1" /><path d="M12 9v2.5M3.5 11.5h17M5.5 11.5V20M18.5 11.5V20M5.5 15.5h5V20" /></>,
+  door: <><path d="M6.5 20.5V4.5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v16M4 20.5h16M14.5 12v1" /></>,
+  sofa: <><path d="M5.5 11V8.5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2V11" /><path d="M3.5 13a2 2 0 0 1 4 0v2h9v-2a2 2 0 0 1 4 0v4.5h-17z" /><path d="M6 17.5V19.5M18 17.5V19.5" /></>,
+  moon: <><path d="M19.5 14.5A8 8 0 1 1 9.5 4.5a6.5 6.5 0 0 0 10 10z" /></>,
+  eyeoff: <><path d="M4 4l16 16M10 6.2A9.3 9.3 0 0 1 12 6c4.5 0 7.8 3 9 6a11 11 0 0 1-2.4 3.4M6.5 7.6A10.5 10.5 0 0 0 3 12c1.2 3 4.5 6 9 6 1.3 0 2.6-.3 3.7-.7M10 10.1a2.8 2.8 0 0 0 3.9 3.9" /></>,
 };
 
 export function Icon({ name, size = 18 }: { name: string; size?: number }) {

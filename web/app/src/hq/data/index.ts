@@ -8,6 +8,7 @@ export * from "./office";
 export * from "./topology";
 export * from "./activity";
 export * from "./milestones";
+export * from "./floor";
 
 import { evidence, type HqSource } from "./evidence";
 import { buildOffice } from "./office";
