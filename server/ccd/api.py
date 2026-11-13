@@ -153,6 +153,21 @@
     GET   /api/desktop/launcher      the Windows launcher's version, SHA-256 and build commit
     GET   /api/desktop/launcher/download  CommandCenter.exe, as an attachment
 
+  Messages (ccd/chat.py, ccd/leadchat.py; Jay's answers C1-C8): Jay's conversations with the CTO and each project
+  lead. Normal sign-in, no Developer Unlock (C3). A message is never typed into a terminal: the lead gets one fixed
+  nudge and reads the words with scripts/cc-inbox. Agents (X-CCD-Actor: agent:…) write only as the lead.
+    GET   /api/chat                  conversations: lead (running? idle?), Jay's unread, messages the lead has not read
+    GET   /api/chat/{conv}           one conversation's history, oldest first (?before= ?limit=)
+    POST  /api/chat/{conv}/messages  {text, files?: [ids], replyTo?}. Jay: stored, then the lead is nudged (idle) or
+                                     queued (busy; ccd nudges when it goes idle). An agent: the lead's reply
+    POST  /api/chat/{conv}/seen      Jay read the lead's messages {upTo?}
+    GET   /api/chat/{conv}/inbox     an agent (cc-inbox): Jay's unread messages, then marked read (?peek=1 keeps them)
+    POST  /api/chat/{conv}/start     Jay. start the stopped lead (config chat_start_leads): budget check first; over
+                                     budget answers needsApproval until Jay sends {overBudgetOk: true}
+    POST  /api/chat/files            octet-stream ?conversation=&name=: an image, PDF or Markdown file for a message;
+                                     its type is read from its bytes; anything else is refused (415)
+    GET   /api/chat/files/{fid}      always application/octet-stream + attachment
+
   DEVELOPER routes need the ccd token AND `X-CCD-Developer: <session>` from
   /api/developer/unlock. The ordinary ccd token alone can never write a file.
 
@@ -195,7 +210,7 @@ WS_TOKEN_PREFIX = "ccd-token."
 WRITE_METHODS = ("POST", "PATCH", "PUT", "DELETE")
 # The only routes that take a raw byte body instead of JSON. application/octet-stream
 # is not a CORS-safelisted type either, so a cross-site page still needs a preflight.
-STREAM_PATHS = ("/api/files/upload", "/api/attachments")
+STREAM_PATHS = ("/api/files/upload", "/api/attachments", "/api/chat/files")
 DEV_HEADER = "x-ccd-developer"
 SCM_OPS = ("stage", "unstage", "stage-all", "discard", "commit", "branch")
 # SSH sign-in: the browser trades a one-time code (minted over Jay's SSH login) for the ccd token and a
@@ -361,7 +376,7 @@ class UiFiles:
         self.files = StaticFiles(directory=str(directory), html=True)
         self.headers = [
             (b"content-security-policy", (
-                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
                 f"connect-src 'self' ws://127.0.0.1:{port} ws://localhost:{port}; font-src 'self'; "
                 "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'").encode()),
             (b"x-frame-options", b"DENY"), (b"referrer-policy", b"no-referrer"),
@@ -865,6 +880,65 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         _attach_audit(row["ownerKind"], row["ownerKey"], "removed", row, request.state.actor)
         return {"ok": True, "id": row["id"]}
 
+    # ---------- Messages ----------
+
+    def chat_route(fn):
+        async def handler(request):
+            try:
+                body = await _body(request) if request.method in WRITE_METHODS and \
+                    request.url.path != "/api/chat/files" else None
+                _note(body=body)
+                request.state.actor = actor_of(request)
+                _note(claimed=request.state.actor)
+                result = await fn(request, body)
+                return result if not isinstance(result, dict) else _json(result)
+            except ActionError as e:
+                return _json({"ok": False, "error": e.message}, e.status)
+        return handler
+
+    def _int_param(q, name, default=None):
+        raw = q.get(name)
+        if raw is None or raw == "":
+            return default
+        if not re.fullmatch(r"[0-9]{1,18}", raw):
+            raise ActionError(400, f"{name} must be a whole number")
+        return int(raw)
+
+    async def chat_overview(request, _):
+        return daemon.chat_overview(request.state.actor)
+
+    async def chat_history(request, _):
+        q = request.query_params
+        return daemon.chat_history(request.path_params["conv"], _int_param(q, "before"), _int_param(q, "limit", 50),
+                                   request.state.actor)
+
+    async def chat_send(request, body):
+        return await daemon.chat_send(request.path_params["conv"], body, request.state.actor)
+
+    async def chat_seen(request, body):
+        return daemon.chat_seen(request.path_params["conv"], body, request.state.actor)
+
+    async def chat_inbox(request, _):
+        return daemon.chat_inbox(request.path_params["conv"], request.state.actor,
+                                 peek=request.query_params.get("peek") == "1")
+
+    async def chat_start(request, body):
+        result = await daemon.chat_start(request.path_params["conv"], body, request.state.actor)
+        return _json(result, 409 if result.get("needsApproval") else 200)
+
+    async def chat_upload(request, _):
+        q = request.query_params
+        conv = q.get("conversation") or ""
+        daemon._need_chat(conv)
+        row = await daemon.chat_upload(conv, q.get("name"), request.stream(), request.state.actor,
+                                       length=_length(request))
+        return {"ok": True, "file": row}
+
+    async def chat_file(request, _):
+        fd, row = await asyncio.to_thread(daemon.chat_open_file, request.path_params["fid"],
+                                            request.state.actor)
+        return _stream_fd(fd, row["size"], row["name"])
+
     async def dev_status(request):
         sid = request.headers.get(DEV_HEADER) or ""
         active = bool(gate and gate.check(sid))
@@ -1291,6 +1365,14 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/attachments", ws_route(attach_add, dev=True), methods=["POST"]),
         Route("/api/attachments/{aid}/download", ws_route(attach_download), methods=["GET"]),
         Route("/api/attachments/{aid}", ws_route(attach_remove, dev=True), methods=["DELETE"]),
+        Route("/api/chat", chat_route(chat_overview), methods=["GET"]),
+        Route("/api/chat/files", chat_route(chat_upload), methods=["POST"]),
+        Route("/api/chat/files/{fid}", chat_route(chat_file), methods=["GET"]),
+        Route("/api/chat/{conv}", chat_route(chat_history), methods=["GET"]),
+        Route("/api/chat/{conv}/messages", chat_route(chat_send), methods=["POST"]),
+        Route("/api/chat/{conv}/seen", chat_route(chat_seen), methods=["POST"]),
+        Route("/api/chat/{conv}/inbox", chat_route(chat_inbox), methods=["GET"]),
+        Route("/api/chat/{conv}/start", chat_route(chat_start), methods=["POST"]),
         Route("/api/developer", dev_status, methods=["GET"]),
         Route("/api/developer/unlock", dev_unlock, methods=["POST"]),
         Route("/api/developer/lock", dev_lock, methods=["POST"]),

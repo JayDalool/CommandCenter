@@ -70,8 +70,9 @@ export function HqTabBar() {
   const [more, setMore] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
   // The same counts as the sidebar's Decisions badge and Jay's menu.
-  const n = useSelector(app.store, (d) => ({ needs: jayQueue(d.state).length, approvals: buildDecisions(d).summary.approvals }), shallowEqual);
-  const badge: Partial<Record<string, number>> = { needs: n.needs, approvals: n.approvals };
+  const n = useSelector(app.store, (d) => ({ needs: jayQueue(d.state).length, approvals: buildDecisions(d).summary.approvals,
+    messages: d.state?.chat?.unread ?? 0 }), shallowEqual);
+  const badge: Partial<Record<string, number>> = { needs: n.needs, approvals: n.approvals, messages: n.messages };
   const inTabs = TABS.some((t) => t.id === cur);
   // A new address closes the sheet: a row was used, or Back was pressed.
   const at = location.hash;

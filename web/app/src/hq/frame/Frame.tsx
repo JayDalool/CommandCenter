@@ -56,12 +56,14 @@ export function HqSide() {
     jay: jayQueue(d.state).length,
     tasks: d.tickets.filter((t) => !t.archived && !["DONE", "DENIED", "CANCELLED"].includes(t.status)).length,
     alerts: d.state?.alerts.filter((a) => !a.ack).length ?? 0,
+    chat: d.state?.chat?.unread ?? 0,
   }), shallowEqual);
   const cur = sectionOf(route.screen);
   const badge: Partial<Record<string, ReactNode>> = {
     needs: counts.jay ? <span className="hq-badge is-jay" title="needs you">{counts.jay}</span> : null,
     tasks: counts.tasks ? <span className="hq-badge is-quiet" title="open tasks">{counts.tasks}</span> : null,
     activity: counts.alerts ? <span className="hq-badge is-warn" title="unacknowledged alerts">{counts.alerts}</span> : null,
+    messages: counts.chat ? <span className="hq-badge is-jay" title="unread messages from your leads">{counts.chat}</span> : null,
   };
   return <aside className="hq-side" aria-label="Navigation">
     <a className="hq-brand" href={href("dashboard")} aria-label="Command Center, My Office">

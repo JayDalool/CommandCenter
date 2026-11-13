@@ -70,6 +70,10 @@ ALLOWED = {
     ("GET", "/api/onboarding/drafts/{id}"), ("PUT", "/api/onboarding/drafts/{id}"),
     ("POST", "/api/onboarding/drafts/{id}/discard"), ("POST", "/api/onboarding/drafts/{id}/register"),
     ("POST", "/api/onboarding/validate"), ("GET", "/api/onboarding/events"), ("GET", "/api/onboarding/budgets"),
+    # Messages (Jay's answers C1-C8): conversations with the CTO and project leads; a fixed nudge, never Jay's words
+    ("GET", "/api/chat"), ("GET", "/api/chat/{conv}"), ("POST", "/api/chat/{conv}/messages"),
+    ("POST", "/api/chat/{conv}/seen"), ("GET", "/api/chat/{conv}/inbox"), ("POST", "/api/chat/{conv}/start"),
+    ("POST", "/api/chat/files"), ("GET", "/api/chat/files/{fid}"),
 }
 JAY_PRESSES = {"/api/jay/merge", "/api/jay/go-live"}
 FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec", "push",

@@ -47,6 +47,7 @@ function answer(path: string): unknown {
     case "/api/developer": return { active: false, expiresIn: null };
     case "/api/pty": return { sessions: [], enabled: false };
     case "/api/attachments": return { attachments: [] };
+    case "/api/chat": return { conversations: [], canStart: false, unread: 0, limits: { text: 16000, fileBytes: 20971520, filesPerMessage: 10 } };
   }
   const task = /^\/api\/tasks\/([^/]+)(\/work)?$/.exec(path);
   const t = task && fx.tasks.tickets.find((x) => x.key === decodeURIComponent(task[1]));

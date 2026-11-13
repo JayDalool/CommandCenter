@@ -432,6 +432,44 @@ granted, no agent started, no proposed policy enforced. `ccd/onboarding.py` and 
   (`docs/runbooks/tasks-db-v10-rollback.md`). A drill report made with `--redact` names no path, host or user and
   never holds row contents; `--clean` deletes the copies of the data after the run.
 
+## Messages (Jay's answers C1-C8, 2026-11-12)
+
+Jay talks to the CTO and each project lead in HQ's Messages (docs/API.md, Messages).
+
+- **Nothing Jay writes is typed into a terminal** (C2 b). The lead gets one fixed nudge through herdr's `agent.prompt`,
+  only while idle and only when its input line reads as empty (the night-shift check), so a half-typed draft is never
+  submitted. The nudge names the conversation and the two commands; the lead reads the words with `cc-inbox`.
+  The nudge's wording is neutral: it says a message is waiting and that the lead's usual rules, gates and approvals
+  apply to anything it asks. A message is never an approval.
+- **Who.** No Developer Unlock (C3). Jay's side is the ordinary ccd token with no `X-CCD-Actor`; an agent writes only as
+  its own conversation's lead (`agent:lead-<conv>`, `agent:cto` for `cto`): it reads only through that conversation's
+  inbox and only that conversation's files, cannot list conversations or read history, cannot mark Jay's side read
+  and cannot start a lead. Any other agent actor is refused. Jay's side is limited to 30 messages a minute per
+  conversation. As everywhere else, `X-CCD-Actor` is self-asserted: anything holding the token could write as Jay or
+  as any lead. The binding stops one lead wandering into another's conversation by mistake; it is not a boundary
+  against a hostile process, which waits for Phase 2 identity like every other route.
+- **Storage.** `DATA_DIR/chat.db` (created `0600`) and `SHARE_DIR/chat-files/` (`0700`), apart from `ccd.db` and
+  `tasks.db`, never in a repository. This is the one store that holds conversation text, because Jay asked to keep all
+  history (C4). Text that looks like a token, key, password or credential URL is refused whole (`onboarding.SECRET_RE`).
+  Text may not hold control or format characters (C0, C1, bidi overrides, zero-width) other than newline and tab.
+  Events and the audit trail record which conversation and message, never the text.
+- **Files** (C6). The type comes from the first bytes (PNG, JPEG, GIF, WebP, `%PDF-`), and a text file must also be
+  named `.md`, `.markdown` or `.txt` and decode as UTF-8 with no control characters (so no terminal escape codes
+  reach a lead's `cat`) and nothing that looks like a secret; SVG, HTML and everything else are refused before
+  anything is kept. The stored name always ends in an extension of the detected type (`run.bat` → `run.bat.png`), so
+  a file saved by `cc-inbox` or a browser never opens as something else. At most 20 unsent files per conversation
+  and side; blobs left without a row by a crash are swept when ccd starts. `cc-inbox` saves only into a real
+  `0700` folder of its own account (never through a symlink), and `cc-reply` checks a file's size before reading it. Names are display text only (the generated id is the path; no `/`, control or bidi
+  characters). Downloads are `application/octet-stream` + `attachment` + `Content-Security-Policy: sandbox`. HQ shows
+  an image by fetching its bytes and making a `blob:` of the stored image type; the UI's CSP gains `img-src blob:`
+  for that, and nothing else. Markdown is shown as plain text, never rendered as HTML.
+- **Starting a lead** (C7) is the one place ccd starts a Claude. Only Jay, only from Messages, only while
+  `chat_start_leads` is true, never for a paused project, and never when an unidentified Claude already sits in the
+  lead's folder. A budget at its hold refuses the start until Jay confirms it; the confirmation is recorded. It runs
+  herdr's own CLI: `workspace create --no-focus` (a new workspace at the lead's folder) and `agent start <name>
+  --kind claude` in its root pane. It splits, moves, closes and stops nothing; a failed start leaves the workspace
+  for Jay to see.
+
 ## Audit trail, actor identity and metering (v2 Phase 1, PR 7)
 
 **Audit trail** (`ccd/audit.py`, tasks.db v9 `audit_events`). One row for every write (`POST/PATCH/PUT/DELETE`)

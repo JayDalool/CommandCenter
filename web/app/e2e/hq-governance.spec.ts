@@ -1,6 +1,6 @@
 // Jay's menu and the pages behind it in a real browser: Approvals and Budgets read the server's own data and write
 // nothing, Budgets says Not enabled while the server answers 404 for the shadow budgets (the switch is off), and
-// Messages and Revenue say Not connected. No page scrolls sideways.
+// Messages lists its conversations (none in the fixture) and Revenue says Not connected. No page scrolls sideways.
 import { test, expect, open, problems } from "./fixture";
 
 test.use({ ui: "hq" });
@@ -11,7 +11,8 @@ for (const [route, heading] of [["approvals", "Approvals"], ["budgets", "Budgets
     await open(page, route);
     await expect(page.locator("#main .hq-page h2").first()).toHaveText(heading);
     if (route === "budgets") await expect(page.getByRole("region", { name: "Company, project and agent budgets" })).toContainText("Not enabled");
-    if (route === "messages" || route === "revenue") await expect(page.locator("#main")).toContainText("Not connected");
+    if (route === "messages") await expect(page.locator("#main")).toContainText("Choose a conversation.");
+    if (route === "revenue") await expect(page.locator("#main")).toContainText("Not connected");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(await problems(page, watch)).toEqual([]);
   });
