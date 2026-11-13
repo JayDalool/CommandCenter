@@ -43,7 +43,7 @@ def list_(project, as_json=False, out=None):
         json.dump(mine, out, indent=2)
         out.write("\n")
         return 0
-    for track in ("technical", "business"):
+    for track in [t for t in ("technical", "business") if t in mine]:
         print(f"{track.capitalize()} milestones ({project}):", file=out)
         rows = mine.get(track) or []
         if not rows:

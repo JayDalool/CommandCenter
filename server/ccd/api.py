@@ -833,7 +833,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         return handler
 
     async def milestones_list(request, _):
-        return daemon.milestones_state()
+        return daemon.milestones_state(request.state.actor)
 
     async def milestone_add(request, body):
         return daemon.milestone_add(request.path_params["project"], body, request.state.actor)
@@ -869,7 +869,6 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}[meta["mime"]]
         resp = _stream_fd(fd, meta["size"], request.path_params["project"] + "-logo" + ext)
         resp.headers["X-CCD-Logo-Type"] = meta["mime"]
-        resp.headers["ETag"] = f'"{meta["sha256"]}"'
         return resp
 
     async def logo_remove(request, body):

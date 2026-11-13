@@ -249,7 +249,7 @@ the lawyer, send the email to the client).
 
 | route | who | what |
 |---|---|---|
-| `GET /api/milestones` | anyone with the token | `{projects: {[key]: {technical: Milestone[], business: Milestone[], revision}}}`. Every task project appears, with empty lists when it has none. List order is display order (new ones go last) |
+| `GET /api/milestones` | Jay; a lead sees only its own project's `technical` track (no `business` key) | `{projects: {[key]: {technical: Milestone[], business: Milestone[], revision}}}`. Every task project appears, with empty lists when it has none. List order is display order (new ones go last) |
 | `POST /api/milestones/{project}` | Jay; the project's lead for `technical` | `{track, title, due?, note?}` → `{milestone, revision}`. New milestones start `todo`. `by` is the actor that added it |
 | `PATCH /api/milestones/{project}/{id}` | Jay; the project's lead on a `technical` one | `{title?, state?, due?, note?}` (at least one; `due`/`note` null or "" clears) → `{milestone, revision}`. Moving to `done` sets `doneAt`; moving out of it clears it. The track never changes |
 | `DELETE /api/milestones/{project}/{id}` | Jay | → `{ok, revision}` |
@@ -291,7 +291,7 @@ Every task project appears, in the registry's order. In the window:
 
 Now, not in the window: `needsYou` (the Needs You queue plus agents waiting on Jay), `mainChecks` (main's last run).
 `spendUsd`: measured spend in the window from the usage meter; `null` until the meter has read a log, and `null` for a
-project whose replies there are all unpriced (no data is never shown as $0). `highlights`: the newest 8 events of the
+project with any unpriced reply in the window (a partial sum would read as exact) (no data is never shown as $0). `highlights`: the newest 8 events of the
 window for that project, newest first: merges, deploys, done, gates and questions opened, answers, blocks, failed
 auto-merges, re-plans, PRs opened and closed, checks turning failing, main checks changing, lead replies in Messages,
 milestones done. `kind` is the pipeline step (`pipeline.merged`) or the event kind (`pr.opened`); `text` is ccd's own
@@ -304,6 +304,8 @@ happened in the window (every count but `needsYou` is 0 and there are no highlig
 | route | who | what |
 |---|---|---|
 | `PUT /api/projects/{project}/logo` | Jay + Developer Unlock | raw body, `Content-Type: application/octet-stream`. PNG, JPEG or WebP read from the bytes (never SVG, never GIF); 415 otherwise; 413 over 512 KB. Replaces any earlier one → `{ok, mime, sha256, updatedAt}`. Event `logo.changed` |
-| `GET /api/projects/{project}/logo` | anyone with the token | the bytes, always `application/octet-stream` + `attachment` + `CSP: sandbox` + `nosniff`; `X-CCD-Logo-Type` names the stored type and `ETag` is its SHA-256, so HQ builds a `blob:` of that type (as for chat images). 404 when none |
+| `GET /api/projects/{project}/logo` | anyone with the token | the bytes, always `application/octet-stream` + `attachment` + `CSP: sandbox` + `nosniff`; `X-CCD-Logo-Type` names the stored type, so HQ builds a `blob:` of that type (as for chat images). 404 when none |
 | `DELETE /api/projects/{project}/logo` | Jay + Developer Unlock | → `{ok}`; 404 when none. Event `logo.removed` |
-| `GET /api/projects/logos` | anyone with the token | `{[key]: {mime, sha256, updatedAt}}` for the projects that have one, so the UI can cache by sha |
+| `GET /api/projects/logos` | anyone with the token | `{[key]: {mime, sha256, updatedAt}}` for the projects that have one, so the UI can cache by sha (the logo GET itself is `no-store`) |
+
+Logos work for project keys of the form `^[a-z][a-z0-9_-]{0,31}$` (every registered key today).

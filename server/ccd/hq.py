@@ -149,10 +149,10 @@ class HqStore:
     def __init__(self, db_path, logo_dir, clock=time.time):
         self.clock = clock
         db_path = str(db_path)
-        fresh = not os.path.exists(db_path)
+        fd = os.open(db_path, os.O_RDWR | os.O_CREAT, 0o600)   # created private, never under the umask
+        os.close(fd)
+        os.chmod(db_path, 0o600)
         self.db = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
-        if fresh:
-            os.chmod(db_path, 0o600)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
         self.logo_dir = str(logo_dir)
@@ -408,9 +408,18 @@ class HqDaemon:
         self._event("milestones", kind, f"{project}: {track} milestone {word}", project=project,
                     data={"id": m["id"] if m else None, "track": track, "state": state})
 
-    def milestones_state(self):
+    def milestones_state(self, actor="jay"):
+        """Jay reads every project. A lead (agent:lead-<project>) reads its own project's technical track only
+        (business milestones can name clients and people); any other agent is refused."""
+        from .daemon import ActionError
         self._need_hq()
-        return {"projects": self.hq.all([p["key"] for p in self._projects()])}
+        keys = [p["key"] for p in self._projects()]
+        if actor == "jay":
+            return {"projects": self.hq.all(keys)}
+        own = next((k for k in keys if actor == f"agent:lead-{k}"), None)
+        if own is None:
+            raise ActionError(403, "only Jay or a project's lead (agent:lead-<project>) reads milestones")
+        return {"projects": {own: {"technical": self.hq.track(own, "technical"), "revision": self.hq.revision(own)}}}
 
     def milestone_add(self, project, body, actor):
         from .daemon import ActionError
@@ -543,7 +552,14 @@ class HqDaemon:
                     counts[proj]["questionsAsked"] = asked or 0
                     counts[proj]["questionsAnswered"] = answered or 0
 
-        # The event log (ccd.db): PRs opened, checks that went red, and the highlights.
+        # The event log (ccd.db): PRs opened and checks that went red, counted in SQL, then the highlights.
+        for proj, opened, failed in self.store.db.execute(
+                "SELECT project, SUM(kind = 'pr.opened'), SUM(kind IN ('pr.ci_changed','ci.main_changed') AND "
+                "json_extract(data, '$.to') = ?) FROM events WHERE at >= ? AND at < ? AND project IS NOT NULL AND "
+                "kind IN ('pr.opened','pr.ci_changed','ci.main_changed') GROUP BY project", (FAILING, since, now)):
+            if proj in counts:
+                counts[proj]["opened"] = opened or 0
+                counts[proj]["failedChecks"] = failed or 0
         for _seq, at, kind, proj, ref, text, data in self.store.db.execute(
                 "SELECT seq, at, kind, project, ref, text, data FROM events WHERE at >= ? AND at < ? AND "
                 "project IS NOT NULL AND kind IN ('task.pipeline','pr.opened','pr.closed','pr.ci_changed',"
@@ -554,11 +570,7 @@ class HqDaemon:
                 data = json.loads(data or "{}")
             except ValueError:
                 data = {}
-            if kind == "pr.opened":
-                counts[proj]["opened"] += 1
             failing = kind in ("pr.ci_changed", "ci.main_changed") and data.get("to") == FAILING
-            if failing:
-                counts[proj]["failedChecks"] += 1
             if kind == "task.pipeline":
                 label = PIPELINE_HIGHLIGHTS.get(data.get("kind"))
                 hkind = data.get("kind")
@@ -607,13 +619,13 @@ class HqDaemon:
 
     def _briefing_spend(self, since, now):
         """{project: USD} measured in the window, or None when the meter has never read a log (no data is not 0).
-        A project whose replies in the window are all unpriced is None too."""
+        A project with any unpriced reply in the window is None too: a partial sum would read as exact."""
         meter = getattr(self, "meter", None)
         if meter is None or getattr(self, "meter_read_at", None) is None:
             return None
         out = {}
-        for proj, cost, priced in meter.db.execute(
-                "SELECT project, SUM(cost_usd), SUM(cost_usd IS NOT NULL) FROM usage_records WHERE at >= ? AND at < ? "
+        for proj, cost, priced, n in meter.db.execute(
+                "SELECT project, SUM(cost_usd), SUM(cost_usd IS NOT NULL), COUNT(*) FROM usage_records WHERE at >= ? AND at < ? "
                 "AND source != 'reported' AND project IS NOT NULL GROUP BY project", (since, now)):
-            out[proj] = round(cost, 4) if priced else None
+            out[proj] = round(cost, 4) if priced == n else None
         return {p["key"]: out.get(p["key"], 0.0) for p in self._projects()}

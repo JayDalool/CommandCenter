@@ -134,6 +134,19 @@ class Milestones(HqBase):
         self.assertEqual(self.send("PATCH", f"/api/milestones/samvision/{mid}", {"state": "todo"}, OTHER_LEAD).status_code,
                          403)
 
+    def test_a_lead_reads_only_its_own_technical_track(self):
+        self.add(title="Backend")
+        self.add(track="business", title="Email the client")
+        self.add(project="gyst", title="Other project")
+        r = self.client.get("/api/milestones", headers=dict(AUTH, **{"x-ccd-actor": "agent:lead-samvision"}))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(list(r.json()["projects"]), ["samvision"])
+        sv = r.json()["projects"]["samvision"]
+        self.assertEqual(([m["title"] for m in sv["technical"]], "business" in sv), (["Backend"], False))
+        self.assertNotIn("client", r.text)
+        r = self.client.get("/api/milestones", headers=dict(AUTH, **{"x-ccd-actor": "agent:coordinator"}))
+        self.assertEqual(r.status_code, 403)
+
     def test_remove_and_reorder_with_a_revision(self):
         a = self.add(title="A").json()["milestone"]["id"]
         b = self.add(title="B").json()["milestone"]["id"]
@@ -348,19 +361,25 @@ class Briefing(HqBase):
             self.skipTest("meter off in this config")
         now = time.time()
         cols = [r[1] for r in meter.db.execute("PRAGMA table_info(usage_records)")]
-        row = {c: None for c in cols}
-        row.update(at=now - 60, project="samvision", source="claude", cost_usd=1.25, input=1, output=1, cache_read=0,
-                   cache_write=0)
-        row = {k: v for k, v in row.items() if k in cols}
-        for c in cols:
-            if row.get(c) is None and c not in ("cost_usd", "ticket_key", "model", "project"):
-                row[c] = 0 if c not in ("ref", "source", "path", "session", "actor") else f"x-{c}"
-        meter.db.execute(f"INSERT INTO usage_records({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
-                         tuple(row.values()))
+
+        def insert(project, cost, n):
+            row = {c: None for c in cols}
+            row.update(at=now - 60, project=project, source="claude", cost_usd=cost, input=1, output=1, cache_read=0,
+                       cache_write=0)
+            row = {k: v for k, v in row.items() if k in cols and k != "id"}
+            for c in cols:
+                if c != "id" and row.get(c) is None and c not in ("id", "cost_usd", "ticket_key", "model", "project"):
+                    row[c] = 0 if c not in ("ref", "source", "path", "session", "actor") else f"x-{c}-{n}"
+            meter.db.execute(f"INSERT INTO usage_records({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
+                             tuple(row.values()))
+        insert("samvision", 1.25, 1)
+        insert("mfe", 2.0, 2)
+        insert("mfe", None, 3)                                    # one unpriced reply: the sum would be partial
         self.daemon.meter_read_at = now
         projects = {p["key"]: p for p in self.get("/api/briefing").json()["projects"]}
         self.assertEqual(projects["samvision"]["spendUsd"], 1.25)
         self.assertEqual(projects["gyst"]["spendUsd"], 0.0)
+        self.assertIsNone(projects["mfe"]["spendUsd"])
 
 
 class MilestoneCli(unittest.TestCase):
@@ -390,6 +409,17 @@ class MilestoneCli(unittest.TestCase):
 
 
 class Store(unittest.TestCase):
+    def test_an_existing_db_with_loose_permissions_is_made_private(self):
+        base = tempfile.mkdtemp(prefix="hqs-")
+        try:
+            path = os.path.join(base, "hq.db")
+            open(path, "w").close()
+            os.chmod(path, 0o644)
+            hq_mod.HqStore(path, os.path.join(base, "logos")).close()
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        finally:
+            shutil.rmtree(base)
+
     def test_logo_folder_must_be_a_real_folder(self):
         base = tempfile.mkdtemp(prefix="hqs-")
         try:
