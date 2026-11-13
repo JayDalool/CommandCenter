@@ -47,7 +47,7 @@ function Row({ label, hint, children }: { label: ReactNode; hint?: ReactNode; ch
   </div>;
 }
 
-/** One of Classic's settings panels, unchanged: it keeps Classic's look until it is ported. */
+/** One of Classic's settings panels, unchanged markup; inside HQ it takes HQ's colours (frame/classic-bridge.css). */
 function Classic({ id, children }: { id: string; children: ReactNode }) {
   return <div className="hq-set-classic" id={`set-${id}`}>{children}</div>;
 }
@@ -141,10 +141,10 @@ function Notifications() {
       <Row label="Waiting now"><a className="hq-link" href={href("needs")}>{waiting ? `${plural(waiting, "item")} in Decisions` : "Nothing"}</a></Row>
     </Group>
     <Group title="Where">
-      <Row label="The bell" hint="In the top bar. What you have seen is remembered in this browser only."><Pill tone="ok">On</Pill></Row>
-      <Row label="A tone and a short message" hint="Once for each new item, while Command Center is open. The browser keeps the tone silent until you have clicked in the window.">
+      <Row label="The bell" hint="In the top bar"><Pill tone="ok">On</Pill></Row>
+      <Row label="A tone and a short message" hint="Once per new item, while Command Center is open">
         <Pill tone="ok">On</Pill></Row>
-      <Row label="Slack" hint="Would send the request with a link to approve here. Slack itself never approves.">
+      <Row label="Slack" hint="Sends a link to approve here. Slack never approves.">
         <Pill tone="warn">Off · needs your approval</Pill></Row>
     </Group>
   </>;
@@ -178,18 +178,18 @@ function Windows() {
       {out.length ? out.map((v) => <Row key={v} label={name(v)}>
         <button type="button" className="hq-btn" onClick={() => focusView(v)}>Focus</button>
         <button type="button" className="hq-btn" onClick={() => returnView(v)}>Return here</button></Row>)
-        : <Row label="No page is in its own window" hint="Use Pop out at the top of a page, or press Alt+Shift+O." />}
+        : <Row label="No page is in its own window" hint="Use Pop out, or Alt+Shift+O" />}
     </Group>
     <Group title="Monitors">
       {perm === null ? <Row label="Open a pop-out on a chosen monitor" hint="Checking this browser…" />
         : perm === "unsupported" || !canPickScreen()
-          ? <Row label="Open a pop-out on a chosen monitor" hint="Edge and Chrome can, and the desktop app opens in one of them. Here, drag the window to the monitor you want.">
+          ? <Row label="Open a pop-out on a chosen monitor" hint="Needs Edge or Chrome. Here, drag the window to a monitor.">
             <Pill tone="idle">Not in this browser</Pill></Row>
           : perm === "denied"
-            ? <Row label="Open a pop-out on a chosen monitor" hint="Allow “Window management” for this site in the browser's site settings.">
+            ? <Row label="Open a pop-out on a chosen monitor" hint="Allow “Window management” in this site's browser settings">
               <Pill tone="bad">Blocked</Pill></Row>
             : perm === "prompt" || !screens
-              ? <Row label="Open a pop-out on a chosen monitor" hint="The browser asks once to let Command Center place windows on your displays.">
+              ? <Row label="Open a pop-out on a chosen monitor" hint="The browser asks once">
                 <button type="button" className="hq-btn" onClick={() => void ask()}>Allow…</button></Row>
               : <>
                 <Row label="Open a pop-out on a chosen monitor" hint="Pop out lists these monitors."><Pill tone="ok">Allowed</Pill></Row>
@@ -199,7 +199,7 @@ function Windows() {
     </Group>
     <Group title="Remembered places" foot="A pop-out opens where you last left it. The places are kept in this browser only.">
       {saved.length ? saved.map(({ v, p }) => <Row key={v} label={name(v)} hint={`${p.w} × ${p.h} at ${p.x}, ${p.y}`} />)
-        : <Row label="None yet" hint="Each pop-out opens beside this window until you move it." />}
+        : <Row label="None yet" hint="Pop-outs open beside this window" />}
       {saved.length > 0 && <Row label="Forget them" hint="Pop-outs open beside this window again.">
         <button type="button" className="hq-btn" onClick={() => { forgetPlaces(); setSaved([]); app.toast("Forgot the remembered window places"); }}>
           Forget</button></Row>}
@@ -223,7 +223,7 @@ function Security() {
         <Pill tone={active ? "warn" : "idle"}>{active ? "Unlocked" : "Locked"}</Pill>
         {active ? <button type="button" className="hq-btn" onClick={() => void lockDevMode()}>Lock</button>
           : <button type="button" className="hq-btn" onClick={unlockDialogOpen}>Unlock…</button>}</Row>
-      <Row label="Ends" hint="When you lock it, close the browser, after two idle hours or eight hours in all, or when ccd restarts. Reloads and Command Center's own pop-out windows keep it." />
+      <Row label="Ends" hint="On lock, closing the browser, 2 idle hours, 8 hours in all, or a ccd restart. Reloads and pop-outs keep it." />
     </Group>
     <Group title="Records">
       <Row label="Approvals" hint="Merges and deploys waiting for you, each bound to what it approves">
@@ -280,8 +280,8 @@ function More() {
   return <Group title="Screens outside the sidebar" foot="Every old link still works.">
     {DIAGNOSTICS.map(([id]) => <Row key={id} label={hqTitle(id, null, null)} hint={MORE_HINT[id]}>
       <a className="hq-link" href={href(id)}>Open</a></Row>)}
-    <Row label="Approvals" hint="Also in your menu, at the top right"><a className="hq-link" href={href("approvals")}>Open</a></Row>
-    <Row label="Budgets" hint="Also in your menu, at the top right"><a className="hq-link" href={href("budgets")}>Open</a></Row>
+    <Row label="Approvals" hint="Also in your menu"><a className="hq-link" href={href("approvals")}>Open</a></Row>
+    <Row label="Budgets" hint="Also in your menu"><a className="hq-link" href={href("budgets")}>Open</a></Row>
   </Group>;
 }
 
@@ -300,7 +300,7 @@ function Help() {
       <Row label="Search in a list"><Keys k="/" /></Row>
       <Row label="Close a menu, dialog or the palette"><Keys k="Esc" /></Row>
       <Row label="Pop the page out to its own window" hint="On a page with Pop out at the top"><Keys k="Alt Shift O" /></Row>
-      <Row label="Collapse the sidebar to icons" hint="In a window wider than 1440 px; narrower, it is icons already"><Keys k={"Ctrl \\"} /></Row>
+      <Row label="Collapse the sidebar to icons" hint="Windows wider than 1440 px"><Keys k={"Ctrl \\"} /></Row>
       <Row label="Workspace focus: the Workspace without the sidebar" hint="On the Workspace"><Keys k="Ctrl ." /></Row>
     </Group>
     <Group title="Workspace" foot="Inside a terminal, Ctrl+K, Ctrl+P, Ctrl+S, Ctrl+B and Ctrl+Shift+F go to the shell.">

@@ -107,7 +107,7 @@ describe("HQ tokens are inert in Classic", () => {
   });
 });
 
-describe("HQ tokens match the approved design (4b72f3f)", () => {
+describe("HQ tokens match the approved design (d55aab0, Workbench)", () => {
   it("is exactly what the generator wrote (its seal), so a hand edit fails even without the approved commit", () => {
     // `node design/hq-tokens/generate.mjs --check` (in npm run test:e2e:local) compares with the commit itself.
     for (const [name, text] of [["tokens.css", css], ["palette.ts", paletteTs]]) {
@@ -117,10 +117,10 @@ describe("HQ tokens match the approved design (4b72f3f)", () => {
     }
   });
 
-  it("has every token: 187 dark, 152 light, 5 project colours", () => {
-    expect([...dark.keys()].filter((k) => !k.startsWith("--hq-pj-")).length).toBe(187);
+  it("has every token: 188 dark, 153 light, 5 project colours", () => {
+    expect([...dark.keys()].filter((k) => !k.startsWith("--hq-pj-")).length).toBe(188);
     expect([...dark.keys()].filter((k) => k.startsWith("--hq-pj-")).length).toBe(5);
-    expect(light.size).toBe(152);
+    expect(light.size).toBe(153);
     for (const k of light.keys()) expect(dark.has(k), `${k} has a dark value`).toBe(true);
   });
 
@@ -140,9 +140,15 @@ describe("HQ tokens match the approved design (4b72f3f)", () => {
     }
   });
 
+  it("keeps white on the count badge at 4.5:1 or better, in both themes", () => {
+    for (const theme of [dark, new Map([...dark, ...light])]) {
+      expect(contrast("#ffffff", theme.get("--hq-badge")!)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   it("palette.ts has the 11 approved colours, and tokens.css agrees", () => {
-    expect(HQ_PROJECT_COLORS).toEqual({ samvision: "#2fe0a0", gyst: "#9d6bff", mfe: "#ff9f43", gauzemate: "#ff4f7b",
-      commandcenter: "#4f8bff" });
+    expect(HQ_PROJECT_COLORS).toEqual({ samvision: "#4fbf8f", gyst: "#9a86d8", mfe: "#d1a94a", gauzemate: "#d9748a",
+      commandcenter: "#6a9ad8" });
     expect(HQ_AGENT_COLORS).toEqual({ claude: "#ff7a45", iris: "#4f7bff", nova: "#a463ff", atlas: "#22c98e",
       pixel: "#ff4fa0", orion: "#ffb020" });
     for (const [key, color] of Object.entries(HQ_PROJECT_COLORS)) expect(dark.get(`--hq-pj-${key}`)).toBe(color);

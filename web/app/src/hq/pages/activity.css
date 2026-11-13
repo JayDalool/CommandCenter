@@ -13,7 +13,7 @@
 }
 :root[data-ui="hq"] .hq-act-row:hover { background: var(--hq-hover); }
 :root[data-ui="hq"] .hq-act-row time { color: var(--hq-muted); font: var(--hq-fs-sm) var(--hq-mono); }
-:root[data-ui="hq"] .hq-act-row .hq-pill { justify-content: center; }
+:root[data-ui="hq"] .hq-act-row .hq-pill { justify-content: flex-start; }
 :root[data-ui="hq"] .hq-act-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 :root[data-ui="hq"] .hq-act-text small { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
 :root[data-ui="hq"] .hq-act-text a { color: var(--hq-accent-2); }

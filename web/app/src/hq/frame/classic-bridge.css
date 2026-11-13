@@ -1,0 +1,27 @@
+/* Classic's screens, panels and dialogs inside the HQ frame, in HQ's colours and type.
+ *
+ * Every Classic screen without an HQ page yet (Workspace, Tickets, the settings panels HQ shows as they are, the
+ * dialogs) is styled with Classic's variables. Left alone they keep Classic's navy palette inside HQ's graphite frame.
+ * Here, and only inside .hq-shell, those variables point at HQ's tokens instead, so the markup is unchanged and the
+ * colours follow HQ's theme. This is the one HQ stylesheet that declares custom properties: on <html> Classic's
+ * variables keep their values (parity.spec.ts checks that), and the pop-out windows, which have no frame, still match
+ * Classic pixel for pixel. The terminal colours (--term-*), the stage and state colours (--vs-*, --st-*) and Classic's
+ * Needs Jay red (--jay*, --human, --agent), and the type scale, row heights and radii keep Classic's values: the colours
+ * carry meaning HQ has no token for yet, and the sizes keep Classic's screens laid out as they are.
+ * tests/hq-bridge.test.ts holds the scope; parity.spec.ts checks every value in a browser. */
+:root[data-ui="hq"] .hq-shell {
+  --font-ui: var(--hq-font); --font-display: var(--hq-font-display); --font-mono: var(--hq-mono);
+  --bg: var(--hq-bg); --bg-2: var(--hq-bg-2); --surface: var(--hq-panel); --surface-2: var(--hq-panel-2);
+  --raise: var(--hq-raise); --hover: var(--hq-hover); --sel: var(--hq-sel);
+  --line: var(--hq-line); --line-strong: var(--hq-line-2);
+  --text: var(--hq-text); --text-2: var(--hq-text-2); --muted: var(--hq-muted); --faint: var(--hq-faint);
+  --accent: var(--hq-accent); --accent-ink: var(--hq-bg); --accent-soft: var(--hq-accent-soft); --focus: var(--hq-focus);
+  --ok: var(--hq-ok); --warn: var(--hq-warn); --bad: var(--hq-bad); --info: var(--hq-info);
+  --pj-samvision: var(--hq-pj-samvision); --pj-gyst: var(--hq-pj-gyst); --pj-mfe: var(--hq-pj-mfe);
+  --pj-gauzemate: var(--hq-pj-gauzemate); --pj-commandcenter: var(--hq-pj-commandcenter); --pj-home: var(--hq-idle);
+  --input-bg: var(--hq-input); --kbd-bg: var(--hq-kbd-bg); --scrim: var(--hq-veil); --grid-dot: var(--hq-dots);
+  --shadow-pop: var(--hq-e3);
+  /* <body> resolved Classic's font and text colour before these were redefined, and its children inherit the result,
+   * so the shell takes them again from the variables above. */
+  font-family: var(--font-ui); color: var(--text);
+}

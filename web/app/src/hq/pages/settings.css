@@ -83,7 +83,7 @@
 :root[data-ui="hq"] .hq-theme button b { margin-top: 6px; font-weight: 500; color: var(--hq-text); }
 :root[data-ui="hq"] .hq-theme button small { color: var(--hq-muted); font-size: var(--hq-fs-xs); }
 :root[data-ui="hq"] .hq-theme-thumb {
-  position: relative; display: block; width: 116px; height: 74px; border: 2px solid var(--hq-line-2); border-radius: 9px; overflow: hidden;
+  position: relative; display: block; width: 116px; height: 74px; border: 2px solid var(--hq-line-2); border-radius: var(--hq-r-lg); overflow: hidden;
 }
 :root[data-ui="hq"] .hq-theme button:hover .hq-theme-thumb { border-color: var(--hq-input-line-hover); }
 :root[data-ui="hq"] .hq-theme button[aria-checked="true"] .hq-theme-thumb { border-color: var(--hq-accent); box-shadow: 0 0 0 3px var(--hq-accent-soft); }
@@ -94,15 +94,15 @@
 :root[data-ui="hq"] .hq-theme-win .b { top: 10px; left: 32%; width: 40%; height: 5px; }
 :root[data-ui="hq"] .hq-theme-win .c { top: 22px; left: 32%; right: 8px; bottom: 10px; border: 1px solid; }
 :root[data-ui="hq"] .hq-theme-win .a { top: 30px; left: 38%; width: 22%; height: 5px; }
-:root[data-ui="hq"] .hq-theme-win.is-dark { background: #070b17; }
-:root[data-ui="hq"] .hq-theme-win.is-dark .s { background: #060a15; box-shadow: 1px 0 0 #19233f; }
-:root[data-ui="hq"] .hq-theme-win.is-dark .b { background: #b4bdd6; }
-:root[data-ui="hq"] .hq-theme-win.is-dark .c { background: #0b1224; border-color: #19233f; }
-:root[data-ui="hq"] .hq-theme-win.is-light { background: #f2f3f8; }
-:root[data-ui="hq"] .hq-theme-win.is-light .s { background: #e9ebf3; box-shadow: 1px 0 0 #e1e4ee; }
-:root[data-ui="hq"] .hq-theme-win.is-light .b { background: #4a5372; }
-:root[data-ui="hq"] .hq-theme-win.is-light .c { background: #ffffff; border-color: #e1e4ee; }
-:root[data-ui="hq"] .hq-theme-win .a { background: #6d5cff; }
+:root[data-ui="hq"] .hq-theme-win.is-dark { background: #0f1012; }
+:root[data-ui="hq"] .hq-theme-win.is-dark .s { background: #0c0d0f; box-shadow: 1px 0 0 #25262a; }
+:root[data-ui="hq"] .hq-theme-win.is-dark .b { background: #b0b1b7; }
+:root[data-ui="hq"] .hq-theme-win.is-dark .c { background: #16171a; border-color: #25262a; }
+:root[data-ui="hq"] .hq-theme-win.is-light { background: #f5f5f3; }
+:root[data-ui="hq"] .hq-theme-win.is-light .s { background: #efefec; box-shadow: 1px 0 0 #e1e1dc; }
+:root[data-ui="hq"] .hq-theme-win.is-light .b { background: #5f6066; }
+:root[data-ui="hq"] .hq-theme-win.is-light .c { background: #ffffff; border-color: #e1e1dc; }
+:root[data-ui="hq"] .hq-theme-win .a { background: #ff7a45; }
 
 /* A phone: the list, or one section with a link back. */
 @media (max-width: 760px) {

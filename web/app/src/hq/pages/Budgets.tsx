@@ -86,7 +86,7 @@ export function Budgets() {
 
   return <div className="hq-page hq-budgets">
     <header className="hq-hero"><div><h2>Budgets</h2>
-      <p>Model spend against the limits you set, estimated at list prices. Not a bill, and nothing here stops work.</p></div></header>
+      <p>Model spend against your limits, at list prices. Not a bill; nothing here stops work.</p></div></header>
 
     <section className="hq-kpis" aria-label="Summary">
       <Kpi label="Estimated spend" value={t ? usd(t.costUsd) : "—"} sub={t ? `last 30 days · ${plural(t.replies, "model reply", "model replies")}` : "metering off or not read yet"} />
@@ -103,10 +103,9 @@ export function Budgets() {
         {shadow.s === "loading" && <p className="hq-empty">Loading…</p>}
         {shadow.s === "failed" && <p className="hq-note">Could not read the shadow budgets: {shadow.error}</p>}
         {shadow.s === "off" && <div className="hq-off-body">
-          <p>Budgets per company, project and agent, with alerts at 50, 80 and 95 % and a hold at 100 %, are built but switched off on
-            this server. They run in shadow first: they show what would be held and hold nothing.</p>
-          <p className="hq-note">They come on with the onboarding groundwork switch in the server's config.json, which is a separate
-            approval of yours. The project limits on the right already apply as shown-only figures.</p>
+          <p>Company, project and agent budgets (alerts at 50, 80 and 95 %, hold at 100 %) are built but off on this server.
+            When on, they run in shadow first and hold nothing.</p>
+          <p className="hq-note">Turned on by the onboarding groundwork switch in config.json, a separate approval of yours.</p>
         </div>}
         {shadow.s === "on" && <>
           {SCOPES.map(({ k, title }) => {

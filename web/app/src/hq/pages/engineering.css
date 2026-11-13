@@ -60,10 +60,10 @@
 :root[data-ui="hq"] .has-detail .hq-table :is(.c-project, .c-assignee, .c-session, .c-updated) { display: none; }
 :root[data-ui="hq"] .hq-table tbody tr { cursor: pointer; transition: background var(--hq-dur-1); }
 :root[data-ui="hq"] .hq-table tbody tr:hover { background: var(--hq-hover); }
-:root[data-ui="hq"] .hq-table tbody tr.is-sel { background: var(--hq-accent-soft); box-shadow: inset 3px 0 0 var(--hq-accent); }
+:root[data-ui="hq"] .hq-table tbody tr.is-sel { background: var(--hq-sel); box-shadow: inset 2px 0 0 var(--hq-accent); }
 :root[data-ui="hq"] .hq-table code { font: 600 var(--hq-fs-sm) var(--hq-mono); color: var(--hq-text-2); }
 :root[data-ui="hq"] .hq-eng-t { display: flex; align-items: center; gap: 6px; min-width: 0; }
 :root[data-ui="hq"] .hq-eng-t > .hq-ellip { flex: 0 1 auto; }
 :root[data-ui="hq"] .hq-flag {
-  flex: none; padding: 1px 6px; border: 1px solid currentColor; border-radius: var(--hq-r-pill); font-size: var(--hq-fs-xs);
+  flex: none; padding: 1px 6px; border: 1px solid currentColor; border-radius: var(--hq-r-2xs); font-size: var(--hq-fs-xs);
 }

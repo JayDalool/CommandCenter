@@ -18,7 +18,7 @@
 :root[data-ui="hq"] .hq-side {
   grid-area: rail; display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow: auto;
   padding: 12px 10px 10px; border-right: 1px solid var(--hq-line); color: var(--hq-text-2);
-  background: linear-gradient(180deg, var(--hq-side-a), var(--hq-side-b)); font-family: var(--hq-font);
+  background: var(--hq-side); font-family: var(--hq-font);
 }
 :root[data-ui="hq"] .hq-brand { display: flex; align-items: center; gap: 11px; padding: 2px 8px 14px; color: var(--hq-text); text-decoration: none; }
 :root[data-ui="hq"] .hq-brand-t { display: grid; line-height: 1.15; white-space: nowrap; }
@@ -33,18 +33,17 @@
 }
 :root[data-ui="hq"] .hq-nav-item:hover { background: var(--hq-hover); color: var(--hq-text); }
 :root[data-ui="hq"] .hq-nav-item.is-current {
-  background: linear-gradient(90deg, var(--hq-nav-on-a), var(--hq-nav-on-b)); color: var(--hq-text-strong); font-weight: 650;
-  box-shadow: inset 3px 0 0 var(--hq-accent-line), var(--hq-hl);
+  background: var(--hq-nav-on-a); color: var(--hq-text-strong); font-weight: 650;
+  box-shadow: inset 2px 0 0 var(--hq-accent-line);
 }
 :root[data-ui="hq"] .hq-nav-item svg { flex: none; }
 :root[data-ui="hq"] .hq-nav-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* Count badges: the prototype's V12 badge red (#dc2f4c keeps white numbers at 4.5:1). It becomes --hq-badge when the
- * V12 tokens are generated into hq/tokens.css. */
+/* Count badges: square-cornered tags, not pills. --hq-badge keeps white numbers at 4.5:1 or better in both themes. */
 :root[data-ui="hq"] .hq-badge {
-  min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--hq-r-pill); display: grid; place-items: center;
-  font: 700 11.5px/1 var(--hq-font); background: var(--hq-raise); color: var(--hq-text-2);
+  min-width: 20px; height: 18px; padding: 0 5px; border-radius: var(--hq-r-xs); display: grid; place-items: center;
+  font: 600 11px/1 var(--hq-mono); font-variant-numeric: tabular-nums; background: var(--hq-raise); color: var(--hq-text-2);
 }
-:root[data-ui="hq"] .hq-badge.is-jay { background: #dc2f4c; color: #fff; }
+:root[data-ui="hq"] .hq-badge.is-jay { background: var(--hq-badge); color: #fff; }
 :root[data-ui="hq"] .hq-badge.is-warn { background: var(--hq-warn); color: #1a1200; }
 :root[data-ui="hq"] .hq-side-fill { flex: 1; }
 :root[data-ui="hq"] .hq-nav-low .hq-nav-item { font-size: 14px; }
@@ -146,8 +145,7 @@
   :root[data-ui="hq"] .hq-tabbar {
     grid-area: tabbar; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); z-index: 45;
     padding: 6px max(6px, env(safe-area-inset-right, 0px)) calc(6px + env(safe-area-inset-bottom, 0px)) max(6px, env(safe-area-inset-left, 0px));
-    border-top: 1px solid var(--hq-material-line); background: var(--hq-material);
-    -webkit-backdrop-filter: blur(22px) saturate(160%); backdrop-filter: blur(22px) saturate(160%); font-family: var(--hq-font);
+    border-top: 1px solid var(--hq-material-line); background: var(--hq-material); font-family: var(--hq-font);
   }
   :root[data-ui="hq"] .hq-tabbar-i {
     display: grid; justify-items: center; gap: 3px; min-height: 48px; padding: 4px 0 2px; border: 0; border-radius: var(--hq-r-md);
@@ -158,8 +156,8 @@
   :root[data-ui="hq"] .hq-tabbar-i:focus-visible { outline-offset: -2px; }
   :root[data-ui="hq"] .hq-tabbar-ico { position: relative; display: grid; place-items: center; height: 26px; }
   :root[data-ui="hq"] .hq-tabbar-ico em {
-    position: absolute; top: -4px; left: calc(50% + 6px); min-width: 17px; height: 17px; padding: 0 5px; border-radius: var(--hq-r-pill);
-    background: #dc2f4c; color: #fff; font: 700 10.5px/17px var(--hq-font); font-style: normal; text-align: center;
+    position: absolute; top: -4px; left: calc(50% + 6px); min-width: 17px; height: 16px; padding: 0 4px; border-radius: var(--hq-r-xs);
+    background: var(--hq-badge); color: #fff; font: 600 10.5px/16px var(--hq-mono); font-style: normal; text-align: center;
     box-shadow: 0 0 0 2px var(--hq-bg);
   }
 
@@ -178,7 +176,7 @@
 }
 :root[data-ui="hq"] .hq-sheet {
   display: grid; gap: 14px; max-height: 86vh; overflow: auto; padding: 6px 14px calc(18px + env(safe-area-inset-bottom, 0px));
-  border-top: 1px solid var(--hq-material-line); border-radius: 18px 18px 0 0; background: var(--hq-panel); box-shadow: var(--hq-e3);
+  border-top: 1px solid var(--hq-material-line); border-radius: var(--hq-r-xl) var(--hq-r-xl) 0 0; background: var(--hq-panel); box-shadow: var(--hq-e3);
   color: var(--hq-text); font: var(--hq-fs-base)/1.4 var(--hq-font); animation: hq-sheet-in var(--hq-dur-3) var(--hq-ease-out) backwards;
 }
 @keyframes hq-sheet-fade { from { opacity: 0; } }
