@@ -575,7 +575,9 @@ class ControlRoomApi(PipelineApi):
             msgs = self.daemon.chat.history("samvision")
             self.assertEqual(len(msgs), 1)
             self.assertEqual((msgs[0]["side"], msgs[0]["ref"], msgs[0]["via"]), ("jay", "SV-056", "app"))
-            self.assertIn("Format?\n   → XLSX", msgs[0]["text"])
+            self.assertIn("1. XLSX", msgs[0]["text"])
+            self.assertNotIn("Format?", msgs[0]["text"])                           # agent text never as Jay's words
+            self.assertIn("pipeline_cli work SV-056", msgs[0]["text"])
             sent = [p for m, p in self.fake.calls if m == "agent.prompt"]
             self.assertEqual([p["target"] for p in sent], ["wE:p2"])                 # the lead, with the fixed nudge
             self.assertIn("cc-inbox samvision", sent[0]["text"])

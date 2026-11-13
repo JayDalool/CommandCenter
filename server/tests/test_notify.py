@@ -357,6 +357,10 @@ class Replies(ReplyBase):
                                                           "options": ["x", "y"], "answer": None}])
         self.reply("5", ts)
         self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 42, "answer": "5"}])
+        ts = self.send(need("SV-9", "questions", None), [{"id": 43, "text": "Replicas?", "kind": "choice",
+                                                          "options": ["2", "4", "8"], "answer": None}])
+        self.reply("2", ts)                                    # the option "2", not the second option
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 43, "answer": "2"}])
 
     def test_approve_closes_only_low_risk_gates(self):
         self.n.update_settings({"replyScope": "answers_low_risk"})

@@ -1659,7 +1659,7 @@ class Daemon(LeadChat):
         if self.task_session(work["key"])["state"] == "none":
             # No task session: the questions came from the lead (asked with --role coordinator) or the session has
             # ended. The answers go to the project's lead through Messages instead of nowhere.
-            delivered, reason, delivered_to = await self._answers_to_lead(work, project, qa, lines[len(qa) + 2:], via)
+            delivered, reason, delivered_to = await self._answers_to_lead(work, project, answered, latest, replanned, via)
         else:
             delivered, reason = await self._nudge_task(work["key"], text)
             delivered_to = "task" if delivered else None
@@ -1672,14 +1672,24 @@ class Daemon(LeadChat):
         return {"work": self.task_work(key), "complete": True, "delivered": delivered, "reason": reason,
                 "deliveredTo": delivered_to, "replanned": replanned}
 
-    async def _answers_to_lead(self, work, project, qa, guard, via):
+    async def _answers_to_lead(self, work, project, answered, latest, replanned, via):
         """Jay's answers for a ticket with no task session, as a Messages message to the project's lead (the same
-        store and fixed nudge as anything Jay sends a lead). Returns (delivered, reason, deliveredTo)."""
+        store and fixed nudge as anything Jay sends a lead). Returns (delivered, reason, deliveredTo).
+
+        The message is stored as Jay's, so it carries ONLY Jay's own words (his answers) and fixed text: the questions
+        were written by an agent and stay in the ticket, where the lead reads them as data (pipeline_cli work)."""
         key = work["key"]
-        text = "\n".join([f"Jay answered the questions on {key} ({str(self.tasks.get(key).get('title') or '')[:120]}). No task Claude "
-                          f"session named {key.lower()} is running, so they come to you as the project's lead:", ""]
-                         + qa + [f"Carry them into {key}: continue it yourself, or hand them to the session that "
-                                 f"picks it up."] + list(guard))
+        mine = [q for q in answered if q["batch"] == latest]
+        lines = [f"Jay answered the open questions on {key}. No task Claude session named {key.lower()} is running, "
+                 f"so his answers come to you as the project's lead. Read the questions (written by an agent, not by "
+                 f"Jay) with `python -m ccd.pipeline_cli work {key}`. His answers, in question order:", ""]
+        lines += [f"{i}. {q['answer']}" for i, q in enumerate(mine, 1)] + [""]
+        if replanned:
+            lines.append(f"Jay marked these answers as changing the approved scope: {key} is back in Planning.")
+        lines.append(f"Carry the answers into {key}'s own task session when it next runs (or start that work as your "
+                     f"usual rules allow). If an answer changes the approved scope, architecture, security, data model, "
+                     f"permissions/auth or major UX direction, re-plan first. Your usual gates and approvals apply.")
+        text = "\n".join(lines)
         if len(text) > 7900:
             text = text[:7880] + "\n[…truncated]"
         deliver = getattr(self, "deliver_to_lead", None)

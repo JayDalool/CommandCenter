@@ -94,7 +94,7 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
     {open.map((q, i) => <div key={q.id} className="qs-item">
       <label className="qs-q" htmlFor={`q-${q.id}`}><span className="qs-n">{i + 1}</span>{q.text}</label>
       {q.kind === "choice" ? <>
-        <select id={`q-${q.id}`} className="select" value={other[q.id] ? OTHER : vals[q.id] ?? ""} onChange={(e) => {
+        <select id={`q-${q.id}`} className="select" value={own[q.id] ? OTHER : vals[q.id] ?? ""} onChange={(e) => {
           const own = e.target.value === OTHER;
           setOther((m) => ({ ...m, [q.id]: false })); setOwn((m) => ({ ...m, [q.id]: own })); set(q.id, own ? "" : e.target.value);
         }}>

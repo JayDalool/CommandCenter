@@ -292,6 +292,8 @@ def pick_option(q, text):
     """A reply of just an option's number or letter ("2", "b", "2.") answers with that option's text. Anything else
     is Jay's own answer, as written."""
     opts = q.get("options") or []
+    if any(str(o).strip().lower() == (text or "").strip().lower() for o in opts):
+        return text            # the option's own text ("2" when the options are 2 / 4 / 8)
     m = re.fullmatch(r"\s*([1-8]|[a-hA-H])[.)]?\s*", text or "")
     if q.get("kind") != "choice" or not opts or not m:
         return text
@@ -768,8 +770,14 @@ class Notifier:
         if r.get("complete") is False:
             said = "Answered. Another question on this task is still open in CommandCenter."
         else:
-            said = "Answered." + (" Sent to the task's session." if r.get("delivered") else
-                                   " The task session gets it when it is running.")
+            to = r.get("deliveredTo")
+            if r.get("delivered"):
+                said = "Answered." + (" Sent to the project's lead (no task session is running)." if to == "lead"
+                                      else " Sent to the task's session.")
+            elif to == "lead":
+                said = "Answered. Saved for the project's lead in Messages; it reads it when it runs."
+            else:
+                said = "Answered. Not delivered yet: " + esc(str(r.get("reason") or "no session was reached")) + "."
         return {"did": "answered", "say": said}
 
     async def approve(self, key, gate, item=None):
