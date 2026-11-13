@@ -144,6 +144,9 @@ function ProjectLogos() {
     void run(project, () => app.api.logoPut(project, file));
   };
   if (l.state === "none") return <Group title="Project logos"><Row label="This server does not have project logos yet" hint="They arrive with the next server update" /></Group>;
+  if (l.state === "error") return <Group id="logos" title="Project logos">
+    <Row label="Project logos could not be loaded" hint={<span role="alert">{l.error}</span>}>
+      <button type="button" className="hq-btn" onClick={() => void refreshLogos()}>Try again</button></Row></Group>;
   return <Group id="logos" title="Project logos" foot={<>Kept on the server, so every window and device shows them. PNG, JPEG or WebP, up to 512 KB.
     {!active && <> Changing one needs Developer Unlock. <button type="button" className="hq-link" onClick={unlockDialogOpen}>Unlock…</button></>}</>}>
     {projects.length === 0 && <Row label="No projects reported yet" />}
@@ -151,7 +154,7 @@ function ProjectLogos() {
       const m = l.meta[p.key];
       return <Row key={p.key} label={<span className="hq-with-logo"><ProjectLogo project={p.key} size={28} />{p.name}</span>}
         hint={note?.project === p.key ? <span className="t-bad" role="alert">{note.text}</span>
-          : busy === p.key ? "Saving…"
+          : busy === p.key ? <span role="status">Saving…</span>
           : m ? `${KIND[m.mime] ?? m.mime}, added ${new Date(m.updatedAt * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : "No logo"}>
         <label className={cx("hq-btn", busy !== null && "is-busy")}>
           {m ? "Replace…" : "Choose image…"}

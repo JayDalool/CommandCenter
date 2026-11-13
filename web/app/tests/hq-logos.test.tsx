@@ -93,6 +93,15 @@ describe("the logo list", () => {
     expect(revoked).toEqual([]);
   });
 
+  it("a first load that fails for another reason says why, and the next try can succeed", async () => {
+    vi.mocked(app.api.logos).mockRejectedValueOnce(new ApiError(0, "ccd unreachable"));
+    await refreshLogos();
+    expect(logos.get()).toMatchObject({ state: "error", error: "ccd unreachable", urls: {} });
+    await refreshLogos();
+    expect(logos.get()).toMatchObject({ state: "ok", urls: { samvision: "blob:1:image/png" } });
+    expect(logos.get().error).toBeUndefined();
+  });
+
   it("asks ccd with the token, uploads raw bytes with the Developer session, and removes with a JSON DELETE", async () => {
     setToken("a".repeat(43));
     const calls: [string, string, Record<string, string>, unknown][] = [];
@@ -216,6 +225,28 @@ describe("Settings › Appearance › Project logos", () => {
     await settle();
     expect(put).toHaveBeenCalledTimes(1);
     expect(within(group(main)).getByRole("alert")).toHaveTextContent("PNG, JPEG or WebP only");
+  });
+
+  it("a list that could not be loaded says why and can be tried again; a save in progress is announced", async () => {
+    vi.mocked(app.api.logos).mockRejectedValueOnce(new ApiError(500, "ccd: database is locked"));
+    load();
+    developer.set({ active: true, expiresAt: null, error: null });
+    const main = await show("#/settings?tab=appearance");
+    expect(group(main)).toHaveTextContent("Project logos could not be loaded");
+    expect(within(group(main)).getByRole("alert")).toHaveTextContent("ccd: database is locked");
+    expect(main).not.toHaveTextContent("This server does not have project logos yet");
+    fireEvent.click(within(group(main)).getByRole("button", { name: "Try again" }));
+    await settle();
+    expect(shown(group(main))).toContain("samvision blob:1:image/png");
+
+    let done!: () => void;
+    vi.spyOn(app.api, "logoPut").mockImplementation(() => new Promise((r) => { done = () => r({ ok: true, ...meta("9".repeat(64)) }); }));
+    fireEvent.change(input(main, /^Choose the GYST/), { target: { files: [png()] } });
+    await settle();
+    expect(within(group(main)).getByRole("status")).toHaveTextContent("Saving…");
+    done();
+    await settle();
+    expect(within(group(main)).queryByRole("status")).toBeNull();
   });
 
   it("says so on a server that has no logos yet", async () => {
