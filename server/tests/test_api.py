@@ -62,7 +62,7 @@ ALLOWED = {
     ("POST", "/api/developer/handoff"), ("POST", "/api/developer/redeem"),
     ("GET", "/api/pty"), ("POST", "/api/pty/close"), ("WS", "/api/pty/{name}"),
     # v2 Phase 1: Project Operating Profiles, read-only
-    ("GET", "/api/profiles"), ("GET", "/api/autonomy"), ("GET", "/api/decisions"), ("GET", "/api/inbox"), ("GET", "/api/audit"), ("GET", "/api/usage"), ("GET", "/api/actors"), ("POST", "/api/actors/issue"), ("POST", "/api/actors/revoke"), ("GET", "/api/workers"), ("GET", "/api/broker"), ("POST", "/api/workers/enrol"),
+    ("GET", "/api/profiles"), ("GET", "/api/autonomy"), ("GET", "/api/decisions"), ("GET", "/api/inbox"), ("GET", "/api/audit"), ("GET", "/api/usage"), ("GET", "/api/notify"), ("PUT", "/api/notify"), ("POST", "/api/notify/test"), ("POST", "/api/notify/summary"), ("GET", "/api/actors"), ("POST", "/api/actors/issue"), ("POST", "/api/actors/revoke"), ("GET", "/api/workers"), ("GET", "/api/broker"), ("POST", "/api/workers/enrol"),
     ("POST", "/api/workers/heartbeat"), ("POST", "/api/workers/approve"), ("POST", "/api/workers/revoke"),
     # Onboarding groundwork (D-024 proposed): 404 unless config onboarding_groundwork is true; records only.
     ("GET", "/api/onboarding"), ("GET", "/api/onboarding/agents"), ("GET", "/api/onboarding/agents/{id}"),

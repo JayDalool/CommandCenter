@@ -89,6 +89,7 @@ _SECRET_PATTERNS = [
     re.compile(r"sk-ant-[A-Za-z0-9_-]{20,}"),
     re.compile(r"AKIA[0-9A-Z]{16}"),
     re.compile(r"xox[abprs]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"xapp-[A-Za-z0-9-]{10,}"),
     re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),  # JWT
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization)\b(\s*[:=]\s*|\s+)(bearer\s+)?[^\s'\"]{6,}"),
