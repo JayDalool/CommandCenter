@@ -18,6 +18,8 @@ export interface TeamMember {
   waitingSince: number | null;
   ticket: string | null;
   cwd: string;
+  /** The project key this session is the lead of. Absent on every other session. */
+  leadOf?: string;
 }
 
 export interface Team {
@@ -64,7 +66,7 @@ export function buildTeams(src: HqSource, ev: Evidence): TeamsView {
     const members = agents.filter((a) => a.project === p.key && a.id !== lead?.id).map((a) => member(a, src.tickets, ev));
     const defined = p.team.filter((m) => !m.pane_id && !agents.some((a) => a.agent_name === m.name))
       .map((m) => ({ name: m.name, model: m.model }));
-    return { key: p.key, name: p.name, lead: lead ? member(lead, src.tickets, ev) : null, leadWhy: why, members, defined,
+    return { key: p.key, name: p.name, lead: lead ? { ...member(lead, src.tickets, ev), leadOf: p.key } : null, leadWhy: why, members, defined,
       openTasks: src.tickets.filter((t) => t.project === p.key && isActive(t)).length };
   });
   const known = new Set(st.projects.map((p) => p.key));

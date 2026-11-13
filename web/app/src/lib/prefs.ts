@@ -29,6 +29,8 @@ export interface Prefs {
   railCollapsed: boolean;
   /** Which interface this browser shows: Classic (the default) or the HQ preview. Only exactly "hq" turns HQ on. */
   ui: "classic" | "hq";
+  /** HQ only: Childish gives agents a character and adds emoji. Professional (the default) shows neither. */
+  style: "professional" | "childish";
 }
 const KEY = "cc.prefs";
 const DEFAULTS: Prefs = { theme: "dark", density: "comfortable", sshHost: "jay-server",
@@ -36,7 +38,7 @@ const DEFAULTS: Prefs = { theme: "dark", density: "comfortable", sshHost: "jay-s
   lastProject: null, wsExplorerW: 260, wsExplorerOpen: true, wsTermH: 300, wsTermOpen: true, wsMax: "none",
   wsSide: "explorer", wsCollapsed: [], wsDetailOpen: true,
   wsTreeOpen: true, wsLeft: "projects", wsTasksW: 640, wsFocus: false, railCollapsed: false,
-  ui: "classic" };
+  ui: "classic", style: "professional" };
 
 const SIDES = ["explorer", "scm", "search"];
 
@@ -53,6 +55,7 @@ export function parsePrefs(raw: string | null): Prefs {
     if (p.wsLeft !== "tasks") p.wsLeft = "projects";
     if (typeof p.wsTasksW !== "number" || !Number.isFinite(p.wsTasksW)) p.wsTasksW = DEFAULTS.wsTasksW;
     if (p.ui !== "hq") p.ui = "classic";
+    if (p.style !== "childish") p.style = "professional";
     return p;
   } catch { return { ...DEFAULTS }; }
 }

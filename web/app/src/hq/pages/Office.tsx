@@ -9,6 +9,7 @@ import { buildOffice, PRESENCE_LABEL, type Health, type OfficeProject, type Pres
 import { useHqData } from "./live";
 import { AttentionRow, Kpi, Pill, PRESENCE_TONE, cx, plural } from "./ui";
 import type { Alert } from "../../api/types";
+import { Fun, Persona, PRESENCE_EMOJI, useFun } from "../persona/mode";
 
 const HEALTH: Record<Health, { label: string; tone: string }> = {
   healthy: { label: "Healthy", tone: "ok" }, degraded: { label: "Degraded", tone: "bad" }, unknown: { label: "Unknown", tone: "idle" },
@@ -30,7 +31,7 @@ function ProjectCard({ p, stale }: { p: OfficeProject; stale: boolean }) {
     <span className="hq-proj-foot">
       {p.blocked > 0 && <span className="t-bad">{p.blocked} blocked</span>}
       <span>{plural(p.sessions, "session")}{stale && " last reported"}</span>
-      <span>{p.lead ? `Lead: ${p.lead}` : "No lead session"}</span>
+      <span className="hq-proj-lead">{p.lead && <Persona lead={p.key} size={20} />}{p.lead ? `Lead: ${p.lead}` : "No lead session"}</span>
     </span>
   </a>;
 }
@@ -45,10 +46,14 @@ function AlertRow({ a, now }: { a: Alert; now: number }) {
 const FILTERS: (Presence | "all")[] = ["all", "working", "waiting", "idle", "offline", "unknown"];
 
 function SessionCard({ m }: { m: TeamMember }) {
-  const body = <>
-    <span className="hq-sess-top"><b className="hq-ellip">{m.name}</b><Pill tone={PRESENCE_TONE[m.presence]}>{PRESENCE_LABEL[m.presence]}</Pill></span>
+  const fun = useFun();
+  const text = <>
+    <span className="hq-sess-top"><b className="hq-ellip">{m.name}</b>
+      <Pill tone={PRESENCE_TONE[m.presence]}>{PRESENCE_LABEL[m.presence]}<Fun e={PRESENCE_EMOJI[m.presence]} /></Pill></span>
     <small className="hq-ellip">{m.agent}{m.ticket ? ` · ${m.ticket}` : ""}</small></>;
-  return m.ticket ? <a className="hq-sess" href={href("tasks", m.ticket)}>{body}</a> : <div className="hq-sess">{body}</div>;
+  const body = fun ? <><Persona lead={m.leadOf} name={m.name} size={36} /><span className="hq-sess-body">{text}</span></> : text;
+  const cls = cx("hq-sess", fun && "has-face");
+  return m.ticket ? <a className={cls} href={href("tasks", m.ticket)}>{body}</a> : <div className={cls}>{body}</div>;
 }
 
 export function Office() {
@@ -63,7 +68,7 @@ export function Office() {
   const health = HEALTH[v.kpis.health.state];
   return <div className="hq-page hq-office">
     <header className="hq-hero">
-      <div><h2>{greeting(now)}, <em>Jay</em></h2><p>What is happening across your projects, from live data.</p></div>
+      <div><h2>{greeting(now)}, <em>Jay</em><Fun e={now.getHours() < 12 ? "☀️" : now.getHours() < 18 ? "🌤️" : "🌙"} /></h2><p>What is happening across your projects, from live data.</p></div>
       <time dateTime={now.toISOString()}>{now.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</time>
     </header>
 
@@ -89,7 +94,7 @@ export function Office() {
         <section className="hq-panel" aria-labelledby="hq-office-attn">
           <header><h3 id="hq-office-attn">Needs your attention</h3><a className="hq-link" href={href("needs")}>View all {v.kpis.needsYou.total}</a></header>
           {v.attention.length ? <ul className="hq-attn">{v.attention.map((d) => <AttentionRow key={d.id} d={d} now={ev.now} />)}</ul>
-            : <p className="hq-empty">Nothing is waiting for you.</p>}
+            : <p className="hq-empty">Nothing is waiting for you.<Fun e="🎉" /></p>}
         </section>
         {v.alerts.length > 0 && <section className="hq-panel" aria-labelledby="hq-office-alerts">
           <header><h3 id="hq-office-alerts">Alerts</h3><a className="hq-link" href={href("alerts")}>View all {v.alerts.length}</a></header>

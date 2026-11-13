@@ -11,6 +11,8 @@ import { app } from "../../store/app";
 import { useSelector } from "../../lib/store";
 import { href } from "../../lib/router";
 import { commands, prefs, usePrefs, type Prefs } from "../../lib/prefs";
+import "../persona/persona.css";
+import { CAST, Face } from "../persona/characters";
 import { isRemembered } from "../../api/auth";
 import { jayQueue } from "../../tickets/model";
 import { lockDevMode, unlockDialogOpen, useDevActive } from "../../components/DevMode";
@@ -121,6 +123,12 @@ function Appearance() {
     <Group title="Theme" foot="Every open window follows the choice, pop-outs included.">
       <div className="hq-set-row is-block"><ThemePicker /></div>
       {p.theme === "system" && <Row label="Showing now" hint="From your operating system">{dark ? "Dark" : "Light"}</Row>}
+    </Group>
+    <Group title="Style" foot="This browser only. A face or an emoji never stands for a status: everything is also in words.">
+      <Row label="Style" hint="Childish gives every agent a character and adds emoji"><Seg label="Style" value={p.style}
+        onChange={(v) => prefs.patch({ style: v })} options={[["professional", "Professional"], ["childish", "Childish"]]} /></Row>
+      {p.style === "childish" && <div className="hq-set-row is-block"><ul className="hq-cast" aria-label={`The cast: ${CAST.length} characters`}>
+        {CAST.map((c) => <li key={c.id}><Face who={c} size={44} /><span>{c.name}</span></li>)}</ul></div>}
     </Group>
     <Group title="Density">
       <Row label="Table rows" hint="In the Classic screens and panels"><Seg label="Row density" value={p.density}

@@ -15,6 +15,7 @@ import type { ChatConversation, ChatDelivery, ChatFile, ChatLead, ChatMessage, C
 import { jayQueue } from "../../tickets/model";
 import { ago } from "../../lib/time";
 import { Icon } from "../frame/icons";
+import { Persona, useFun } from "../persona/mode";
 import { usePageNav } from "./route";
 import { Pill, cx, plural } from "./ui";
 
@@ -77,12 +78,14 @@ export function Messages() {
 }
 
 function ConvRow({ c, on, onPick }: { c: ChatConversation; on: boolean; onPick: () => void }) {
+  const fun = useFun();
   const [label, tone] = leadPill(c.lead);
   const now = Date.now() / 1000;
   return <button type="button" className={cx("hq-chat-row", on && "is-on")} aria-current={on ? "true" : undefined} onClick={onPick}>
-    <span className={cx("hq-chat-av", c.kind === "cto" && "is-cto")} aria-hidden
-      style={c.kind === "project" ? { background: `var(--hq-pj-${c.id}, var(--hq-node-neutral))` } : undefined}>
-      {c.kind === "cto" ? "CTO" : c.name.slice(0, 2)}</span>
+    {fun ? <Persona lead={c.id} size={36} />
+      : <span className={cx("hq-chat-av", c.kind === "cto" && "is-cto")} aria-hidden
+        style={c.kind === "project" ? { background: `var(--hq-pj-${c.id}, var(--hq-node-neutral))` } : undefined}>
+        {c.kind === "cto" ? "CTO" : c.name.slice(0, 2)}</span>}
     <span className="hq-chat-row-main">
       <span className="hq-chat-row-top"><b>{c.kind === "cto" ? "CTO" : `${c.name} lead`}</b>
         {c.last && <time>{ago(c.last.at, now)}</time>}</span>
