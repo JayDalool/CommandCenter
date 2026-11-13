@@ -1,6 +1,6 @@
 import { useId } from "react";
 // The approved prototype's stroke icons (design/ui-prototypes/engineering-hq/src/components/Icon.tsx), only the ones
-// the frame uses. 24×24, currentColor. "folder" is new: the prototype has no Files page.
+// the frame and the HQ pages use. 24×24, currentColor. "folder" is new: the prototype has no Files page.
 const P: Record<string, React.ReactNode> = {
   home: <><path d="M3.5 11 12 4l8.5 7" /><path d="M5.5 9.5V20h13V9.5" /><path d="M10 20v-5h4v5" /></>,
   shield: <><path d="M12 3.5 19 6v5.5c0 4.2-3 7.4-7 9-4-1.6-7-4.8-7-9V6z" /><path d="m9 12 2 2 4-4" /></>,
@@ -15,6 +15,18 @@ const P: Record<string, React.ReactNode> = {
   x: <><path d="M6 6l12 12M18 6 6 18" /></>,
   chevl: <><path d="m15 6-6 6 6 6" /></>,
   chevron: <><path d="m9 6 6 6-6 6" /></>,
+  plus: <><path d="M12 5v14M5 12h14" /></>,
+  code: <><path d="m8.5 7-5 5 5 5M15.5 7l5 5-5 5M13.5 5l-3 14" /></>,
+  mobile: <><rect x="7" y="3" width="10" height="18" rx="2" /><path d="M11 18h2" /></>,
+  rocket: <><path d="M14 4c3.5 0 6 2.5 6 6-1.5 3-4.5 6-8 7.5L6.5 12C8 8.5 11 5.5 14 4z" /><circle cx="14.5" cy="9.5" r="1.6" /><path d="M6.5 12 4 12.5 3.5 15l3 1M12 17.5l-.5 2.5 2.5-.5 1-3M7 17l-2.5 2.5" /></>,
+  server: <><rect x="4" y="4" width="16" height="7" rx="1.5" /><rect x="4" y="13" width="16" height="7" rx="1.5" /><path d="M7.5 7.5h.1M7.5 16.5h.1M11 7.5h5M11 16.5h5" /></>,
+  laptop: <><rect x="5" y="5" width="14" height="10" rx="1.5" /><path d="M3 18.5h18" /></>,
+  check: <><circle cx="12" cy="12" r="8.5" /><path d="m8.5 12.2 2.4 2.4 4.6-5" /></>,
+  fit: <><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></>,
+  zoomin: <><circle cx="11" cy="11" r="6" /><path d="m20 20-4.5-4.5M8.5 11h5M11 8.5v5" /></>,
+  zoomout: <><circle cx="11" cy="11" r="6" /><path d="m20 20-4.5-4.5M8.5 11h5" /></>,
+  graph: <><circle cx="12" cy="5" r="2.2" /><circle cx="5" cy="17" r="2.2" /><circle cx="19" cy="17" r="2.2" /><path d="M11 7 6 15M13 7l5 8M7.2 17h9.6" /></>,
+  list: <><path d="M9 6.5h11M9 12h11M9 17.5h11M4.5 6.5h.1M4.5 12h.1M4.5 17.5h.1" /></>,
 };
 
 export function Icon({ name, size = 18 }: { name: string; size?: number }) {
