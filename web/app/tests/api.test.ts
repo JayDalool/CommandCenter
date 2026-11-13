@@ -38,6 +38,29 @@ describe("API adapter", () => {
     expect(urls[0]).toBe("/api/agents/wE%3Ap2/tail?lines=40");
     expect(urls[1]).toBe("/api/tasks/CC-001/relations");
   });
+  it("milestones and the briefing: ccd's routes, and every write is JSON, a DELETE included", async () => {
+    const calls: [string, string, string | undefined, unknown][] = [];
+    const api = new Api(async (u, i) => {
+      calls.push([i!.method!, String(u), (i!.headers as Record<string, string>)["Content-Type"], i!.body ? JSON.parse(String(i!.body)) : undefined]);
+      return jsonResponse({});
+    });
+    await api.milestones();
+    await api.milestoneAdd("samvision", { track: "business", title: "Contact the lawyer", due: null });
+    await api.milestoneChange("samvision", "m_0123456789ab", { state: "done" });
+    await api.milestoneRemove("samvision", "m_0123456789ab");
+    await api.milestoneOrder("samvision", "technical", ["m_b", "m_a"], 7);
+    await api.briefing();
+    await api.briefing(1794505841.73);
+    expect(calls).toEqual([
+      ["GET", "/api/milestones", undefined, undefined],
+      ["POST", "/api/milestones/samvision", "application/json", { track: "business", title: "Contact the lawyer", due: null }],
+      ["PATCH", "/api/milestones/samvision/m_0123456789ab", "application/json", { state: "done" }],
+      ["DELETE", "/api/milestones/samvision/m_0123456789ab", "application/json", {}],
+      ["PUT", "/api/milestones/samvision/order", "application/json", { track: "technical", ids: ["m_b", "m_a"], revision: 7 }],
+      ["GET", "/api/briefing", undefined, undefined],
+      ["GET", "/api/briefing?since=1794505841", undefined, undefined],
+    ]);
+  });
 });
 
 describe("token storage", () => {

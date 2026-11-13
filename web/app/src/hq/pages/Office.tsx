@@ -1,6 +1,7 @@
-// My Office (roadmap P3.2): the HQ landing page, on live data from hq/data/office.ts. Read-only: every row links to
-// the Classic screen where the work is done. Status only from evidence: a stale feed reads Unknown, never Working.
-// Lead updates have no source until Project Lead conversations exist (P5.1), so that panel is not shown.
+// My Office (roadmap P3.2): the HQ landing page, on live data from hq/data/office.ts. Top to bottom: the figures,
+// the Briefing (what happened while Jay was away) and Where we are (each project's milestones) beside what needs him,
+// then the projects and the sessions. Everything but the milestones is read-only: a row links to the Classic screen
+// where the work is done. Status only from evidence: a stale feed reads Unknown, never Working.
 import { useMemo, useState } from "react";
 import "./office.css";
 import { href } from "../../lib/router";
@@ -10,6 +11,8 @@ import { useHqData } from "./live";
 import { AttentionRow, Kpi, Pill, PRESENCE_TONE, cx, plural } from "./ui";
 import type { Alert } from "../../api/types";
 import { Fun, Persona, PRESENCE_EMOJI, useFun } from "../persona/mode";
+import { Briefing } from "./Briefing";
+import { Milestones } from "./Milestones";
 
 const HEALTH: Record<Health, { label: string; tone: string }> = {
   healthy: { label: "Healthy", tone: "ok" }, degraded: { label: "Degraded", tone: "bad" }, unknown: { label: "Unknown", tone: "idle" },
@@ -85,11 +88,10 @@ export function Office() {
     </section>
 
     <div className="hq-office-grid">
-      <section className="hq-panel hq-office-projects" aria-labelledby="hq-office-projects">
-        <header><h3 id="hq-office-projects">Projects</h3><a className="hq-link" href={href("projects")}>All projects</a></header>
-        {v.projects.length ? <div className="hq-proj-grid">{v.projects.map((p) => <ProjectCard key={p.key} p={p} stale={stale} />)}</div>
-          : <p className="hq-empty">No projects reported yet.</p>}
-      </section>
+      <div className="hq-office-main">
+        <Briefing now={now} />
+        <Milestones projects={v.projects} now={now} />
+      </div>
       <div className="hq-office-side">
         <section className="hq-panel" aria-labelledby="hq-office-attn">
           <header><h3 id="hq-office-attn">Needs your attention</h3><a className="hq-link" href={href("needs")}>View all {v.kpis.needsYou.total}</a></header>
@@ -102,6 +104,12 @@ export function Office() {
         </section>}
       </div>
     </div>
+
+    <section className="hq-panel hq-office-projects" aria-labelledby="hq-office-projects">
+      <header><h3 id="hq-office-projects">Projects</h3><a className="hq-link" href={href("projects")}>All projects</a></header>
+      {v.projects.length ? <div className="hq-proj-grid">{v.projects.map((p) => <ProjectCard key={p.key} p={p} stale={stale} />)}</div>
+        : <p className="hq-empty">No projects reported yet.</p>}
+    </section>
 
     <section className="hq-panel" aria-labelledby="hq-office-sessions">
       <header><h3 id="hq-office-sessions">Sessions <small>{plural(v.agents.length, "session")} {stale ? "last reported" : "reported"} by herdr</small></h3>

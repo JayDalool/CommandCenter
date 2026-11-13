@@ -1,0 +1,129 @@
+/* My Office's Briefing and Where we are panels (Briefing.tsx, Milestones.tsx). Scoped to :root[data-ui="hq"], no
+ * custom property declared here (parity.spec.ts); --pj is set inline per project, as on the project cards. */
+
+/* ---------- Briefing ---------- */
+:root[data-ui="hq"] .hq-brief-stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none;
+}
+:root[data-ui="hq"] .hq-brief-stats li {
+  display: grid; gap: 1px; padding: 8px 12px; border: 1px solid var(--hq-line); border-radius: var(--hq-r-md); background: var(--hq-tile);
+}
+:root[data-ui="hq"] .hq-brief-stats b { font: 700 var(--hq-fs-xl)/1.2 var(--hq-font-display); color: var(--hq-text-strong); }
+:root[data-ui="hq"] .hq-brief-stats small { color: var(--hq-muted); font-size: var(--hq-fs-xs); white-space: nowrap; }
+:root[data-ui="hq"] .hq-brief-stats .is-zero b { color: var(--hq-faint); }
+
+:root[data-ui="hq"] .hq-brief-projects { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+:root[data-ui="hq"] .hq-brief-proj {
+  display: grid; gap: 6px; min-width: 0; padding: 10px 12px; border: 1px solid var(--hq-line); border-radius: var(--hq-r-md);
+  background: var(--hq-tile); box-shadow: inset 3px 0 0 var(--pj);
+}
+:root[data-ui="hq"] .hq-brief-top { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; min-width: 0; }
+:root[data-ui="hq"] .hq-page .hq-brief-name { font-weight: 650; font-size: var(--hq-fs-md); color: var(--hq-text-strong); }
+:root[data-ui="hq"] .hq-page .hq-brief-name:hover { text-decoration: underline; }
+:root[data-ui="hq"] .hq-brief-counts { flex: 1; min-width: 0; color: var(--hq-text-2); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-page .hq-brief-needs { color: var(--hq-warn); font-size: var(--hq-fs-sm); font-weight: 600; white-space: nowrap; }
+:root[data-ui="hq"] .hq-page .hq-brief-needs:hover { text-decoration: underline; }
+:root[data-ui="hq"] .hq-brief-top .hq-dim { font-size: var(--hq-fs-sm); white-space: nowrap; }
+
+:root[data-ui="hq"] .hq-brief-hl { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
+:root[data-ui="hq"] .hq-brief-hl :is(a, .hq-brief-row) {
+  display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; padding: 3px 6px; border-radius: var(--hq-r-sm);
+  color: var(--hq-text-2); font-size: var(--hq-fs-sm);
+}
+:root[data-ui="hq"] .hq-brief-hl a:hover { background: var(--hq-hover); color: var(--hq-text); }
+:root[data-ui="hq"] .hq-brief-hl time { color: var(--hq-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+:root[data-ui="hq"] .hq-brief-hl span span { min-width: 0; overflow-wrap: anywhere; }
+:root[data-ui="hq"] .hq-brief-hl code { font: 600 var(--hq-fs-xs) var(--hq-mono); color: var(--hq-text); }
+:root[data-ui="hq"] .hq-brief-more {
+  justify-self: start; padding: 2px 6px; border: 0; border-radius: var(--hq-r-sm); background: none;
+  color: var(--hq-link); font: 600 var(--hq-fs-sm) var(--hq-font); cursor: pointer;
+}
+:root[data-ui="hq"] .hq-brief-more:hover { color: var(--hq-link-hover); text-decoration: underline; }
+
+/* ---------- Where we are (milestones) ---------- */
+/* The panel sits in My Office's wide column, which is anything from a phone's width to most of a desktop, so its
+   layout follows its own width, not the window's. */
+:root[data-ui="hq"] .hq-office-main { display: grid; gap: 18px; align-content: start; min-width: 0; }
+:root[data-ui="hq"] .hq-ms { container: hq-ms / inline-size; }
+:root[data-ui="hq"] .hq-ms-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+:root[data-ui="hq"] .hq-ms-proj {
+  min-width: 0; border: 1px solid var(--hq-line); border-radius: var(--hq-r-md); background: var(--hq-tile); box-shadow: inset 3px 0 0 var(--pj);
+}
+:root[data-ui="hq"] .hq-ms-proj.is-open { border-color: var(--hq-line-2); }
+:root[data-ui="hq"] .hq-ms-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; padding: 8px 10px 10px 14px; }
+:root[data-ui="hq"] .hq-ms-name { font-size: var(--hq-fs-md); color: var(--hq-text-strong); }
+/* the name and its button share the first line whatever order the tracks come in */
+:root[data-ui="hq"] .hq-ms-name { grid-column: 1; grid-row: 1; }
+:root[data-ui="hq"] .hq-ms-row > .hq-btn { grid-column: 2; grid-row: 1; padding: 3px 12px; }
+/* one line per track: its name, how far along, and what is in hand */
+:root[data-ui="hq"] .hq-ms-track {
+  grid-column: 1 / -1; display: grid; grid-template-columns: 68px 72px auto minmax(0, 1fr); align-items: center; gap: 2px 10px;
+  min-width: 0; font-size: var(--hq-fs-sm);
+}
+:root[data-ui="hq"] .hq-ms-track > small { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-ms-track > .hq-dim { grid-column: 2 / -1; }
+:root[data-ui="hq"] .hq-ms-bar { display: block; height: 6px; border-radius: var(--hq-r-pill); background: var(--hq-line-2); overflow: hidden; }
+:root[data-ui="hq"] .hq-ms-bar i { display: block; height: 100%; border-radius: inherit; background: var(--pj); transition: width var(--hq-dur-3); }
+:root[data-ui="hq"] .hq-ms-count { color: var(--hq-text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+:root[data-ui="hq"] .hq-ms-now { color: var(--hq-text); }
+:root[data-ui="hq"] .hq-ms-now em { font-style: normal; font-weight: 650; color: var(--hq-text-2); }
+
+:root[data-ui="hq"] .hq-ms-edit {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; padding: 12px 14px 14px; border-top: 1px solid var(--hq-line);
+}
+:root[data-ui="hq"] .hq-ms-col { display: grid; gap: 8px; align-content: start; min-width: 0; }
+:root[data-ui="hq"] .hq-ms-col h4 { margin: 0; font: 650 var(--hq-fs-md) var(--hq-font); color: var(--hq-text-strong); }
+:root[data-ui="hq"] .hq-ms-col h4 small { margin-left: 6px; color: var(--hq-muted); font-weight: 400; font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-ms-col ol { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+:root[data-ui="hq"] .hq-ms-item {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 6px 8px;
+  border: 1px solid var(--hq-line); border-radius: var(--hq-r-sm); background: var(--hq-panel);
+}
+:root[data-ui="hq"] .hq-ms-item.is-done b { color: var(--hq-muted); text-decoration: line-through; }
+:root[data-ui="hq"] .hq-ms-item.is-doing { border-color: var(--pj); }
+:root[data-ui="hq"] .hq-ms-item select {
+  padding: 4px 6px; border: 1px solid var(--hq-line-2); border-radius: var(--hq-r-sm); background: var(--hq-input);
+  color: var(--hq-text); font: var(--hq-fs-sm) var(--hq-font); cursor: pointer;
+}
+:root[data-ui="hq"] .hq-ms-item select:focus-visible, :root[data-ui="hq"] .hq-ms-in:focus-visible { outline: 2px solid var(--hq-focus); outline-offset: 1px; }
+:root[data-ui="hq"] .hq-ms-text { display: grid; gap: 1px; min-width: 0; }
+:root[data-ui="hq"] .hq-ms-text b { font-weight: 600; overflow-wrap: anywhere; }
+:root[data-ui="hq"] .hq-ms-text small { display: flex; flex-wrap: wrap; gap: 0 10px; color: var(--hq-muted); font-size: var(--hq-fs-xs); }
+:root[data-ui="hq"] .hq-ms-text .hq-ms-note { color: var(--hq-text-2); font-size: var(--hq-fs-sm); overflow-wrap: anywhere; }
+:root[data-ui="hq"] .hq-ms-acts { display: flex; align-items: center; gap: 2px; }
+:root[data-ui="hq"] .hq-ms-acts .hq-icon-btn { width: 28px; height: 28px; }
+/* aria-disabled, not disabled: the control keeps the keyboard's focus while a write runs (Milestones.tsx, off()) */
+:root[data-ui="hq"] .hq-ms-acts .hq-icon-btn[aria-disabled="true"] { opacity: .35; cursor: default; }
+:root[data-ui="hq"] .hq-ms-acts .hq-icon-btn[aria-disabled="true"]:hover { background: none; color: var(--hq-muted); }
+:root[data-ui="hq"] .hq-ms :is(.hq-btn, select)[aria-disabled="true"] { opacity: .5; cursor: default; }
+:root[data-ui="hq"] .hq-btn:disabled { opacity: .5; cursor: default; }
+:root[data-ui="hq"] .hq-btn.is-danger { border-color: var(--hq-bad); color: var(--hq-bad); }
+
+:root[data-ui="hq"] .hq-ms-in {
+  min-width: 0; padding: 6px 10px; border: 1px solid var(--hq-line-2); border-radius: var(--hq-r-sm);
+  background: var(--hq-input); color: var(--hq-text); font: var(--hq-fs-sm) var(--hq-font);
+}
+:root[data-ui="hq"] .hq-ms-in:hover { border-color: var(--hq-input-line-hover); }
+:root[data-ui="hq"] .hq-ms-in.is-date { width: 150px; }
+:root[data-ui="hq"] textarea.hq-ms-in { resize: vertical; }
+:root[data-ui="hq"] .hq-ms-add { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; }
+:root[data-ui="hq"] .hq-ms-item.is-edit { display: block; }
+:root[data-ui="hq"] .hq-ms-item.is-edit form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+:root[data-ui="hq"] .hq-ms-item.is-edit textarea, :root[data-ui="hq"] .hq-ms-item.is-edit .hq-ms-acts { grid-column: 1 / -1; }
+:root[data-ui="hq"] .hq-ms-item.is-edit .hq-ms-acts { gap: 6px; }
+
+@container hq-ms (max-width: 720px) {
+  :root[data-ui="hq"] .hq-ms-edit { grid-template-columns: minmax(0, 1fr); }
+}
+@container hq-ms (max-width: 460px) {
+  /* what is in hand goes under the bar, at full width, instead of being cut to a few letters */
+  :root[data-ui="hq"] .hq-ms-track { grid-template-columns: 68px minmax(0, 1fr) auto; }
+  :root[data-ui="hq"] .hq-ms-now { grid-column: 2 / -1; white-space: normal; }
+  :root[data-ui="hq"] .hq-ms-item { grid-template-columns: auto minmax(0, 1fr); }
+  :root[data-ui="hq"] .hq-ms-item > .hq-ms-acts { grid-column: 1 / -1; justify-content: flex-end; }
+  :root[data-ui="hq"] .hq-ms-add { grid-template-columns: minmax(0, 1fr) auto; }
+  :root[data-ui="hq"] .hq-ms-add .hq-ms-in:first-child { grid-column: 1 / -1; }
+}
+@media (max-width: 520px) {
+  :root[data-ui="hq"] .hq-brief-hl :is(a, .hq-brief-row) { grid-template-columns: 62px minmax(0, 1fr); gap: 8px; }
+}

@@ -181,6 +181,7 @@ describe("faces on the pages", () => {
     expect(app.store.get().state!.projects.some((p) => p.key === "samvision")).toBe(true);
     const main = await show("#/agents");
     const expected = castLeads(leadKeys(app.store.get())).get("samvision")!.id;
-    expect(faces(main.querySelector(".hq-teams")!).map((f) => f.dataset.character)).toContain(expected);
+    const card = [...main.querySelectorAll<HTMLElement>(".hq-sess.is-lead")].find((c) => c.querySelector("b")?.textContent === "samvision")!;
+    expect(who(card)).toBe(expected);
   });
 });
