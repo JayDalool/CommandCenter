@@ -1,0 +1,11 @@
+/* Characters and emoji (hq/persona). Only present in the DOM in Childish mode. */
+:root[data-ui="hq"] .hq-face { flex: none; display: block; border-radius: 22%; }
+:root[data-ui="hq"] .hq-fun { font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif; font-style: normal; }
+:root[data-ui="hq"] .hq-cast { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 12px 8px; margin: 0; padding: 0; list-style: none; }
+:root[data-ui="hq"] .hq-cast li { display: grid; justify-items: center; gap: 4px; color: var(--hq-text-2); font-size: var(--hq-fs-xs); }
+/* A session card with a face: the face sits left of the card's own text, which keeps its grid. The org chart's
+   `> li > .hq-sess { display: grid }` (teams.css) is more specific than a bare .hq-sess, so this names the state too. */
+:root[data-ui="hq"] .hq-sess.has-face,
+:root[data-ui="hq"] .hq-org-reports > li > .hq-sess.has-face { display: flex; align-items: center; gap: 10px; }
+:root[data-ui="hq"] .hq-sess-body { display: grid; gap: 4px; flex: 1; min-width: 0; }
+:root[data-ui="hq"] .hq-proj-lead { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }

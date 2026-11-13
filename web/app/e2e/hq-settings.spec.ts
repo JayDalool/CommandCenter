@@ -73,3 +73,35 @@ test("Slack and phone show what is not set up yet, fit a phone, and ask for Deve
   expect(watch.writes).toEqual([]);
   expect(await problems(page, watch)).toEqual([]);
 });
+
+test("Style: Professional has no faces; Childish puts them on Teams and My Office, phone included, and survives a reload", async ({ page, watch }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  for (const r of ["dashboard", "agents", "messages"]) {
+    await open(page, r);
+    await expect(page.locator("#main .hq-page")).toBeVisible();
+    await expect(page.locator(".hq-face, .hq-fun")).toHaveCount(0);
+  }
+  await open(page, "settings?tab=appearance");
+  await page.getByRole("group", { name: "Style" }).getByRole("button", { name: "Childish" }).click();
+  await expect(page.locator(".hq-cast .hq-face")).toHaveCount(30);
+  expect(await page.evaluate(wide)).toBe(true);
+
+  await page.reload();
+  await expect(page.getByRole("group", { name: "Style" }).getByRole("button", { name: "Childish" })).toHaveAttribute("aria-pressed", "true");
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    for (const r of ["agents", "dashboard"]) {
+      await open(page, r);
+      const cards = page.locator("#main .hq-sess.has-face");
+      await expect(cards.first()).toBeVisible();
+      // the face sits beside the card's text, never on top of it or pushing it out of the card
+      const fit = await cards.evaluateAll((els) => els.every((el) => {
+        const f = el.querySelector(".hq-face")!.getBoundingClientRect(), b = el.querySelector(".hq-sess-body")!.getBoundingClientRect(), c = el.getBoundingClientRect();
+        return f.width === 36 && f.right <= b.left && b.right <= c.right + 0.5 && f.left >= c.left;
+      }));
+      expect(fit, `${r} at ${width}`).toBe(true);
+      expect(await page.evaluate(wide), `${r} at ${width}`).toBe(true);
+    }
+  }
+  expect(await problems(page, watch)).toEqual([]);
+});

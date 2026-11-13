@@ -15,15 +15,21 @@ import { buildTeams, PRESENCE_LABEL, type Team, type TeamMember } from "../data"
 import { useHqData } from "./live";
 import { Kpi, Pill, PRESENCE_TONE, cx, plural } from "./ui";
 import { Icon } from "../frame/icons";
+import { Fun, Persona, PRESENCE_EMOJI, useFun } from "../persona/mode";
 
 interface Extra { model: string; last: { at: number; text: string } | null }
 
+/** In Childish mode the card starts with the session's face. */
 function Member({ m, x, lead, now }: { m: TeamMember; x?: Extra; lead?: boolean; now: number }) {
-  return <a className={cx("hq-sess", lead && "is-lead")} href={href("agents", m.id)} title={m.cwd || undefined}>
-    <span className="hq-sess-top"><b className="hq-ellip">{m.name}</b><Pill tone={PRESENCE_TONE[m.presence]}>{PRESENCE_LABEL[m.presence]}</Pill></span>
+  const fun = useFun();
+  const body = <>
+    <span className="hq-sess-top"><b className="hq-ellip">{m.name}</b>
+      <Pill tone={PRESENCE_TONE[m.presence]}>{PRESENCE_LABEL[m.presence]}<Fun e={PRESENCE_EMOJI[m.presence]} /></Pill></span>
     <small className="hq-ellip">{lead ? "Lead · " : ""}{m.agent}{x?.model && x.model !== "—" ? ` · ${x.model}` : ""}{m.ticket ? ` · ${m.ticket}` : ""}</small>
     {m.waitingSince != null ? <small className="t-jay">Waiting for you {dur(now - m.waitingSince)}</small>
-      : x?.last && <small className="hq-ellip" title={x.last.text}>{ago(x.last.at, now)} · {x.last.text}</small>}
+      : x?.last && <small className="hq-ellip" title={x.last.text}>{ago(x.last.at, now)} · {x.last.text}</small>}</>;
+  return <a className={cx("hq-sess", lead && "is-lead", fun && "has-face")} href={href("agents", m.id)} title={m.cwd || undefined}>
+    {fun ? <><Persona lead={m.leadOf} name={m.name} size={36} /><span className="hq-sess-body">{body}</span></> : body}
   </a>;
 }
 
