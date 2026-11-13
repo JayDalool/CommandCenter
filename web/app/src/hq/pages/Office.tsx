@@ -1,7 +1,8 @@
 // My Office (roadmap P3.2): the HQ landing page, on live data from hq/data/office.ts. Top to bottom: the figures,
 // the Briefing (what happened while Jay was away) and Where we are (each project's milestones) beside what needs him,
-// then the projects and the sessions. Everything but the milestones is read-only: a row links to the Classic screen
-// where the work is done. Status only from evidence: a stale feed reads Unknown, never Working.
+// then the projects and the sessions, on the office floor (Floor.tsx) or as a list. Everything but the milestones is
+// read-only: a row links to the Classic screen where the work is done. Status only from evidence: a stale feed reads
+// Unknown, never Working.
 import { useMemo, useState } from "react";
 import "./office.css";
 import { href } from "../../lib/router";
@@ -14,6 +15,8 @@ import { Fun, Persona, PRESENCE_EMOJI, useFun } from "../persona/mode";
 import { ProjectLogo } from "../logos";
 import { Briefing } from "./Briefing";
 import { Milestones } from "./Milestones";
+import { Floor } from "./Floor";
+import { prefs, usePrefs } from "../../lib/prefs";
 
 const HEALTH: Record<Health, { label: string; tone: string }> = {
   healthy: { label: "Healthy", tone: "ok" }, degraded: { label: "Degraded", tone: "bad" }, unknown: { label: "Unknown", tone: "idle" },
@@ -64,6 +67,7 @@ export function Office() {
   const { src, ev } = useHqData();
   const v = useMemo(() => buildOffice(src, ev), [src, ev]);
   const [filter, setFilter] = useState<Presence | "all">("all");
+  const view = usePrefs((p) => p.sessions);
   const now = new Date(ev.now * 1000);
   const s = v.kpis.sessions;
   const stale = ev.sessions !== "live";
@@ -115,11 +119,16 @@ export function Office() {
     <section className="hq-panel" aria-labelledby="hq-office-sessions">
       <header><h3 id="hq-office-sessions">Sessions <small>{plural(v.agents.length, "session")} {stale ? "last reported" : "reported"} by herdr</small></h3>
         {stale && <Pill tone="warn">Feed not live · status unknown</Pill>}
-        <div className="hq-seg" role="group" aria-label="Filter sessions">
+        {view === "list" && <div className="hq-seg" role="group" aria-label="Filter sessions">
           {FILTERS.map((f) => <button key={f} type="button" aria-pressed={filter === f} onClick={() => setFilter(f)}>
             {f === "all" ? "All" : PRESENCE_LABEL[f]} ({count(f)})</button>)}
+        </div>}
+        <div className="hq-seg" role="group" aria-label="Show sessions as">
+          {(["floor", "list"] as const).map((x) => <button key={x} type="button" aria-pressed={view === x}
+            onClick={() => prefs.patch({ sessions: x })}>{x === "floor" ? "Floor" : "List"}</button>)}
         </div></header>
-      {shown.length ? <div className="hq-sess-grid">{shown.map((m) => <SessionCard key={m.id} m={m} />)}</div>
+      {view === "floor" ? <Floor src={src} ev={ev} />
+        : shown.length ? <div className="hq-sess-grid">{shown.map((m) => <SessionCard key={m.id} m={m} />)}</div>
         : <p className="hq-empty">{v.agents.length ? "No session matches this filter." : "herdr reports no sessions."}</p>}
     </section>
   </div>;

@@ -35,7 +35,7 @@ beforeEach(() => {
   vi.spyOn(app, "boot").mockResolvedValue(undefined);
   prefs.patch({ ui: "hq" });
 });
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); prefs.patch({ ui: "classic" }); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); prefs.patch({ ui: "classic", sessions: "floor" }); });
 
 const kpi = (page: HTMLElement, label: string) =>
   [...page.querySelectorAll<HTMLElement>(".hq-kpi")].find((k) => k.querySelector("small")?.textContent === label)!;
@@ -67,6 +67,7 @@ describe("My Office", () => {
     expect(kpi(page, "Sessions").querySelector("b")).toHaveTextContent("Unknown");
     expect(kpi(page, "Health").querySelector("b")).toHaveTextContent("Unknown");
     expect(kpi(page, "Health")).toHaveAttribute("href", "#/server");
+    fireEvent.click(within(page).getByRole("button", { name: "List" }));
     expect(page.querySelector(".hq-sess .hq-pill")?.textContent).toBe("Unknown");
     expect(within(page).queryByText("Working")).toBeNull();
     expect(page.textContent).toMatch(/Feed not live/);
@@ -78,6 +79,7 @@ describe("My Office", () => {
   it("filters sessions by presence", async () => {
     load(true);
     const page = await show();
+    fireEvent.click(within(page).getByRole("button", { name: "List" }));
     const group = within(page).getByRole("group", { name: "Filter sessions" });
     const all = page.querySelectorAll(".hq-sess").length;
     expect(all).toBe(app.store.get().state!.agents.length);

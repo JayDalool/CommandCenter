@@ -3,6 +3,7 @@
 // whole window, however many places show it. A project without a logo shows nothing extra: no placeholder picture.
 import { useEffect } from "react";
 import { app } from "../store/app";
+import { ApiError } from "../api/client";
 import { Store, useSelector } from "../lib/store";
 import type { ProjectLogo as Meta } from "../api/types";
 
@@ -10,19 +11,27 @@ import type { ProjectLogo as Meta } from "../api/types";
 export const LOGO_TYPES = ["image/png", "image/jpeg", "image/webp"];
 export const LOGO_MAX = 512 * 1024;
 
-interface Logos { state: "idle" | "loading" | "ok" | "none"; meta: Record<string, Meta>; urls: Record<string, string> }
+/** "none": this ccd has no logo route (an older server). "error": the first load failed for any other reason; `error`
+ *  says why, and the next place that shows a logo tries again. */
+interface Logos { state: "idle" | "loading" | "ok" | "none" | "error"; meta: Record<string, Meta>; urls: Record<string, string>; error?: string }
 const EMPTY: Logos = { state: "idle", meta: {}, urls: {} };
 export const logos = new Store<Logos>(EMPTY);
 let turn = 0, seen = 0;
 
-/** Read ccd's list again and fetch the bytes of any logo that is new or changed (by its sha). A server without the
- *  route, or one that fails, leaves whatever is already showing. */
+/** Read ccd's list again and fetch the bytes of any logo that is new or changed (by its sha). A refresh that fails
+ *  after a good load leaves whatever is already showing. */
 export async function refreshLogos(): Promise<void> {
   const mine = ++turn;
-  if (logos.get().state === "idle") logos.patch({ state: "loading" });
+  if (logos.get().state === "idle" || logos.get().state === "error") logos.patch({ state: "loading", error: undefined });
   let meta: Record<string, Meta>;
   try { meta = await app.api.logos(); }
-  catch { if (mine === turn && logos.get().state === "loading") logos.patch({ state: "none" }); return; }
+  catch (e) {
+    if (mine === turn && logos.get().state === "loading") {
+      logos.patch(e instanceof ApiError && e.status === 404 ? { state: "none" }
+        : { state: "error", error: e instanceof Error ? e.message : String(e) });
+    }
+    return;
+  }
   const was = logos.get(), urls: Record<string, string> = {};
   await Promise.all(Object.entries(meta).map(async ([key, m]) => {
     if (!LOGO_TYPES.includes(m.mime)) return;
@@ -43,7 +52,8 @@ export function resetLogos() { turn++; seen = 0; logos.set(EMPTY); }
 export function useLogos() {
   const pulse = useSelector(app.store, (d) => d.activity.find((e) => e.kind.startsWith("logo."))?.seq ?? 0);
   useEffect(() => {
-    if (logos.get().state === "idle") void refreshLogos();
+    const state = logos.get().state;
+    if (state === "idle" || state === "error") void refreshLogos();
     else if (pulse > seen) void refreshLogos();
     seen = Math.max(seen, pulse);
   }, [pulse]);

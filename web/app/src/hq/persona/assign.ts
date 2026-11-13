@@ -1,6 +1,7 @@
 // Who gets which character. No storage: the same names always give the same faces, in every window. The CTO and each
-// project's lead get a face of their own (no two leads share one while there are faces left); every other session
-// takes whichever its name lands on, so two of those can look alike.
+// project's lead get a face of their own first; then every other session herdr reports takes the face its name lands
+// on, or the next free one. So no two look alike while there are faces left. A name that is not a session (a subagent
+// a coordinator can call) takes whichever its name lands on, and can look like someone else.
 import { CAST, type Character } from "./characters";
 
 /** FNV-1a, 32 bit: small, stable, and spread well enough for 30 slots. */
@@ -30,5 +31,18 @@ export function leadKeys(src: { taskProjects: readonly { key: string }[];
   return [...src.taskProjects, ...(src.state?.projectsConfig ?? []), ...(src.state?.projects ?? [])].map((p) => p.key);
 }
 
-/** Any other session, by its name. */
+/** Every other session, by name, after the leads. Names are taken in sorted order: a session keeps its face from
+ *  one report to the next unless an earlier name that lands on the same face arrives or leaves. Keys are lower case. */
+export function castSessions(leads: ReadonlyMap<string, Character>, names: readonly string[]): Map<string, Character> {
+  const out = new Map<string, Character>(), used = new Set([...leads.values()].map((c) => CAST.indexOf(c)));
+  for (const name of [...new Set(names.map((n) => n.toLowerCase()))].sort()) {
+    let i = hash(`agent:${name}`) % CAST.length;
+    if (used.size < CAST.length) while (used.has(i)) i = (i + 1) % CAST.length;
+    used.add(i);
+    out.set(name, CAST[i]);
+  }
+  return out;
+}
+
+/** A name that is not a session herdr reports. */
 export const castFor = (name: string): Character => CAST[hash(`agent:${name.toLowerCase()}`) % CAST.length];

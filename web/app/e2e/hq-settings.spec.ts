@@ -92,6 +92,18 @@ test("Style: Professional has no faces; Childish puts them on Teams and My Offic
     await page.setViewportSize({ width, height: 844 });
     for (const r of ["agents", "dashboard"]) {
       await open(page, r);
+      if (r === "dashboard") {
+        // My Office shows its sessions on the floor first: a face above its name, both inside the session's own box
+        const people = page.locator("#main .hq-who");
+        await expect(people.first()).toBeVisible();
+        const stand = await people.evaluateAll((els) => els.every((el) => {
+          const f = el.querySelector(".hq-face")!.getBoundingClientRect(), n = el.querySelector("b")!.getBoundingClientRect(), c = el.getBoundingClientRect();
+          return f.width === 40 && f.bottom <= n.top && n.left >= c.left - 0.5 && n.right <= c.right + 0.5;
+        }));
+        expect(stand, `the floor at ${width}`).toBe(true);
+        expect(await page.evaluate(wide), `the floor at ${width}`).toBe(true);
+        await page.getByRole("button", { name: "List" }).click();
+      }
       const cards = page.locator("#main .hq-sess.has-face");
       await expect(cards.first()).toBeVisible();
       // the face sits beside the card's text, never on top of it or pushing it out of the card
@@ -101,6 +113,7 @@ test("Style: Professional has no faces; Childish puts them on Teams and My Offic
       }));
       expect(fit, `${r} at ${width}`).toBe(true);
       expect(await page.evaluate(wide), `${r} at ${width}`).toBe(true);
+      if (r === "dashboard") await page.getByRole("button", { name: "Floor" }).click();
     }
   }
   expect(await problems(page, watch)).toEqual([]);
