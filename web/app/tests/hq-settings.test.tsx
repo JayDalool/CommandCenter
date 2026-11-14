@@ -1,7 +1,7 @@
 // HQ's Settings (hq/pages/Settings.tsx) on the test fixture: eleven sections, Classic's section ids still land in the
 // right place (and HQ's land somewhere sensible in Classic), and the controls change only what Classic's did: this
 // browser's preferences, its remembered window places and the Developer Unlock session. No demo or sample data.
-import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { vi } from "vitest";
 import { App } from "../src/App";
 import { app, initial } from "../src/store/app";
@@ -154,6 +154,31 @@ describe("HQ Settings", () => {
     expect(asked).toHaveBeenCalledTimes(1);
     expect(put).not.toHaveBeenCalled();
     window.removeEventListener("cc:dev-unlock", asked);
+  });
+
+  it("Slack and phone: a change pressed while locked goes out once Jay has unlocked, without a second press", async () => {
+    load();
+    developer.set({ active: false, expiresAt: null, error: null });
+    vi.spyOn(app.api, "notify").mockResolvedValue(NOTIFY);
+    vi.spyOn(app.api, "developerStatus").mockResolvedValue({ active: false, expiresIn: null, tokenFile: null });
+    vi.spyOn(app.api, "unlock").mockResolvedValue({ ok: true, session: "s".repeat(43), expiresIn: 3600 });
+    const put = vi.spyOn(app.api, "setNotify").mockResolvedValue({ ...NOTIFY, settings: { ...NOTIFY.settings, ntfy: true } });
+    try {
+      const page = await show("#/settings?tab=notifications");
+      const phone = () => within(within(page).getByRole("group", { name: "Phone alerts" })).getByRole("button", { name: "On" });
+      fireEvent.click(phone());
+      await act(async () => {});
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));      // Cancel drops what was pressed
+      fireEvent.click(phone());
+      await act(async () => {});
+      expect(put).not.toHaveBeenCalled();
+      fireEvent.change(screen.getByLabelText("Developer token"), { target: { value: "k".repeat(43) } });
+      fireEvent.click(screen.getByRole("button", { name: "Unlock and continue" }));
+      await waitFor(() => expect(put).toHaveBeenCalled());
+      await act(async () => {});
+      expect(put.mock.calls).toEqual([[{ ntfy: true }]]);
+      expect(phone()).toHaveAttribute("aria-pressed", "true");
+    } finally { act(() => setDevSession(null)); }
   });
 
   it("Slack and phone save one change at a time once unlocked", async () => {

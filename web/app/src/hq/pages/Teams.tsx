@@ -18,6 +18,7 @@ import { useHqData } from "./live";
 import { Kpi, Pill, PRESENCE_TONE, cx, plural } from "./ui";
 import { Icon } from "../frame/icons";
 import { ProjectLogo } from "../logos";
+import { LiveTag } from "../release";
 import { Fun, Persona, PRESENCE_EMOJI, useFun } from "../persona/mode";
 import { Seats } from "./Seats";
 
@@ -41,7 +42,7 @@ function TeamPanel({ t, extra, now, stale }: { t: Team; extra: Map<string, Extra
   const n = t.members.length + (t.lead ? 1 : 0);
   const defined = t.defined.filter((d, i) => t.defined.findIndex((x) => x.name === d.name && x.model === d.model) === i);
   return <section className="hq-panel hq-team" aria-labelledby={`hq-team-${t.key}`} style={{ ["--pj" as string]: `var(--hq-pj-${t.key}, var(--hq-accent))` }}>
-    <header><h3 id={`hq-team-${t.key}`}><ProjectLogo project={t.key} /> {t.name} <small>{plural(n, "session")}{stale ? " last reported" : ""} · {plural(t.openTasks, "open task")}</small></h3>
+    <header><h3 id={`hq-team-${t.key}`}><ProjectLogo project={t.key} /> {t.name} <LiveTag project={t.key} /> <small>{plural(n, "session")}{stale ? " last reported" : ""} · {plural(t.openTasks, "open task")}</small></h3>
       <span className="hq-team-links"><a className="hq-link" href={href("tasks", null, { project: t.key })}>Tasks</a>
         <a className="hq-link" href={href("projects", t.key)}>Project</a></span></header>
     <div className="hq-sess-grid">

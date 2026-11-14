@@ -97,32 +97,48 @@ test("a live project is marked on My Office and Company, and its panel says when
   await open(page, "projects");
   await page.getByRole("group", { name: "View" }).getByRole("button", { name: "List" }).click();
   await expect(page.locator("#main a.hq-topo-node", { hasText: "SamVision" }).locator(".hq-live")).toHaveText("Live");
+
+  // Teams: after each project's name, level with it, and nothing wider than a phone.
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await open(page, "agents");
+    const team = page.getByRole("region", { name: /^SamVision/ });
+    await expect(team.locator("h3 .hq-live")).toHaveText("Live");
+    await expect(page.getByRole("region", { name: /^GYST/ }).locator("h3 .hq-live")).toHaveText("Not live");
+    expect(await team.locator("h3").evaluate((h) => {
+      const tag = h.querySelector(".hq-live")!.getBoundingClientRect(), box = h.getBoundingClientRect();
+      return tag.top >= box.top - 1 && tag.bottom <= box.bottom + 1 && tag.left >= box.left && tag.right <= box.right + 1;
+    }), `label inside the heading at ${width}`).toBe(true);
+    expect(await page.evaluate(wide), `Teams at ${width}`).toBe(true);
+  }
   expect(ccd.calls).toEqual([]);
   expect(ccd.problems).toEqual([]);
   expect(await problems(page, watch)).toEqual([]);
 });
 
-test("Settings: locked sends nothing; unlocked makes a project live and moves the day, kept through a reload", async ({ page, watch }) => {
+test("Settings: locked sends nothing; a press carries on after the unlock; the day and time move, kept through a reload", async ({ page, watch }) => {
   const ccd = await serveRelease(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await open(page, "settings?tab=profiles");
   const gyst = row(page, "GYST");
   const live = gyst.getByRole("button", { name: "Live", exact: true });
 
-  // Locked: the press opens Developer Unlock and nothing is sent.
+  // Locked: the press opens Developer Unlock and nothing is sent. Cancel drops what was pressed.
   await live.click();
   const dialog = page.getByRole("dialog", { name: "Developer Unlock" });
   await expect(dialog).toBeVisible();
-  expect(ccd.calls).toEqual([]);
-  await dialog.getByLabel("Developer token").fill(DEV_TOKEN);
-  await dialog.getByRole("button", { name: "Unlock" }).click();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.locator("#set-release")).not.toContainText("Changing these needs Developer Unlock.");
-  await expect(live).toHaveAttribute("aria-pressed", "false");     // unlocking does not make the change by itself
+  expect(ccd.calls).toEqual([]);
 
+  // Pressed again and unlocked: the change goes out once, without a second press.
   await live.click();
+  await dialog.getByLabel("Developer token").fill(DEV_TOKEN);
+  await dialog.getByRole("button", { name: "Unlock and continue" }).click();
+  await expect(dialog).toBeHidden();
   await expect(live).toHaveAttribute("aria-pressed", "true");
   await expect(gyst).toContainText("Changes wait for the weekly release.");
+  await expect(page.locator("#set-release")).not.toContainText("Changing these needs Developer Unlock.");
 
   const day = row(page, "Release day");
   await day.getByRole("button", { name: "Thu" }).click();

@@ -11,6 +11,7 @@ import { PRESENCE_LABEL, SEAT_LABEL, STAGE_LABEL, type SeatsTeam, type SeatsView
 import { Pill, PRESENCE_TONE, cx, plural } from "./ui";
 import { Icon } from "../frame/icons";
 import { ProjectLogo } from "../logos";
+import { LiveTag } from "../release";
 import { Fun, Persona, PRESENCE_EMOJI, useFun } from "../persona/mode";
 import { TicketFlowPanel } from "./TicketFlow";
 
@@ -85,7 +86,7 @@ function Loose({ list, label }: { list: TeamMember[]; label: string }) {
 function TeamSeats({ t, now }: { t: SeatsTeam; now: number }) {
   const nth = (i: number) => t.seats.slice(0, i).filter((x) => x.seat === t.seats[i]!.seat).length;
   return <section className="hq-panel hq-team hq-seating" aria-labelledby={`hq-seating-${t.key}`} style={{ ["--pj" as string]: `var(--hq-pj-${t.key}, var(--hq-accent))` }}>
-    <header><h3 id={`hq-seating-${t.key}`}><ProjectLogo project={t.key} /> {t.name}
+    <header><h3 id={`hq-seating-${t.key}`}><ProjectLogo project={t.key} /> {t.name} <LiveTag project={t.key} />
       <small>{plural(t.inFlight, "ticket")} in flight · {t.atIntake} more at intake</small></h3>
       <span className="hq-team-links"><a className="hq-link" href={href("tasks", null, { project: t.key })}>Tasks</a>
         <a className="hq-link" href={href("projects", t.key)}>Project</a></span></header>
