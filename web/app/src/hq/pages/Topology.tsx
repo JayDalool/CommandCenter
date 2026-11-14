@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import "./office.css";
 import "./topology.css";
+import { LiveTag, ReleaseNote, useRelease } from "../release";
 import { app } from "../../store/app";
 import { href } from "../../lib/router";
 import { ago } from "../../lib/time";
@@ -47,7 +48,9 @@ function useWorkers() {
 const pct = (n: number | null) => n == null ? "—" : `${Math.round(n)}%`;
 
 /** What the page knows about each project beyond buildTopology: the Classic project row and Jay's queue. */
-interface Ctx { src: AppData; ev: Evidence; all: TopologyView; needs: DecisionItem[]; names: Map<string, string>; stale: boolean }
+/** `live`: ccd's live switch per project; empty on a ccd without the release store. */
+interface Ctx { src: AppData; ev: Evidence; all: TopologyView; needs: DecisionItem[]; names: Map<string, string>; stale: boolean;
+  live: Record<string, { live: boolean }> }
 const openTasks = (c: Ctx, key: string) => c.src.tickets.filter((t) => t.project === key && isActive(t)).length;
 const needsOf = (c: Ctx, key: string) => c.needs.filter((d) => d.project === key).length;
 
@@ -99,7 +102,7 @@ function NodeBody({ n, c, v, expanded }: { n: GNode; c: Ctx; v: TopologyView; ex
     return <>
       <span className="hq-gn-row"><i className="hq-gn-dot" aria-hidden /><span className="hq-gn-body"><b>{p.name}</b>
         <small className="hq-ellip" title={p.healthWhy}>{p.healthWhy}</small></span></span>
-      <span className="hq-gn-row"><Pill tone={tone}>{label}</Pill>{need > 0 && <Pill tone="jay">{need} need you</Pill>}</span>
+      <span className="hq-gn-row"><Pill tone={tone}>{label}</Pill>{need > 0 && <Pill tone="jay">{need} need you</Pill>}<LiveTag project={p.key} /></span>
       <span className="hq-gn-row hq-gn-foot"><span className="hq-ellip">{foot}</span></span>
     </>;
   }
@@ -136,7 +139,11 @@ function NodeBody({ n, c, v, expanded }: { n: GNode; c: Ctx; v: TopologyView; ex
 function nodeLabel(n: GNode, v: TopologyView, c: Ctx): string {
   switch (n.kind) {
     case "root": return `Jay, ${c.needs.length} need you`;
-    case "project": { const p = v.projects.find((x) => x.key === n.ref)!; return `${p.name}, ${HEALTH[p.health][0].toLowerCase()}`; }
+    case "project": {
+      const p = v.projects.find((x) => x.key === n.ref)!;
+      const live = c.live[p.key];
+      return `${p.name}, ${HEALTH[p.health][0].toLowerCase()}${live ? (live.live ? ", live" : ", not live") : ""}`;
+    }
     case "stage": { const s = v.stages.find((x) => x.id === n.ref)!; return `${s.label}, ${plural(s.tasks.length, "task")}`; }
     case "task": { const t = v.stages.flatMap((s) => s.tasks).find((x) => x.key === n.ref)!; return `${t.key} ${t.title}`; }
     case "more": return `More ${v.stages.find((x) => x.id === n.ref)!.label} tasks`;
@@ -263,6 +270,7 @@ function Inspector({ sel, c, onBack }: { sel: string; c: Ctx; onBack: () => void
         <div className="hq-insp-head" style={{ ["--pj" as string]: pjColor(p.key) }}><i className="hq-gn-dot" aria-hidden />
           <div><h3>{p.name}</h3><p>{pv?.summary || "Project"}</p></div></div>
         <div className="hq-insp-status"><Pill tone={tone}>{label}</Pill><span className="hq-dim">{p.healthWhy}</span></div>
+        <ReleaseNote project={p.key} />
         <div className="hq-insp-stats"><Stat label="Open tasks" value={openTasks(c, p.key)} /><Stat label="Need you" value={need} tone={need ? "jay" : undefined} />
           <Stat label="PRs" value={pv ? pv.prs.length : "—"} /><Stat label={c.stale ? "Sessions (last)" : "Sessions"} value={p.sessions} /></div>
         <p className="hq-note">{p.coordinator ? <>Lead session: <Pill tone={PRESENCE_TONE[p.coordinator.presence]}>{PRESENCE_LABEL[p.coordinator.presence]}</Pill></>
@@ -351,7 +359,7 @@ function ProjectNode({ p, c }: { p: TopoProject; c: Ctx }) {
   const pv = c.src.state?.projects.find((x) => x.key === p.key);
   const need = needsOf(c, p.key);
   return <a className="hq-proj hq-topo-node" href={href("projects", p.key)} style={{ ["--pj" as string]: pjColor(p.key) }}>
-    <span className="hq-proj-top"><b>{p.name}</b><Pill tone={tone} title={p.healthWhy}>{label}</Pill></span>
+    <span className="hq-proj-top"><span className="hq-live-with"><b>{p.name}</b><LiveTag project={p.key} /></span><Pill tone={tone} title={p.healthWhy}>{label}</Pill></span>
     <small className="hq-proj-why">{p.healthWhy}</small>
     {pv?.summary && <small className="hq-ellip" title={pv.summary}>{pv.summary}</small>}
     <span className="hq-proj-foot">
@@ -418,6 +426,7 @@ const narrow = () => typeof matchMedia === "function" && matchMedia("(max-width:
 export function Topology() {
   const { src, ev } = useHqData();
   const { workers, failed } = useWorkers();
+  const rel = useRelease();
   const [mode, setMode] = useState<"graph" | "list">(() => narrow() ? "list" : "graph");
   const [status, setStatus] = useState<NonNullable<TopoFilter["status"]>>("all");
   const [only, setOnly] = useState<string[]>([]);
@@ -427,7 +436,8 @@ export function Topology() {
   const all = useMemo(() => buildTopology(src, ev, {}, workers), [src, ev, workers]);
   const v = useMemo(() => buildTopology(src, ev, { projects: only, status }, workers), [src, ev, only, status, workers]);
   const needs = useMemo(() => buildDecisions(src).items, [src]);
-  const c: Ctx = { src, ev, all, needs, names: new Map(all.projects.map((p) => [p.key, p.name])), stale: ev.sessions !== "live" };
+  const c: Ctx = { src, ev, all, needs, names: new Map(all.projects.map((p) => [p.key, p.name])), stale: ev.sessions !== "live",
+    live: rel.data?.projects ?? {} };
   const toggle = (k: string) => setOnly(only.includes(k) ? only.filter((x) => x !== k) : [...only, k]);
   const filtered = only.length > 0 || status !== "all";
   const graph = mode === "graph";

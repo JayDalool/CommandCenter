@@ -13,6 +13,7 @@ import { AttentionRow, Kpi, Pill, PRESENCE_TONE, cx, plural } from "./ui";
 import type { Alert } from "../../api/types";
 import { Fun, Persona, PRESENCE_EMOJI, useFun } from "../persona/mode";
 import { ProjectLogo } from "../logos";
+import { LiveTag } from "../release";
 import { Briefing } from "./Briefing";
 import { Milestones } from "./Milestones";
 import { Floor } from "./Floor";
@@ -27,7 +28,8 @@ function greeting(d: Date) { const h = d.getHours(); return h < 12 ? "Good morni
 function ProjectCard({ p, stale }: { p: OfficeProject; stale: boolean }) {
   const h = HEALTH[p.health];
   return <a className="hq-proj" href={href("projects", p.key)} style={{ ["--pj" as string]: `var(--hq-pj-${p.key}, var(--hq-accent))` }}>
-    <span className="hq-proj-top"><b className="hq-with-logo"><ProjectLogo project={p.key} size={22} />{p.name}</b><Pill tone={h.tone} title={p.healthWhy}>{h.label}</Pill></span>
+    <span className="hq-proj-top"><span className="hq-live-with"><b className="hq-with-logo"><ProjectLogo project={p.key} size={22} />{p.name}</b>
+      <LiveTag project={p.key} /></span><Pill tone={h.tone} title={p.healthWhy}>{h.label}</Pill></span>
     <small className="hq-proj-why">{p.healthWhy}</small>
     <span className="hq-proj-counts">
       <span className={cx(p.counts.needs > 0 && "t-jay")}><b>{p.counts.needs}</b>needs you</span>

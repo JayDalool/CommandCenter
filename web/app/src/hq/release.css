@@ -1,0 +1,12 @@
+/* Live or not live: a small label beside a project's name (hq/release.tsx). Live is the one that stands out. */
+:root[data-ui="hq"] .hq-live {
+  display: inline-flex; align-items: center; gap: 5px; flex: none; padding: 1px 8px; border-radius: 999px;
+  font: 600 var(--hq-fs-xs)/1.5 var(--hq-font); white-space: nowrap; color: var(--hq-muted);
+  box-shadow: inset 0 0 0 1px var(--hq-line);
+}
+:root[data-ui="hq"] .hq-live.is-live { color: var(--hq-ok); box-shadow: inset 0 0 0 1px currentColor; }
+:root[data-ui="hq"] .hq-live.is-live i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+/* A project's name with its label, kept together when the row spreads its children apart. */
+:root[data-ui="hq"] .hq-live-with { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+:root[data-ui="hq"] .hq-live-note { display: flex; align-items: flex-start; gap: 8px; }
+:root[data-ui="hq"] .hq-live-note > span:last-child { min-width: 0; }
