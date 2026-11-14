@@ -16,34 +16,51 @@ export type Fetch = typeof fetch;
 /** ccd's 403 for a remembered device whose token is more than 8 h old: `{error, reenter: true}`. */
 const reenter = (data: unknown) => !!data && typeof data === "object" && (data as { reenter?: unknown }).reenter === true;
 
+/** How long a read waits for ccd before it is reported as not answered. Only reads: a write that outlives a timeout
+ *  may still land, and calling it failed would invite a second press of the same button. */
+export const READ_TIMEOUT_MS = 30_000;
+/** The import preview asks GitHub once per project, one after another, and ccd gives each call up to 25 s. */
+export const IMPORT_PREVIEW_TIMEOUT_MS = 180_000;
+
 /** The one place the UI talks HTTP to ccd. Same origin; the token goes in a header. */
 export class Api {
   constructor(private fetchImpl: Fetch = (...a) => fetch(...a), private base = "") {}
 
-  private async req<T>(method: string, path: string, body?: unknown, again = false): Promise<T> {
+  private async req<T>(method: string, path: string, body?: unknown, again = false, wait = READ_TIMEOUT_MS): Promise<T> {
     const headers: Record<string, string> = {};
     const token = getToken();
     if (token) headers["X-CCD-Token"] = token;
     const dev = devSession();
     if (dev) headers["X-CCD-Developer"] = dev;
     if (body !== undefined) headers["Content-Type"] = "application/json";
+    // A read that hangs (a dropped network on the way to jay-server, a stuck ccd) would otherwise leave whatever waits
+    // on it waiting for good. It gets the same status as an unreachable ccd, so callers treat it the same way.
+    const read = method === "GET" ? new AbortController() : null;
+    const timer = read ? setTimeout(() => read.abort(), wait) : undefined;
+    const late = () => new ApiError(0, `ccd did not answer within ${wait / 1000} s`);
     let res: Response;
-    try {
-      res = await this.fetchImpl(this.base + path, {
-        method, headers, body: body === undefined ? undefined : JSON.stringify(body),
-        cache: "no-store", credentials: "omit",
-      });
-    } catch (e) {
-      throw new ApiError(0, "ccd unreachable");
-    }
     let data: unknown = null;
-    try { data = await res.json(); } catch { /* empty body */ }
+    try {
+      try {
+        res = await this.fetchImpl(this.base + path, {
+          method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+          cache: "no-store", credentials: "omit", ...(read ? { signal: read.signal } : {}),
+        });
+      } catch (e) {
+        throw read?.signal.aborted ? late() : new ApiError(0, "ccd unreachable");
+      }
+      try { data = await res.json(); } catch { /* empty body */ }
+      // A body cut off by the timeout reads as empty: that is not an answer.
+      if (read?.signal.aborted) throw late();
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) {
       if (res.status === 403 && data && typeof data === "object" && "error" in data &&
         String((data as { error: unknown }).error).startsWith("Developer Unlock")) devExpired();
       // A remembered device, more than 8 h after the token was typed: ccd wants it again before this write. Ask once,
       // then send the same request again, so the save Jay asked for still happens.
-      if (res.status === 403 && !again && reenter(data) && await askReenter()) return this.req<T>(method, path, body, true);
+      if (res.status === 403 && !again && reenter(data) && await askReenter()) return this.req<T>(method, path, body, true, wait);
       if (res.status === 409 && data && typeof data === "object") {
         throw Object.assign(new ApiError(409, String((data as { error?: unknown }).error ?? "conflict")), { data });
       }
@@ -201,7 +218,7 @@ export class Api {
     return this.req<{ brief: string; dispatchable: boolean; ticket: TicketDetail }>(
       "GET", `/api/tasks/${encodeURIComponent(key)}/context`);
   }
-  importPreview() { return this.req<ImportPreview>("GET", "/api/tasks/import-preview"); }
+  importPreview() { return this.req<ImportPreview>("GET", "/api/tasks/import-preview", undefined, false, IMPORT_PREVIEW_TIMEOUT_MS); }
 
   devCommits(key: string) { return this.req<DevCommits>("GET", `/api/development/${encodeURIComponent(key)}/commits`); }
 
