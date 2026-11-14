@@ -65,6 +65,22 @@ describe("the cast", () => {
     const { container } = render(<Face who={CAST[0]} />);
     expect(container.querySelector("title")).toBeNull();
   });
+
+  it("gives every face gradients of its own, so one face never paints with another's", () => {
+    // The same character twice as well: two seats can show the same face on one page.
+    const { container } = render(<>{CAST.map((c) => <Face key={c.id} who={c} />)}<Face who={CAST[0]} /></>);
+    const all = faces(container), named = (el: ParentNode) => [...el.querySelectorAll("[id]")].map((x) => x.id);
+    expect(all).toHaveLength(31);
+    expect(new Set(named(container)).size).toBe(named(container).length);
+    for (const svg of all) {
+      const own = new Set(named(svg));
+      const used = [...svg.querySelectorAll("*")].flatMap((x) => ["fill", "stroke", "clip-path"].map((a) => x.getAttribute(a) ?? ""))
+        .filter((v) => v.startsWith("url(")).map((v) => /^url\(#([A-Za-z][A-Za-z0-9]*)\)$/.exec(v)?.[1]);
+      // tile, head and the clip for the shoulders
+      expect(new Set(used).size, svg.dataset.character).toBe(3);
+      for (const u of used) expect(u !== undefined && own.has(u), svg.dataset.character).toBe(true);
+    }
+  });
 });
 
 describe("who gets which character", () => {
