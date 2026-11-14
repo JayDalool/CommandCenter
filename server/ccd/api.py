@@ -50,8 +50,11 @@
                                      recorded (resolvedActor, would-refuse reasons), never required yet
     POST  /api/actors/revoke         JAY + DEVELOPER UNLOCK. {id} (a negative id is a pre-Phase-2 token)
     GET   /api/developer             is this tab's developer session active?
-    POST  /api/developer/unlock      developer token → a short-lived in-memory session id
+    POST  /api/developer/unlock      developer token (+ remember?) → a session id: 8 h, or 30 days for a remembered
+                                     device; survives a ccd restart (only an HMAC of the id is saved)
     POST  /api/developer/lock        end that session
+    POST  /api/developer/lock-all    DEVELOPER. end every session on every device
+    GET   /api/developer/devices     DEVELOPER. the devices holding a session (label, last used), never an id
     POST  /api/developer/handoff     SSH sign-in: developer token (read by scripts/cc-session as jay) → a
                                      day-long session + a one-time 2-minute code
     POST  /api/developer/redeem      NO TOKEN (Host/Origin still checked): that code, once → the ccd token
@@ -239,6 +242,9 @@ SCM_OPS = ("stage", "unstage", "stage-all", "discard", "commit", "branch")
 # Developer session. It cannot present a token yet, so this one route needs none; Host and Origin still apply.
 REDEEM_PATH = "/api/developer/redeem"
 DEV_WS_PREFIX = "ccd-dev."
+# A remembered device (contract §6) more than 8 h past typing the secret: still unlocked for approvals and steering,
+# but the live terminal and file writes ask for the secret again. 403 with `reenter: true`; a terminal closes 4412.
+REENTER = "type the developer token again to use the terminal or write files on this device"
 JSON_MAX = 3 * 1024 * 1024  # the editor's 2 MB text, JSON-escaped, with room
 
 
@@ -886,17 +892,22 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
             return _json({"ok": False, "error": e.message, **e.extra}, e.status)
         return _json({"ok": False, "error": e.message}, e.status)
 
-    def developer(request):
-        if gate is None or not gate.check(request.headers.get(DEV_HEADER) or ""):
+    def developer(request, fresh=False):
+        """Developer Unlock. `fresh`: file writes, which a remembered device may make only within 8 h of typing the
+        secret (contract §6); past that the answer says `reenter: true` so the page asks for the secret again."""
+        sid = request.headers.get(DEV_HEADER) or ""
+        if gate is None or not gate.check(sid, fresh=fresh):
+            if gate is not None and fresh and gate.needs_reentry(sid):
+                raise FileError(403, REENTER, reenter=True)
             raise ActionError(403, "Developer Unlock required")
 
-    def ws_route(fn, dev=False):
+    def ws_route(fn, dev=False, fresh=False):
         async def handler(request):
             try:
                 if files is None or attach is None:
                     raise ActionError(503, "workspace is not configured")
                 if dev:
-                    developer(request)
+                    developer(request, fresh)
                 request.state.actor = actor_of(request)
                 _note(claimed=request.state.actor)
                 result = await fn(request)
@@ -1071,8 +1082,22 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         # Which developer.token belongs to THIS ccd (a path, never its contents), so a preview does not
         # send Jay to the live token file.
         hint = getattr(daemon, "dev_token_hint", None)
-        return _json({"active": active, "expiresIn": gate.expires_in(sid) if active else None,
+        about = gate.describe(sid) if active else None
+        return _json({"active": active, "expiresIn": about["expiresIn"] if about else None,
+                      "remembered": bool(about and about["remembered"]),
+                      "reenterIn": about["reenterIn"] if about else None,
                       "configured": gate is not None, "tokenFile": hint})
+
+    def _device_label(request, given):
+        """The name Settings shows for a device: the page's own label, else a guess from the User-Agent."""
+        if isinstance(given, str) and given.strip():
+            return given
+        ua = request.headers.get("user-agent") or ""
+        browser = next((n for k, n in (("Edg/", "Edge"), ("Firefox/", "Firefox"), ("Chrome/", "Chrome"),
+                                        ("Safari/", "Safari")) if k in ua), "Browser")
+        system = next((n for k, n in (("iPhone", "iPhone"), ("iPad", "iPad"), ("Android", "Android"),
+                                       ("Windows", "Windows"), ("Mac OS", "Mac"), ("Linux", "Linux")) if k in ua), "")
+        return f"{browser} on {system}" if system else browser
 
     async def dev_unlock(request):
         try:
@@ -1081,11 +1106,20 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
             return _err(e)
         if gate is None:
             return _json({"ok": False, "error": "developer unlock is not configured"}, 503)
-        sid, problem = gate.unlock(body.get("token"))
+        remember = body.get("remember", False)
+        if not isinstance(remember, bool):
+            return _json({"ok": False, "error": "remember must be true or false"}, 400)
+        sid, problem = gate.unlock(body.get("token"), remember=remember,
+                                   label=_device_label(request, body.get("label")),
+                                   current=request.headers.get(DEV_HEADER) or None)
         if not sid:
             return _json({"ok": False, "error": problem}, 429 if "too many" in problem else 403)
-        daemon._event("security", "developer.unlocked", "Developer Mode unlocked")
-        return _json({"ok": True, "session": sid, "expiresIn": gate.expires_in(sid)})
+        daemon._event("security", "developer.unlocked",
+                      "Developer Mode unlocked, this device remembered for 30 days" if remember
+                      else "Developer Mode unlocked")
+        about = gate.describe(sid)
+        return _json({"ok": True, "session": sid, "expiresIn": about["expiresIn"], "remembered": about["remembered"],
+                      "idleLimit": about["idleLimit"], "reenterIn": about["reenterIn"]})
 
     async def dev_handoff(request):
         """SSH sign-in, step 1 (scripts/cc-session on the server, as jay): the developer secret from its 0600
@@ -1120,6 +1154,26 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         if gate is not None:
             gate.lock(request.headers.get(DEV_HEADER) or "")
         return _json({"ok": True})
+
+    async def dev_lock_all(request):
+        """LOCK ALL DEVICES: every session everywhere ends, this one included. Needs a live Developer session, so
+        the ccd token alone (which agents on the server can read) cannot lock Jay out."""
+        try:
+            await _body(request)
+            developer(request)
+        except ActionError as e:
+            return _err(e)
+        ended = gate.lock_all()
+        daemon._event("security", "developer.locked_all", f"Developer Mode locked on every device ({ended} ended)")
+        return _json({"ok": True, "ended": ended})
+
+    async def dev_devices(request):
+        """The devices holding a live Developer session (label, last used); never a session id."""
+        try:
+            developer(request)
+        except ActionError as e:
+            return _err(e)
+        return _json({"devices": gate.devices(request.headers.get(DEV_HEADER) or "")})
 
     def _launcher_meta():
         d = getattr(daemon, "launcher_dir", None)
@@ -1277,8 +1331,11 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
             await ws.accept(subprotocol=sub)
             await ws.close(code=code, reason=reason)
 
-        if not gate.check(dev):
-            await refuse(4403, "Developer Unlock required")
+        if not gate.check(dev, fresh=True):
+            if gate.needs_reentry(dev):
+                await refuse(4412, "developer token needed again")
+            else:
+                await refuse(4403, "Developer Unlock required")
             return
         try:
             ptys.cwd_for(name)
@@ -1320,8 +1377,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
                 now = asyncio.get_running_loop().time()
                 if now - last_check > 30:  # typing keeps the developer session alive
                     last_check = now
-                    if not gate.check(dev):
-                        await ws.close(code=4403)
+                    if not gate.check(dev, fresh=True):
+                        await ws.close(code=4412 if gate.needs_reentry(dev) else 4403)
                         return
                 if msg.get("bytes") is not None:
                     ptys.write(s, msg["bytes"])
@@ -1347,8 +1404,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
             # Developer Mode locked or expired: this view stops at once, output and input alike.
             while True:
                 await asyncio.sleep(3)
-                if not gate.expires_in(dev):  # locked, idle-expired or past its TTL
-                    await ws.close(code=4403)
+                if not gate.expires_in(dev, fresh=True):  # locked, idle-expired, past its TTL or its 8 h
+                    await ws.close(code=4412 if gate.needs_reentry(dev) else 4403)
                     return
 
         tasks_ = [asyncio.create_task(pump_out()), asyncio.create_task(pump_in()), asyncio.create_task(watchdog())]
@@ -1489,8 +1546,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/files/list", ws_route(files_list), methods=["GET"]),
         Route("/api/files/read", ws_route(files_read), methods=["GET"]),
         Route("/api/files/download", ws_route(files_download), methods=["GET"]),
-        Route("/api/files/save", ws_route(files_save, dev=True), methods=["POST"]),
-        Route("/api/files/upload", ws_route(files_upload, dev=True), methods=["POST"]),
+        Route("/api/files/save", ws_route(files_save, dev=True, fresh=True), methods=["POST"]),
+        Route("/api/files/upload", ws_route(files_upload, dev=True, fresh=True), methods=["POST"]),
         Route("/api/attachments", ws_route(attach_list), methods=["GET"]),
         Route("/api/attachments", ws_route(attach_add, dev=True), methods=["POST"]),
         Route("/api/attachments/{aid}/download", ws_route(attach_download), methods=["GET"]),
@@ -1516,16 +1573,18 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/developer", dev_status, methods=["GET"]),
         Route("/api/developer/unlock", dev_unlock, methods=["POST"]),
         Route("/api/developer/lock", dev_lock, methods=["POST"]),
+        Route("/api/developer/lock-all", dev_lock_all, methods=["POST"]),
+        Route("/api/developer/devices", dev_devices, methods=["GET"]),
         Route("/api/developer/handoff", dev_handoff, methods=["POST"]),
         Route(REDEEM_PATH, dev_redeem, methods=["POST"]),
-        *[Route(f"/api/files/{op}", ws_route(files_op, dev=True), methods=["POST"])
+        *[Route(f"/api/files/{op}", ws_route(files_op, dev=True, fresh=True), methods=["POST"])
           for op in ("mkdir", "rename", "duplicate", "remove")],
         Route("/api/search/files", ws_route(search_files), methods=["GET"]),
         Route("/api/search/text", ws_route(search_text), methods=["GET"]),
         Route("/api/scm/status", ws_route(scm_status), methods=["GET"]),
         Route("/api/scm/diff", ws_route(scm_diff), methods=["GET"]),
         Route("/api/scm/ticket-branch", ws_route(scm_ticket_branch), methods=["GET"]),
-        *[Route(f"/api/scm/{op}", ws_route(scm_op, dev=True), methods=["POST"])
+        *[Route(f"/api/scm/{op}", ws_route(scm_op, dev=True, fresh=True), methods=["POST"])
           for op in SCM_OPS],
         Route("/api/action/prompt", ws_route(claude_prompt, dev=True), methods=["POST"]),
         Route("/api/action/key", ws_route(claude_key, dev=True), methods=["POST"]),
