@@ -14,6 +14,7 @@ import { commands, prefs, usePrefs, type Prefs } from "../../lib/prefs";
 import "../persona/persona.css";
 import { CAST, Face } from "../persona/characters";
 import { LOGO_MAX, LOGO_TYPES, ProjectLogo, logos, refreshLogos, useLogos } from "../logos";
+import { WEEKDAYS, clock, dayText, setRelease, useRelease, windowText } from "../release";
 import { isRemembered } from "../../api/auth";
 import { jayQueue } from "../../tickets/model";
 import { lockDevMode, unlockDialogOpen, useDevActive } from "../../components/DevMode";
@@ -419,8 +420,54 @@ function Connections() {
   </>;
 }
 
+/** Which projects are live, and the weekly window live projects release in (ccd's release store, GET and PUT
+ *  /api/release). Changing either is Jay's and needs Developer Unlock; ccd checks both. Nothing here deploys anything.
+ *  An older ccd has no such route, and this group is not shown. */
+function ReleaseDay() {
+  const active = useDevActive();
+  const r = useRelease();
+  const configured = useSelector(app.store, (d) => d.state?.projectsConfig);
+  const tracked = useSelector(app.store, (d) => d.taskProjects);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  if (r.state === "none" || r.state === "idle") return null;
+  if (!r.data) {
+    return <Group id="release" title="Live projects and release day">
+      <Row label={r.state === "error" ? `Could not read the release settings: ${r.error}` : "Reading the release settings…"} /></Group>;
+  }
+  const { window: w, cutoff, projects } = r.data;
+  /** Between noon and the window on release day: tonight's release is still "next", and its cut-off is behind us. */
+  const late = cutoff * 1000 < Date.now();
+  /** Resolves true once ccd took the change; false when it was not sent (locked) or was refused. */
+  const save = (change: () => ReturnType<typeof app.api.release>): Promise<boolean> => {
+    if (!active) { unlockDialogOpen(); return Promise.resolve(false); }
+    setBusy(true); setNote(null);
+    return change().then((d) => { setRelease(d); return true; })
+      .catch((e: unknown) => { setNote(e instanceof Error ? e.message : String(e)); return false; })
+      .finally(() => setBusy(false));
+  };
+  const name = (key: string) => configured?.find((p) => p.key === key)?.name ?? tracked.find((p) => p.key === key)?.name ?? key;
+  return <Group id="release" title="Live projects and release day" foot={<>A live project has real users, so its changes go out
+    together, once a week. A change merged before noon on release day goes out that night; a later one waits a week. A
+    project that is not live has no window. Nothing here deploys by itself.
+    {!active && <> Changing these needs Developer Unlock. <button type="button" className="hq-link" onClick={unlockDialogOpen}>Unlock…</button></>}</>}>
+    {Object.keys(projects).map((key) => <Row key={key} label={<span className="hq-with-logo"><ProjectLogo project={key} />{name(key)}</span>}
+      hint={projects[key].live ? "Changes wait for the weekly release." : "Changes can go out as soon as they are merged."}>
+      <Seg label={`${name(key)} is`} value={projects[key].live ? "live" : "not"} options={[["not", "Not live"], ["live", "Live"]]} disabled={busy}
+        onChange={(v) => { if ((v === "live") !== projects[key].live) void save(() => app.api.setLive(key, v === "live")); }} /></Row>)}
+    <Row label="Release day" hint={`${windowText(w)}.`}>
+      <Seg label="Release weekday" value={String(w.weekday)} options={WEEKDAYS.map((d, i) => [String(i), d.slice(0, 3)] as [string, string])} disabled={busy}
+        onChange={(v) => { if (+v !== w.weekday) void save(() => app.api.setReleaseWindow(+v, w.time)); }} /></Row>
+    <Row label="Release time" hint={`Next release: ${clock(w.time)} on ${dayText(w.next, w.tz)}. ${late
+      ? `The noon cut-off on ${dayText(cutoff, w.tz)} has passed: a change merged now waits for the release after it.`
+      : `A change merged by noon on ${dayText(cutoff, w.tz)} is in it.`}`}>
+      <TimeBox label="Release time" value={w.time} onSave={(t) => save(() => app.api.setReleaseWindow(w.weekday, t))} /></Row>
+    {note && <p className="hq-note t-bad" role="alert">{note}</p>}
+  </Group>;
+}
+
 function Profiles() {
-  return <><Classic id="policies"><Policies /></Classic><Classic id="decisions"><DecisionRecords /></Classic></>;
+  return <><ReleaseDay /><Classic id="policies"><Policies /></Classic><Classic id="decisions"><DecisionRecords /></Classic></>;
 }
 
 function Workers() {

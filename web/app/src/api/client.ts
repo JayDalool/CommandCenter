@@ -1,3 +1,4 @@
+import type { ReleaseState } from "./types";
 import { getToken } from "./auth";
 import { devExpired, devSession } from "./developer";
 import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
@@ -354,6 +355,13 @@ export class Api {
     return data as { ok: true } & ProjectLogo;
   }
   logoRemove(project: string) { return this.req<{ ok: true }>("DELETE", `/api/projects/${encodeURIComponent(project)}/logo`, {}); }
+
+  // ---------- Live projects and the release window (ccd release store, flow contract §5) ----------
+  release() { return this.req<ReleaseState>("GET", "/api/release"); }
+  /** Jay with Developer Unlock. ccd answers with the whole state, as GET does. */
+  setLive(project: string, live: boolean) { return this.req<ReleaseState>("PUT", `/api/release/projects/${encodeURIComponent(project)}`, { live }); }
+  /** Jay with Developer Unlock. `weekday` 0 = Sunday … 6 = Saturday, `time` "HH:MM" (24-hour, Winnipeg time). */
+  setReleaseWindow(weekday: number, time: string) { return this.req<ReleaseState>("PUT", "/api/release/window", { weekday, time }); }
 
   /** GET a file with the token header and hand it to the browser as a download. */
   async download(path: string, fallbackName: string) {

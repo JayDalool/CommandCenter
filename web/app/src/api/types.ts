@@ -678,5 +678,12 @@ export interface BriefingProject extends BriefingCounts {
   key: string; name: string; mainChecks: "passing" | "failing" | "unknown"; spendUsd: number | null; highlights: BriefingHighlight[];
 }
 export interface Briefing { since: number; until: number; totals: BriefingCounts; projects: BriefingProject[]; quiet: boolean }
+/** The weekly release window for live projects (GET /api/release, flow contract §5). `weekday` 0 = Sunday … 6 =
+ *  Saturday; `time` "HH:MM" in `tz`; `next` the start of the next window that has not ended (epoch seconds); `hours`
+ *  how long a window stays open. */
+export interface ReleaseWindow { weekday: number; time: string; tz: string; next: number; hours?: number }
+/** Which projects are live, and when their changes go out. `cutoff`: noon on that release day (epoch seconds); a
+ *  change merged after it waits for the next week's window. */
+export interface ReleaseState { window: ReleaseWindow; cutoff: number; projects: Record<string, { live: boolean }> }
 /** A project's logo as ccd lists it (GET /api/projects/logos). The bytes are fetched apart and shown from a blob:. */
 export interface ProjectLogo { mime: string; sha256: string; updatedAt: number }
