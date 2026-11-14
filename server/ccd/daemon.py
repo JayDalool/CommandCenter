@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 from . import __version__, autonomy, coordid, coordinators, github, ledger, merge_policy, model, profiles, registry, sources
+from . import flow as flow_mod
 from . import pipeline as pipeline_mod
 from . import workers as workers_mod
 from . import inbox as inbox_mod
@@ -722,6 +723,10 @@ class Daemon(LeadChat, HqDaemon):
                 raise
             except Exception as e:  # noqa: BLE001
                 self.git["error"] = repr(e)[:200]
+            try:
+                self.flow_sweep()
+            except Exception as e:  # noqa: BLE001 — a stale mark must never stop the git poll
+                log.warning(json.dumps({"msg": "flow stale sweep failed", "error": repr(e)[:200]}))
             self._git_now.clear()
             try:
                 await asyncio.wait_for(self._git_now.wait(), float(self.cfg["git_seconds"]))
@@ -1174,6 +1179,7 @@ class Daemon(LeadChat, HqDaemon):
             m = marks.get(t["id"]) or {"gate": None, "gateReason": None, "openQuestions": 0, "deploy": None}
             t.update(gate=m["gate"], gateReason=m["gateReason"], openQuestions=m["openQuestions"], deploy=m["deploy"])
             t["visibleStage"] = pipeline_mod.visible_stage(t, m)
+            t.update(pipeline_mod.Pipeline.list_marks(t, m))     # size, stage (the flow's stage key), route, stale
         return tickets
 
     def task_list(self, project=None, include_archived=False):
@@ -1451,7 +1457,8 @@ class Daemon(LeadChat, HqDaemon):
     # ---------- the ticket pipeline (plans/TICKET-PIPELINE-V1.md) ----------
 
     PIPELINE_OPS = ("plan", "start", "review", "verify", "confirm", "handoff", "block", "role", "finding",
-                    "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale")
+                    "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
+                    "intake", "criteria", "plan-review", "user-check", "close")
 
     def task_work(self, key):
         self._need_tasks()
@@ -1535,6 +1542,23 @@ class Daemon(LeadChat, HqDaemon):
             r = self._wrap(pl.writer, key, body.get("owner"), actor, body.get("checkpoint"))
         elif op == "stale":
             r = self._wrap(pl.stale, key, body.get("reason"), actor)
+        elif op == "intake":
+            r = self._wrap(pl.intake, key, body.get("size"), body.get("criteria"), actor, body.get("requirements"),
+                           body.get("parent"))
+        elif op == "criteria":
+            r = self._wrap(pl.define, key, actor, body.get("criteria"), body.get("requirements"), body.get("size"),
+                           developer=developer)
+        elif op == "plan-review":
+            r = self._wrap(pl.plan_review, key, body.get("verdict"), actor, body.get("note"), body.get("blast"),
+                           body.get("tests"), body.get("size"), **meta)
+        elif op == "user-check":
+            t = self._wrap(self.tasks.get, key)
+            if len(self._open_prs(t)) > 1:
+                raise ActionError(409, f"{t['key']} has several open PRs linked; one PR per user check")
+            r = self._wrap(pl.user_check, key, body.get("result"), body.get("head"), actor, body.get("note"),
+                           body.get("criteria"), pr=self._pr_state(t), open_prs=self._open_prs(t), **meta)
+        elif op == "close":
+            r = self._wrap(pl.close, key, body.get("note"), actor)
         elif op == "deploy-request":
             self._broker_ticket("deploy.request", key, body.get("env"))
             r = self._wrap(pl.deploy_request, key, body.get("env"), body.get("what"), body.get("verification"), actor)
@@ -1577,6 +1601,48 @@ class Daemon(LeadChat, HqDaemon):
             delivered, reason = await self._nudge_task(work["key"], text)
             work = dict(work, nudge={"delivered": delivered, "reason": reason})
         return work
+
+    # ---------- the delivery flow (ccd/flow.py) ----------
+
+    def flow_state(self):
+        """GET /api/flow: per project, its seats (who is in each), the tickets in flight and the WIP limits."""
+        self._need_tasks()
+        pl = self.pipeline
+        coords = (self.snap or {}).get("coordinators") or {}
+        out = []
+        for p in self._projects():
+            key = p["key"]
+            flying = pl.in_flight(key)
+            lead = coords.get(key) or {}
+            seats = [{"seat": "lead", "session": lead.get("paneId") or None, "ticket": None, "stage": None,
+                      "since": None}]
+            held = {}
+            for t, _w, fl, _h in flying:
+                h = fl["holder"]
+                if h and h["seat"] in flow_mod.SEATS:
+                    held.setdefault(h["seat"], []).append({"seat": h["seat"], "session": h["session"], "ticket": t["key"],
+                                                           "stage": fl["stage"], "since": h["since"]})
+            for seat in flow_mod.SEATS[1:]:
+                rows = sorted(held.get(seat) or [], key=lambda r: r["since"] or 0)
+                seats += rows or [{"seat": seat, "session": None, "ticket": None, "stage": None, "since": None}]
+            in_flight = [{"key": t["key"], "title": t["title"], "size": fl["size"], "stage": fl["stage"],
+                          "route": fl["route"],
+                          "holder": fl["holder"], "waitingOn": fl["waitingOn"], "stale": fl["stale"],
+                          "parent": t.get("parent"), "children": {"total": t["subtasks"]["total"],
+                                                                  "done": t["subtasks"]["done"]}}
+                         for t, _w, fl, _h in flying]
+            out.append({"key": key, "name": p.get("name") or key, "seats": seats, "inFlight": in_flight,
+                        "limits": {"investigate": {"used": len(pl.investigating(key, flying=flying)),
+                                                   "max": pl.investigate_limit(key)},
+                                   "build": {"used": pl.lanes(key), "max": pl.lane_limit(key)}}})
+        return {"projects": out}
+
+    def flow_sweep(self):
+        """Mark tickets that have gone quiet for 48 hours (one pipeline.flow_stale event each). Best effort."""
+        if self.pipeline is None:
+            return
+        for r in self.pipeline.sweep_stale():
+            self._pipeline_result(*r)
 
     def task_session(self, key):
         """The ticket's task Claude session, from the one resolver (coordid.task_session). A pane that is any

@@ -356,6 +356,7 @@ PIPELINE_HIGHLIGHTS = {
     "pipeline.done": "done", "pipeline.gate_opened": "waiting on you", "pipeline.questions": "questions for you",
     "pipeline.answered": "answered", "pipeline.blocked": "blocked", "pipeline.auto_merge_failed": "merge failed",
     "pipeline.deploy_requested": "deploy waiting on you", "pipeline.replan": "back to planning",
+    "pipeline.flow_stale": "gone quiet for 48 hours",
 }
 EVENT_HIGHLIGHTS = {"pr.opened": "PR opened", "pr.closed": "PR closed", "pr.ci_changed": "checks failing",
                     "ci.main_changed": "main checks changed", "chat.reply": "lead replied",
