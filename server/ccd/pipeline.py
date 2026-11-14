@@ -235,6 +235,8 @@ class Pipeline:
         # Whether ccd's auto-merge is switched on (config.json `auto_merge`, set by the daemon). While it is off,
         # a "low-risk" project behaves like "owner": a ready PR opens a merge gate for Jay.
         self.auto_merge = False
+        # The release window (ccd/release.py, set by the daemon): a live project's live deploys wait for it.
+        self.releases = None
 
     # ---------- reading ----------
 
@@ -985,7 +987,13 @@ class Pipeline:
             return {}, {}, []       # standard / risky: the lead's closing note finishes it (`close`)
         return {"status": "DONE"}, {"gate": None, "gate_reason": None}, [("pipeline.done", "done", {})]
 
-    def confirm(self, key, gate, actor, via=None):
+    def _held(self, t, w, at):
+        """The unix start of the release window this ticket's live deploy waits for, or None."""
+        if self.releases is None:
+            return None
+        return self.releases.hold(t["project"], (w.get("merge") or {}).get("at"), at)
+
+    def confirm(self, key, gate, actor, via=None, urgent=False):
         """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock). `via` marks a
         live-deploy approval whose message only asks Claude to PREPARE: "go-live" (Go Live) gives approvedBy
         "jay:go-live", "gate" (the ticket's deploy gate) gives "jay:gate". Either way the event says the deploy was
@@ -1003,10 +1011,19 @@ class Pipeline:
         def fn(tid, t, w, at):
             if w["gate"] != gate:
                 raise TaskError(409, f"{t['key']} has no open {gate} gate")
+            if urgent:
+                f = self._flow(tid)
+                if gate != "deploy" or f["size"] not in flow_mod.SIZES \
+                        or flow_mod.effective_size(f["size"], policy(t)) != "risky":
+                    raise TaskError(409, "only a risky ticket's live deploy can be approved as urgent")
+                if (w["deploy"] or {}).get("requestedAt"):
+                    w = dict(w, deploy=dict(w["deploy"], urgent=True, heldUntil=None))
             add = {f"merge:{w['review']['head']}"} if gate == "merge" else {gate} - {"failure"}
             confirmed = sorted(set(w["confirmed"]) | add)
             work = {"confirmed": confirmed, "gate": None, "gate_reason": None}
             events = [("pipeline.gate_confirmed", f"Jay confirmed the {gate} gate", {"gate": gate, "via": via or "ui"})]
+            if urgent:
+                events.append(("pipeline.deploy_urgent", "Jay approved it as urgent: no release window", {}))
             if gate == "plan":
                 work["plan_state"] = "accepted"
                 if self._flow(tid)["reviewDue"] is not None:
@@ -1366,12 +1383,16 @@ class Pipeline:
                                      f"{env} request")
             d = {"env": env, "what": what, "verification": verification, "requestedAt": at, "requestedBy": actor,
                  "approvedAt": None, "result": None}
+            held = self._held(t, w, at) if env == "live" else None
+            if held:
+                d["heldUntil"] = held
             if env != "live":   # preview / dev follow the configured automation
                 d.update(approvedAt=at, approvedBy="policy")
                 return {}, {"deploy": d}, [("pipeline.deploy_requested", f"{env} deployment requested", {"env": env})]
             work = {"deploy": d, "gate": "deploy", "gate_reason": "Ready for live deployment",
                     "confirmed": [g for g in w["confirmed"] if g != "deploy"]}
-            return {}, work, [("pipeline.deploy_requested", "live deployment waiting for Jay", {"env": env}),
+            return {}, work, [("pipeline.deploy_requested", "live deployment waiting for Jay"
+                               + (" and the release window" if held else ""), {"env": env, "heldUntil": held}),
                               ("pipeline.gate_opened", "deploy gate", {"gate": "deploy"})]
         return self._tx(key, actor, fn)
 
@@ -1390,6 +1411,11 @@ class Pipeline:
                 raise TaskError(409, f"no {env} deployment was requested for {t['key']}")
             if not d.get("approvedAt"):
                 raise TaskError(409, "Jay has not approved this live deployment")
+            if env == "live" and not d.get("urgent"):
+                held = self._held(t, w, at)
+                if held:
+                    when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(held))
+                    raise TaskError(409, f"{t['project']} is live: this deploy waits for the release window ({when})")
             d = dict(d, result=result, evidence=evidence, deployedAt=at, deployedBy=actor)
             self.db.execute("INSERT INTO ticket_evidence(ticket_id, at, actor, stage, kind, ref, note) VALUES (?,?,?,?,?,?,?)",
                             (tid, at, actor, "VERIFY", "deploy", f"{env} deployment {result}", evidence))

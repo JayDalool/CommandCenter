@@ -25,6 +25,7 @@ from pathlib import Path
 
 from . import __version__, autonomy, coordid, coordinators, github, ledger, merge_policy, model, profiles, registry, sources
 from . import flow as flow_mod
+from . import release as release_mod
 from . import pipeline as pipeline_mod
 from . import workers as workers_mod
 from . import inbox as inbox_mod
@@ -295,6 +296,10 @@ class Daemon(LeadChat, HqDaemon):
         self.herdr = herdr
         self.tasks = tasks  # TaskStore, durable product data (tasks.db); None = task system off
         self.pipeline = pipeline_mod.Pipeline(tasks) if tasks is not None else None
+        # Live or not, and the weekly release window (flow contract §5; ccd/release.py).
+        self.releases = release_mod.Release(cfg.get("release_path") or STATE_DIR / "release.json")
+        if self.pipeline is not None:
+            self.pipeline.releases = self.releases
         # Auto-merge (CC-025): the config switch is read once, here. `gh_cli(args) -> (code, stdout, stderr)` is the
         # only way ccd writes to GitHub; tests give it a fake. The stop file is checked before every merge.
         self.auto_merge_on = cfg.get("auto_merge") is True
@@ -1518,7 +1523,7 @@ class Daemon(LeadChat, HqDaemon):
             # A live-deploy approval from the ticket's gate is marked "jay:gate": the message asks Claude to
             # PREPARE and wait for Jay in the pane (GATE_DEPLOY_TEMPLATE), like Go Live.
             r = self._wrap(pl.confirm, key, body.get("gate"), actor,
-                           "gate" if body.get("gate") == "deploy" else None)
+                           "gate" if body.get("gate") == "deploy" else None, urgent=body.get("urgent") is True)
         elif op == "handoff":
             r = self._wrap(pl.handoff, key, body, actor)
         elif op == "block":
@@ -1636,6 +1641,31 @@ class Daemon(LeadChat, HqDaemon):
                                                    "max": pl.investigate_limit(key)},
                                    "build": {"used": pl.lanes(key), "max": pl.lane_limit(key)}}})
         return {"projects": out}
+
+    def release_state(self, now=None):
+        """GET /api/release: the window (with its next start), the merge cutoff, and live per project."""
+        return self.releases.public([p["key"] for p in self._projects()], _now() if now is None else now)
+
+    def release_set(self, what, body, actor="jay", developer=False, project=None):
+        """PUT /api/release/window {weekday, time} or /api/release/projects/{project} {live}: Jay with Developer Unlock."""
+        if actor != "jay" or not developer:
+            raise ActionError(403, "Developer Unlock required: the release settings are Jay's")
+        if not isinstance(body, dict):
+            raise ActionError(400, "body must be an object")
+        try:
+            if what == "window":
+                self.releases.set_window(body.get("weekday"), body.get("time"))
+                self._event("tasks", "release.window", f"release window set: day {body.get('weekday')} {body.get('time')}",
+                            data={"weekday": body.get("weekday"), "time": body.get("time")})
+            else:
+                if self._project(project) is None:
+                    raise ActionError(404, f"unknown project {project}")
+                self.releases.set_live(project, body.get("live"))
+                self._event("tasks", "release.live", f"{project} is {'live' if body.get('live') else 'not live'}",
+                            project=project, data={"live": body.get("live")})
+        except release_mod.ReleaseError as e:
+            raise ActionError(e.status, e.message)
+        return self.release_state()
 
     def flow_sweep(self):
         """Mark tickets that have gone quiet for 48 hours (one pipeline.flow_stale event each). Best effort."""
