@@ -328,16 +328,24 @@ class DeveloperGate:
                                          "proved": now, "label": self.clean_label(label)}
         return sid
 
-    def unlock(self, presented, remember=False, label=None, current=None):
+    def unlock(self, presented, remember=False, label=None, current=None, reprove=False):
         """The secret → a session id. `remember`: a 30-day session for this device. `current`: the session the
         browser already holds; typing the secret again on a live one re-proves it in place (the terminal and file
-        writes open again for FRESH) instead of adding a second entry to the device list."""
+        writes open again for FRESH) instead of adding a second entry to the device list. `reprove`: ONLY that;
+        never mint a session or change a kind, so a session locked or replaced in another window a moment earlier
+        is not turned into a new 30-day one."""
         now = self.clock()
         problem = self._secret_ok(presented, now)
         if problem:
             return None, problem
         self._prune(now)
         key, rec = self._find(current)
+        if reprove:
+            if rec is None or rec["kind"] != "remember":
+                return None, "this device's session has ended; unlock again"
+            rec.update(used=now, proved=now)
+            self._save()
+            return current, None
         if rec is not None and (remember or rec["kind"] == "remember"):
             if remember != (rec["kind"] == "remember"):
                 rec["made"] = now               # a change of kind starts that kind's clock

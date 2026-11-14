@@ -173,6 +173,23 @@ class Remember(Base):
         self.assertTrue(g.check(sid, fresh=True))
         self.assertEqual(len(g.devices()), 1)
 
+    def test_reprove_never_creates_or_changes_a_session(self):
+        g = self.gate()
+        plain, _ = g.unlock(DEV)
+        self.assertIsNone(g.unlock(DEV, current=plain, reprove=True)[0])      # a plain session stays plain
+        self.assertFalse(g.describe(plain)["remembered"])
+        kept, _ = g.unlock(DEV, remember=True)
+        g.lock(kept)
+        sid, problem = g.unlock(DEV, current=kept, reprove=True)                # locked a moment ago
+        self.assertIsNone(sid)
+        self.assertIn("ended", problem)
+        self.assertEqual(len(g.devices()), 1)                                   # nothing new was made
+        kept, _ = g.unlock(DEV, remember=True)
+        self.now[0] += 9 * HOUR
+        self.assertEqual(g.unlock(DEV, current=kept, reprove=True)[0], kept)
+        self.assertTrue(g.check(kept, fresh=True))
+        self.assertIsNone(g.unlock("wrong", current=kept, reprove=True)[0])     # still needs the token
+
     def test_a_wrong_secret_never_reproves_and_still_counts(self):
         g = self.gate()
         sid, _ = g.unlock(DEV, remember=True)
@@ -288,6 +305,10 @@ class Api(ApiBase):
         self.assertEqual(again["session"], sid)
         r = self.client.post("/api/files/mkdir", content=body, headers=dev)
         self.assertNotEqual(r.status_code, 403, r.text)
+        self.client.post("/api/developer/lock", content="{}", headers=dev)
+        r = self.client.post("/api/developer/unlock", content=json.dumps({"token": DEV, "reprove": True}),
+                             headers=dev)
+        self.assertEqual((r.status_code, r.json().get("ended")), (409, True))
 
     def test_the_ccd_token_is_never_a_developer_session(self):
         self.unlock(remember=True)

@@ -1106,15 +1106,17 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
             return _err(e)
         if gate is None:
             return _json({"ok": False, "error": "developer unlock is not configured"}, 503)
-        remember = body.get("remember", False)
-        if not isinstance(remember, bool):
-            return _json({"ok": False, "error": "remember must be true or false"}, 400)
-        sid, problem = gate.unlock(body.get("token"), remember=remember,
-                                   label=_device_label(request, body.get("label")),
-                                   current=request.headers.get(DEV_HEADER) or None)
+        remember, reprove = body.get("remember", False), body.get("reprove", False)
+        if not isinstance(remember, bool) or not isinstance(reprove, bool):
+            return _json({"ok": False, "error": "remember and reprove must be true or false"}, 400)
+        sid, problem = gate.unlock(body.get("token"), remember=remember or reprove,
+                                   label=None if reprove else _device_label(request, body.get("label")),
+                                   current=request.headers.get(DEV_HEADER) or None, reprove=reprove)
         if not sid:
-            return _json({"ok": False, "error": problem}, 429 if "too many" in problem else 403)
+            status = 429 if "too many" in problem else 409 if "has ended" in problem else 403
+            return _json({"ok": False, "error": problem, **({"ended": True} if status == 409 else {})}, status)
         daemon._event("security", "developer.unlocked",
+                      "Developer Mode re-proved on a remembered device" if reprove else
                       "Developer Mode unlocked, this device remembered for 30 days" if remember
                       else "Developer Mode unlocked")
         about = gate.describe(sid)

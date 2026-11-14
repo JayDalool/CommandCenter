@@ -234,7 +234,8 @@ browser does not copy `sessionStorage` into it.
   (`/api/action/prompt`, which can make that agent run anything) and every file write
   (`/api/files/save|upload|mkdir|rename|duplicate|remove`, `/api/scm/*`) refuse it: 403 `{reenter: true}`, and an
   open terminal closes with code 4412. Typing the token again (`POST /api/developer/unlock` with the same
-  `X-CCD-Developer`) re-proves that session in place for another 8 hours. Plain sessions (8 h) and SSH sign-in
+  `X-CCD-Developer`) re-proves that session in place for another 8 hours. The page sends `reprove: true` for this, so a session locked
+  or replaced in another window a moment earlier is refused (409) instead of becoming a new 30-day one. Plain sessions (8 h) and SSH sign-in
   (12 h, proved by Jay's SSH key) are unaffected. So a stolen remembered id can do what Jay's clicks do for up to a
   month, but cannot open a shell, prompt an agent or change code past one working day, and Jay can end it at once with:
 - **Lock all devices** (`POST /api/developer/lock-all`, Settings): every session on every device ends, with every
