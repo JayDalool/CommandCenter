@@ -245,7 +245,8 @@ def validate_agent(body, agents, open_drafts=(), token_actors=(), team=(), self_
                                             "reused, so old records stay attributed.")
             else:
                 v.error("id", "duplicate_id", f'The ID "{slug}" is already registered to {a[1]}.')
-        elif any(_slug_of((d or {}).get("id")) == slug for d in open_drafts if isinstance(d, dict)):
+        elif f"agent:{slug}" != self_id and any(_slug_of((d or {}).get("id")) == slug
+                                                for d in open_drafts if isinstance(d, dict)):
             v.warn("id", "draft_id", f'Another open draft also uses the ID "{slug}".')
         if SLUG_RE.match(slug) and f"agent:{slug}" in token_actors:
             v.warn("id", "token_actor", f"An actor token already names agent:{slug}; registering ties that history "
@@ -340,6 +341,13 @@ def validate_agent(body, agents, open_drafts=(), token_actors=(), team=(), self_
     return v.out()
 
 
+def _height(aid, configs, seen=None):
+    """How many levels the agent and the registered agents reporting to it span (1 when nobody reports to it)."""
+    seen = (seen or set()) | {aid}
+    kids = [i for i, c in configs.items() if c.get("reportsTo") == aid and i not in seen]
+    return 1 + max((_height(k, configs, seen) for k in kids), default=0)
+
+
 def _team_rules(v, aid, body, team):
     """D-024 clause 14 and the roster plan: who a role belongs to and reports to. Applies to roles in ROLES; a
     free-text `template` keeps the older, looser rules. The reporting chain is checked for every agent."""
@@ -357,8 +365,22 @@ def _team_rules(v, aid, body, team):
         seen.add(cur)
         depth += 1
         cur = configs[cur].get("reportsTo")
-    if depth > MAX_LEVELS:
+    # An amendment moves the agent's own reports with it, so the levels below it count too.
+    below = _height(aid, configs) - 1 if aid else 0
+    if depth + below > MAX_LEVELS:
         v.error("reportsTo", "too_deep", f"At most {MAX_LEVELS} levels of agents below Jay (D-024 clause 14).")
+
+    # D-024 clause 16 follows the repository's class, not the role: no push or PR requested on a client or employer
+    # project, whatever the template. Company-wide agents name no project; what they may do in one is the Broker's
+    # intersection with that project's profile when activation exists (clause 10).
+    req = body.get("requested") if isinstance(body.get("requested"), dict) else {}
+    asked = [p for p in REPO_WRITES if req.get(p) in ("allow", "approval")]
+    for key in body.get("projects") if isinstance(body.get("projects"), list) else []:
+        if asked and isinstance(key, str) and registry.project(key) and registry.class_of(key) != "own":
+            v.error("requested", "client_repo_write", f"{registry.name_of(key)} is a {registry.class_of(key)} "
+                                                      f"project: CommandCenter does not {', '.join(asked)} there "
+                                                      "during onboarding (D-024 clause 16). Set them to deny.")
+            break
 
     role = body.get("template")
     if role not in ROLES:
@@ -374,7 +396,7 @@ def _team_rules(v, aid, body, team):
         v.error("projects", "one_project", f"A {spec['title']} belongs to exactly one project.")
         return
     key = projects[0]
-    leads = [i for i, c in configs.items() if c.get("template") == "lead" and key in (c.get("projects") or [])]
+    leads = sorted(i for i, c in configs.items() if c.get("template") == "lead" and key in (c.get("projects") or []))
     if role == "lead":
         if rt not in (None, "jay"):
             v.error("reportsTo", "lead_reports_to_jay", "A Project Lead reports to Jay.")
@@ -390,13 +412,7 @@ def _team_rules(v, aid, body, team):
     else:
         v.error("reportsTo", "reports_to_lead", f"A {spec['title']} reports to its project's lead, and "
                                                 f"{registry.name_of(key)} has none yet: use jay.")
-    if registry.class_of(key) != "own":
-        req = body.get("requested") if isinstance(body.get("requested"), dict) else {}
-        asked = [p for p in REPO_WRITES if req.get(p) in ("allow", "approval")]
-        if asked:
-            v.error("requested", "client_repo_write", f"{registry.name_of(key)} is a {registry.class_of(key)} "
-                                                      f"project: CommandCenter does not {', '.join(asked)} there "
-                                                      "during onboarding (D-024 clause 16). Set them to deny.")
+
 
 
 def _budget(v, budget):
@@ -528,6 +544,10 @@ class Onboarding:
 
     def _agents(self):
         return [tuple(r) for r in self.db.execute("SELECT id, display_name, status FROM agent_registrations")]
+
+    def _reports(self, aid):
+        """Registered agents whose newest configuration reports to `aid`."""
+        return sorted(i for i, status, c in self._team() if status == "registered" and c.get("reportsTo") == aid)
 
     def _team(self):
         """[(id, status, newest config)] of every registered or retired agent."""
@@ -688,7 +708,13 @@ class Onboarding:
                                      "ORDER BY version DESC LIMIT 1", (aid,)).fetchone()
         if isinstance(version, bool) or not isinstance(version, int) or version != cur_v:
             raise OnboardingError(409, f"{aid} is at version {cur_v}; reload it and try again")
-        config = {k: v for k, v in dict(_loads(cur), **changes).items() if v is not None}
+        old = _loads(cur)
+        config = {k: v for k, v in dict(old, **changes).items() if v is not None}
+        reports = self._reports(aid)
+        if reports and (config.get("template") != old.get("template")
+                        or set(old.get("projects") or []) - set(config.get("projects") or [])):
+            raise OnboardingError(409, f"{', '.join(reports)} report to {aid}; point them at someone else (or retire "
+                                       "them) before changing its role or taking it off a project")
         self._storable(dict(config, id=_slug_of(aid), name=row[0]))
         result = validate_agent(dict(config, id=_slug_of(aid), name=row[0]), self._agents(),
                                 self._open_bodies("agent"), (), self._team(), self_id=aid)
@@ -720,6 +746,10 @@ class Onboarding:
             raise OnboardingError(404, f"no registered agent {aid}")
         if row[0] == "retired":
             raise OnboardingError(409, f"{aid} is already retired")
+        reports = self._reports(aid)
+        if reports:
+            raise OnboardingError(409, f"{', '.join(reports)} report to {aid}; point them at someone else (or retire "
+                                       "them) first, so no agent reports to a retired one")
         with self._tx():
             self.db.execute("UPDATE agent_registrations SET status='retired', retired_at=MAX(?, created_at), "
                             "retired_by='jay' WHERE id=?", (self.clock(), aid))

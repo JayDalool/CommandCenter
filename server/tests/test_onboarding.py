@@ -417,7 +417,31 @@ class Roster(unittest.TestCase):
         msg = self.err(409, self.o.amend_agent, a["id"], {"reportsTo": c["id"]}, 1, [], "jay")
         self.assertIn("comes back", msg)
 
+    def test_an_amendment_counts_the_levels_below_the_agent(self):
+        a = self.reg(dict(NOVA, id="a1", name="Ash", template="x"))
+        z = self.reg(dict(NOVA, id="z1", name="Zinnia", template="x"))
+        y = self.reg(dict(NOVA, id="y1", name="Yarrow", template="x", reportsTo=z["id"]))
+        self.reg(dict(NOVA, id="x1", name="Xeno", template="x", reportsTo=y["id"]))
+        self.assertIn("levels", self.err(409, self.o.amend_agent, z["id"], {"reportsTo": a["id"]}, 1, [], "jay"))
+
+    def test_a_lead_with_reports_cannot_be_moved_or_retired_out_from_under_them(self):
+        lead = self.reg(role_body("cc-lead", "Orrin", "lead", ["commandcenter"]))
+        dev = self.reg(role_body("cc-dev", "Pike", "backend", ["commandcenter"], lead["id"]))
+        self.assertIn("agent:cc-dev", self.err(409, self.o.amend_agent, lead["id"], {"projects": ["gyst"]}, 1, [], "jay"))
+        self.err(409, self.o.amend_agent, lead["id"], {"template": "architect"}, 1, [], "jay")
+        self.err(409, self.o.retire_agent, lead["id"], "jay")
+        self.o.amend_agent(lead["id"], {"notes": "fine"}, 1, [], "jay")                    # other changes go through
+        self.o.retire_agent(dev["id"], "jay")
+        self.o.retire_agent(lead["id"], "jay")
+
+    def test_amending_an_agent_does_not_collide_with_itself_or_a_draft_of_its_id(self):
+        lead = self.reg(role_body("cc-lead", "Orrin", "lead", ["commandcenter"]))
+        self.o.create_draft("agent", role_body("cc-lead", "Other", "lead", ["gyst"]), "jay")
+        self.assertEqual(self.o.amend_agent(lead["id"], {"notes": "x"}, 1, [], "jay")["version"], 2)
+
     def test_a_client_project_refuses_repository_writes(self):
+        errs, _ = self.codes(dict(NOVA, id="cust", name="Custom", template="custom", projects=["gauzemate"]))
+        self.assertIn("client_repo_write", errs)                                          # any template
         errs, _ = self.codes(role_body("gz-dev", "Wren", "fullstack", ["gauzemate"]))
         self.assertIn("client_repo_write", errs)
         body = role_body("gz-dev", "Wren", "fullstack", ["gauzemate"])
