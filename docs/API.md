@@ -107,7 +107,7 @@ DEV = also needs `X-CCD-Developer: <session>` from `/api/developer/unlock`.
 | | |
 |---|---|
 | `GET /api/workspace/projects` | `{projects[{key,name,prefix,root,exists,branch,github{owner,repo,slug,url},coordinator,coordinatorState{state,how,candidates[{paneId,sessionId,status}]}}]}`. Roots come from `ccd/registry.py` only. `state` is `ready`, `found` (one unnamed Claude at the root: adopt it), `multiple` (pick one) or `none`, from the one resolver `ccd/coordid.py` |
-| `GET /api/tasks/{key}/work` | The ticket's durable pipeline state in one object: `stage`, `stages[]`, `plan`, `planState`, `policy`, `gate`, `roles`, `branch`, `worktree`, `prs`, `review{verdict,head,cycles}`, `verification`, `merge`, `handoff`, `blocked`, `findings[]` (plans/TICKET-PIPELINE-V1.md) |
+| `GET /api/tasks/{key}/work` | The ticket's durable pipeline state in one object: `stage`, `stages[]`, `plan`, `planState`, `policy`, `gate`, `roles`, `branch`, `worktree`, `prs`, `review{verdict,head,cycles}`, `verification`, `merge`, `handoff`, `blocked`, `findings[]` (plans/TICKET-PIPELINE-V1.md), and the delivery flow's `size`, `requirements`, `criteria`, `planReview`, `userCheck`, `closing`, `flow`, `handoffs` (see **Delivery flow** below) |
 | `POST /api/tasks/{key}/work/{op}` | One pipeline step, recorded as `X-CCD-Actor` (`agent:<role>`): `plan {plan}`, `start {branch, worktree}`, `review {verdict, head, findings}`, `verify {result, evidence}`, `handoff`, `block {reason}`, `role`, `finding`. `confirm {gate}` closes an owner gate and needs Jay AND Developer Unlock. Agents use `python -m ccd.pipeline_cli` |
 | `POST /api/coordinators/adopt` | DEVELOPER. `{project, sessionId}` binds that EXISTING Claude (a live one at the project root) as the coordinator; recorded by session id in `state/coordinator-bindings.json`, so a title change or a new pane id never breaks it. Never starts, resumes, renames or types into Claude |
 | `GET /api/files/list?project=&path=&git=1` | one folder: `{entries[{name,kind,size,mtime,protected,link,git?}], crumbs, truncated}`; `.git` never listed |
@@ -309,3 +309,87 @@ happened in the window (every count but `needsYou` is 0 and there are no highlig
 | `GET /api/projects/logos` | anyone with the token | `{[key]: {mime, sha256, updatedAt}}` for the projects that have one, so the UI can cache by sha (the logo GET itself is `no-store`) |
 
 Logos work for project keys of the form `^[a-z][a-z0-9_-]{0,31}$` (every registered key today).
+
+## Delivery flow (the shared flow contract §1-4, tasks.db schema 14)
+
+Nine stages over the canonical statuses (no second status set), three sizes, one seat per stage. `ccd/flow.py` reads
+them from what the pipeline records; the steps below move a ticket. Only signals move a ticket: an agent's step, Jay's
+click, ccd's GitHub poll. Nothing here lets an agent approve, merge or deploy.
+
+| # | `stage` | seat | status while in it |
+|---|---|---|---|
+| 1 | `intake` | `lead` | INBOX, PROPOSED |
+| 2 | `investigate` | `investigator` | RESEARCHING, no plan waiting for review |
+| 3 | `techReview` | `techReviewer` | RESEARCHING, plan recorded, not yet approved (or waiting for Jay's plan gate) |
+| 4 | `build` | `developer` | READY_TO_IMPLEMENT, IN_PROGRESS |
+| 5 | `userCheck` | `userReviewer` (+ `designReviewer`) | IN_REVIEW, user check not passed on the current head |
+| 6 | `codeReview` | `codeReviewer` | IN_REVIEW, user check passed (or not on the route) |
+| 7 | `merge` | `jay` | READY_TO_MERGE |
+| 8 | `release` | `verifier` | VERIFYING |
+| 9 | `done` | `lead` | DONE |
+
+Seats are pipeline roles: lead = `coordinator`, investigator = `planner`, techReviewer = `tech-reviewer`, developer =
+`implementer`, userReviewer = `user-reviewer`, designReviewer = `design-reviewer`, codeReviewer = `reviewer`,
+verifier = `verifier`. An agent takes a seat with `role KEY --role <role> --session <id>`; it holds the ticket from then
+until the ticket leaves the stage.
+
+Routes: `small` = intake, build, (userCheck when `policy.ui`), codeReview, merge, release, done; `standard` = all
+nine; `risky` = all nine, Jay approves the plan after the technical review (the plan gate) and the release (the deploy
+gate). A ticket whose labels/flags/type open the plan gate (`PLAN_GATE_LABELS`, needs:jay, SECURITY, LEGAL) is risky
+whatever was typed. **A ticket nobody has sized** (`size: null`, "Not sized") keeps the steps it had before the flow:
+no technical review, no user check, no closing note; sizing it puts it on its route.
+
+Steps on `POST /api/tasks/{key}/work/{op}` (agents: `python -m ccd.pipeline_cli <op>`; refusals are one line, 409 for
+order and state, 403 for the wrong seat, 400 for a bad body):
+
+| op | who (`X-CCD-Actor`) | body | effect |
+|---|---|---|---|
+| `intake` | `agent:coordinator`, `jay` | `{size, criteria: [text], requirements?: [text], parent?}` | from INBOX/PROPOSED; refused without a description, a size and one criterion. small → READY_TO_IMPLEMENT, else → RESEARCHING. `parent` sets the parent (two levels at most) |
+| `criteria` | `agent:coordinator` (intake / investigate only), `jay` (any time) | `{criteria?: [text \| {id, text}], requirements?: [text], size?}` | replaces the list: an item with its `id` keeps its state unless its text changed (then `open`); one without an id is new; one left out is removed. A size goes up freely; only Jay lowers `risky` (or any size after investigation) |
+| `plan` | `agent:planner` | as before, + `plan.reproduced: yes\|no\|na`, `plan.findings: [text]` | on a sized standard/risky ticket the plan waits in `techReview` (RESEARCHING); it is not accepted by being recorded. Refused on a small ticket |
+| `plan-review` | `agent:tech-reviewer` | `{verdict: APPROVE\|SEND_BACK, note, blast?, tests?: [text], size?, session, model?}` | `session` must not be the planner's. SEND_BACK → investigate, round +1; the 2nd → BLOCKED (gate `failure`). APPROVE → READY_TO_IMPLEMENT, or on a risky ticket the plan gate for Jay. `size` only raises |
+| `user-check` | `agent:user-reviewer`, `agent:design-reviewer` | `{result: pass\|fail, head, note, criteria?: {id: pass\|fail} \| ["c1=pass"], session, model?}` | IN_REVIEW on a route with a user check; `head` must be the linked PR's current head; never the developer's session. `pass` needs every criterion passed at that head. `fail` → IN_PROGRESS (a rework, lane limit applies); the 2nd fail → BLOCKED. A new head after a pass clears it (`pipeline.user_check_stale`) |
+| `review` | `agent:reviewer` | as before | `APPROVE` is refused until the user check passed on the same head, when the route has one |
+| `close` | `agent:coordinator`, `jay` | `{note}` (≤4000) | the closing note. On standard/risky, `verify pass` waits in VERIFYING (`flow.waitingOn: "lead"`) until it; then DONE. Also allowed on a DONE ticket |
+
+Limits (409, one line): at most 2 tickets per project in investigate with an investigator (registry pipeline
+`max_investigate`) and 2 in build with a worktree (`max_lanes`); `start` and a first `plan` are refused while another
+sized ticket of the project has waited more than 4 hours in techReview, userCheck or codeReview with nobody in that seat
+(the refusal names it); two rounds at most at each review stage. Children before parents: a ticket with a parent cannot
+be a parent; a parent cannot become DONE (any path, `PATCH` included) while a child is open (archived children do not
+count); a verified parent waits in VERIFYING with `waitingOn: "lead"` and the lead's `close` finishes it. Stale: a
+ticket in stages 2-6 with no pipeline step or status move for 48 hours (and not waiting on Jay) reads `stale: true`;
+ccd records one `pipeline.flow_stale` event per quiet spell (the briefing shows it as "gone quiet for 48 hours"); the
+next step clears it.
+
+`GET /api/tasks/{key}/work` adds:
+
+    size: "small"|"standard"|"risky"|null, requirements: string[], criteria: [{id, text, state: open|pass|fail, by, at, head}],
+    planReview: {verdict, by, session, at, note, blast, tests} | null,
+    userCheck: {result, head, pr, by, session, at, note} | null,
+    closing: {note, by, at} | null,
+    flow: {size, stage, route: string[], openChildren: number,
+           stages: [{stage, state: done|active|todo|skipped|blocked, seat, by, session, at}]   // always nine, in order
+           holder: {seat, session, since} | null, next: {stage, seat} | null,
+           waitingOn: "jay"|"lead"|"reviewer"|null, rounds, idleSince, stale},
+    handoffs: [{at, stage, kind: advanced|sentBack|blocked|resumed, from, to, by, note}]   // oldest first
+
+`handoffs` is derived from the ticket's events; `note` is ccd's own wording (`flow.NOTES`), never agent text. A
+blocked hand-off has `to: null`. `GET /api/tasks` rows add `size`, `stage` (the stage key) and `stale`.
+
+`GET /api/flow` (normal sign-in) for Teams and My Office:
+
+    {projects: [{key, name,
+                 seats: [{seat, session, ticket, stage, since}],    // lead, investigator, techReviewer, developer,
+                                                                    // userReviewer, designReviewer, codeReviewer, verifier
+                 inFlight: [{key, title, size, stage, holder, waitingOn, stale, parent, children: {total, done}}],
+                 limits: {investigate: {used, max}, build: {used, max}}}]}
+
+Every seat appears at least once per project; a seat with several holders (two developers, two investigators) has one
+row each, oldest first; an empty seat has `session: null`. The lead's session is the coordinator's pane from the
+coordinator resolver; the others come from the `roles` of tickets in flight (open, past intake).
+
+Events (ticket timeline and `/api/activity` `task.pipeline` with `data.kind`; ids only): `pipeline.intake`,
+`pipeline.criteria`, `pipeline.plan_reviewed`, `pipeline.user_checked`, `pipeline.user_check_stale`,
+`pipeline.closed_note`, `pipeline.flow_stale`.
+

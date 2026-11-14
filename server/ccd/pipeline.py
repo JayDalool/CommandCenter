@@ -23,6 +23,7 @@ import json
 import re
 import time
 
+from . import flow as flow_mod
 from . import registry
 from .tasks import TaskError, _printable
 
@@ -39,7 +40,11 @@ MERGE_POLICIES = ("owner", "low-risk")   # registry pipeline "merge"; "owner" is
 AUTO_MERGE_KINDS = ("pipeline.auto_merge_held", "pipeline.auto_merged", "pipeline.auto_merge_failed")
 GATES = ("plan", "merge", "ui", "deploy", "failure")
 OWNER_GATES = ("plan", "ui", "deploy", "failure", "merge")
-ROLE_NAMES = ("coordinator", "planner", "implementer", "reviewer", "verifier")
+ROLE_NAMES = ("coordinator", "planner", "implementer", "reviewer", "verifier",
+              "tech-reviewer", "user-reviewer", "design-reviewer")       # the flow's seats (flow.ROLE_OF)
+LEADS = ("jay", "agent:coordinator")          # who runs intake, edits criteria and writes the closing note
+USER_REVIEWERS = ("agent:user-reviewer", "agent:design-reviewer")
+CRITERION_ID_RE = re.compile(r"^c[0-9]{1,3}$")
 MAX_LANES = 2
 MAX_REVIEW_CYCLES = 2
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")   # the full PR head commit: no prefix can match another head
@@ -153,7 +158,12 @@ def clean_plan(raw):
             "affected": _list(raw.get("affected"), "affected", 40, 300),
             "risk": _text(raw.get("risk"), 1000, "risk"),
             "tests": _list(raw.get("tests"), "tests"),
-            "questions": _list(raw.get("questions"), "questions")}
+            "questions": _list(raw.get("questions"), "questions"),
+            # The investigator's part (the flow): did it reproduce, and what it found before choosing an approach.
+            "reproduced": raw.get("reproduced") if raw.get("reproduced") in ("yes", "no", "na") else None,
+            "findings": _list(raw.get("findings"), "findings")}
+    if raw.get("reproduced") not in (None, "", "yes", "no", "na"):
+        raise TaskError(400, "reproduced is yes, no or na")
     if not plan["summary"]:
         raise TaskError(400, "a plan needs a summary")
     return plan
@@ -174,6 +184,42 @@ def _meta(v, field):
     if not isinstance(v, str) or not META_RE.match(v):
         raise TaskError(400, f"{field} must be a short name (letters, digits, . _ : / @ + -)")
     return v
+
+
+def clean_criteria(raw, old=(), at=None, by=None):
+    """The acceptance checklist after an edit. `raw` is a list of texts or {id, text}: an item with a known id keeps
+    its state unless its text changed (then it is open again); an item without an id is new. Items left out are
+    removed. State is never set here: only the user check sets it."""
+    if raw is None:
+        return list(old)
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or len(raw) > flow_mod.MAX_CRITERIA:
+        raise TaskError(400, f"criteria must be a list of at most {flow_mod.MAX_CRITERIA} items")
+    have = {c["id"]: c for c in old}
+    used = [int(c["id"][1:]) for c in old if CRITERION_ID_RE.match(c.get("id") or "")]
+    nxt = max(used, default=0) + 1
+    out, seen = [], set()
+    for item in raw:
+        cid, text = (None, item) if isinstance(item, str) else \
+            ((item.get("id"), item.get("text")) if isinstance(item, dict) else (None, None))
+        if text is None:
+            raise TaskError(400, "each criterion is text or {id, text}")
+        text = _text(text, 300, "criterion", multiline=False)
+        if not text:
+            raise TaskError(400, "a criterion needs text (1-300 characters)")
+        if cid is not None:
+            if cid not in have or cid in seen:
+                raise TaskError(400, f"no criterion {str(cid)[:20]} on this ticket")
+            c = dict(have[cid])
+            if c["text"] != text:
+                c.update(text=text, state="open", by=None, at=None, head=None)
+        else:
+            c = {"id": f"c{nxt}", "text": text, "state": "open", "by": None, "at": None, "head": None}
+            nxt += 1
+        seen.add(c["id"])
+        out.append(c)
+    return out
 
 
 class Pipeline:
@@ -203,6 +249,75 @@ class Pipeline:
                 "merge": j(r[13], None), "updatedAt": r[14], "writer": r[16], "checkpoint": j(r[17], None),
                 "deploy": j(r[18], None), "released": j(r[19], None)}
 
+    FLOW_EMPTY = {"size": None, "requirements": [], "criteria": [], "planReview": None, "userCheck": None,
+                  "closing": None, "rounds": {}, "reviewDue": None, "staleAt": None}
+
+    def _flow(self, tid):
+        """The ticket's flow row (migration 14), or the empty one."""
+        if not self._has_flow():
+            return dict(self.FLOW_EMPTY, rounds={})
+        r = self.db.execute("SELECT size, requirements, criteria, plan_review, user_check, closing, rounds, review_due, "
+                            "stale_at FROM ticket_flow WHERE ticket_id=?", (tid,)).fetchone()
+        if not r:
+            return dict(self.FLOW_EMPTY, rounds={})
+        j = lambda v, d: json.loads(v) if v else d  # noqa: E731
+        return {"size": r[0], "requirements": j(r[1], []), "criteria": j(r[2], []), "planReview": j(r[3], None),
+                "userCheck": j(r[4], None), "closing": j(r[5], None), "rounds": j(r[6], {}), "reviewDue": r[7],
+                "staleAt": r[8]}
+
+    def _has_flow(self):
+        """False on a file older than migration 14 (the migration drill drives today's code over older schemas)."""
+        return bool(self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ticket_flow'").fetchone())
+
+    FLOW_COLS = ("size", "requirements", "criteria", "plan_review", "user_check", "closing", "rounds", "review_due",
+                 "stale_at")
+
+    def _flow_set(self, tid, at, **cols):
+        """Write flow columns inside the caller's transaction (creating the row the first time)."""
+        bad = set(cols) - set(self.FLOW_COLS)
+        if bad:
+            raise ValueError(f"unknown flow columns {bad}")
+        self.db.execute("INSERT OR IGNORE INTO ticket_flow(ticket_id, updated_at) VALUES (?,?)", (tid, at))
+        if cols:
+            vals = [v if v is None or isinstance(v, (str, int, float)) else json.dumps(v) for v in cols.values()]
+            self.db.execute(f"UPDATE ticket_flow SET {', '.join(f'{c}=?' for c in cols)}, updated_at=? WHERE ticket_id=?",
+                            (*vals, at, tid))
+
+    def _events(self, tid):
+        return self.db.execute("SELECT at, actor, kind, field, from_value, to_value, data FROM ticket_events "
+                               "WHERE ticket_id=? ORDER BY id", (tid,)).fetchall()
+
+    def _children(self, tid):
+        """{total, done, open: [keys]} of the ticket's children (archived ones left out)."""
+        rows = self.db.execute("SELECT key, status FROM tickets WHERE parent_id=? AND archived=0 ORDER BY number",
+                               (tid,)).fetchall()
+        return {"total": len(rows), "done": sum(1 for _k, st in rows if st == "DONE"),
+                "open": [k for k, st in rows if st not in CLOSED_STATUSES]}
+
+    def flow_of(self, key, t=None, w=None, now=None):
+        """(flow, handoffs) for one ticket: flow.view over what is recorded."""
+        t = t or self.ts.get(key)
+        tid = t["id"]
+        if w is None:
+            w = self.work_row(tid)
+        f = self._flow(tid)
+        kids = self._children(tid)
+        return flow_mod.view(t, w, f, self._events(tid), policy(t), len(kids["open"]), now)
+
+    def work_row(self, tid):
+        """The work row with open questions counted (what flow.view reads), or the empty one."""
+        w = self._row(tid) or self._empty_work()
+        w["openQuestions"] = self.db.execute("SELECT COUNT(*) FROM ticket_questions WHERE ticket_id=? AND "
+                                             "answered_at IS NULL", (tid,)).fetchone()[0]
+        return w
+
+    @staticmethod
+    def _empty_work():
+        return {"plan": {}, "planState": "none", "gate": None, "gateReason": None, "confirmed": [],
+                "worktree": None, "roles": {}, "review": {"verdict": None, "head": None, "cycles": 0, "pr": None},
+                "verification": None, "handoff": None, "blocked": None, "merge": None, "updatedAt": None,
+                "writer": None, "checkpoint": None, "deploy": None, "released": None}
+
     DEV_ROLES = ("planner", "implementer", "reviewer", "verifier")
 
     def recorded(self, ids):
@@ -227,10 +342,7 @@ class Pipeline:
         """Everything a coordinator needs to resume this ticket, in one object."""
         t = self.ts.get(key)
         tid = self.ts._id_of(key)
-        w = self._row(tid) or {"plan": {}, "planState": "none", "gate": None, "gateReason": None, "confirmed": [],
-                               "worktree": None, "roles": {}, "review": {"verdict": None, "head": None, "cycles": 0, "pr": None},
-                               "verification": None, "handoff": None, "blocked": None, "merge": None, "updatedAt": None,
-                               "writer": None, "checkpoint": None, "deploy": None, "released": None}
+        w = self._row(tid) or self._empty_work()
         stage = stage_of(t["status"]) or ((w.get("blocked") or {}).get("stage") if t["status"] == "BLOCKED" else None)
         findings = [{"at": a, "source": s, "scope": sc, "category": c, "summary": m, "head": h} for a, s, sc, c, m, h in
                     self.db.execute("SELECT at, source, scope, category, summary, head FROM ticket_findings "
@@ -246,6 +358,11 @@ class Pipeline:
                    questions=questions, openQuestions=sum(1 for q in questions if q["answer"] is None),
                    evidence=evidence)
         out["visibleStage"] = visible_stage(t, out)
+        f = self._flow(tid)
+        out.update(size=flow_mod.shown_size(f["size"], out["policy"]), requirements=f["requirements"],
+                   criteria=f["criteria"], planReview=f["planReview"], userCheck=f["userCheck"], closing=f["closing"])
+        out["flow"], out["handoffs"] = flow_mod.view(t, out, f, self._events(tid), out["policy"],
+                                                     len(self._children(tid)["open"]))
         return out
 
     def questions(self, tid):
@@ -293,7 +410,39 @@ class Pipeline:
             for tid, n in self.db.execute(f"SELECT ticket_id, COUNT(*) FROM ticket_questions WHERE answered_at IS NULL "
                                           f"AND ticket_id IN ({marks}) GROUP BY ticket_id", chunk):
                 out.setdefault(tid, {"gate": None, "gateReason": None, "deploy": None, "verification": None})["openQuestions"] = n
+            # What the list's size / stage / stale need (flow.list_marks), without each ticket's whole history.
+            for tid, plan_state, blocked in self.db.execute(
+                    f"SELECT ticket_id, plan_state, blocked FROM ticket_work WHERE ticket_id IN ({marks})", chunk):
+                m = out.setdefault(tid, {"gate": None, "gateReason": None, "deploy": None, "verification": None,
+                                         "openQuestions": 0})
+                m.update(planState=plan_state, blocked=json.loads(blocked) if blocked else None)
+            for tid, size, review_due, user_check in self.db.execute(
+                    f"SELECT ticket_id, size, review_due, user_check FROM ticket_flow WHERE ticket_id IN ({marks})",
+                    chunk) if self._has_flow() else ():
+                m = out.setdefault(tid, {"gate": None, "gateReason": None, "deploy": None, "verification": None,
+                                         "openQuestions": 0})
+                m["flowRow"] = {"size": size, "reviewDue": review_due,
+                                "userCheck": json.loads(user_check) if user_check else None}
+            for tid, last in self.db.execute(
+                    f"SELECT ticket_id, MAX(at) FROM ticket_events WHERE ticket_id IN ({marks}) AND kind != ? AND "
+                    f"(kind LIKE 'pipeline.%' OR field = 'status') GROUP BY ticket_id", (*chunk, flow_mod.STALE_KIND)):
+                out.setdefault(tid, {"gate": None, "gateReason": None, "deploy": None, "verification": None,
+                                     "openQuestions": 0})["idleSince"] = last
         return out
+
+    @staticmethod
+    def list_marks(t, m, now=None):
+        """{size, stage, stale} for one row of GET /api/tasks, from compact()'s marks."""
+        f = m.get("flowRow") or {}
+        pol = policy(t)
+        rt = flow_mod.route(f.get("size"), pol)
+        w = {"gate": m.get("gate"), "blocked": m.get("blocked"), "planState": m.get("planState")}
+        stage = flow_mod.current(t, w, f, rt)
+        waiting = "jay" if m.get("gate") or m.get("openQuestions") else None
+        idle = m.get("idleSince") or t.get("createdAt")
+        now = time.time() if now is None else now
+        return {"size": flow_mod.shown_size(f.get("size"), pol), "stage": stage,
+                "stale": flow_mod.is_stale(stage, t["status"], waiting, idle, now)}
 
     @staticmethod
     def _stages(status, stage):
@@ -419,6 +568,59 @@ class Pipeline:
         if self.lanes(t["project"]) >= limit:
             raise TaskError(409, f"{limit} implementation lanes are already running in {t['project']}; {what}")
 
+    def investigate_limit(self, project):
+        """At most this many tickets in investigate with an investigator per project (registry `max_investigate`)."""
+        return int(registry.pipeline_of(project).get("max_investigate") or flow_mod.MAX_INVESTIGATE)
+
+    def in_flight(self, project):
+        """[(ticket, work, flow, handoffs)] for the project's open tickets past intake (not INBOX / PROPOSED)."""
+        out = []
+        for (key,) in self.db.execute(
+                "SELECT key FROM tickets WHERE project=? AND archived=0 AND status NOT IN "
+                "('INBOX','PROPOSED','DONE','DENIED','CANCELLED') ORDER BY number", (project,)).fetchall():
+            t = self.ts.get(key)
+            w = self.work_row(t["id"])
+            fl, hs = self.flow_of(key, t, w)
+            out.append((t, w, fl, hs))
+        return out
+
+    def investigating(self, project, exclude=None):
+        """Keys of the project's tickets in investigate with an investigator in the seat."""
+        return [t["key"] for t, _w, fl, _h in self.in_flight(project)
+                if t["key"] != exclude and fl["stage"] == "investigate" and t["status"] == "RESEARCHING"
+                and fl["holder"] and fl["holder"]["seat"] == "investigator"]
+
+    def _investigate_free(self, t):
+        limit = self.investigate_limit(t["project"])
+        busy = self.investigating(t["project"], exclude=t["key"])
+        if len(busy) >= limit:
+            raise TaskError(409, f"{limit} tickets are already being investigated in {t['project']} "
+                                 f"({', '.join(busy[:4])}); finish one first")
+
+    def unseated(self, project, exclude=None, now=None):
+        """Finishing first: the project's sized tickets that have waited more than 4 hours in technical review,
+        user check or code review with nobody in that seat, oldest first, as [(key, stage)]."""
+        now = _now() if now is None else now
+        out = []
+        for t, _w, fl, _h in self.in_flight(project):
+            if t["key"] == exclude or fl["size"] is None or fl["stage"] not in flow_mod.REVIEW_STAGES:
+                continue
+            if t["status"] == "BLOCKED" or fl["holder"] or fl["waitingOn"] == "jay":
+                continue
+            since = next((s["at"] for s in fl["stages"] if s["stage"] == fl["stage"]), None)
+            if since is not None and now - since > flow_mod.UNSEATED_AFTER:
+                out.append((since, t["key"], fl["stage"]))
+        return [(k, st) for _at, k, st in sorted(out)]
+
+    LABEL = {"techReview": "technical review", "userCheck": "user check", "codeReview": "code review"}
+
+    def _finish_first(self, t, what):
+        waiting = self.unseated(t["project"], exclude=t["key"])
+        if waiting:
+            k, st = waiting[0]
+            raise TaskError(409, f"{k} has waited more than 4 hours for {self.LABEL[st]} with nobody on it; "
+                                 f"finish that before {what}")
+
     def done_worktrees(self):
         """[(key, project, branch, worktree)] of every DONE ticket that still has a recorded worktree."""
         return self.db.execute(
@@ -470,6 +672,13 @@ class Pipeline:
         def fn(tid, t, w, at):
             self._need(t, ("INBOX", "PROPOSED", "RESEARCHING", "READY_TO_IMPLEMENT"), "a plan")
             pol = policy(t)
+            f = self._flow(tid)
+            first = not self.db.execute("SELECT 1 FROM ticket_events WHERE ticket_id=? AND kind='pipeline.plan' LIMIT 1",
+                                        (tid,)).fetchone()
+            if first:
+                self._finish_first(t, "planning new work")
+            if f["size"] in flow_mod.SIZES:
+                return self._flow_plan(tid, t, w, f, at, plan, pol, model, session)
             # A new plan needs a new approval: Jay approved the plan he saw, not this one. And a ticket
             # whose plan ever needed Jay keeps needing him ("owner:plan" is sticky), whatever its labels say now.
             sticky = "owner:plan" in w["confirmed"] or w["gate"] == "plan"
@@ -488,10 +697,30 @@ class Pipeline:
             return ({"status": "READY_TO_IMPLEMENT"} if t["status"] != "READY_TO_IMPLEMENT" else {}), work, events
         return self._tx(key, actor, fn)
 
+    def _flow_plan(self, tid, t, w, f, at, plan, pol, model, session):
+        """plan on a sized ticket: the plan goes to the technical reviewer; nobody accepts it by recording it."""
+        if flow_mod.effective_size(f["size"], pol) == "small":
+            raise TaskError(409, f"{t['key']} is small: its route has no investigation; start it")
+        if t["status"] not in ("INBOX", "PROPOSED", "RESEARCHING"):
+            raise TaskError(409, f"{t['key']} is {t['status']}; its plan was already reviewed (re-plan to change it)")
+        if t["status"] != "RESEARCHING":
+            raise TaskError(409, f"{t['key']} is {t['status']}; run intake first")
+        fl, _h = flow_mod.view(t, w, f, self._events(tid), pol)
+        if fl["stage"] == "investigate" and not fl["holder"]:     # an investigator takes the seat now
+            self._investigate_free(t)
+        work = {"plan": plan, "roles": self._role(w, "planner", model, session, at),
+                "confirmed": [g for g in w["confirmed"] if g != "plan"], "plan_state": "proposed"}
+        if w["gate"] == "plan":     # a risky plan waiting for Jay was replaced: it goes back through review
+            work.update(gate=None, gate_reason=None)
+        self._flow_set(tid, at, review_due=at, plan_review=None)
+        return {}, work, [("pipeline.plan", "plan recorded for technical review", {"owner": False, "review": True})]
+
     def start(self, key, branch, worktree, actor, model=None, session=None):
         def fn(tid, t, w, at):
             self._need(t, ("READY_TO_IMPLEMENT",), "start")
-            if w["planState"] != "accepted":
+            f = self._flow(tid)
+            small = flow_mod.effective_size(f["size"], policy(t)) == "small" and f["size"] == "small"
+            if w["planState"] != "accepted" and not small:
                 raise TaskError(409, f"{t['key']} has no accepted plan")
             if not isinstance(branch, str) or not re.match(rf"^{re.escape(t['key'])}-{SLUG_RE}$", branch):
                 raise TaskError(400, f"branch must be {t['key']}-<short-slug> (lowercase, digits, hyphens)")
@@ -499,6 +728,7 @@ class Pipeline:
                     or not re.match(r"^/[A-Za-z0-9._/-]+$", worktree) or "/../" in worktree + "/":
                 raise TaskError(400, "worktree must be an absolute path")
             self._lane_free(t)
+            self._finish_first(t, "starting new work")
             held = self.held(t["key"])
             if held:
                 refs = ", ".join(sorted({h["ref"] for h in held}))
@@ -527,6 +757,12 @@ class Pipeline:
                     raise TaskError(409, "the implementer cannot approve its own work; a fresh reviewer must")
                 if not session:
                     raise TaskError(400, "say which fresh reviewer session approves (--session)")
+                f = self._flow(tid)
+                if "userCheck" in flow_mod.route(f["size"], policy(t)):
+                    uc = f["userCheck"] or {}
+                    if uc.get("result") != "pass" or uc.get("head") != head:
+                        raise TaskError(409, f"{t['key']} has not passed its user check at {head[:7]}; "
+                                             f"the code review approves after it")
             roles = self._role(w, "reviewer", model, session, at)
             for f in rows:
                 self.db.execute("INSERT INTO ticket_findings(ticket_id, at, source, scope, category, summary, head) "
@@ -590,8 +826,20 @@ class Pipeline:
         return {"status": "READY_TO_MERGE"}, work, events
 
     def sync_pr(self, key, pr):
-        """ccd's GitHub poll, per linked PR: promote a covered approval, or invalidate a stale one."""
+        """ccd's GitHub poll, per linked PR: promote a covered approval, or invalidate a stale one. A user check that
+        passed on another head of the same PR is cleared: the new commits are checked again."""
         def fn(tid, t, w, at):
+            status, work, events = inner(tid, t, w, at)
+            uc = self._flow(tid)["userCheck"] or {}
+            if uc.get("result") == "pass" and pr.get("head") and pr["head"] != uc.get("head") \
+                    and (not uc.get("pr") or uc["pr"] == pr.get("ref")):
+                self._flow_set(tid, at, user_check=None)
+                events = events + [("pipeline.user_check_stale",
+                                    f"new PR head {pr['head'][:7]}; the user check was for {str(uc.get('head'))[:7]}",
+                                    {"head": pr["head"]})]
+            return status, work, events
+
+        def inner(tid, t, w, at):
             rv = w["review"]
             if rv.get("pr") and pr.get("ref") != rv["pr"]:
                 return {}, {}, []
@@ -710,7 +958,9 @@ class Pipeline:
 
     def _after_verify(self, t, w):
         pol = policy(t)
-        for g, on in (("ui", pol["ui"]), ("deploy", pol["deploy"])):
+        f = self._flow(t["id"])
+        risky = f["size"] in flow_mod.SIZES and flow_mod.effective_size(f["size"], pol) == "risky"
+        for g, on in (("ui", pol["ui"]), ("deploy", pol["deploy"] or risky)):
             if on and g not in w["confirmed"]:
                 return {}, {"gate": g, "gate_reason": "verified; owner check left"}, \
                     [("pipeline.gate_opened", f"{g} gate", {"gate": g})]
@@ -719,6 +969,10 @@ class Pipeline:
             # A live deployment was asked for: the ticket closes only once it is deployed and verified live.
             # Its deploy gate (if Jay has not approved yet) stays open.
             return {}, {}, []
+        if self._children(t["id"])["open"]:
+            return {}, {}, []       # children first: the parent waits in VERIFYING for the lead's close
+        if f["size"] in flow_mod.SIZES and flow_mod.effective_size(f["size"], pol) != "small" and not f["closing"]:
+            return {}, {}, []       # standard / risky: the lead's closing note finishes it (`close`)
         return {"status": "DONE"}, {"gate": None, "gate_reason": None}, [("pipeline.done", "done", {})]
 
     def confirm(self, key, gate, actor, via=None):
@@ -745,12 +999,18 @@ class Pipeline:
             events = [("pipeline.gate_confirmed", f"Jay confirmed the {gate} gate", {"gate": gate, "via": via or "ui"})]
             if gate == "plan":
                 work["plan_state"] = "accepted"
+                if self._flow(tid)["reviewDue"] is not None:
+                    self._flow_set(tid, at, review_due=None)
                 return {"status": "READY_TO_IMPLEMENT"}, work, events
             if gate == "failure":
                 stage = (w["blocked"] or {}).get("stage") or "PLAN"
                 if stage == "BUILD":
                     self._lane_free(t, "resume this one later")
                 work.update(blocked=None, review_cycles=0 if stage == "REVIEW" else w["review"]["cycles"])
+                fs = (w["blocked"] or {}).get("flowStage")
+                if fs in ("techReview", "userCheck"):
+                    rounds = dict(self._flow(tid)["rounds"], **{fs: 0})
+                    self._flow_set(tid, at, rounds=rounds)
                 return {"status": RESUME_STATUS.get(stage, "RESEARCHING")}, work, events
             if gate == "deploy" and not (w["deploy"] or {}).get("requestedAt"):
                 # The deploy gate came from the ticket's needs:deploy flag, with no request yet: Jay's
@@ -808,8 +1068,15 @@ class Pipeline:
     def role(self, key, role, actor, model=None, session=None):
         if role not in ROLE_NAMES:
             raise TaskError(400, f"role must be one of {', '.join(ROLE_NAMES)}")
-        return self._tx(key, actor, lambda tid, t, w, at: ({}, {"roles": self._role(w, role, model, session, at)},
-                                                          [("pipeline.role", f"{role} reported", {"role": role})]))
+
+        def fn(tid, t, w, at):
+            if role == "planner" and t["status"] == "RESEARCHING":
+                fl, _h = flow_mod.view(t, w, self._flow(tid), self._events(tid), policy(t))
+                if fl["stage"] == "investigate" and not fl["holder"]:
+                    self._investigate_free(t)
+            return {}, {"roles": self._role(w, role, model, session, at)}, \
+                [("pipeline.role", f"{role} reported", {"role": role})]
+        return self._tx(key, actor, fn)
 
     @staticmethod
     def _finding(f):
@@ -975,6 +1242,11 @@ class Pipeline:
             work = {"plan_state": "proposed", "review_verdict": None, "confirmed": confirmed, "blocked": None,
                     "gate": None, "gate_reason": None, "verification": None, "deploy": None}
             status = {"status": "RESEARCHING"} if t["status"] != "RESEARCHING" else {}
+            f = self._flow(tid)
+            if f["size"] in flow_mod.SIZES:
+                # A ticket that needs re-planning was not small: it goes through investigation and review now.
+                self._flow_set(tid, at, review_due=None, plan_review=None, user_check=None,
+                               size="standard" if f["size"] == "small" else f["size"])
             return status, work, [("pipeline.replan", f"back to planning: {reason}", {"from": t["status"]})]
         return self._tx(key, actor, fn)
 
@@ -1000,6 +1272,8 @@ class Pipeline:
                     "blocked": None, "verification": None, "deploy": None}
             if w["gate"] in ("merge", "failure", "ui", "deploy"):
                 work.update(gate=None, gate_reason=None)
+            if self._flow(tid)["userCheck"]:
+                self._flow_set(tid, at, user_check=None)
             return {"status": "IN_PROGRESS"}, work, [("pipeline.rework", f"back to implementation: {reason}",
                                                       {"from": t["status"], "prs": prs})]
         return self._tx(key, actor, fn)
@@ -1128,3 +1402,304 @@ class Pipeline:
             return {}, {"writer": None, "released": dict(summary, at=at)}, [
                 ("pipeline.released", "task sessions released", {k: summary.get(k) for k in ("ptys", "claude")})]
         return self._tx(key, actor, fn)
+
+    # ---------- the delivery flow (ccd/flow.py; the shared flow contract, sections 2-4) ----------
+
+    @staticmethod
+    def _lead(actor, op):
+        if actor not in LEADS:
+            raise TaskError(403, f"{op} is the lead's (agent:coordinator) or Jay's")
+
+    def intake(self, key, size, criteria, actor, requirements=None, parent=None):
+        """Intake: the lead sizes the ticket and writes its acceptance criteria, then sends it on (small to build,
+        standard and risky to investigation). Refused without a description, a size and one criterion."""
+        self._lead(actor, "intake")
+        if size not in flow_mod.SIZES:
+            raise TaskError(400, f"size must be one of {', '.join(flow_mod.SIZES)}")
+        crit = clean_criteria(criteria)
+        reqs = _list(requirements, "requirements", flow_mod.MAX_REQUIREMENTS, 500)
+        if not crit:
+            raise TaskError(400, "intake needs at least one acceptance criterion")
+        if parent is not None and not isinstance(parent, str):
+            raise TaskError(400, "parent is a ticket key")
+
+        def fn(tid, t, w, at):
+            self._need(t, ("INBOX", "PROPOSED"), "intake")
+            if not (t.get("description") or "").strip():
+                raise TaskError(409, f"{t['key']} has no description; write what is asked and why first")
+            pol = policy(t)
+            eff = "risky" if pol["plan"] == "owner" else size
+            to = "build" if eff == "small" else "investigate"
+            fields = {"status": "READY_TO_IMPLEMENT" if eff == "small" else "RESEARCHING"}
+            if parent:
+                fields["parent"] = parent
+            self._flow_set(tid, at, size=eff, criteria=crit, requirements=reqs, review_due=None)
+            said = f"intake: {eff}" + (" (the policy makes it risky)" if eff != size else "")
+            return fields, {}, [("pipeline.intake", said, {"size": eff, "asked": size, "to": to,
+                                                           "criteria": len(crit)})]
+        return self._tx(key, actor, fn)
+
+    def define(self, key, actor, criteria=None, requirements=None, size=None):
+        """Edit the acceptance criteria, requirements or size. The lead while the ticket is in intake or
+        investigation; Jay at any time while it is open. An edited criterion is open again. A size goes up freely;
+        only Jay lowers a risky ticket, and a ticket the policy makes risky stays risky."""
+        self._lead(actor, "editing the criteria")
+        if size is not None and size not in flow_mod.SIZES:
+            raise TaskError(400, f"size must be one of {', '.join(flow_mod.SIZES)}")
+        if criteria is None and requirements is None and size is None:
+            raise TaskError(400, "say what changes: criteria, requirements or size")
+
+        def fn(tid, t, w, at):
+            self._open(t, "editing the criteria")
+            f = self._flow(tid)
+            pol = policy(t)
+            early = t["status"] in ("INBOX", "PROPOSED") or (t["status"] == "RESEARCHING" and not f["reviewDue"]
+                                                              and w["gate"] != "plan")
+            if actor != "jay" and not early:
+                raise TaskError(409, f"{t['key']} is past investigation; only Jay edits its criteria now")
+            cols, said = {}, []
+            if criteria is not None:
+                crit = clean_criteria(criteria, f["criteria"])
+                if not crit and t["status"] not in ("INBOX", "PROPOSED") and f["size"]:
+                    raise TaskError(400, "a sized ticket keeps at least one acceptance criterion")
+                cols["criteria"] = crit
+                said.append(f"{len(crit)} criteria")
+            if requirements is not None:
+                cols["requirements"] = _list(requirements, "requirements", flow_mod.MAX_REQUIREMENTS, 500)
+                said.append(f"{len(cols['requirements'])} requirements")
+            if size is not None:
+                new = "risky" if pol["plan"] == "owner" else size
+                old = f["size"]
+                order = {s: i for i, s in enumerate(flow_mod.SIZES)}
+                if old == "risky" and new != "risky" and actor != "jay":
+                    raise TaskError(403, "only Jay lowers a risky ticket")
+                if old in flow_mod.SIZES and order[new] < order[old] and not early and actor != "jay":
+                    raise TaskError(403, "only Jay lowers a size after investigation")
+                if new != old:
+                    if new == "small" and t["status"] in ("RESEARCHING",) and (f["reviewDue"] or w["gate"] == "plan"):
+                        raise TaskError(409, f"{t['key']} has a plan in review; it cannot become small now")
+                    cols["size"] = new
+                    said.append(f"size {new}")
+            self._flow_set(tid, at, **cols)
+            return {}, {}, [("pipeline.criteria", "criteria updated: " + ", ".join(said),
+                             {k: (len(v) if isinstance(v, list) else v) for k, v in cols.items()})]
+        return self._tx(key, actor, fn)
+
+    def plan_review(self, key, verdict, actor, note, blast=None, tests=None, size=None, model=None, session=None):
+        """The technical reviewer reads the investigator's plan: APPROVE sends it to build (a risky ticket opens the
+        plan gate for Jay first); SEND_BACK returns it to investigation. Never the planner's own session."""
+        if actor != "agent:tech-reviewer":
+            raise TaskError(403, "a plan review is the technical reviewer's (--role tech-reviewer)")
+        if verdict not in ("APPROVE", "SEND_BACK"):
+            raise TaskError(400, "verdict must be APPROVE or SEND_BACK")
+        note = _text(note, 2000, "note")
+        blast = _text(blast, 2000, "blast")
+        tests = _list(tests, "tests")
+        if not note:
+            raise TaskError(400, "say what the review found (--note)")
+        if size is not None and size not in flow_mod.SIZES:
+            raise TaskError(400, f"size must be one of {', '.join(flow_mod.SIZES)}")
+        if not session:
+            raise TaskError(400, "say which reviewer session reviews the plan (--session)")
+        _meta(session, "session")
+
+        def fn(tid, t, w, at):
+            self._need(t, ("RESEARCHING",), "a plan review")
+            f = self._flow(tid)
+            pol = policy(t)
+            if "techReview" not in flow_mod.route(f["size"], pol) or f["size"] not in flow_mod.SIZES:
+                raise TaskError(409, f"{t['key']}'s route has no technical review")
+            if not f["reviewDue"] or w["gate"] == "plan":
+                raise TaskError(409, f"{t['key']} has no plan waiting for technical review")
+            planner = (w["roles"].get("planner") or {}).get("session")
+            if planner and session == planner:
+                raise TaskError(409, "the investigator cannot review its own plan; a fresh session must")
+            order = {s: i for i, s in enumerate(flow_mod.SIZES)}
+            cur = flow_mod.effective_size(f["size"], pol)
+            new = cur
+            if size is not None:
+                if order[size] < order[cur]:
+                    raise TaskError(403, "the technical reviewer can raise a size, not lower it")
+                new = size
+            review = {"verdict": verdict, "by": actor, "session": session, "at": at, "note": note, "blast": blast,
+                      "tests": tests}
+            work = {"roles": self._role(w, "tech-reviewer", model, session, at)}
+            cols = {"plan_review": review}
+            if new != f["size"]:
+                cols["size"] = new
+            if verdict == "SEND_BACK":
+                rounds = dict(f["rounds"])
+                rounds["techReview"] = int(rounds.get("techReview") or 0) + 1
+                cols.update(rounds=rounds, review_due=None)
+                self._flow_set(tid, at, **cols)
+                if rounds["techReview"] >= MAX_REVIEW_CYCLES:
+                    reason = f"{rounds['techReview']} technical reviews sent the plan back"
+                    work.update(gate="failure", gate_reason=reason,
+                                blocked={"stage": "PLAN", "flowStage": "techReview", "reason": reason, "at": at})
+                    return {"status": "BLOCKED"}, work, [
+                        ("pipeline.plan_reviewed", f"plan sent back (round {rounds['techReview']})",
+                         {"verdict": verdict, "rounds": rounds["techReview"], "blocked": True}),
+                        ("pipeline.blocked", reason, {"stage": "PLAN"})]
+                return {}, work, [("pipeline.plan_reviewed", f"plan sent back (round {rounds['techReview']})",
+                                   {"verdict": verdict, "rounds": rounds["techReview"]})]
+            if new == "risky":
+                # The existing plan gate: Jay approves a risky plan after the technical review.
+                self._flow_set(tid, at, **cols)
+                reason = "technical review approved; risky: " + (", ".join(pol["planReasons"]) or "sized risky")
+                work.update(gate="plan", gate_reason=reason[:300], plan_state="proposed",
+                            confirmed=sorted(set(w["confirmed"]) | {"owner:plan"}))
+                return {}, work, [("pipeline.plan_reviewed", "plan approved; Jay approves risky plans",
+                                   {"verdict": verdict, "gate": True}),
+                                  ("pipeline.gate_opened", "plan gate: " + reason[:200], {"gate": "plan"})]
+            cols["review_due"] = None
+            self._flow_set(tid, at, **cols)
+            work.update(plan_state="accepted", gate=None, gate_reason=None)
+            return {"status": "READY_TO_IMPLEMENT"}, work, [("pipeline.plan_reviewed", "plan approved",
+                                                             {"verdict": verdict, "gate": False})]
+        return self._tx(key, actor, fn)
+
+    @staticmethod
+    def _marks(raw):
+        """{criterion id: "pass" | "fail"} from a dict, a list of {id, state} or a list of "ID=state"."""
+        if raw is None:
+            return {}
+        if isinstance(raw, dict):
+            items = list(raw.items())
+        elif isinstance(raw, list):
+            items = []
+            for m in raw:
+                if isinstance(m, str) and "=" in m:
+                    items.append(tuple(m.split("=", 1)))
+                elif isinstance(m, dict):
+                    items.append((m.get("id"), m.get("state")))
+                else:
+                    raise TaskError(400, "mark a criterion as ID=pass or ID=fail")
+        else:
+            raise TaskError(400, "criteria marks are {id: pass|fail}")
+        out = {}
+        for cid, state in items:
+            if not isinstance(cid, str) or not CRITERION_ID_RE.match(cid.strip()) or state not in ("pass", "fail"):
+                raise TaskError(400, "mark a criterion as ID=pass or ID=fail (ids look like c1)")
+            out[cid.strip()] = state
+        return out
+
+    def user_check(self, key, result, head, actor, note, marks=None, pr=None, open_prs=(), model=None, session=None):
+        """The user reviewer tries the change on the PR's current head against the acceptance criteria. pass needs
+        every criterion passed on that head; fail sends it back to build (a rework)."""
+        if actor not in USER_REVIEWERS:
+            raise TaskError(403, "a user check is the user reviewer's (--role user-reviewer or design-reviewer)")
+        if result not in ("pass", "fail"):
+            raise TaskError(400, "result must be pass or fail")
+        if not isinstance(head, str) or not SHA_RE.match(head):
+            raise TaskError(400, "head must be the PR head commit SHA")
+        note = _text(note, 2000, "note")
+        if not note:
+            raise TaskError(400, "say what was checked (--note)")
+        if not session:
+            raise TaskError(400, "say which session ran the user check (--session)")
+        _meta(session, "session")
+        marks = self._marks(marks)
+        prs = [{"ref": str(p.get("ref")), "head": str(p.get("head") or "")} for p in open_prs or ()
+               if isinstance(p, dict) and p.get("ref")]
+
+        def fn(tid, t, w, at):
+            self._need(t, ("IN_REVIEW",), "a user check")
+            f = self._flow(tid)
+            if "userCheck" not in flow_mod.route(f["size"], policy(t)):
+                raise TaskError(409, f"{t['key']}'s route has no user check")
+            if not pr or not pr.get("head"):
+                raise TaskError(409, f"{t['key']} has no open PR ccd can see; one PR per user check")
+            if pr["head"] != head:
+                raise TaskError(409, f"{head[:7]} is not the PR's current head ({pr['head'][:7]})")
+            impl = (w["roles"].get("implementer") or {})
+            own = {x for x in (impl.get("session"), t["key"].lower(), t["key"]) if x}
+            if session in own:
+                raise TaskError(409, "the developer cannot check its own work; a fresh session must")
+            crit = [dict(c) for c in f["criteria"]]
+            ids = {c["id"] for c in crit}
+            unknown = sorted(set(marks) - ids)
+            if unknown:
+                raise TaskError(400, f"no criterion {unknown[0]} on {t['key']}")
+            for c in crit:
+                if c["id"] in marks:
+                    c.update(state=marks[c["id"]], by=actor, at=at, head=head)
+            if result == "pass":
+                left = [c["id"] for c in crit if c["state"] != "pass" or c.get("head") != head]
+                if left:
+                    raise TaskError(409, f"pass needs every criterion passed at {head[:7]}: "
+                                         f"{', '.join(left[:10])} not yet")
+            check = {"result": result, "head": head, "pr": pr.get("ref"), "by": actor, "session": session, "at": at,
+                     "note": note}
+            seat = "design-reviewer" if actor == "agent:design-reviewer" else "user-reviewer"
+            work = {"roles": self._role(w, seat, model, session, at)}
+            if result == "pass":
+                self._flow_set(tid, at, criteria=crit, user_check=check)
+                return {}, work, [("pipeline.user_checked", f"user check passed at {head[:7]}",
+                                   {"result": "pass", "head": head})]
+            rounds = dict(f["rounds"])
+            rounds["userCheck"] = int(rounds.get("userCheck") or 0) + 1
+            self._flow_set(tid, at, criteria=crit, user_check=check, rounds=rounds)
+            work.update(review_verdict=None,
+                        confirmed=[g for g in _no_merge(w["confirmed"]) if g not in ("ui", "deploy")],
+                        verification=None, deploy=None)
+            if w["gate"] in ("merge", "ui", "deploy"):
+                work.update(gate=None, gate_reason=None)
+            events = [("pipeline.user_checked", f"user check failed at {head[:7]} (round {rounds['userCheck']})",
+                       {"result": "fail", "head": head, "rounds": rounds["userCheck"],
+                        "blocked": rounds["userCheck"] >= MAX_REVIEW_CYCLES})]
+            if rounds["userCheck"] >= MAX_REVIEW_CYCLES:
+                reason = f"{rounds['userCheck']} user checks failed"
+                work.update(gate="failure", gate_reason=reason,
+                            blocked={"stage": "BUILD", "flowStage": "userCheck", "reason": reason, "at": at})
+                return {"status": "BLOCKED"}, work, events + [("pipeline.blocked", reason, {"stage": "BUILD"})]
+            self._lane_free(t)
+            # The PRs this rework is about (rework_prs / new_head): only a new head returns it to review.
+            return {"status": "IN_PROGRESS"}, work, events + [
+                ("pipeline.rework", "back to implementation: the user check failed",
+                 {"from": t["status"], "prs": prs, "via": "userCheck"})]
+        return self._tx(key, actor, fn)
+
+    def close(self, key, note, actor):
+        """The lead's closing note: what was done and anything the next person should know. On a standard or risky
+        ticket, a verified ticket waits for it in VERIFYING; recording it finishes the ticket (when nothing else,
+        such as an open child, a gate or a live deploy, is left)."""
+        self._lead(actor, "the closing note")
+        note = _text(note, 4000, "note")
+        if not note:
+            raise TaskError(400, "a closing note says what was done (--note)")
+
+        def fn(tid, t, w, at):
+            self._need(t, ("VERIFYING", "DONE"), "a closing note")
+            if t["status"] == "VERIFYING" and (w["verification"] or {}).get("result") != "pass":
+                raise TaskError(409, f"{t['key']} has not passed verification yet")
+            kids = self._children(tid)["open"]
+            if kids and t["status"] == "VERIFYING":
+                raise TaskError(409, f"{t['key']} has open children: {', '.join(kids[:10])}; finish them first")
+            self._flow_set(tid, at, closing={"note": note, "by": actor, "at": at})
+            events = [("pipeline.closed_note", "closing note recorded", {})]
+            if t["status"] == "DONE":
+                return {}, {}, events
+            status, work, ev = self._after_verify(t, w)
+            return status, work, events + ev
+        return self._tx(key, actor, fn)
+
+    def sweep_stale(self, now=None):
+        """Mark tickets that have had no pipeline step for 48 hours in stages 2-6: one pipeline.flow_stale event per
+        quiet spell (a later step starts a new one). Returns [(ticket, changes, events)] for the daemon to announce."""
+        now = _now() if now is None else now
+        out = []
+        for (key, tid) in self.db.execute(
+                "SELECT key, id FROM tickets WHERE archived=0 AND status IN "
+                "('RESEARCHING','READY_TO_IMPLEMENT','IN_PROGRESS','IN_REVIEW') ORDER BY id").fetchall():
+            fl, _h = self.flow_of(key, now=now)
+            if not fl["stale"]:
+                continue
+            marked = self._flow(tid)["staleAt"]
+            if marked is not None and marked >= fl["idleSince"]:
+                continue
+
+            def fn(tid, t, w, at):
+                self._flow_set(tid, at, stale_at=at)
+                return {}, {}, [(flow_mod.STALE_KIND, "no step recorded for 48 hours", {})]
+            out.append(self._tx(key, "system:automation", fn))
+        return out

@@ -20,6 +20,19 @@
     python -m ccd.pipeline_cli deployed SV-056 --role coordinator --env live --result pass --evidence "…"
     python -m ccd.pipeline_cli stale    SV-056 --role coordinator --reason "superseded by SV-071 (plans/x.md)"
     python -m ccd.pipeline_cli tasks    samvision                  the project's open tasks (the task check)
+
+The delivery flow (docs/flow/FLOW.md). Each line runs as the seat named in brackets unless --role says otherwise:
+
+    python -m ccd.pipeline_cli intake      SV-056 --size standard --criterion "Comps table shows 5 rows" \
+                                           [--criterion …] [--requirement "keep the CSV export"] [--parent SV-050]   [lead]
+    python -m ccd.pipeline_cli criteria    SV-056 --criterion "…" [--criterion …] [--requirement …] [--size risky]  [lead]
+    python -m ccd.pipeline_cli plan-review SV-056 APPROVE|SEND_BACK --session <fresh> --note "…" [--blast "…"] \
+                                           [--test "…"] [--size risky]                                       [tech-reviewer]
+    python -m ccd.pipeline_cli user-check  SV-056 pass|fail --head <sha> --session <fresh> --note "…" \
+                                           --criterion c1=pass [--criterion c2=fail …]                        [user-reviewer]
+    python -m ccd.pipeline_cli close       SV-056 --note "what was done, what to know next time"             [lead]
+
+`criteria` replaces the whole list: repeat every criterion you keep (as its text; an unchanged text keeps its state).
     python -m ccd.pipeline_cli add      samvision --role coordinator --title "…" --note "plans/x.md:12" [--label night-finding]
 
 The task check: `stale` asks Jay "Cancel it / Keep it" (only his answer cancels anything); `add` puts a
@@ -45,7 +58,11 @@ import urllib.request
 
 from . import config
 
-ROLES = ("coordinator", "planner", "implementer", "reviewer", "verifier")
+ROLES = ("coordinator", "planner", "implementer", "reviewer", "verifier", "tech-reviewer", "user-reviewer",
+         "design-reviewer")
+# The flow's steps run as their seat when no --role is given.
+DEFAULT_ROLE = {"intake": "coordinator", "criteria": "coordinator", "close": "coordinator",
+                "plan-review": "tech-reviewer", "user-check": "user-reviewer"}
 
 
 def call(method, path, body=None, actor=None, port=None, token=None):
@@ -110,15 +127,16 @@ def build(argv):
     p = argparse.ArgumentParser(prog="ccd.pipeline_cli", description="Record a ticket pipeline step in Command Center.")
     p.add_argument("op", choices=("work", "plan", "start", "review", "verify", "handoff", "block", "role", "finding",
                                   "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
-                                  "tasks", "add"))
+                                  "tasks", "add", "intake", "criteria", "plan-review", "user-check", "close"))
     p.add_argument("key")
+    p.add_argument("decision", nargs="?", help="plan-review: APPROVE or SEND_BACK; user-check: pass or fail")
     p.add_argument("--role", choices=ROLES)
     p.add_argument("--model")
     p.add_argument("--session")
     p.add_argument("--plan-file")
     p.add_argument("--branch")
     p.add_argument("--worktree")
-    p.add_argument("--verdict", choices=("APPROVE", "REQUEST_CHANGES"))
+    p.add_argument("--verdict", choices=("APPROVE", "REQUEST_CHANGES", "SEND_BACK"))
     p.add_argument("--head")
     p.add_argument("--findings-file")
     p.add_argument("--result", choices=("pass", "fail"))
@@ -144,7 +162,17 @@ def build(argv):
     p.add_argument("--label", choices=("task-check", "night-finding", "ui-finding"), default="task-check")
     p.add_argument("--scope", choices=("in", "out"), default="in")
     p.add_argument("--source", choices=("review", "owner", "verifier"), default="review")
+    p.add_argument("--size", choices=("small", "standard", "risky"))
+    p.add_argument("--criterion", action="append", help="intake/criteria: a criterion's text; user-check: ID=pass|fail")
+    p.add_argument("--requirement", action="append")
+    p.add_argument("--parent")
+    p.add_argument("--blast")
+    p.add_argument("--test", action="append")
     a = p.parse_args(argv)
+    if a.decision is not None and a.op not in ("plan-review", "user-check"):
+        p.error(f"unexpected argument {a.decision}")
+    if not a.role:
+        a.role = DEFAULT_ROLE.get(a.op)
     key = urllib.parse.quote(a.key, safe="")
     if a.op not in ("work", "tasks") and not a.role:
         p.error("--role is required: every write is recorded as agent:<role>")
@@ -169,6 +197,15 @@ def build(argv):
         "deploy-request": lambda: {"env": a.env, "what": a.what, "verification": a.verification},
         "deployed": lambda: {"env": a.env, "result": a.result, "evidence": a.evidence},
         "stale": lambda: {"reason": a.reason},
+        "intake": lambda: {"size": a.size, "criteria": a.criterion or [], "requirements": a.requirement or [],
+                           **({"parent": a.parent} if a.parent else {})},
+        "criteria": lambda: {k: v for k, v in (("criteria", a.criterion), ("requirements", a.requirement),
+                                               ("size", a.size)) if v is not None},
+        "plan-review": lambda: {"verdict": a.decision or a.verdict, "note": a.note, "blast": a.blast,
+                                "tests": a.test or [], **({"size": a.size} if a.size else {}), **meta},
+        "user-check": lambda: {"result": a.decision or a.result, "head": a.head, "note": a.note,
+                               "criteria": a.criterion or [], **meta},
+        "close": lambda: {"note": a.note},
     }
     if a.op == "work":
         return "GET", f"/api/tasks/{key}/work", None, None

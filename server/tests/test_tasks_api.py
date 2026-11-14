@@ -532,6 +532,52 @@ class PipelineApi(Automation):
     def status(self):
         return self.tickets.get(self.key)["status"]
 
+    def test_the_delivery_flow_over_http_and_the_flow_view(self):
+        """Intake, technical review, user check, code review, merge, verify, the closing note; /api/flow shows it."""
+        self.tickets.create("samvision", "feature", number=56, status="INBOX", description="Comps miss sold homes")
+        r = self.step("intake", {"size": "standard", "criteria": ["Five comps show"]})
+        self.assertEqual((r.status_code, r.json()["status"], r.json()["flow"]["stage"]), (200, "RESEARCHING", "investigate"))
+        row = next(t for t in self.get("/api/tasks").json()["tickets"] if t["key"] == "SV-056")
+        self.assertEqual((row["size"], row["stage"], row["stale"]), ("standard", "investigate", False))
+        self.step("role", {"role": "planner", "session": "inv-1"}, "agent:planner")
+        self.step("plan", {"plan": {"summary": "the feature"}, "session": "inv-1"}, "agent:planner")
+        r = self.step("plan-review", {"verdict": "APPROVE", "note": "ok", "session": "inv-1"}, "agent:tech-reviewer")
+        self.assertEqual(r.status_code, 409, r.text)                               # its own plan
+        r = self.step("plan-review", {"verdict": "APPROVE", "note": "ok", "session": "tr-1"}, "agent:tech-reviewer")
+        self.assertEqual(r.json()["status"], "READY_TO_IMPLEMENT", r.text)
+        self.step("start", {"branch": "SV-056-feature", "worktree": "/srv/server/worktrees/sv/SV-056"})
+        head = "94" * 20
+        self.at_head(head)
+        self.poll()
+        self.assertEqual(self.status(), "IN_REVIEW")
+        r = self.step("review", {"verdict": "APPROVE", "head": head, "session": "cr-1"}, "agent:reviewer")
+        self.assertEqual(r.status_code, 409, r.text)                               # the user check comes first
+        r = self.step("user-check", {"result": "pass", "head": head, "note": "tried it", "session": "ur-1",
+                                     "criteria": ["c1=pass"]}, "agent:user-reviewer")
+        self.assertEqual(r.json()["flow"]["stage"], "codeReview", r.text)
+        flow = self.get("/api/flow").json()["projects"]
+        sv = next(p for p in flow if p["key"] == "samvision")
+        self.assertEqual([s["seat"] for s in sv["seats"]], ["lead", "investigator", "techReviewer", "developer",
+                                                           "userReviewer", "designReviewer", "codeReviewer", "verifier"])
+        self.assertEqual([(t["key"], t["stage"], t["waitingOn"]) for t in sv["inFlight"]],
+                         [("SV-056", "codeReview", "reviewer")])
+        self.assertEqual(sv["limits"], {"investigate": {"used": 0, "max": 2}, "build": {"used": 0, "max": 2}})
+        r = self.step("review", {"verdict": "APPROVE", "head": head, "session": "cr-1"}, "agent:reviewer")
+        self.assertEqual(r.json()["status"], "READY_TO_MERGE", r.text)
+        self.gh.data["samvision"]["prs"] = []
+        self.gh.data["samvision"]["merged"] = [{"number": 156, "title": "SV-056: the feature", "url": "u",
+                                                "mergedAt": "2026-10-03T00:00:00Z", "mergeCommit": {"oid": "f" * 40}}]
+        self.poll()
+        self.assertEqual(self.status(), "VERIFYING")
+        r = self.step("verify", {"result": "pass", "evidence": "health ok"}, "agent:verifier")
+        self.assertEqual((r.json()["status"], r.json()["flow"]["waitingOn"]), ("VERIFYING", "lead"), r.text)
+        r = self.step("close", {"note": "Comps fixed."})
+        self.assertEqual(r.json()["status"], "DONE", r.text)
+        kinds = [e["data"].get("kind") for e in self.get("/api/activity?limit=200").json()["events"]
+                 if e["kind"] == "task.pipeline"]
+        for k in ("pipeline.intake", "pipeline.plan_reviewed", "pipeline.user_checked", "pipeline.closed_note"):
+            self.assertIn(k, kinds)
+
     def test_rework_returns_to_review_only_on_a_new_head(self):
         a, b = "94" * 20, "95" * 20
         for number, actor in ((56, "agent:coordinator"), (57, "jay")):
