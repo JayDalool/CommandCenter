@@ -60,7 +60,65 @@ CEILINGS = {
     "infra.provision": "deny",
 }
 AGENT_KEYS = {"id", "name", "title", "spec", "template", "model", "requested", "budget", "projects", "reportsTo",
-              "notes"}
+              "notes", "persona"}
+# What an amendment may change: everything but the identity (the ID and display name never change).
+AMENDABLE = AGENT_KEYS - {"id", "name"}
+PERSONA_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")   # a character id from the HQ cast; the UI picks it
+MAX_LEVELS = 3        # D-024 clause 14: at most three levels below Jay, no cycles
+
+
+def _grants(allow=(), approval=()):
+    return {**{p: "allow" for p in allow}, **{p: "approval" for p in approval}}
+
+
+_READ = ("repo.read",)
+_DOCS_PR = ("repo.read", "repo.branch", "repo.commit", "repo.push", "repo.pr")
+_BUILD = ("repo.read", "repo.branch", "repo.worktree", "repo.commit", "repo.push", "repo.pr",
+          "run.tests", "run.dev", "run.terminal", "run.browser", "prod.observe", "data.dev_read")
+_OPUS = {"provider": "anthropic", "model": "claude-opus-5-5", "reasoning": "high"}
+_SONNET = {"provider": "anthropic", "model": "claude-sonnet-5-5", "reasoning": "medium"}
+
+# The roster (agent roster plan, 2026-11-14; seats from docs/flow/FLOW.md). A draft names its role in `template`;
+# the role sets its scope and the defaults the HQ form starts from. Requested permissions are what the agent ASKS
+# for: every value is within CEILINGS, and nothing here grants any of it (D-024 clause 10).
+#   scope "project": belongs to exactly one project and reports to that project's lead (the lead reports to Jay)
+#   scope "company": serves every project and reports to Jay
+ROLES = {
+    "lead":            {"title": "Project Lead", "scope": "project", "seat": "lead", "model": _OPUS,
+                        "requested": _grants(_DOCS_PR + ("run.tests", "prod.observe"))},
+    "investigator":    {"title": "Investigator", "scope": "project", "seat": "investigator", "model": _OPUS,
+                        "requested": _grants(("repo.read", "repo.branch", "repo.worktree", "run.tests", "run.dev",
+                                              "run.terminal", "run.browser", "prod.observe", "data.dev_read"))},
+    "tech-reviewer":   {"title": "Technical Reviewer", "scope": "project", "seat": "techReviewer", "model": _OPUS,
+                        "requested": _grants(("repo.read", "run.tests", "prod.observe"))},
+    "backend":         {"title": "Backend Engineer", "scope": "project", "seat": "developer", "model": _SONNET,
+                        "requested": _grants(_BUILD, ("data.dev_write",))},
+    "frontend":        {"title": "Frontend Engineer", "scope": "project", "seat": "developer", "model": _SONNET,
+                        "requested": _grants(_BUILD, ("data.dev_write",))},
+    "fullstack":       {"title": "Full-stack Engineer", "scope": "project", "seat": "developer", "model": _SONNET,
+                        "requested": _grants(_BUILD, ("data.dev_write",))},
+    "user-reviewer":   {"title": "User Reviewer", "scope": "project", "seat": "userReviewer", "model": _SONNET,
+                        "requested": _grants(("repo.read", "repo.worktree", "run.tests", "run.dev", "run.browser",
+                                              "prod.observe", "data.dev_read"))},
+    "code-reviewer":   {"title": "Code Reviewer", "scope": "company", "seat": "codeReviewer", "model": _OPUS,
+                        "requested": _grants(("repo.read", "run.tests", "run.terminal"))},
+    "security":        {"title": "Security Engineer", "scope": "company", "seat": "techReviewer", "model": _OPUS,
+                        "requested": _grants(_DOCS_PR + ("run.tests", "run.terminal", "prod.observe", "data.dev_read"),
+                                             ("prod.diagnose",))},
+    "architect":       {"title": "Software Architect", "scope": "company", "seat": "techReviewer", "model": _OPUS,
+                        "requested": _grants(_DOCS_PR + ("run.dev", "run.browser"))},
+    "designer":        {"title": "Product Designer", "scope": "company", "seat": "designReviewer", "model": _SONNET,
+                        "requested": _grants(_DOCS_PR + ("run.dev", "run.browser"))},
+    "manager":         {"title": "Portfolio Manager", "scope": "company", "seat": None, "model": _SONNET,
+                        "requested": _grants(_READ)},
+    "finance":         {"title": "Finance Agent", "scope": "company", "seat": None, "model": _SONNET,
+                        "requested": _grants(_READ + ("prod.observe",))},
+    "accounting":      {"title": "Accounting Agent", "scope": "company", "seat": None, "model": _SONNET,
+                        "requested": _grants(_READ)},
+}
+# A project role that writes to the repository. On a client or employer project CommandCenter may not push, open a
+# PR or comment during onboarding (D-024 clause 16, Annex A), so these requests are refused there.
+REPO_WRITES = ("repo.push", "repo.pr")
 PROJECT_KEYS = {"key", "name", "prefix", "repo", "type", "lead", "notes"}
 BUDGET_KEYS = {"dailyUsd": 100_000, "monthlyUsd": 1_000_000, "monthlyTokens": 10 ** 12}
 
@@ -150,9 +208,18 @@ def _text(issues, body, key, n, label, required=False):
     return v
 
 
-def validate_agent(body, agents, open_drafts=(), token_actors=()):
+def roles():
+    """The role catalog with each role's defaults, for the HQ "Add agent" form."""
+    return [{"id": k, "title": r["title"], "scope": r["scope"], "seat": r["seat"], "model": dict(r["model"]),
+             "requested": dict(r["requested"]), "reportsTo": "jay" if r["scope"] == "company" or k == "lead" else "lead"}
+            for k, r in ROLES.items()]
+
+
+def validate_agent(body, agents, open_drafts=(), token_actors=(), team=(), self_id=None):
     """The prototype's agent rules. `agents`: [(id, display_name, status)] registered or retired; `open_drafts`:
-    other open agent drafts' bodies; `token_actors`: actors that hold actor tokens today. Pure; writes nothing."""
+    other open agent drafts' bodies; `token_actors`: actors that hold actor tokens today; `team`: [(id, status,
+    newest config)] for the reporting-line checks; `self_id`: the registered agent an amendment is for (it does not
+    collide with itself). Pure; writes nothing."""
     v = Issues()
     if not isinstance(body, dict):
         v.error("body", "bad_body", "An agent draft must be an object.")
@@ -171,7 +238,7 @@ def validate_agent(body, agents, open_drafts=(), token_actors=()):
                                     "hyphens (2 to 32 characters).")
         elif slug in RESERVED_IDS:
             v.error("id", "reserved_id", f'The ID "{slug}" is reserved for the system.')
-        elif f"agent:{slug}" in by_id:
+        elif f"agent:{slug}" in by_id and f"agent:{slug}" != self_id:
             a = by_id[f"agent:{slug}"]
             if a[2] == "retired":
                 v.error("id", "retired_id", f'The ID "{slug}" belonged to {a[1]}, who was retired. IDs are never '
@@ -187,7 +254,7 @@ def validate_agent(body, agents, open_drafts=(), token_actors=()):
     name = _text(v, body, "name", 32, "The display name", required=True)
     if name:
         n = _norm(name)
-        live = [a for a in agents if a[2] == "registered"]
+        live = [a for a in agents if a[2] == "registered" and a[0] != self_id]
         if not NAME_RE.match(name.strip()):
             v.error("name", "bad_name", "The name must start with a letter and use letters, numbers, spaces, dots, "
                                         "apostrophes or hyphens (up to 32 characters).")
@@ -201,7 +268,7 @@ def validate_agent(body, agents, open_drafts=(), token_actors=()):
                           or (letters and re.sub(r"[^a-z]", "", _norm(a[1])) == letters)), None)
             if close:
                 v.warn("name", "confusable_name", f'"{name}" is easy to confuse with {close[1]} ({close[0]}).')
-            gone = next((a for a in agents if a[2] == "retired" and _norm(a[1]) == n), None)
+            gone = next((a for a in agents if a[2] == "retired" and _norm(a[1]) == n and a[0] != self_id), None)
             if gone:
                 v.warn("name", "retired_name", f"A retired agent was also called {gone[1]} ({gone[0]}).")
 
@@ -259,7 +326,77 @@ def validate_agent(body, agents, open_drafts=(), token_actors=()):
             v.error("reportsTo", "self_report", "An agent cannot report to itself.")
         elif not isinstance(rt, str) or rt not in live_ids:
             v.error("reportsTo", "bad_reports_to", "reportsTo must be jay or a registered agent's ID.")
+
+    persona = body.get("persona")
+    if persona is not None:
+        if not isinstance(persona, str) or not PERSONA_RE.match(persona):
+            v.error("persona", "bad_persona", "persona is a character id: lowercase letters, numbers and hyphens.")
+        else:
+            other = next((t[0] for t in team if t[1] == "registered" and t[0] not in (self_id, f"agent:{slug}")
+                          and (t[2] or {}).get("persona") == persona), None)
+            if other:
+                v.warn("persona", "persona_taken", f"{other} already has this character.")
+    _team_rules(v, f"agent:{slug}" if slug else None, body, team)
     return v.out()
+
+
+def _team_rules(v, aid, body, team):
+    """D-024 clause 14 and the roster plan: who a role belongs to and reports to. Applies to roles in ROLES; a
+    free-text `template` keeps the older, looser rules. The reporting chain is checked for every agent."""
+    configs = {t[0]: (t[2] or {}) for t in team if t[1] == "registered" and t[0] != aid}
+    rt = body.get("reportsTo")
+
+    # The chain from this agent up to Jay: at most MAX_LEVELS agents (this one included), no cycle.
+    seen, cur, depth = {aid}, rt, 1
+    while isinstance(cur, str) and cur != "jay":
+        if cur in seen:
+            v.error("reportsTo", "reporting_cycle", "This reporting line comes back to the agent itself.")
+            break
+        if cur not in configs:      # an unknown or retired manager is bad_reports_to, reported above
+            break
+        seen.add(cur)
+        depth += 1
+        cur = configs[cur].get("reportsTo")
+    if depth > MAX_LEVELS:
+        v.error("reportsTo", "too_deep", f"At most {MAX_LEVELS} levels of agents below Jay (D-024 clause 14).")
+
+    role = body.get("template")
+    if role not in ROLES:
+        return
+    spec, projects = ROLES[role], body.get("projects")
+    projects = [p for p in projects if isinstance(p, str)] if isinstance(projects, list) else []
+    if spec["scope"] == "company":
+        if rt not in (None, "jay"):
+            v.error("reportsTo", "company_role_reports_to_jay", f"A {spec['title']} works across projects and "
+                                                                "reports to Jay.")
+        return
+    if len(projects) != 1:
+        v.error("projects", "one_project", f"A {spec['title']} belongs to exactly one project.")
+        return
+    key = projects[0]
+    leads = [i for i, c in configs.items() if c.get("template") == "lead" and key in (c.get("projects") or [])]
+    if role == "lead":
+        if rt not in (None, "jay"):
+            v.error("reportsTo", "lead_reports_to_jay", "A Project Lead reports to Jay.")
+        if leads:
+            v.error("template", "lead_exists", f"{registry.name_of(key)} already has a Project Lead ({leads[0]}).")
+    elif leads:
+        if rt != leads[0]:
+            v.error("reportsTo", "reports_to_lead", f"A {spec['title']} on {registry.name_of(key)} reports to its "
+                                                    f"Project Lead, {leads[0]}.")
+    elif rt in (None, "jay"):
+        v.warn("reportsTo", "no_project_lead", f"{registry.name_of(key)} has no Project Lead yet, so this agent "
+                                               "reports to Jay until it has one.")
+    else:
+        v.error("reportsTo", "reports_to_lead", f"A {spec['title']} reports to its project's lead, and "
+                                                f"{registry.name_of(key)} has none yet: use jay.")
+    if registry.class_of(key) != "own":
+        req = body.get("requested") if isinstance(body.get("requested"), dict) else {}
+        asked = [p for p in REPO_WRITES if req.get(p) in ("allow", "approval")]
+        if asked:
+            v.error("requested", "client_repo_write", f"{registry.name_of(key)} is a {registry.class_of(key)} "
+                                                      f"project: CommandCenter does not {', '.join(asked)} there "
+                                                      "during onboarding (D-024 clause 16). Set them to deny.")
 
 
 def _budget(v, budget):
@@ -392,6 +529,13 @@ class Onboarding:
     def _agents(self):
         return [tuple(r) for r in self.db.execute("SELECT id, display_name, status FROM agent_registrations")]
 
+    def _team(self):
+        """[(id, status, newest config)] of every registered or retired agent."""
+        return [(r[0], r[1], _loads(r[2])) for r in self.db.execute(
+            "SELECT a.id, a.status, v.config FROM agent_registrations a JOIN agent_config_versions v "
+            "ON v.agent_id = a.id AND v.version = (SELECT MAX(version) FROM agent_config_versions w "
+            "WHERE w.agent_id = a.id)")]
+
     def _open_bodies(self, kind, except_id=None):
         return [json.loads(r[0]) for r in self.db.execute(
             "SELECT body FROM onboarding_drafts WHERE kind=? AND state='open' AND id IS NOT ?", (kind, except_id))]
@@ -410,7 +554,8 @@ class Onboarding:
         """Read-only: the errors and warnings a draft has now. Saving a draft never needs it to be valid."""
         self.require_on()
         if kind == "agent":
-            return validate_agent(body, self._agents(), self._open_bodies("agent", except_id), self._token_actors())
+            return validate_agent(body, self._agents(), self._open_bodies("agent", except_id), self._token_actors(),
+                                  self._team())
         if kind == "project":
             return validate_project(body, self._open_bodies("project", except_id))
         raise OnboardingError(400, "kind must be agent or project")
@@ -523,6 +668,49 @@ class Onboarding:
             self._event(f"draft:{did}", "registered", {"agent": aid})
         return self.agent(aid)
 
+    def amend_agent(self, agent_id, changes, version, acknowledge, actor):
+        """A new configuration version: its projects, reporting line, model, budget, character or requested
+        permissions change. The ID and name never do. Validated as a whole, like registering; grants nothing."""
+        self._jay(actor, "change an agent")
+        aid = f"agent:{_slug_of(agent_id)}"
+        row = self.db.execute("SELECT display_name, status FROM agent_registrations WHERE id=?", (aid,)).fetchone()
+        if row is None:
+            raise OnboardingError(404, f"no registered agent {aid}")
+        if row[1] != "registered":
+            raise OnboardingError(409, f"{aid} is retired; a retired agent never changes")
+        if not isinstance(changes, dict) or not changes:
+            raise OnboardingError(400, "changes must be an object with at least one field")
+        bad = sorted(set(changes) - AMENDABLE)
+        if bad:
+            raise OnboardingError(400, f"{bad[0]} cannot be changed: the ID and name are fixed, and only agent fields "
+                                       "exist")
+        cur_v, cur = self.db.execute("SELECT version, config FROM agent_config_versions WHERE agent_id=? "
+                                     "ORDER BY version DESC LIMIT 1", (aid,)).fetchone()
+        if isinstance(version, bool) or not isinstance(version, int) or version != cur_v:
+            raise OnboardingError(409, f"{aid} is at version {cur_v}; reload it and try again")
+        config = {k: v for k, v in dict(_loads(cur), **changes).items() if v is not None}
+        self._storable(dict(config, id=_slug_of(aid), name=row[0]))
+        result = validate_agent(dict(config, id=_slug_of(aid), name=row[0]), self._agents(),
+                                self._open_bodies("agent"), (), self._team(), self_id=aid)
+        if result["errors"]:
+            first = result["errors"][0]
+            raise OnboardingError(409, f"{first['message']} ({len(result['errors'])} problem(s))")
+        ack = set(acknowledge) if isinstance(acknowledge, list) and all(isinstance(a, str) for a in acknowledge) \
+            else set()
+        missing = sorted({w["code"] for w in result["warnings"]} - ack)
+        if missing:
+            raise OnboardingError(409, f"acknowledge these warnings first: {', '.join(missing)}")
+        config = {k: config[k] for k in sorted(config)}
+        # The new version row is the record of the change (who, when, the whole configuration and its hash); the
+        # HTTP write is also in the hash-chained audit trail. No onboarding_events row: that table's CHECK lists the
+        # v10 kinds, and widening it would need a table rebuild and a migration number the flow work holds.
+        with self._tx():
+            self.db.execute("INSERT INTO agent_config_versions (agent_id, version, config, config_sha, created_at, "
+                            "created_by, note) VALUES (?,?,?,?,?,?,?)",
+                            (aid, cur_v + 1, json.dumps(config, sort_keys=True), _sha(config), self.clock(), "jay",
+                             "amended: " + ", ".join(sorted(changes))))
+        return self.agent(aid)
+
     def retire_agent(self, agent_id, actor, reason=""):
         """Final for that ID: it is never reused. Retiring revokes nothing because registering issued nothing."""
         self._jay(actor, "retire an agent")
@@ -562,6 +750,36 @@ class Onboarding:
                     for r in self.db.execute("SELECT version, config, config_sha, created_at, created_by, note "
                                              "FROM agent_config_versions WHERE agent_id=? ORDER BY version", (aid,))]
         return dict(base, versions=versions, events=self.events(subject=aid))
+
+    def roles(self):
+        self.require_on()
+        return roles()
+
+    def project_agents(self, key):
+        """A project's team from the records: its lead and the registered agents that name it, plus the
+        company-wide agents (they serve every project). Records only: none of them is running because of this."""
+        self.require_on()
+        if registry.project(key) is None:
+            raise OnboardingError(404, f"{key} is not a registered project")
+        names = {a[0]: a[1] for a in self._agents()}
+        lead, members, company = None, [], []
+        for aid, status, c in sorted(self._team()):
+            if status != "registered":
+                continue
+            role = c.get("template")
+            row = {"id": aid, "name": names.get(aid), "role": role if role in ROLES else None,
+                   "title": c.get("title"), "seat": (ROLES.get(role) or {}).get("seat"),
+                   "reportsTo": c.get("reportsTo"), "persona": c.get("persona"), "model": c.get("model"),
+                   "active": False}
+            if (ROLES.get(role) or {}).get("scope") == "company":
+                company.append(row)
+            elif key in (c.get("projects") or []):
+                if role == "lead" and lead is None:
+                    lead = row
+                else:
+                    members.append(row)
+        return {"project": key, "name": registry.name_of(key), "class": registry.class_of(key),
+                "paused": registry.paused(key), "lead": lead, "members": members, "company": company}
 
     def drafts(self, state=None):
         self.require_on()

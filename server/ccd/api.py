@@ -126,6 +126,10 @@
     GET   /api/onboarding/agents              registered and retired agents (status registered|retired; never active)
     GET   /api/onboarding/agents/{id}         one agent (`nova` or `agent:nova`): configuration versions, events
     POST  /api/onboarding/agents/{id}/retire  Jay AND Developer Unlock. {reason?}: final; the ID is never reused
+    POST  /api/onboarding/agents/{id}/amend   Jay AND Developer Unlock. {changes, version, acknowledge?}: a new
+                                              configuration version (never the ID or name); validated like registering
+    GET   /api/onboarding/roles               the roster's roles: scope, seat, default model and requested permissions
+    GET   /api/onboarding/projects/{project}/agents  a project's lead, members and the company-wide agents (records)
     GET   /api/onboarding/drafts              ?state=open|registered|discarded
     POST  /api/onboarding/drafts              Jay AND Developer Unlock. {kind: agent|project, body} → the draft. A body
                                               that looks like it holds a secret is refused whole (400)
@@ -718,6 +722,18 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
         return daemon.act_onboarding("retire", request.state.actor, developer=dev, id=request.path_params["id"],
                                      reason=str(body.get("reason") or ""))
+
+    async def onboarding_amend(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.act_onboarding("amend", request.state.actor, developer=dev, id=request.path_params["id"],
+                                     changes=body.get("changes"), version=body.get("version"),
+                                     acknowledge=body.get("acknowledge"))
+
+    async def onboarding_roles(request, _):
+        return daemon.onboarding_roles()
+
+    async def onboarding_project_agents(request, _):
+        return daemon.onboarding_project_agents(request.path_params["project"])
 
     async def onboarding_drafts(request, _):
         return daemon.onboarding_drafts(request.query_params.get("state") or None)
@@ -1535,6 +1551,9 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/onboarding/agents", guarded(onboarding_agents), methods=["GET"]),
         Route("/api/onboarding/agents/{id}", guarded(onboarding_agent), methods=["GET"]),
         Route("/api/onboarding/agents/{id}/retire", guarded(onboarding_retire), methods=["POST"]),
+        Route("/api/onboarding/agents/{id}/amend", guarded(onboarding_amend), methods=["POST"]),
+        Route("/api/onboarding/roles", guarded(onboarding_roles), methods=["GET"]),
+        Route("/api/onboarding/projects/{project}/agents", guarded(onboarding_project_agents), methods=["GET"]),
         Route("/api/onboarding/drafts", guarded(onboarding_drafts), methods=["GET"]),
         Route("/api/onboarding/drafts", guarded(onboarding_draft_create), methods=["POST"]),
         Route("/api/onboarding/drafts/{id}", guarded(onboarding_draft), methods=["GET"]),

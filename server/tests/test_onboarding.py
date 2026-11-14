@@ -357,6 +357,105 @@ class Budgets(unittest.TestCase):
         self.assertEqual(budgets.report(ts.db, now, meter_at=now)["prices"]["asOf"], meter.PRICES_AS_OF)
 
 
+def role_body(slug, name, role, projects=(), reports_to="jay", **extra):
+    spec = onboarding.ROLES[role]
+    return dict({"id": slug, "name": name, "title": spec["title"], "template": role, "model": dict(spec["model"]),
+                 "requested": dict(spec["requested"]), "projects": list(projects), "reportsTo": reports_to}, **extra)
+
+
+class Roster(unittest.TestCase):
+    """The agent roster plan (2026-11-14) on top of the records: roles, reporting lines (D-024 clause 14), client
+    projects (clause 16), and changing an agent through a new configuration version."""
+
+    def setUp(self):
+        self.ts = tasks_db()
+        self.o = onboarding.Onboarding(self.ts.db, clock=Clock(), enabled=True)
+
+    def reg(self, body, ack=()):
+        return self.o.register_agent(self.o.create_draft("agent", body, "jay")["id"], 1, list(ack), "jay")
+
+    def codes(self, body):
+        r = self.o.validate("agent", body)
+        return {e["code"] for e in r["errors"]}, {w["code"] for w in r["warnings"]}
+
+    def err(self, status, fn, *a):
+        with self.assertRaises(onboarding.OnboardingError) as e:
+            fn(*a)
+        self.assertEqual(e.exception.status, status, e.exception.message)
+        return e.exception.message
+
+    def test_every_role_default_is_valid_and_within_the_ceilings(self):
+        for r in onboarding.roles():
+            for perm, grant in r["requested"].items():
+                self.assertIn(perm, onboarding.CEILINGS)
+                self.assertLessEqual(onboarding.GRANTS.index(grant),
+                                     onboarding.GRANTS.index(onboarding.CEILINGS[perm]), (r["id"], perm))
+            self.assertNotIn("repo.merge", r["requested"])
+            self.assertTrue(all(not p.startswith("infra.") for p in r["requested"]), r["id"])
+
+    def test_a_project_team_is_one_lead_and_members_that_report_to_it(self):
+        lead = self.reg(role_body("sv-lead", "Sable", "lead", ["samvision"]))
+        errs, _ = self.codes(role_body("sv-lead2", "Quill", "lead", ["samvision"]))
+        self.assertIn("lead_exists", errs)
+        errs, _ = self.codes(role_body("sv-dev", "Rook", "backend", ["samvision"]))          # reports to jay
+        self.assertIn("reports_to_lead", errs)
+        errs, _ = self.codes(role_body("sv-dev", "Rook", "backend", ["samvision", "gyst"], lead["id"]))
+        self.assertIn("one_project", errs)
+        self.assertEqual(self.codes(role_body("sv-dev", "Rook", "backend", ["samvision"], lead["id"])), (set(), set()))
+        errs, _ = self.codes(role_body("cr", "Vale", "code-reviewer", ["samvision"], lead["id"]))
+        self.assertIn("company_role_reports_to_jay", errs)
+        errs, _ = self.codes(role_body("sv-lead3", "Moss", "lead", ["gyst"], lead["id"]))
+        self.assertIn("lead_reports_to_jay", errs)
+        # A project with no lead yet: a member may report to Jay, with a warning to acknowledge.
+        self.assertEqual(self.codes(role_body("gy-dev", "Fern", "fullstack", ["gyst"]))[1], {"no_project_lead"})
+
+    def test_reporting_lines_have_at_most_three_levels_and_no_cycle(self):
+        a = self.reg(dict(NOVA, id="a1", name="Ash", template="x"))
+        b = self.reg(dict(NOVA, id="b1", name="Birch", template="x", reportsTo=a["id"]))
+        c = self.reg(dict(NOVA, id="c1", name="Cedar", template="x", reportsTo=b["id"]))
+        self.assertIn("too_deep", self.codes(dict(NOVA, id="d1", name="Dune", template="x", reportsTo=c["id"]))[0])
+        msg = self.err(409, self.o.amend_agent, a["id"], {"reportsTo": c["id"]}, 1, [], "jay")
+        self.assertIn("comes back", msg)
+
+    def test_a_client_project_refuses_repository_writes(self):
+        errs, _ = self.codes(role_body("gz-dev", "Wren", "fullstack", ["gauzemate"]))
+        self.assertIn("client_repo_write", errs)
+        body = role_body("gz-dev", "Wren", "fullstack", ["gauzemate"])
+        body["requested"].update({"repo.push": "deny", "repo.pr": "deny"})
+        self.assertNotIn("client_repo_write", self.codes(body)[0])
+
+    def test_amending_writes_a_new_version_and_never_the_identity(self):
+        lead = self.reg(role_body("cc-lead", "Orrin", "lead", ["commandcenter"], persona="captain"))
+        a = self.o.amend_agent(lead["id"], {"model": dict(onboarding.ROLES["lead"]["model"], reasoning="max")}, 1,
+                               [], "jay")
+        self.assertEqual(a["version"], 2)
+        self.assertEqual(a["versions"][-1]["config"]["persona"], "captain")                # untouched fields stay
+        self.assertEqual(a["versions"][-1]["note"], "amended: model")
+        self.err(409, self.o.amend_agent, lead["id"], {"notes": "x"}, 1, [], "jay")         # stale version
+        self.err(400, self.o.amend_agent, lead["id"], {"name": "Other"}, 2, [], "jay")
+        self.err(400, self.o.amend_agent, lead["id"], {"notes": "ghp_abcdefghijklmnopqrstuvwxyz12"}, 2, [], "jay")
+        self.err(403, self.o.amend_agent, lead["id"], {"notes": "x"}, 2, [], "agent:cc-lead")
+        self.o.retire_agent(lead["id"], "jay")
+        self.err(409, self.o.amend_agent, lead["id"], {"notes": "x"}, 2, [], "jay")
+
+    def test_a_project_team_reads_from_the_records_and_nothing_is_active(self):
+        lead = self.reg(role_body("mfe-lead", "Ivy", "lead", ["mfe"]))
+        self.reg(role_body("mfe-dev", "Juniper", "fullstack", ["mfe"], lead["id"]))
+        self.reg(role_body("fin", "Ledger", "finance"))
+        t = self.o.project_agents("mfe")
+        self.assertEqual((t["lead"]["id"], [m["id"] for m in t["members"]], [c["id"] for c in t["company"]]),
+                         ("agent:mfe-lead", ["agent:mfe-dev"], ["agent:fin"]))
+        self.assertEqual(t["members"][0]["seat"], "developer")
+        self.assertFalse(any(x["active"] for x in [t["lead"]] + t["members"] + t["company"]))
+        self.assertEqual(self.o.project_agents("gauzemate")["class"], "client")
+        self.err(404, self.o.project_agents, "nope")
+
+    def test_a_taken_character_is_a_warning(self):
+        self.reg(role_body("arch", "Atlas", "architect", persona="owl"))
+        self.assertIn("persona_taken", self.codes(role_body("des", "Iris", "designer", persona="owl"))[1])
+        self.assertIn("bad_persona", self.codes(role_body("des", "Iris", "designer", persona="Owl!"))[0])
+
+
 class InTheDaemon(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.store = Store(new_db())
@@ -427,7 +526,9 @@ class OverHttp(unittest.IsolatedAsyncioTestCase):
               ("POST", "/api/onboarding/drafts"), ("GET", "/api/onboarding/drafts/d-000000000000"),
               ("PUT", "/api/onboarding/drafts/d-000000000000"), ("POST", "/api/onboarding/drafts/d-000000000000/discard"),
               ("POST", "/api/onboarding/drafts/d-000000000000/register"), ("POST", "/api/onboarding/validate"),
-              ("GET", "/api/onboarding/events"), ("GET", "/api/onboarding/budgets"))
+              ("GET", "/api/onboarding/events"), ("GET", "/api/onboarding/budgets"),
+              ("POST", "/api/onboarding/agents/nova/amend"), ("GET", "/api/onboarding/roles"),
+              ("GET", "/api/onboarding/projects/samvision/agents"))
 
     def test_off_every_route_is_a_404_even_with_developer_unlock(self):
         self.client(False)

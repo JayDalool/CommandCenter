@@ -47,6 +47,9 @@ PROJECTS = {
     "gauzemate":     {"name": "GauzeMate",        "prefix": "GZ",   "legacy": ("GM",),
                       "root": "/srv/server/repos/GauzeMate",        "github": "JayDalool/GauzeMate",
                       "pipeline": {"merge": "owner"},    # Jay accepts every GauzeMate merge (2026-10-09)
+                      # A client's repository (D-024 clause 16): no push, PR, comment or CI change by CommandCenter
+                      # during onboarding. The same list as notify's client_projects default.
+                      "class": "client",
                       # Paused by Jay (2026-10-09) until he adds designs and files: no agent works on it.
                       # Remove this line to resume.
                       "paused": "Jay paused GauzeMate until he adds designs and files"},
@@ -206,6 +209,16 @@ def check(key, prefix=None, legacy=()):
 def root_of(key):
     """The registered checkout of a project, or None. The only source of a Workspace root."""
     return (PROJECTS.get(key) or {}).get("root")
+
+
+CLASSES = ("own", "client", "employer")
+
+
+def class_of(key):
+    """Whose repository the project is: "own" (Jay's, the default), "client" or "employer" (D-024 clause 16). A
+    value this code does not know is read as "client", the strictest, as D-024 says for an unknown class."""
+    c = (PROJECTS.get(key) or {}).get("class") or "own"
+    return c if c in CLASSES else "client"
 
 
 def github_of(key):
