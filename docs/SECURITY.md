@@ -197,16 +197,60 @@ Two credentials, two powers:
 | developer token | `~/.config/command-center/developer.token` (0600, created on first start, must differ from the ccd token) | **also** saving and uploading repository files, adding and removing attachments |
 
 The browser sends the developer token once to `POST /api/developer/unlock` and
-gets a random session id that lives in ccd's memory. The token itself is never
-stored. **Once per app session (control room, spec §27):** the session id is kept
-in the tab's `sessionStorage` (so a reload does not ask again) and handed to
-Command Center's own other windows — pop-out terminals and rooms, a second
-Workspace window — over a same-origin `BroadcastChannel`; never localStorage, a
-URL or the page. Sessions end on LOCK (in any window: every window locks), when
-the browser session ends, 2 h idle, 8 h total, or a ccd restart. Five wrong
-developer tokens at unlock and handoff in five minutes lock both for five minutes; both need the ccd token. Write routes answer 403
-to the ccd token alone. The ccd token reaches a pop-out window the same way when
-the browser does not copy `sessionStorage` into it.
+gets a random session id. The token itself is never stored. **Once per app
+session (control room, spec §27):** the session id is kept in the tab's
+`sessionStorage` (so a reload does not ask again) and handed to Command Center's
+own other windows — pop-out terminals and rooms, a second Workspace window — over
+a same-origin `BroadcastChannel`; never a URL or the page. A plain unlock ends on
+LOCK (in any window: every window locks), when the browser session ends, 2 h idle
+or 8 h total. Five wrong developer tokens at unlock and handoff in five minutes
+lock both for five minutes; both need the ccd token. Write routes answer 403 to
+the ccd token alone. The ccd token reaches a pop-out window the same way when the
+browser does not copy `sessionStorage` into it.
+
+**Developer Unlock that lasts (contract §6, Jay 2026-11-14).** Unlock asked too often, so:
+
+- **It survives a ccd restart.** Sessions are saved to `~/command-center/data/developer-sessions.json` (0600, written
+  atomically). For each session the file holds an HMAC-SHA256 of its id keyed with the developer token, its kind,
+  three times (made, last used, last proved) and a device label. **Never the session id, never the developer token.**
+  The file also carries an HMAC of a fixed string under the same key, so a file written under another
+  `developer.token` is ignored whole: changing `developer.token` ends every session. Consequences: reading the file
+  gives no session (it holds no id, and the HMAC cannot be reversed); writing an entry into it without the token
+  matches no id; the limits come from the kind in code, never from the file; and each row carries an HMAC over its
+  kind, times, id and label, so an edited row (say, a plain session turned into a remembered one) is dropped. A time
+  in the future is dropped too, and if the server clock goes backwards the sessions it would stretch end. A file another user can read or that
+  another uid owns is ignored and replaced on the next save. "Last used" reaches the disk at most once a minute;
+  unlock, lock, lock-all and expiry are written at once. If the file cannot be written, sessions keep working from
+  memory and simply do not survive the next restart. Wrong-token counts stay in memory (a restart clears them;
+  only jay can restart ccd).
+- **"Remember this device"** (`remember: true` at unlock): 30 days, no idle limit. The browser is to keep that
+  session id in `localStorage` (the unlock-dialog checkbox, the Settings device list and the re-entry prompt are the
+  web side's part of contract §6 and land after this server change) instead of `sessionStorage` so it outlives the tab; anything running in Command Center's own
+  origin could read either, so the defences against script injection (CSP, no third-party script, sanitised
+  rendering) are what protect it, as they protect the ccd token beside it. Plain and SSH sessions keep their limits
+  above.
+- **The terminal and file writes keep short limits.** A remembered session older than 8 hours since the token was
+  last typed can still approve and answer, but the live terminal (`WS /api/pty/*`), typing a free-text prompt into a Claude pane
+  (`/api/action/prompt`, which can make that agent run anything) and every file write
+  (`/api/files/save|upload|mkdir|rename|duplicate|remove`, `/api/scm/*`) refuse it: 403 `{reenter: true}`, and an
+  open terminal closes with code 4412. Typing the token again (`POST /api/developer/unlock` with the same
+  `X-CCD-Developer`) re-proves that session in place for another 8 hours. The page sends `reprove: true` for this, so a session locked
+  or replaced in another window a moment earlier is refused (409) instead of becoming a new 30-day one. Plain sessions (8 h) and SSH sign-in
+  (12 h, proved by Jay's SSH key) are unaffected. So a stolen remembered id can do what Jay's clicks do for up to a
+  month, but cannot open a shell, prompt an agent or change code past one working day, and Jay can end it at once with:
+- **Lock all devices** (`POST /api/developer/lock-all`, Settings): every session on every device ends, with every
+  unredeemed sign-in code, in memory and on disk. It needs a live Developer session, so the ccd token alone (which
+  processes running as jay can read) cannot lock Jay out. Settings lists the devices holding a session
+  (`GET /api/developer/devices`: label, kind, created, last used, expiry; never an id). LOCK ends just this one.
+
+What the file does not defend against: a process running as jay can put back an older copy of it, which would
+bring back sessions that Lock all ended. Such a process can also read `developer.token` itself, so the file adds no
+new power; the unlock defends against clicks that do not come from Jay, not against code already running as jay
+with the token in reach.
+
+Why the unlock stays at all: on this server the ccd token is readable by every process running as jay, agents
+included. Developer Unlock is the one proof that a click came from Jay at a screen and not from an agent approving
+its own work, so it is made to last, not removed.
 
 **SSH sign-in (control room).** Typing two tokens was the friction; an SSH key login is the stronger
 proof and CommandCenter.exe already makes one for its tunnel. Over it the launcher runs the fixed helper
@@ -510,8 +554,7 @@ carries `sha = sha256(prev_sha + row)`, so editing or removing any row but the n
 the last good check on every look, and the whole chain on request (`GET /api/audit?full=1`).
 Recording happens after the response and never changes it; a failure to record is logged.
 
-The Developer Unlock check used for recording is read-only (it does not refresh the session's idle timer);
-`security.py` is unchanged.
+The Developer Unlock check used for recording is read-only (`DeveloperGate.peek`: it does not refresh the session's idle timer).
 
 **Actor tokens** (`ccd/identity.py`, `actor_tokens`). Jay, with Developer Unlock, issues a token to one agent
 (`agent:<name>`, never `jay`: Jay is proven by Developer Unlock). It is shown once (`cca_…`); ccd keeps its SHA-256,

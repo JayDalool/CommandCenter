@@ -237,14 +237,10 @@ def resolve(asserted, developer, token_hit, project=None):
 
 def developer_session_valid(gate, sid):
     """Is `sid` a live Developer Unlock session? Read-only: unlike DeveloperGate.check it neither refreshes the idle
-    timer nor prunes, so recording who made a write never keeps a session alive (security.py is left unchanged)."""
+    timer nor prunes, so recording who made a write never keeps a session alive."""
     if gate is None or not isinstance(sid, str) or not sid:
         return False
     try:
-        now = gate.clock()
-        for k, (made, used, ttl, idle) in list(gate.sessions.items()):
-            if hmac.compare_digest(k, sid):
-                return now - made <= ttl and now - used <= idle
+        return bool(gate.peek(sid))
     except Exception:  # noqa: BLE001 — identity is a record; a gate it can't read means "not verified"
         return False
-    return False

@@ -175,10 +175,10 @@ class Identity(unittest.TestCase):
         now = [100.0]
         g = security.DeveloperGate(DEV, clock=lambda: now[0])
         sid, _ = g.unlock(DEV)
-        used = g.sessions[sid][1]
+        used = g.devices()[0]["lastUsedAt"]
         now[0] += 10
         self.assertTrue(identity.developer_session_valid(g, sid))
-        self.assertEqual(g.sessions[sid][1], used)                         # idle timer untouched
+        self.assertEqual(g.devices()[0]["lastUsedAt"], used)               # idle timer untouched
         self.assertFalse(identity.developer_session_valid(g, "nope"))
         self.assertFalse(identity.developer_session_valid(None, sid))
         now[0] += 10 ** 6

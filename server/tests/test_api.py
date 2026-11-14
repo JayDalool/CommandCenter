@@ -46,6 +46,7 @@ ALLOWED = {
     ("GET", "/api/attachments"), ("POST", "/api/attachments"), ("GET", "/api/attachments/{aid}/download"),
     ("DELETE", "/api/attachments/{aid}"),
     ("GET", "/api/developer"), ("POST", "/api/developer/unlock"), ("POST", "/api/developer/lock"),
+    ("POST", "/api/developer/lock-all"), ("GET", "/api/developer/devices"),
     ("GET", "/api/desktop/launcher"), ("GET", "/api/desktop/launcher/download"),
     # Workstation: explorer ops, search, source control (no push/reset/force), Claude input, terminals
     ("POST", "/api/files/mkdir"), ("POST", "/api/files/rename"), ("POST", "/api/files/duplicate"),

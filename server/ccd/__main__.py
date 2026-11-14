@@ -93,7 +93,8 @@ def build(cfg=None):
     dev_secret = security.load_or_create_token(config.DEV_TOKEN_PATH)
     if hmac.compare_digest(dev_secret, token):
         sys.exit("developer.token must differ from ccd.token")
-    daemon.dev_gate = security.DeveloperGate(dev_secret)
+    # Unlocks survive a restart (contract §6): only HMACs of session ids reach this 0600 file.
+    daemon.dev_gate = security.DeveloperGate(dev_secret, path=config.DATA_DIR / "developer-sessions.json")
     daemon.dev_token_hint = str(config.DEV_TOKEN_PATH).replace(str(os.path.expanduser("~")), "~", 1)
     daemon.secret_values = (token, dev_secret)
     daemon.launcher_dir = config.LAUNCHER_DIR

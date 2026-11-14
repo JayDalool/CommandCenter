@@ -102,7 +102,10 @@ closing or editing GitHub issues.
 
 ## Workspace (go-live)
 
-DEV = also needs `X-CCD-Developer: <session>` from `/api/developer/unlock`.
+DEV = also needs `X-CCD-Developer: <session>` from `/api/developer/unlock`. File writes (`/api/files/save|upload|mkdir|rename|duplicate|remove`,
+`/api/scm/*`), `/api/action/prompt` and the terminal additionally need the token typed within 8 h on a remembered device: past that they
+answer 403 `{error, reenter: true}` (the terminal closes with 4412), and `POST /api/developer/unlock` with the same
+session re-opens them.
 
 | | |
 |---|---|
@@ -119,7 +122,11 @@ DEV = also needs `X-CCD-Developer: <session>` from `/api/developer/unlock`.
 | `POST /api/attachments?owner=&key=&name=` DEV | raw `application/octet-stream` |
 | `GET /api/attachments/{id}/download` | always `application/octet-stream`, attachment, sandboxed |
 | `DELETE /api/attachments/{id}` DEV | remove (audited) |
-| `GET /api/developer` · `POST /api/developer/unlock {token}` · `POST /api/developer/lock` | Developer Unlock |
+| `GET /api/developer` | `{active, expiresIn, remembered, reenterIn, configured, tokenFile}` for this tab's `X-CCD-Developer` session. `reenterIn`: seconds the terminal and file writes stay open without typing the token again (0 = ask for it) |
+| `POST /api/developer/unlock {token, remember?, label?}` | → `{session, expiresIn, remembered, idleLimit, reenterIn}`. `remember: true` = this device for 30 days, no idle limit (`idleLimit: null`); otherwise 8 h with a 2 h idle limit. `label` names the device in Settings (else a guess from the User-Agent). Sent with a live `X-CCD-Developer` session that is or becomes remembered, it re-proves that same session (same id back) instead of adding a device. `reprove: true` ONLY re-proves the live remembered session named by `X-CCD-Developer` (never creates one or changes its kind; 409 `{ended: true}` if it is gone or not remembered). 400 if `remember`/`reprove` is not a boolean; 403 wrong token; 429 after five wrong tokens in five minutes |
+| `POST /api/developer/lock` | end this tab's session |
+| `POST /api/developer/lock-all {}` DEV | **Lock all devices**: every session everywhere ends, this one included, and unredeemed sign-in codes → `{ended}` |
+| `GET /api/developer/devices` DEV | `{devices[{id, label, kind: plain\|ssh\|remember, remembered, createdAt, lastUsedAt, expiresAt, current}]}` (epoch seconds; never a session id) |
 | `POST /api/developer/handoff {token}` | SSH sign-in, used by `scripts/cc-session` (as jay): ccd token + developer token → `{code, expiresIn: 120}`; the code is single-use and the session lasts 12 h |
 | `POST /api/developer/redeem {code}` | **No ccd token** (Host/Origin checked, JSON only): the code, once → `{token, session, expiresIn}`. Wrong/reused codes are refused (403), never counted |
 | `GET /api/development/{key}/commits` | `{branch, base, branchUrl, commits[{sha,short,message,author,at,url}]}` |
