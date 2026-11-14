@@ -19,14 +19,12 @@ const reenter = (data: unknown) => !!data && typeof data === "object" && (data a
 /** How long a read waits for ccd before it is reported as not answered. Only reads: a write that outlives a timeout
  *  may still land, and calling it failed would invite a second press of the same button. */
 export const READ_TIMEOUT_MS = 30_000;
-/** The import preview asks GitHub once per project, one after another, and ccd gives each call up to 25 s. */
-export const IMPORT_PREVIEW_TIMEOUT_MS = 180_000;
 
 /** The one place the UI talks HTTP to ccd. Same origin; the token goes in a header. */
 export class Api {
   constructor(private fetchImpl: Fetch = (...a) => fetch(...a), private base = "") {}
 
-  private async req<T>(method: string, path: string, body?: unknown, again = false, wait = READ_TIMEOUT_MS): Promise<T> {
+  private async req<T>(method: string, path: string, body?: unknown, again = false): Promise<T> {
     const headers: Record<string, string> = {};
     const token = getToken();
     if (token) headers["X-CCD-Token"] = token;
@@ -36,8 +34,8 @@ export class Api {
     // A read that hangs (a dropped network on the way to jay-server, a stuck ccd) would otherwise leave whatever waits
     // on it waiting for good. It gets the same status as an unreachable ccd, so callers treat it the same way.
     const read = method === "GET" ? new AbortController() : null;
-    const timer = read ? setTimeout(() => read.abort(), wait) : undefined;
-    const late = () => new ApiError(0, `ccd did not answer within ${wait / 1000} s`);
+    const timer = read ? setTimeout(() => read.abort(), READ_TIMEOUT_MS) : undefined;
+    const late = () => new ApiError(0, `ccd did not answer within ${READ_TIMEOUT_MS / 1000} s`);
     let res: Response;
     let data: unknown = null;
     try {
@@ -60,7 +58,7 @@ export class Api {
         String((data as { error: unknown }).error).startsWith("Developer Unlock")) devExpired();
       // A remembered device, more than 8 h after the token was typed: ccd wants it again before this write. Ask once,
       // then send the same request again, so the save Jay asked for still happens.
-      if (res.status === 403 && !again && reenter(data) && await askReenter()) return this.req<T>(method, path, body, true, wait);
+      if (res.status === 403 && !again && reenter(data) && await askReenter()) return this.req<T>(method, path, body, true);
       if (res.status === 409 && data && typeof data === "object") {
         throw Object.assign(new ApiError(409, String((data as { error?: unknown }).error ?? "conflict")), { data });
       }
@@ -218,7 +216,7 @@ export class Api {
     return this.req<{ brief: string; dispatchable: boolean; ticket: TicketDetail }>(
       "GET", `/api/tasks/${encodeURIComponent(key)}/context`);
   }
-  importPreview() { return this.req<ImportPreview>("GET", "/api/tasks/import-preview", undefined, false, IMPORT_PREVIEW_TIMEOUT_MS); }
+  importPreview() { return this.req<ImportPreview>("GET", "/api/tasks/import-preview"); }
 
   devCommits(key: string) { return this.req<DevCommits>("GET", `/api/development/${encodeURIComponent(key)}/commits`); }
 

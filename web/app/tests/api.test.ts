@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { Api, ApiError, IMPORT_PREVIEW_TIMEOUT_MS, READ_TIMEOUT_MS } from "../src/api/client";
+import { Api, ApiError, READ_TIMEOUT_MS } from "../src/api/client";
 import { setToken, clearToken, getToken, isRemembered } from "../src/api/auth";
 import { jsonResponse } from "./helpers";
 
@@ -70,16 +70,6 @@ describe("API adapter", () => {
       expect(settled).toBe(false);
       expect(seen[0].signal).toBeUndefined();
       expect(vi.getTimerCount()).toBe(0);
-    });
-
-    it("the import preview gets longer: ccd asks GitHub once per project before it answers", async () => {
-      vi.useFakeTimers();
-      const seen: RequestInit[] = [];
-      const got = hang(seen).importPreview().catch((e: unknown) => e);
-      await vi.advanceTimersByTimeAsync(IMPORT_PREVIEW_TIMEOUT_MS - 1);
-      expect(seen[0].signal?.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(await got).toMatchObject({ status: 0, message: "ccd did not answer within 180 s" });
     });
 
     it("an answered read leaves no timer behind", async () => {
