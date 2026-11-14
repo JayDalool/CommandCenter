@@ -71,6 +71,15 @@ export function dayText(at: number, tz: string): string {
   catch { return d.toDateString(); }   // a zone this browser does not know
 }
 
+/** The hour of a cut-off, in the window's own time zone: "noon", or "9 a.m." for a window that opens before noon
+ *  (ccd then cuts off when it opens). */
+export function cutText(at: number, tz: string): string {
+  try {
+    const t = new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(at * 1000));
+    return t === "12:00" ? "noon" : clock(t);
+  } catch { return "the cut-off"; }   // a zone this browser does not know
+}
+
 /** "Live" or "Not live" beside a project's name. Nothing while ccd has not answered, on an older ccd, and for a
  *  project ccd does not list. */
 export function LiveTag({ project }: { project: string }) {

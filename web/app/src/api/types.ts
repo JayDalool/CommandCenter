@@ -722,8 +722,10 @@ export interface Briefing { since: number; until: number; totals: BriefingCounts
  *  Saturday; `time` "HH:MM" in `tz`; `next` the start of the next window that has not ended (epoch seconds); `hours`
  *  how long a window stays open. */
 export interface ReleaseWindow { weekday: number; time: string; tz: string; next: number; hours?: number }
-/** Which projects are live, and when their changes go out. `cutoff`: noon on that release day (epoch seconds); a
- *  change merged after it waits for the next week's window. */
+/** Which projects are live, and when their changes go out. `cutoff`: the merge cut-off still ahead (epoch seconds):
+ *  noon on a release day, or the window's start when it opens before noon. A change merged by then goes out in that
+ *  day's window. Once it has passed it is next week's, while `window.next` is still this week's window until that
+ *  has ended. */
 export interface ReleaseState { window: ReleaseWindow; cutoff: number; projects: Record<string, { live: boolean }> }
 /** A project's logo as ccd lists it (GET /api/projects/logos). The bytes are fetched apart and shown from a blob:. */
 export interface ProjectLogo { mime: string; sha256: string; updatedAt: number }

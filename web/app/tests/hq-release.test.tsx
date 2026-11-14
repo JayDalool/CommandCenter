@@ -2,23 +2,34 @@
 // store, flow contract §5). ccd says which projects are live and when live projects release; the page shows a
 // label beside each project and lets Jay change either with Developer Unlock. An older ccd has no such route, and
 // then nothing about it is shown.
-import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { vi } from "vitest";
 import { App } from "../src/App";
 import { app, initial } from "../src/store/app";
 import { prefs } from "../src/lib/prefs";
 import { loadHqFrame } from "../src/components/Shell";
-import { developer } from "../src/api/developer";
+import { developer, setDevSession } from "../src/api/developer";
 import { ApiError } from "../src/api/client";
-import { clock, dayText, refreshRelease, release, resetRelease, windowText } from "../src/hq/release";
+import { clock, cutText, dayText, refreshRelease, release, resetRelease, windowText } from "../src/hq/release";
 import type { ReleaseState } from "../src/api/types";
 import { ev, state, tasks } from "./helpers";
 
-// Wednesday 18 November 2026, 22:00 in Winnipeg (UTC-6 in November) is 04:00 UTC on the 19th.
-const NEXT = Date.UTC(2026, 10, 19, 4, 0) / 1000;
-const CUTOFF = Date.UTC(2026, 10, 18, 18, 0) / 1000;
-const rel = (live: string[] = ["samvision"], window: Partial<ReleaseState["window"]> = {}): ReleaseState => ({
-  window: { weekday: 3, time: "22:00", tz: "America/Winnipeg", next: NEXT, hours: 2, ...window }, cutoff: CUTOFF,
+const TZ = "America/Winnipeg";
+// The unix time at which a clock in `tz` reads this wall time. It is read from the machine's own time-zone data and
+// never from a fixed offset: machines disagree about Winnipeg's offset in November 2026 (UTC-6 on one set of zone
+// data, UTC-5 on another), and the page formats with the same data this reads.
+function at(tz: string, year: number, month: number, day: number, hour: number, minute = 0): number {
+  const want = Date.UTC(year, month - 1, day, hour, minute);
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "numeric",
+    day: "numeric", hour: "numeric", minute: "numeric" }).formatToParts(new Date(want));
+  const n = (type: string) => Number(parts.find((x) => x.type === type)?.value);
+  return (2 * want - Date.UTC(n("year"), n("month") - 1, n("day"), n("hour"), n("minute"))) / 1000;
+}
+// Wednesday 18 November 2026 in Winnipeg: the window opens at 22:00 and the cut-off is noon.
+const NEXT = at(TZ, 2026, 11, 18, 22);
+const CUTOFF = at(TZ, 2026, 11, 18, 12);
+const rel = (live: string[] = ["samvision"], window: Partial<ReleaseState["window"]> = {}, cutoff = CUTOFF): ReleaseState => ({
+  window: { weekday: 3, time: "22:00", tz: TZ, next: NEXT, hours: 2, ...window }, cutoff,
   projects: Object.fromEntries(["samvision", "gyst", "mfe", "gauzemate", "commandcenter"].map((k) => [k, { live: live.includes(k) }])),
 });
 
@@ -61,8 +72,15 @@ describe("the words", () => {
   it("names the window and the day in the window's own zone", () => {
     expect(windowText(rel().window)).toBe("Wednesday 10 p.m. Central");
     expect(windowText({ weekday: 5, time: "06:15", tz: "Europe/Paris", next: 0 })).toBe("Friday 6:15 a.m. Europe/Paris");
-    expect(dayText(NEXT, "America/Winnipeg")).toBe("Wed, Nov 18");   // the 19th in UTC, still Wednesday in Winnipeg
+    expect(dayText(NEXT, TZ)).toBe("Wed, Nov 18");   // the 19th in UTC, still Wednesday in Winnipeg
     expect(dayText(NEXT, "Not/AZone")).toMatch(/2026/);              // an unknown zone still gives a date
+  });
+
+  it("says a cut-off's hour in the window's own zone: noon, or when a morning window opens", () => {
+    expect(cutText(CUTOFF, TZ)).toBe("noon");
+    expect(cutText(CUTOFF - 3 * 3600, TZ)).toBe("9 a.m.");
+    expect(cutText(CUTOFF - 3.5 * 3600, TZ)).toBe("8:30 a.m.");
+    expect(cutText(CUTOFF, "Not/AZone")).toBe("the cut-off");
   });
 });
 
@@ -132,6 +150,30 @@ describe("My Office", () => {
   });
 });
 
+describe("Teams", () => {
+  it("says Live or Not live after each project's name, in Seats and in List", async () => {
+    vi.spyOn(app.api, "release").mockResolvedValue(rel(["samvision"]));
+    load();
+    const main = await show("#/agents");
+    const panel = (name: string) => within(main).getByRole("region", { name: new RegExp(`^${name}`) });
+    for (const view of ["Seats", "List"]) {
+      fireEvent.click(within(main).getByRole("button", { name: view }));
+      await settle();
+      expect(tags(panel("SamVision")), view).toEqual(["Live"]);
+      expect(tags(panel("GYST")), view).toEqual(["Not live"]);
+      // In the heading, straight after the name, so the panel is still found by its project's name.
+      expect(panel("SamVision").querySelector("h3")!.textContent, view).toMatch(/^\s*SamVision\s*Live/);
+    }
+  });
+
+  it("shows no label on an older ccd", async () => {
+    vi.spyOn(app.api, "release").mockRejectedValue(new ApiError(404, "not found"));
+    load();
+    const main = await show("#/agents");
+    expect(tags(main)).toEqual([]);
+  });
+});
+
 describe("Settings › Operating profiles", () => {
   const group = (main: HTMLElement) => main.querySelector<HTMLElement>("#set-release");
   const row = (main: HTMLElement, name: string) => [...group(main)!.querySelectorAll<HTMLElement>(".hq-set-row")].find((r) => r.textContent!.startsWith(name))!;
@@ -162,13 +204,33 @@ describe("Settings › Operating profiles", () => {
     expect(within(time).getByLabelText("Release time")).toHaveValue("22:00");
   });
 
-  it("after noon on release day, says the cut-off has passed", async () => {
-    vi.spyOn(app.api, "release").mockResolvedValue(rel(["samvision"]));
+  it("after noon on release day, says the cut-off has passed and when a change merged now goes out", async () => {
+    // ccd sends the cut-off still ahead: past noon on release day that is next week's, while tonight's window is
+    // still the next one.
+    vi.spyOn(app.api, "release").mockResolvedValue(rel(["samvision"], {}, CUTOFF + 7 * 86400));
     load();
     vi.setSystemTime(new Date((CUTOFF + 3600) * 1000));
     const main = await show("#/settings?tab=profiles");
     expect(row(main, "Release time")).toHaveTextContent(
-      "Next release: 10 p.m. on Wed, Nov 18. The noon cut-off on Wed, Nov 18 has passed: a change merged now waits for the release after it.");
+      "Next release: 10 p.m. on Wed, Nov 18. Its cut-off has passed: a change merged now goes out on Wed, Nov 25.");
+    expect(group(main)).toHaveTextContent("A change merged before noon on release day goes out in that day's release; a later one waits a week.");
+  });
+
+  it("a release that opens before noon cuts off when it opens, and the page says that hour", async () => {
+    // ccd: the cut-off is noon, or the window's start when that is earlier (9 a.m. here).
+    const OPENS = CUTOFF - 3 * 3600;
+    const api = vi.spyOn(app.api, "release").mockResolvedValue(rel(["samvision"], { time: "09:00", next: OPENS }, OPENS));
+    load();
+    let main = await show("#/settings?tab=profiles");
+    expect(row(main, "Release time")).toHaveTextContent("Next release: 9 a.m. on Wed, Nov 18. A change merged by 9 a.m. on Wed, Nov 18 is in it.");
+    expect(group(main)).toHaveTextContent("A change merged before the release opens on release day goes out in that day's release; a later one waits a week.");
+    expect(group(main)).not.toHaveTextContent("noon");
+
+    // While that release is open, the cut-off ahead is next week's.
+    cleanup(); resetRelease();
+    api.mockResolvedValue(rel(["samvision"], { time: "09:00", next: OPENS }, OPENS + 7 * 86400));
+    main = await show("#/settings?tab=profiles");
+    expect(row(main, "Release time")).toHaveTextContent("Next release: 9 a.m. on Wed, Nov 18. Its cut-off has passed: a change merged now goes out on Wed, Nov 25.");
   });
 
   it("locked: a press asks for Developer Unlock and sends nothing", async () => {
@@ -186,6 +248,48 @@ describe("Settings › Operating profiles", () => {
       expect(asked).toHaveBeenCalledTimes(1);
       expect(within(row(main, "GYST")).getByRole("button", { name: "Not live" })).toHaveAttribute("aria-pressed", "true");
     } finally { window.removeEventListener("cc:dev-unlock", asked); }
+  });
+
+  it("locked: what Jay pressed goes out once he has unlocked, without a second press; Cancel drops it", async () => {
+    vi.spyOn(app.api, "release").mockResolvedValue(rel([]));
+    vi.spyOn(app.api, "developerStatus").mockResolvedValue({ active: false, expiresIn: null, tokenFile: null });
+    vi.spyOn(app.api, "unlock").mockResolvedValue({ ok: true, session: "s".repeat(43), expiresIn: 3600 });
+    const setLive = vi.spyOn(app.api, "setLive").mockResolvedValue(rel(["gyst"]));
+    const setWindow = vi.spyOn(app.api, "setReleaseWindow").mockResolvedValue(rel(["gyst"], { time: "21:30" }));
+    try {
+      load();
+      const main = await show("#/settings?tab=profiles");
+      const live = () => within(row(main, "GYST")).getByRole("button", { name: "Live" });
+
+      fireEvent.click(live());
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await settle();
+
+      fireEvent.click(live());
+      await settle();
+      expect(setLive).not.toHaveBeenCalled();
+      fireEvent.change(screen.getByLabelText("Developer token"), { target: { value: "k".repeat(43) } });
+      fireEvent.click(screen.getByRole("button", { name: "Unlock and continue" }));
+      await waitFor(() => expect(setLive).toHaveBeenCalled());
+      await settle();
+      expect(setLive.mock.calls).toEqual([["gyst", true]]);     // once: the cancelled press is not sent with it
+      expect(live()).toHaveAttribute("aria-pressed", "true");
+
+      // The time box: locked, it goes back to ccd's time at once, and the typed time is sent after the unlock.
+      act(() => setDevSession(null));
+      const time = within(row(main, "Release time")).getByLabelText("Release time");
+      fireEvent.change(time, { target: { value: "21:30" } });
+      await act(async () => { fireEvent.blur(time); });
+      expect(time).toHaveValue("22:00");
+      expect(setWindow).not.toHaveBeenCalled();
+      fireEvent.change(screen.getByLabelText("Developer token"), { target: { value: "k".repeat(43) } });
+      fireEvent.click(screen.getByRole("button", { name: "Unlock and continue" }));
+      await waitFor(() => expect(setWindow).toHaveBeenCalled());
+      await settle();
+      expect(setWindow.mock.calls).toEqual([[3, "21:30"]]);
+      expect(time).toHaveValue("21:30");
+    } finally { setDevSession(null); }
   });
 
   it("unlocked: makes a project live with one press, and shows ccd's answer everywhere", async () => {
