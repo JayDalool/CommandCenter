@@ -34,10 +34,22 @@ class Window(unittest.TestCase):
         self.assertEqual(release.slot_for(W, at(2026, 11, 14, 9))[0], at(2026, 11, 18, 22))
 
     def test_the_next_window_survives_a_clock_change(self):
-        # Winnipeg moves to standard time on 2026-11-01: the window stays at 22:00 local.
-        start, _ = release.next_window(W, at(2026, 10, 29, 23, 59) + 3 * 3600)
-        self.assertEqual(datetime.datetime.fromtimestamp(start, WPG).strftime("%a %H:%M"), "Wed 22:00")
-        self.assertEqual(start, at(2026, 11, 4, 22))
+        # Manitoba stopped changing clocks in 2026, so Winnipeg cannot show this with current zone data (and older
+        # data disagrees); Chicago still leaves daylight time on 2026-11-01. The window stays at 22:00 local.
+        chi = zoneinfo.ZoneInfo("America/Chicago")
+        w = dict(W, tz="America/Chicago")
+        before = datetime.datetime(2026, 10, 28, 22, 0, tzinfo=chi)
+        after = datetime.datetime(2026, 11, 4, 22, 0, tzinfo=chi)
+        self.assertNotEqual(before.utcoffset(), after.utcoffset())       # the test really spans a change
+        start, _ = release.next_window(w, before.timestamp() + 3 * 3600)
+        self.assertEqual(datetime.datetime.fromtimestamp(start, chi).strftime("%a %H:%M"), "Wed 22:00")
+        self.assertEqual(start, after.timestamp())
+        held = Release(os.path.join(tempfile.mkdtemp(prefix="ccd-release-"), "release.json"))
+        held.data["window"] = w
+        held.data["live"]["samvision"] = True
+        # merged before the 28th's cutoff, nobody deployed: the hold steps to the 4th, still 22:00 local
+        self.assertEqual(held.hold("samvision", before.timestamp() - 12 * 3600, before.timestamp() + 3 * 3600),
+                         after.timestamp())
 
     def test_a_morning_window_cuts_off_at_its_start(self):
         morning = dict(W, time="09:00")
