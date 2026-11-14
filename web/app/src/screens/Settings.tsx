@@ -104,10 +104,7 @@ function DeveloperMode() {
         questions, saving or uploading repository files and attachments also need Developer Unlock, a separate token kept in
         <span className="mono"> ~/.config/command-center/developer.token</span> on jay-server. Unlock once per app session:
         reloads and Command Center's own pop-out windows keep it. It ends when you lock it, close the browser, two idle hours
-        pass or eight hours pass. Tick "Remember this device" in the unlock dialog (when this ccd offers it) and the device
-        stays unlocked for 30 days instead, through a closed browser and a ccd restart; terminals and file changes then
-        ask for the token again 8 hours after it was typed. The token itself is never stored; only the session id, in
-        this browser session, or in this browser on a remembered device.</p>
+        pass, eight hours pass, or ccd restarts. The token itself is never stored; only the session id, in this browser session.</p>
     </div>
   </Panel>;
 }
