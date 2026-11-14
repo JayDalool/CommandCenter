@@ -532,6 +532,23 @@ class PipelineApi(Automation):
     def status(self):
         return self.tickets.get(self.key)["status"]
 
+    def test_release_settings_are_jays_with_developer_unlock(self):
+        r = self.get("/api/release").json()
+        self.assertEqual((r["window"]["weekday"], r["window"]["time"], r["projects"]["samvision"]),
+                         (3, "22:00", {"live": False}))
+        body = json.dumps({"live": True})
+        self.assertEqual(self.client.put("/api/release/projects/samvision", content=body, headers=JSON).status_code, 403)
+        dev = self.client.post("/api/developer/unlock", content=json.dumps({"token": self.DEV}), headers=JSON).json()
+        h = dict(JSON, **{"x-ccd-developer": dev["session"]})
+        self.addCleanup(lambda: self.daemon.releases.set_live("samvision", False))
+        r = self.client.put("/api/release/projects/samvision", content=body, headers=h)
+        self.assertEqual((r.status_code, r.json()["projects"]["samvision"]), (200, {"live": True}), r.text)
+        self.assertEqual(self.client.put("/api/release/projects/nope", content=body, headers=h).status_code, 404)
+        self.assertEqual(self.client.put("/api/release/window", content=json.dumps({"weekday": 9, "time": "22:00"}),
+                                         headers=h).status_code, 400)
+        self.assertEqual(self.client.put("/api/release/projects/samvision", content=body,
+                                         headers=dict(h, **{"x-ccd-actor": "agent:coordinator"})).status_code, 403)
+
     def test_the_delivery_flow_over_http_and_the_flow_view(self):
         """Intake, technical review, user check, code review, merge, verify, the closing note; /api/flow shows it."""
         self.tickets.create("samvision", "feature", number=56, status="INBOX", description="Comps miss sold homes")

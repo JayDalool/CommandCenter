@@ -75,6 +75,9 @@
                                      flow's intake criteria plan-review user-check close;
                                      `confirm` (close an owner gate) needs Jay AND Developer Unlock
     GET   /api/flow                  the delivery flow per project: seats, tickets in flight, WIP limits
+    GET   /api/release               live per project, the weekly release window (next start) and the merge cutoff
+    PUT   /api/release/window        Jay AND Developer Unlock. {weekday 0=Sunday..6, time "HH:MM"} (Winnipeg time)
+    PUT   /api/release/projects/{project}  Jay AND Developer Unlock. {live: true|false}
     POST  /api/tasks/check           Jay AND Developer Unlock. the task check: a fixed message asks the project's
                                      idle coordinator Claude to propose stale tasks and add missing ones
                                      ({copy: true}: send nothing, return the message to paste by hand)
@@ -583,6 +586,18 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
 
     async def flow_state(request, _):
         return daemon.flow_state()
+
+    async def release_state(request, _):
+        return daemon.release_state()
+
+    async def release_window(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.release_set("window", body, request.state.actor, developer=dev)
+
+    async def release_live(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.release_set("project", body, request.state.actor, developer=dev,
+                                  project=request.path_params["project"])
 
     async def task_work_op(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
@@ -1543,6 +1558,9 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/tasks/{key}/context", guarded(task_context), methods=["GET"]),
         Route("/api/tasks/{key}/work", guarded(task_work), methods=["GET"]),
         Route("/api/flow", guarded(flow_state), methods=["GET"]),
+        Route("/api/release", guarded(release_state), methods=["GET"]),
+        Route("/api/release/window", guarded(release_window), methods=["PUT"]),
+        Route("/api/release/projects/{project}", guarded(release_live), methods=["PUT"]),
         Route("/api/tasks/{key}/work/{op}", guarded(task_work_op), methods=["POST"]),
         Route("/api/tasks/{key}/answers", guarded(task_answers), methods=["POST"]),
         Route("/api/tasks/{key}/record", guarded(task_record), methods=["GET"]),

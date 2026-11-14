@@ -402,3 +402,25 @@ Events (ticket timeline and `/api/activity` `task.pipeline` with `data.kind`; id
 `pipeline.criteria`, `pipeline.plan_reviewed`, `pipeline.user_checked`, `pipeline.user_check_stale`,
 `pipeline.closed_note`, `pipeline.flow_stale`.
 
+
+## Live or not live, release day (the shared flow contract §5)
+
+Per project, Jay marks it live or not (default not live), and one weekly release window covers every live project
+(default Wednesday 22:00 America/Winnipeg). Stored in `<CCD_STATE_DIR>/release.json` (0600). Nothing here deploys
+anything and who runs a deploy does not change.
+
+| route | who | what |
+|---|---|---|
+| `GET /api/release` | anyone with the token | `{window: {weekday, time, tz, next, hours}, cutoff, projects: {[key]: {live}}}`. `weekday` 0 = Sunday … 6 = Saturday; `time` "HH:MM" local; `next` the unix start of the next window that has not ended; `hours` how long a window stays open (2); `cutoff` the next merge cutoff still ahead (noon local on a release day, or the window's start when it opens before noon) |
+| `PUT /api/release/window` | Jay + Developer Unlock | `{weekday, time}` → the same body as GET. Event `release.window` |
+| `PUT /api/release/projects/{project}` | Jay + Developer Unlock | `{live: true\|false}` → the same body as GET; 404 for an unknown project. Event `release.live` |
+
+Effect on a **live** project: a change merged before noon on release day goes out in that night's window; one merged
+later waits a week. `deploy-request --env live` records `deploy.heldUntil` (the window's start) and still opens the
+deploy gate for Jay (`/work` works `heldUntil` out on every read); `deployed --env live --result pass` is refused (409,
+naming the window) until the window opens, and a window that passed without a deploy moves the hold to the next week.
+A failed deploy is always recorded. A change with no recorded merge is placed by when its deploy was requested. On a **risky** ticket Jay can approve the deploy gate as
+urgent (`confirm {gate: "deploy", urgent: true}`, Developer Unlock; event `pipeline.deploy_urgent`): no window then.
+Urgent on any other ticket is refused; risky means sized risky or made risky by the policy. On a `needs:deploy`
+gate, urgent carries into the deploy Jay's approval creates. A project that is not live has no window and no banner. The client banner is
+one ticket per app in that app's own repository; ccd only serves the window above.
