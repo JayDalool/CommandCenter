@@ -5,9 +5,10 @@
 import type { FlowStage, Handoff, PipelineStage, TicketWork } from "../../api/types";
 import { taskHref } from "../../lib/control";
 import { href } from "../../lib/router";
+import { useEffect, useState } from "react";
 import { useSelector } from "../../lib/store";
 import { ago, stamp } from "../../lib/time";
-import { useWork, works } from "../../tickets/useWork";
+import { loadWork, works } from "../../tickets/useWork";
 import { PRESENCE_LABEL, SEAT_LABEL, STAGE_LABEL, type FlightRow, type RailStep } from "../data";
 import { Pill, PRESENCE_TONE, cx } from "./ui";
 
@@ -49,8 +50,18 @@ export function handoffText(h: Handoff): string {
 const MARK = { pass: "Passed", fail: "Failed", open: "Not checked" } as const;
 
 export function TicketFlowPanel({ r, now }: { r: FlightRow; now: number }) {
-  useWork(r.t.key);                                    // loads it, and again whenever the ticket changes
-  const w = useSelector(works, (d) => d[r.t.key]);
+  const key = r.t.key;
+  const w = useSelector(works, (d) => d[key]);
+  // Loaded when the ticket is opened and again whenever it changes. loadWork records a ticket with no work as
+  // "missing" and keeps what it had on any other failure, so "nothing yet" after it settles means it failed.
+  const [failed, setFailed] = useState(false);
+  const [tries, setTries] = useState(0);
+  useEffect(() => {
+    let on = true;
+    setFailed(false);
+    void loadWork(key).then(() => { if (on && works.get()[key] === undefined) setFailed(true); });
+    return () => { on = false; };
+  }, [key, r.t.updatedAt, tries]);
   const links = <p className="hq-tf-links">
     <a className="hq-btn" href={taskHref(r.t.key)}>Watch the live session</a>
     <a className="hq-btn" href={href("tasks", r.t.key)}>Open ticket</a></p>;
@@ -58,7 +69,10 @@ export function TicketFlowPanel({ r, now }: { r: FlightRow; now: number }) {
     {r.on.map(({ who, seat }) => <li key={who.id}>
       <b>{seat ? SEAT_LABEL[seat] : "Session"}</b> <a href={href("agents", who.id)}>{who.name}</a>
       <Pill tone={PRESENCE_TONE[who.presence]}>{PRESENCE_LABEL[who.presence]}</Pill></li>)}</ul>;
-  if (w === undefined) return <div className="hq-tf">{people}<p className="hq-note" role="status">Loading the stages…</p>{links}</div>;
+  if (w === undefined) return <div className="hq-tf">{people}
+    {failed ? <p className="hq-note" role="alert">Could not load the stages.{" "}
+      <button type="button" className="hq-link" onClick={() => setTries(tries + 1)}>Try again</button></p>
+      : <p className="hq-note" role="status">Loading the stages…</p>}{links}</div>;
   if (w === "missing") return <div className="hq-tf">{people}
     <p className="hq-note">No work is recorded for this ticket yet, so there are no stages to show.</p>{links}</div>;
   const steps = stepsOf(w, r.rail);

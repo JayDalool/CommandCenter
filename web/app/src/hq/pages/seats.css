@@ -49,7 +49,10 @@
 :root[data-ui="hq"] .hq-fl-btn svg { flex: none; color: var(--hq-muted); }
 :root[data-ui="hq"] .hq-fl-btn code { flex: none; color: var(--hq-text-2); font: 600 var(--hq-fs-sm) var(--hq-mono); }
 :root[data-ui="hq"] .hq-fl-stage { display: flex; align-items: center; gap: 10px; min-width: 0; }
-:root[data-ui="hq"] .hq-fl-stage b { color: var(--hq-text-strong); font-weight: 600; font-size: var(--hq-fs-sm); white-space: nowrap; }
+:root[data-ui="hq"] .hq-fl-stage b {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--hq-text-strong); font-weight: 600; font-size: var(--hq-fs-sm);
+}
 :root[data-ui="hq"] .hq-fl.is-blocked > .hq-fl-row .hq-fl-stage b { color: var(--hq-bad); }
 :root[data-ui="hq"] .hq-fl-who { display: grid; gap: 1px; min-width: 0; color: var(--hq-text-2); font-size: var(--hq-fs-sm); }
 :root[data-ui="hq"] .hq-fl-who .t-jay { font-weight: 600; }
@@ -105,6 +108,7 @@
 :root[data-ui="hq"] .hq-tf-hist time { color: var(--hq-muted); font-variant-numeric: tabular-nums; }
 :root[data-ui="hq"] .hq-tf-close { font-size: var(--hq-fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
 :root[data-ui="hq"] .hq-tf-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+:root[data-ui="hq"] .hq-tf button.hq-link { padding: 0; border: 0; background: none; font: inherit; font-weight: 600; cursor: pointer; }
 
 @media (max-width: 560px) {
   /* a free seat is one line on a phone, so eight seats do not push the tickets off the screen */

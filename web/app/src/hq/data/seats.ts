@@ -28,11 +28,13 @@ export const STAGE_SEAT: Record<FlowStage, FlowSeat | "jay"> = {
   codeReview: "codeReviewer", merge: "jay", release: "verifier", done: "lead",
 };
 
-const ROLE_SEAT: Record<string, FlowSeat> = { COORDINATOR: "lead", PLANNER: "investigator", IMPLEMENTER: "developer",
-  REVIEWER: "codeReviewer", VERIFIER: "verifier" };
+/** COORDINATOR is not here: the lead's seat is the team's lead and nobody else's, so any other session with that
+ *  role sits in no seat. */
+const ROLE_SEAT: Record<string, FlowSeat> = { PLANNER: "investigator", IMPLEMENTER: "developer", REVIEWER: "codeReviewer",
+  VERIFIER: "verifier" };
 /** The seat of the session a ticket records as its agent. A reviewer sits in the review the ticket is at. */
-const seatFor = (role: string, at: FlowStage | null): FlowSeat | undefined =>
-  role === "REVIEWER" && (at === "techReview" || at === "userCheck") ? STAGE_SEAT[at] as FlowSeat : ROLE_SEAT[role];
+const seatFor = (role: string, at: FlowStage | null): FlowSeat | null =>
+  role === "REVIEWER" && (at === "techReview" || at === "userCheck") ? STAGE_SEAT[at] as FlowSeat : ROLE_SEAT[role] ?? null;
 /** With no recorded role, only the stages one session does alone say what the ticket's holder is doing. A ticket in
  *  a review is held by whoever built it as often as by its reviewer, so no seat is guessed there. */
 const DOING: Partial<Record<FlowStage, FlowSeat>> = { investigate: "investigator", build: "developer" };
@@ -52,17 +54,24 @@ export interface RailStep { stage: FlowStage; state: "done" | "active" | "todo" 
 /** A screen changes: the same test ccd uses for its UI gate (pipeline.policy). */
 const isUi = (t: Ticket) => t.flags.includes("needs_ui_review") || t.type === "DESIGN" || t.labels.includes("ui");
 
-/** The ticket's stages in order. `flow` = this ccd runs the nine stages: a sized ticket goes through them (a small
- *  one skips three), and one nobody has sized yet keeps the seven it had before. */
+/** The stages a ticket goes through. ccd says so when it sends `route`. Without it this is a guess from the size:
+ *  a ticket nobody sized keeps the seven stages it had before the flow, and a small one skips three of the nine. */
+export function routeOf(t: Ticket, flow: boolean): FlowStage[] {
+  const sent = t.route?.filter((s) => FLOW_STAGES.includes(s));
+  if (sent?.length) return sent;
+  if (!flow || !t.size) return OLD_STAGES;
+  return t.size !== "small" ? FLOW_STAGES
+    : FLOW_STAGES.filter((s) => s !== "investigate" && s !== "techReview" && (s !== "userCheck" || isUi(t)));
+}
+
+/** The row of stages. `flow` = this ccd runs the nine stages, so every ticket is drawn on the same nine places and a
+ *  stage off its route is skipped; where the ticket is always shows. */
 export function railOf(t: Ticket, flow: boolean): RailStep[] {
-  const at = stageOf(t);
-  const nine = flow && (!!t.size || at === "techReview" || at === "userCheck");
-  const stages = nine ? FLOW_STAGES : OLD_STAGES;
+  const at = stageOf(t), on = routeOf(t, flow);
+  const stages = flow ? FLOW_STAGES : OLD_STAGES;
   const i = at ? stages.indexOf(at) : -1;
-  const skip = (s: FlowStage) => nine && t.size === "small"
-    && (s === "investigate" || s === "techReview" || (s === "userCheck" && !isUi(t)));
   return stages.map((stage, n) => ({ stage,
-    state: n === i ? "active" : skip(stage) ? "skipped" : i >= 0 && n < i ? "done" : "todo" }));
+    state: n === i ? "active" : !on.includes(stage) ? "skipped" : i >= 0 && n < i ? "done" : "todo" }));
 }
 
 export interface SeatRow {
@@ -93,7 +102,8 @@ export interface SeatsTeam {
   seats: SeatRow[];
   /** Tickets past intake, or with someone on them: parents first, every open child under its parent. */
   flight: FlightRow[];
-  /** How many open tickets are in flight, and how many still wait at intake. */
+  /** How many tickets the list holds (children and parents brought along from intake included), and how many
+   *  more wait at intake. */
   inFlight: number;
   atIntake: number;
   /** Sessions of this project in no seat: no ticket, or a ticket that does not say what they do on it. */
@@ -125,7 +135,7 @@ export function buildSeats(src: HqSource, ev: Evidence): SeatsView {
     const seatOf = (m: TeamMember, t: Ticket): FlowSeat | null => {
       if (m.leadOf) return "lead";
       const at = stageOf(t);
-      return (t.agentPaneId === m.id && t.agentRole ? seatFor(t.agentRole, at) : undefined) ?? (at ? DOING[at] ?? null : null);
+      return t.agentPaneId === m.id && t.agentRole ? seatFor(t.agentRole, at) : at ? DOING[at] ?? null : null;
     };
     const on = new Map<string, FlightRow["on"]>();
     for (const m of people) {
@@ -164,9 +174,8 @@ export function buildSeats(src: HqSource, ev: Evidence): SeatsView {
     roots.forEach((r) => r.children.sort(order));
 
     const seated = new Set([...on.values()].flat().filter((x) => x.seat).map((x) => x.who.id));
-    const flying = open.filter(inFlight).length;
-    return { key: team.key, name: team.name, leadWhy: team.leadWhy, seats, flight: roots, inFlight: flying,
-      atIntake: open.length - flying,
+    return { key: team.key, name: team.name, leadWhy: team.leadWhy, seats, flight: roots, inFlight: rows.size,
+      atIntake: open.length - rows.size,
       loose: team.members.filter((m) => !seated.has(m.id)), openTasks: team.openTasks };
   });
   return { teams, unassigned: base.unassigned, flow, sessions: base.sessions };

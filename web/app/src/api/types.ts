@@ -291,6 +291,9 @@ export interface Ticket {
   size?: TicketSize | null;
   stage?: FlowStage | null;
   stale?: boolean;
+  /** The stages this ticket goes through, in order. Its size alone does not say: ccd reads a ticket nobody sized
+   *  as risky when the policy makes it so, and it still runs the route it had before the flow. */
+  route?: FlowStage[];
 }
 
 export const VISIBLE_STAGES = ["Planning", "Implementing", "Reviewing", "UI Testing", "Verifying", "Ready to Merge",

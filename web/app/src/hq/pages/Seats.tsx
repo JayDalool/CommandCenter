@@ -18,7 +18,8 @@ const MONO: Record<FlowSeat, string> = { lead: "LD", investigator: "IN", techRev
   designReviewer: "DR", codeReviewer: "CR", verifier: "VF" };
 const SIZE: Record<TicketSize, string> = { small: "Small", standard: "Standard", risky: "Risky" };
 
-/** The row of stages, as one image: a screen reader hears where the ticket is, not nine dots. */
+/** The row of stages, as one image: a screen reader hears how far the ticket is, not nine dots. The stage's name is
+ *  in words right after it, so the label does not repeat it. */
 export function Rail({ rail, label }: { rail: RailStep[]; label: string }) {
   return <span className="hq-rail" role="img" aria-label={label}>
     {rail.map((s) => <i key={s.stage} className={`is-${s.state}`} title={STAGE_LABEL[s.stage]} />)}</span>;
@@ -48,7 +49,9 @@ function SeatCard({ s, project, nth, leadWhy }: { s: SeatRow; project: string; n
 function Flight({ r, now }: { r: FlightRow; now: number }) {
   const [open, setOpen] = useState(false);
   const id = useId();
-  const at = r.rail.findIndex((s) => s.state === "active");
+  // counted along the ticket's own route: a small ticket at code review is at stage 3 of 6, not 6 of 9
+  const route = r.rail.filter((s) => s.state !== "skipped");
+  const at = route.findIndex((s) => s.state === "active");
   const where = r.blocked ? "Blocked" : r.stage ? STAGE_LABEL[r.stage] : "Not known";
   return <li className={cx("hq-fl", r.needsJay && "is-jay", r.blocked && "is-blocked")}>
     <div className="hq-fl-row">
@@ -57,7 +60,7 @@ function Flight({ r, now }: { r: FlightRow; now: number }) {
       <span className="hq-fl-tags">{r.t.stale && <Pill tone="warn" title="No step recorded for 48 hours">Stale</Pill>}
         {r.notSized ? <small className="hq-fl-size">Not sized</small>
           : r.t.size && <small className={cx("hq-fl-size", r.t.size === "risky" && "is-risky")}>{SIZE[r.t.size]}</small>}</span>
-      <span className="hq-fl-stage"><Rail rail={r.rail} label={at >= 0 && !r.blocked ? `${where}, stage ${at + 1} of ${r.rail.length}` : where} />
+      <span className="hq-fl-stage"><Rail rail={r.rail} label={at >= 0 ? `Stage ${at + 1} of ${route.length}` : "Stage not known"} />
         <b>{where}</b></span>
       <span className="hq-fl-who">
         {r.needsJay && <a className="t-jay" href={href("needs")}>Needs you</a>}
@@ -83,7 +86,7 @@ function TeamSeats({ t, now }: { t: SeatsTeam; now: number }) {
   const nth = (i: number) => t.seats.slice(0, i).filter((x) => x.seat === t.seats[i]!.seat).length;
   return <section className="hq-panel hq-team hq-seating" aria-labelledby={`hq-seating-${t.key}`} style={{ ["--pj" as string]: `var(--hq-pj-${t.key}, var(--hq-accent))` }}>
     <header><h3 id={`hq-seating-${t.key}`}><ProjectLogo project={t.key} /> {t.name}
-      <small>{plural(t.inFlight, "ticket")} in flight · {t.atIntake} at intake</small></h3>
+      <small>{plural(t.inFlight, "ticket")} in flight · {t.atIntake} more at intake</small></h3>
       <span className="hq-team-links"><a className="hq-link" href={href("tasks", null, { project: t.key })}>Tasks</a>
         <a className="hq-link" href={href("projects", t.key)}>Project</a></span></header>
     <ul className="hq-seats" aria-label={`${t.name} seats`}>
@@ -99,8 +102,9 @@ function TeamSeats({ t, now }: { t: SeatsTeam; now: number }) {
 
 export function Seats({ v, now }: { v: SeatsView; now: number }) {
   return <>
-    {!v.flow && v.teams.length > 0 && <p className="hq-note">This Command Center does not run the nine-stage flow yet, so tickets show
-      the seven stages it can tell apart. Technical review and the user check appear once it does.</p>}
+    {/* only tickets can say which flow ccd runs, so with none open there is nothing to say */}
+    {!v.flow && v.teams.some((t) => t.openTasks > 0) && <p className="hq-note">This Command Center does not run the nine-stage flow yet,
+      so tickets show the seven stages it can tell apart. Technical review and the user check appear once it does.</p>}
     {v.teams.map((t) => <TeamSeats key={t.key} t={t} now={now} />)}
     {v.unassigned.length > 0 && <section className="hq-panel hq-seating" aria-labelledby="hq-seating-none">
       <header><h3 id="hq-seating-none">No project <small>{plural(v.unassigned.length, "session")}</small></h3></header>

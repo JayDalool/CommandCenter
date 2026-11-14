@@ -35,7 +35,8 @@ test("before the flow: five seats and seven stages per project, on a desktop and
 
     const rows = sv.getByRole("list", { name: "SamVision tickets in flight" }).locator("> li");
     await expect(rows).toHaveCount(5);
-    await expect(sv.getByRole("img", { name: "Code review, stage 4 of 7" })).toBeVisible();
+    await expect(sv.getByRole("img", { name: "Stage 4 of 7" })).toBeVisible();
+    await expect(rows.filter({ hasText: "SV-056" })).toContainText("Code review");
     await expect(rows.filter({ hasText: "SV-014" })).toContainText("Blocked");
     expect(await rowsFit(page), `rows at ${width}`).toBe(true);
     expect(await page.evaluate(wide), `at ${width}`).toBe(true);
@@ -69,7 +70,7 @@ test("with the flow: eight seats, who sits where, children under their parent, a
   await open(page, "agents");
   await expect(page.getByText(/does not run the nine-stage flow yet/)).toHaveCount(0);
   const sv = team(page, "SamVision");
-  await expect(sv).toContainText("8 tickets in flight · 2 at intake");
+  await expect(sv).toContainText("9 tickets in flight · 1 more at intake");
   const seats = sv.getByRole("list", { name: "SamVision seats" }).getByRole("listitem");
   await expect(seats).toHaveText([/^LDLead/, /^INInvestigator.*sv-011-investigateOn SV-011 · Investigate$/, "TRTechnical reviewerFree",
     /^DVDeveloper.*sv-056-implOn SV-056 · Build$/, "URUser reviewerFree", "DRDesign reviewerFree",
@@ -84,12 +85,17 @@ test("with the flow: eight seats, who sits where, children under their parent, a
   const kids = parent.getByRole("list", { name: "Children of SV-056" }).locator("> li");
   await expect(kids).toHaveText([/^SV-057/, /^SV-058/]);
   expect((await box(kids.first().locator("code"))).x).toBeGreaterThan((await box(parent.locator("code").first())).x);
-  const skipped = kids.first().getByRole("img", { name: "Code review, stage 6 of 9" }).locator("i.is-skipped");
-  await expect(skipped).toHaveCount(2);                                   // SV-057 changes a screen, so it keeps its user check
+  // SV-057 changes a screen, so it keeps its user check: seven stages of the nine, counted along its own route
+  const skipped = kids.first().getByRole("img", { name: "Stage 4 of 7" }).locator("i.is-skipped");
+  await expect(skipped).toHaveCount(2);
   expect((await box(skipped.first())).height).toBeLessThan(2);
   await expect(rows.filter({ hasText: "SV-060" })).toContainText("StaleRisky");
+  // a ticket nobody sized runs seven stages, drawn on the same nine places; so does one the policy alone makes risky
   await expect(rows.filter({ hasText: "SV-014" })).toContainText("Not sized");
-  await expect(rows.filter({ hasText: "SV-014" }).locator(".hq-rail i")).toHaveCount(7);
+  await expect(rows.filter({ hasText: "SV-014" }).locator(".hq-rail i")).toHaveCount(9);
+  await expect(rows.filter({ hasText: "SV-014" }).locator(".hq-rail i.is-skipped")).toHaveCount(2);
+  await expect(rows.first()).toContainText("Risky");
+  await expect(rows.first().getByRole("img", { name: "Stage 5 of 7" })).toBeVisible();
   expect(await rowsFit(page)).toBe(true);
 
   await parent.getByRole("button", { name: /^SV-056/ }).click();
@@ -113,6 +119,12 @@ test("with the flow: eight seats, who sits where, children under their parent, a
   expect(p.x).toBeGreaterThanOrEqual(0);
   expect(p.x + p.width).toBeLessThanOrEqual(390);
   expect(await rowsFit(page)).toBe(true);
+  expect(await page.evaluate(wide)).toBe(true);
+  // the narrowest phone: an indented child's stage name is cut short rather than running past the screen
+  await page.setViewportSize({ width: 320, height: 700 });
+  const past = await page.locator("#main .hq-fl-row > *, #main .hq-fl-stage > *").evaluateAll((els) =>
+    els.filter((el) => el.getBoundingClientRect().right > window.innerWidth + 0.5).map((el) => el.textContent));
+  expect(past).toEqual([]);
   expect(await page.evaluate(wide)).toBe(true);
   expect(watch.writes).toEqual([]);
   expect(await problems(page, watch)).toEqual([]);

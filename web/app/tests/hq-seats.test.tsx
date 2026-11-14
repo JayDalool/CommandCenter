@@ -11,7 +11,8 @@ import { href } from "../src/lib/router";
 import { taskHref } from "../src/lib/control";
 import { works } from "../src/tickets/useWork";
 import type { Agent, FlowStage, State, Ticket, TicketWork } from "../src/api/types";
-import { buildSeats, evidence, railOf, stageOf, type SeatsTeam, type FlightRow } from "../src/hq/data";
+import { buildSeats, evidence, railOf, routeOf, stageOf, type SeatsTeam, type FlightRow } from "../src/hq/data";
+import { ApiError } from "../src/api/client";
 import { handoffText, stepsOf } from "../src/hq/pages/TicketFlow";
 import { state, tasks, fixture } from "./helpers";
 
@@ -74,6 +75,10 @@ describe("buildSeats", () => {
     const row = sv.flight.find((r) => r.t.key === "SV-056")!;
     expect(row.on.map((x) => [x.who.name, x.seat])).toEqual([["sv-056-impl", null]]);
     expect(sv.loose.map((m) => [m.name, m.ticket])).toEqual([["sv-056-impl", "SV-056"]]);
+    // the lead's seat is the team's lead and nobody else's: another session recorded as a coordinator sits nowhere
+    const two = team(build(world({ "SV-011": { agentPaneId: "wE:pB", agentRole: "COORDINATOR" } }, { "wE:pB": "sv-second-lead" })));
+    expect(two.seats.filter((s) => s.seat === "lead").map((s) => s.who?.name)).toEqual(["samvision"]);
+    expect(two.loose.map((m) => m.name)).toContain("sv-second-lead");
   });
 
   it("on a ccd that runs the flow: all eight seats, and a reviewer sits in the review its ticket is at", () => {
@@ -90,7 +95,9 @@ describe("buildSeats", () => {
     // a ticket nobody has sized keeps the seven stages it had before the flow, and says so
     const plain = build(world({ ...NINE, "SV-031": { stage: "release", size: null } }));
     const row = team(plain).flight.find((r) => r.t.key === "SV-031")!;
-    expect([row.notSized, row.rail.map((s) => s.stage).join()]).toEqual([true, "intake,investigate,build,codeReview,merge,release,done"]);
+    expect(row.rail).toHaveLength(9);   // drawn on the same nine places as every other ticket, two of them skipped
+    expect([row.notSized, row.rail.filter((s) => s.state !== "skipped").map((s) => s.stage).join()])
+      .toEqual([true, "intake,investigate,build,codeReview,merge,release,done"]);
     expect(team(plain).flight.find((r) => r.t.key === "SV-042")!.notSized).toBe(false);
     expect(team(build(world())).flight.every((r) => !r.notSized)).toBe(true);   // before the flow nothing is sized, and nothing says so
   });
@@ -106,6 +113,13 @@ describe("buildSeats", () => {
     // where the ticket is always shows, even on a stage its size would skip
     expect(at("techReview")[2]).toBe("techReview:active");
     expect(rail({ ...small, stage: "build", size: "standard" }, true).filter((s) => s.endsWith(":skipped"))).toEqual([]);
+    // the route ccd sends wins over the size: a ticket nobody sized that the policy makes risky still runs seven stages
+    const legacy: FlowStage[] = ["intake", "investigate", "build", "codeReview", "merge", "release", "done"];
+    const risky = { ...t, size: "risky" as const, stage: "build" as const, route: legacy };
+    expect(routeOf(risky, true)).toEqual(legacy);
+    expect(rail(risky, true).filter((s) => s.endsWith(":skipped"))).toEqual(["techReview:skipped", "userCheck:skipped"]);
+    expect(routeOf({ ...risky, route: [] }, true)).toHaveLength(9);          // an empty or unknown route is not one
+    expect(routeOf({ ...risky, route: ["later" as FlowStage] }, true)).toHaveLength(9);
     // the stage ccd sends wins over the status; an unknown one falls back to the status
     expect(stageOf({ ...t, status: "RESEARCHING", stage: "techReview" })).toBe("techReview");
     expect(stageOf({ ...t, status: "RESEARCHING", stage: "later" as FlowStage })).toBe("investigate");
@@ -122,7 +136,7 @@ describe("buildSeats", () => {
     }));
     const sv = team(v);
     expect(keys(sv.flight)).toEqual(["SV-031", "SV-042", ["SV-056", ["SV-057", "SV-058"]], "SV-011", ["SV-010", ["SV-012"]], "SV-014"]);
-    expect([sv.inFlight, sv.atIntake]).toEqual([7, 2]);   // SV-058 and SV-010 are shown, and still count as at intake
+    expect([sv.inFlight, sv.atIntake]).toEqual([9, 0]);   // the counts are of what the list holds: SV-058 and SV-010 are in it
   });
 
   it("puts what needs Jay first, and two sessions in the same seat side by side", () => {
@@ -205,7 +219,7 @@ describe("Teams › Seats", () => {
     expect(within(page).getByRole("button", { name: "Seats" })).toHaveAttribute("aria-pressed", "true");
     expect(within(page).getByText(/does not run the nine-stage flow yet/)).toBeInTheDocument();
     const sv = within(page).getByRole("region", { name: /^SamVision/ });
-    expect(sv).toHaveTextContent("5 tickets in flight · 1 at intake");
+    expect(sv).toHaveTextContent("5 tickets in flight · 1 more at intake");
     const seats = within(within(sv).getByRole("list", { name: "SamVision seats" })).getAllByRole("listitem");
     expect(seats.map((s) => s.querySelector("b")!.textContent)).toEqual(["Lead", "Investigator", "Developer", "Code reviewer", "Verifier"]);
     expect(within(seats[0]).getByRole("link", { name: "samvision" })).toHaveAttribute("href", href("agents", "wE:p2"));
@@ -242,19 +256,20 @@ describe("Teams › Seats", () => {
     const rows = [...flight.children] as HTMLElement[];
     expect(rows[0]).toHaveTextContent("SV-042");                       // what needs Jay comes first
     expect(within(rows[0]).getByRole("link", { name: "Needs you" })).toHaveAttribute("href", href("needs"));
-    expect(within(rows[0]).getByRole("img", { name: "Merge, stage 7 of 9" })).toBeInTheDocument();
+    expect(within(rows[0]).getByRole("img", { name: "Stage 7 of 9" })).toBeInTheDocument();
     const parent = rows.find((r) => r.textContent!.includes("SV-056"))!;
     expect(parent).toHaveTextContent("Developer · sv-056-impl0 of 2 children done");
     const kids = within(parent).getByRole("list", { name: "Children of SV-056" });
     expect([...kids.children].map((k) => k.querySelector("code")!.textContent)).toEqual(["SV-057", "SV-058"]);
-    // a small ticket that changes no screen skips three stages, drawn as skipped; its size and a stale ticket are in words
-    expect(within(kids).getByRole("img", { name: "Code review, stage 6 of 9" }).querySelectorAll("i.is-skipped")).toHaveLength(3);
+    // a small ticket that changes no screen skips three stages, drawn as skipped and not counted; its size and a stale
+    // ticket are in words
+    expect(within(kids).getByRole("img", { name: "Stage 3 of 6" }).querySelectorAll("i.is-skipped")).toHaveLength(3);
     expect(kids.children[0]).toHaveTextContent("Small");
     const stale = rows.find((r) => r.textContent!.includes("SV-060"))!;
     expect(stale).toHaveTextContent("StaleRisky");
     const plain = rows.find((r) => r.textContent!.includes("SV-031"))!;
     expect(plain).toHaveTextContent("Not sized");
-    expect(within(plain).getByRole("img", { name: "Release, stage 6 of 7" })).toBeInTheDocument();
+    expect(within(plain).getByRole("img", { name: "Stage 6 of 7" }).children).toHaveLength(9);
     expect(within(stale).getByText("Nobody on it")).toBeInTheDocument();
   });
 
@@ -309,6 +324,32 @@ describe("Teams › Seats", () => {
     const panel = page.querySelector<HTMLElement>(".hq-tf")!;
     expect(panel).toHaveTextContent("Nobody is on it: it is waiting for you.");
     expect(within(panel).getByRole("link", { name: "Open Decisions" })).toHaveAttribute("href", href("needs"));
+  });
+
+  it("says so when the stages cannot be loaded, and tries again when asked", async () => {
+    load();
+    const asked = vi.spyOn(app.api, "taskWork").mockRejectedValue(new ApiError(500, "boom"));
+    const page = await show();
+    fireEvent.click(within(page).getByRole("button", { name: /^SV-056/ }));
+    await act(async () => {});
+    const panel = page.querySelector<HTMLElement>(".hq-tf")!;
+    expect(within(panel).getByRole("alert")).toHaveTextContent("Could not load the stages.");
+    expect(within(panel).getByRole("link", { name: "Open ticket" })).toBeInTheDocument();
+    asked.mockResolvedValue({ stages: [], roles: {}, merge: null } as unknown as TicketWork);
+    fireEvent.click(within(panel).getByRole("button", { name: "Try again" }));
+    await act(async () => {});
+    expect(asked).toHaveBeenCalledTimes(2);
+    expect(within(panel).queryByRole("alert")).toBeNull();
+    expect(within(panel).getByRole("list", { name: "Stages of SV-056" })).toBeInTheDocument();
+  });
+
+  it("says nothing about the flow when no ticket is open to tell by", async () => {
+    const w = world();
+    w.tickets.length = 0;
+    load(w);
+    const page = await show();
+    expect(page.querySelector(".hq-seats")).not.toBeNull();
+    expect(within(page).queryByText(/does not run the nine-stage flow yet/)).toBeNull();
   });
 
   it("Childish gives each seat a face that stays the seat's, and the lead's seat the lead's own", async () => {

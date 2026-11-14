@@ -10,6 +10,11 @@ const fx = raw as unknown as { state: State; tasks: TaskList };
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
 const T = Math.floor(NOW / 1000), H = 3600;
 
+const NINE: FlowStage[] = ["intake", "investigate", "techReview", "build", "userCheck", "codeReview", "merge", "release", "done"];
+/** The route a ticket had before the flow: what one nobody has sized still runs. */
+const SEVEN = NINE.filter((s) => s !== "techReview" && s !== "userCheck");
+const SMALL = NINE.filter((s) => s !== "investigate" && s !== "techReview");
+
 const STAGE: Partial<Record<TicketStatus, FlowStage>> = { INBOX: "intake", PROPOSED: "intake", RESEARCHING: "investigate",
   READY_TO_IMPLEMENT: "build", IN_PROGRESS: "build", IN_REVIEW: "codeReview", READY_TO_MERGE: "merge", VERIFYING: "release",
   DONE: "done", BLOCKED: "investigate" };
@@ -44,16 +49,17 @@ export function flowTasks(): TaskList {
   const set: Record<string, Partial<Ticket>> = {
     "SV-056": { status: "IN_PROGRESS", agentPaneId: "wE:pA", agentRole: "IMPLEMENTER", subtasks: { total: 2, done: 0 } },
     "SV-011": { agentPaneId: "wE:pB", agentRole: "PLANNER" },
-    "SV-057": { agentPaneId: "wE:pC", agentRole: "REVIEWER", size: "small" },
-    "SV-058": { size: "small" },
+    "SV-057": { agentPaneId: "wE:pC", agentRole: "REVIEWER", size: "small", route: SMALL },            // changes a screen
+    "SV-058": { size: "small", route: SMALL.filter((s) => s !== "userCheck") },
     "SV-031": { agentPaneId: "wE:pD", agentRole: "VERIFIER" },
-    "SV-042": { size: "risky", visibleStage: "Needs Jay" },
+    // nobody sized it; the policy makes it risky, so ccd shows it as risky while it runs the seven stages it had
+    "SV-042": { size: "risky", route: SEVEN, visibleStage: "Needs Jay" },
     "SV-060": { stage: "techReview", size: "risky", stale: true },
-    "SV-061": { size: "small" },
-    "SV-014": { size: null },                     // nobody sized it: it keeps the seven stages it had before the flow
+    "SV-061": { size: "small", route: SMALL.filter((s) => s !== "userCheck") },
+    "SV-014": { size: null, route: SEVEN },       // nobody sized it: it keeps the seven stages it had before the flow
   };
   for (const t of list.tickets) {
-    Object.assign(t, { size: "standard", stale: false }, set[t.key]);
+    Object.assign(t, { size: "standard", stale: false, route: NINE }, set[t.key]);
     t.stage = set[t.key]?.stage ?? STAGE[t.status] ?? null;
   }
   return list;
