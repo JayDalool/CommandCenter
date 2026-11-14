@@ -224,10 +224,12 @@ export class Api {
     return this.req<{ active: boolean; expiresIn: number | null; tokenFile?: string | null; remembered?: boolean; reenterIn?: number | null }>(
       "GET", "/api/developer");
   }
-  /** `remember`: keep this device unlocked for 30 days. Sent with a live session, ccd re-proves that one (same id). */
-  unlock(token: string, remember = false) {
+  /** `remember`: keep this device unlocked for 30 days. `reprove`: the token typed again on a remembered device.
+   *  ccd then only re-proves the remembered session this request carries (same id back); it never creates a session
+   *  or changes its kind, and answers 409 `{ended: true}` when that session is gone or is not a remembered one. */
+  unlock(token: string, remember = false, reprove = false) {
     return this.req<{ ok: true; session: string; expiresIn: number; remembered?: boolean }>("POST", "/api/developer/unlock",
-      remember ? { token, remember: true } : { token });
+      reprove ? { token, reprove: true } : remember ? { token, remember: true } : { token });
   }
   lock() { return this.req<{ ok: true }>("POST", "/api/developer/lock", {}); }
   /** Lock all devices (Developer Unlock): every Developer session on every device ends, this one included. */

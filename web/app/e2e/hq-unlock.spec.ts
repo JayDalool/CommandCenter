@@ -31,9 +31,17 @@ async function serveDeveloper(page: Page, start: Partial<Ccd> = {}): Promise<Ccd
         reenterIn: mine ? ccd.reenterIn : null, configured: true, tokenFile: null }));
     }
     if (req.method() === "POST" && path === "/api/developer/unlock") {
-      const body = req.postDataJSON() as { token?: string; remember?: unknown };
+      const body = req.postDataJSON() as { token?: string; remember?: unknown; reprove?: unknown };
       if (body.token !== DEV_TOKEN) return route.fulfill(json({ ok: false, error: "wrong developer token" }, 403));
-      ccd.unlocked = true; ccd.remembered = body.remember === true; ccd.reenterIn = 8 * 3600;
+      // The token typed again: only a live remembered session is re-proved, nothing is created or changed in kind.
+      if (body.reprove === true) {
+        if (!mine || !ccd.remembered) return route.fulfill(json({ ok: false, error: "that developer session has ended", ended: true }, 409));
+        if (body.remember !== undefined) ccd.problems.push("re-prove sent with remember");
+      } else {
+        if (mine && ccd.remembered) ccd.problems.push("a remembered session was unlocked again without re-prove");
+        ccd.remembered = body.remember === true;
+      }
+      ccd.unlocked = true; ccd.reenterIn = 8 * 3600;
       return route.fulfill(json({ ok: true, session: SESSION, expiresIn: ccd.remembered ? 30 * 86400 : 8 * 3600,
         remembered: ccd.remembered, idleLimit: ccd.remembered ? null : 7200, reenterIn: ccd.reenterIn }));
     }

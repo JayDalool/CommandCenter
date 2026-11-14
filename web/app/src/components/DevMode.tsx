@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { app } from "../store/app";
 import { ApiError } from "../api/client";
 import { useSelector } from "../lib/store";
-import { developer, setDevSession } from "../api/developer";
+import { devExpired, developer, setDevSession } from "../api/developer";
 import { Dialog } from "./Dialog";
 
 export function useDevActive() { return useSelector(developer, (d) => d.active); }
@@ -88,20 +88,25 @@ export function UnlockDialog({ onClose }: { onClose: () => void }) {
     if (!value.trim()) return;
     setBusy(true);
     try {
-      // Typed again on a remembered device (ccd asks only those): ccd re-proves the session this request carries.
-      // It must stay remembered: sent without `remember`, ccd would turn it into a plain 8-hour session. Checked
-      // now, not when the dialog opened: sent for a session that is gone or plain, `remember` would make a new
-      // 30-day one, or turn the plain one into it.
+      // Typed again on a remembered device (ccd asks only those): sent as `reprove`, so ccd re-proves the session
+      // this request carries and can neither make a new one nor change its kind. Checked here as well, now and not
+      // when the dialog opened: the token is not sent for a session that is already gone or plain in this window.
       const now = developer.get();
       if (reenter && !(now.active && now.remembered === true)) { close(false); return; }
-      const keep = reenter || (canRemember && remember);
-      const r = await app.api.unlock(value.trim(), keep);
+      const r = await app.api.unlock(value.trim(), !reenter && canRemember && remember, reenter);
       setDevSession(r.session, r.expiresIn, r.remembered === true);
       if (!reenter && canRemember) keepRemember(remember);
       setValue("");
       app.toast(reenter ? "Developer token accepted" : r.remembered ? "Developer Mode active, this device remembered for 30 days" : "Developer Mode active");
       close(true);
     } catch (ex) {
+      // The session being re-proved ended at ccd meanwhile (409 `ended`): nothing was unlocked or created. This
+      // window locks, and Jay unlocks afresh, with the box, if he wants to.
+      if (reenter && ex instanceof ApiError && ex.status === 409 && (ex as { data?: { ended?: unknown } }).data?.ended === true) {
+        devExpired(); close(false);
+        app.toast("That Developer session had ended, so nothing was unlocked. Unlock again.", "bad");
+        return;
+      }
       setErr((ex as Error).message);
     } finally {
       setBusy(false);

@@ -233,13 +233,17 @@ describe("ccd asks for the token again (403 reenter)", () => {
     answer(false);
   });
 
-  it("unlock sends `remember` only when the box is ticked, and the token never in a URL", async () => {
+  it("unlock sends `remember` only when the box is ticked, `reprove` alone for a re-entry, and the token never in a URL", async () => {
     const seen: { url: string; init: RequestInit }[] = [];
     const api = new Api(async (u, init) => { seen.push({ url: String(u), init: init! }); return jsonResponse({ ok: true, session: DEV, expiresIn: 60 }); });
     await api.unlock(TOKEN);
     await api.unlock(TOKEN, true);
+    await api.unlock(TOKEN, false, true);
+    await api.unlock(TOKEN, true, true);           // re-proving never asks ccd to remember
     expect(JSON.parse(String(seen[0].init.body))).toEqual({ token: TOKEN });
     expect(JSON.parse(String(seen[1].init.body))).toEqual({ token: TOKEN, remember: true });
+    expect(JSON.parse(String(seen[2].init.body))).toEqual({ token: TOKEN, reprove: true });
+    expect(JSON.parse(String(seen[3].init.body))).toEqual({ token: TOKEN, reprove: true });
     for (const s of seen) expect(s.url).not.toContain(TOKEN);
   });
 });
@@ -284,7 +288,7 @@ describe("the unlock dialog", () => {
     type(TOKEN);
     fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
     await waitFor(() => expect(developer.get().active).toBe(true));
-    expect(unlock).toHaveBeenCalledWith(TOKEN, true);
+    expect(unlock).toHaveBeenCalledWith(TOKEN, true, false);
     expect(developer.get().remembered).toBe(true);
     expect(localStorage.getItem(KEY)).toContain(DEV);
     expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain(TOKEN);
@@ -305,7 +309,7 @@ describe("the unlock dialog", () => {
     type(TOKEN);
     fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
     await waitFor(() => expect(developer.get().active).toBe(true));
-    expect(unlock).toHaveBeenCalledWith(TOKEN, false);
+    expect(unlock).toHaveBeenCalledWith(TOKEN, false, false);
     expect(localStorage.getItem(KEY)).toBeNull();
     expect(sessionStorage.getItem(KEY)).toContain(DEV);
   });
@@ -368,9 +372,27 @@ describe("the unlock dialog", () => {
     type(TOKEN);
     fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
     await expect(answer!).resolves.toBe(true);
-    expect(unlock).toHaveBeenCalledWith(TOKEN, true);   // without it ccd would turn the device into a plain session
+    expect(unlock).toHaveBeenCalledWith(TOKEN, false, true);   // re-prove only: ccd makes no session and changes no kind
     expect(developer.get()).toMatchObject({ active: true, remembered: true });
     expect(devSession()).toBe(DEV);
+  });
+
+  it("asked again, and ccd says that session has ended: this window locks, nothing is remembered, and Jay is told", async () => {
+    setDevSession(DEV, 20 * 86400, true);
+    status({ active: true, remembered: true, reenterIn: 0 });
+    vi.spyOn(app.api, "unlock").mockRejectedValue(Object.assign(new ApiError(409, "that developer session has ended"), { data: { ok: false, ended: true } }));
+    const toast = vi.spyOn(app, "toast");
+    render(<Host />);
+    let answer: Promise<boolean>;
+    act(() => { answer = reenterDialog(); });
+    await act(async () => {});
+    type(TOKEN);
+    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    await expect(answer!).resolves.toBe(false);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(devSession()).toBeNull();
+    expect(localStorage.getItem(KEY)).toBeNull();
+    expect(toast).toHaveBeenLastCalledWith(expect.stringMatching(/had ended.*Unlock again/), "bad");
   });
 
   it("asked again, and another window locks meanwhile: the dialog goes, and no token can remember the device again", async () => {
