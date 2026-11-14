@@ -162,6 +162,15 @@ describe("Settings › Operating profiles", () => {
     expect(within(time).getByLabelText("Release time")).toHaveValue("22:00");
   });
 
+  it("after noon on release day, says the cut-off has passed", async () => {
+    vi.spyOn(app.api, "release").mockResolvedValue(rel(["samvision"]));
+    load();
+    vi.setSystemTime(new Date((CUTOFF + 3600) * 1000));
+    const main = await show("#/settings?tab=profiles");
+    expect(row(main, "Release time")).toHaveTextContent(
+      "Next release: 10 p.m. on Wed, Nov 18. The noon cut-off on Wed, Nov 18 has passed: a change merged now waits for the release after it.");
+  });
+
   it("locked: a press asks for Developer Unlock and sends nothing", async () => {
     vi.spyOn(app.api, "release").mockResolvedValue(rel([]));
     const setLive = vi.spyOn(app.api, "setLive");

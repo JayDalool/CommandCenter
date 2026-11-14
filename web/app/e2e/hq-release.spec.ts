@@ -21,7 +21,7 @@ async function serveRelease(page: Page, start: Partial<Ccd> = {}): Promise<Ccd> 
   // The stand-in keeps the fixture's date for "next" whatever the weekday: the page shows what ccd sends.
   const body = () => ({ window: { weekday: ccd.weekday, time: ccd.time, tz: "America/Winnipeg", next: RELEASE_NEXT, hours: 2 },
     cutoff: RELEASE_NEXT - 10 * 3600, projects: Object.fromEntries(KEYS.map((k) => [k, { live: ccd.live.includes(k) }])) });
-  await page.route(/\/api\/(release(\/[a-z]+)?|developer(\/unlock)?)$/, async (route) => {
+  await page.route(/\/api\/(release(\/window|\/projects\/[a-z]+)?|developer(\/unlock)?)$/, async (route) => {
     const req = route.request();
     const path = new URL(req.url()).pathname;
     const mine = ccd.unlocked && req.headers()["x-ccd-developer"] === SESSION;
@@ -43,7 +43,7 @@ async function serveRelease(page: Page, start: Partial<Ccd> = {}): Promise<Ccd> 
       ccd.weekday = sent.weekday; ccd.time = sent.time;
       return route.fulfill(json(body()));
     }
-    const key = path.slice("/api/release/".length);
+    const key = path.slice("/api/release/projects/".length);
     if (!KEYS.includes(key)) return route.fulfill(json({ ok: false, error: "unknown project" }, 404));
     if (typeof sent.live !== "boolean") return route.fulfill(json({ ok: false, error: "live must be true or false" }, 400));
     ccd.live = sent.live ? [...new Set([...ccd.live, key])] : ccd.live.filter((k) => k !== key);
@@ -132,7 +132,7 @@ test("Settings: locked sends nothing; unlocked makes a project live and moves th
   await time.blur();
   await expect(day).toContainText("Thursday 9:30 p.m. Central");
   expect(ccd.calls.slice(1)).toEqual([
-    'PUT /api/release/gyst {"live":true}',
+    'PUT /api/release/projects/gyst {"live":true}',
     'PUT /api/release/window {"weekday":4,"time":"22:00"}',
     'PUT /api/release/window {"weekday":4,"time":"21:30"}',
   ]);

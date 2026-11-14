@@ -436,6 +436,8 @@ function ReleaseDay() {
       <Row label={r.state === "error" ? `Could not read the release settings: ${r.error}` : "Reading the release settings…"} /></Group>;
   }
   const { window: w, cutoff, projects } = r.data;
+  /** Between noon and the window on release day: tonight's release is still "next", and its cut-off is behind us. */
+  const late = cutoff * 1000 < Date.now();
   /** Resolves true once ccd took the change; false when it was not sent (locked) or was refused. */
   const save = (change: () => ReturnType<typeof app.api.release>): Promise<boolean> => {
     if (!active) { unlockDialogOpen(); return Promise.resolve(false); }
@@ -456,7 +458,9 @@ function ReleaseDay() {
     <Row label="Release day" hint={`${windowText(w)}.`}>
       <Seg label="Release weekday" value={String(w.weekday)} options={WEEKDAYS.map((d, i) => [String(i), d.slice(0, 3)] as [string, string])} disabled={busy}
         onChange={(v) => { if (+v !== w.weekday) void save(() => app.api.setReleaseWindow(+v, w.time)); }} /></Row>
-    <Row label="Release time" hint={`Next release: ${clock(w.time)} on ${dayText(w.next, w.tz)}. A change merged by noon on ${dayText(cutoff, w.tz)} is in it.`}>
+    <Row label="Release time" hint={`Next release: ${clock(w.time)} on ${dayText(w.next, w.tz)}. ${late
+      ? `The noon cut-off on ${dayText(cutoff, w.tz)} has passed: a change merged now waits for the release after it.`
+      : `A change merged by noon on ${dayText(cutoff, w.tz)} is in it.`}`}>
       <TimeBox label="Release time" value={w.time} onSave={(t) => save(() => app.api.setReleaseWindow(w.weekday, t))} /></Row>
     {note && <p className="hq-note t-bad" role="alert">{note}</p>}
   </Group>;
