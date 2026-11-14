@@ -39,6 +39,15 @@ class Window(unittest.TestCase):
         self.assertEqual(datetime.datetime.fromtimestamp(start, WPG).strftime("%a %H:%M"), "Wed 22:00")
         self.assertEqual(start, at(2026, 11, 4, 22))
 
+    def test_a_morning_window_cuts_off_at_its_start(self):
+        morning = dict(W, time="09:00")
+        self.assertEqual(release.slot_for(morning, at(2026, 11, 18, 8, 59))[0], at(2026, 11, 18, 9))
+        self.assertEqual(release.slot_for(morning, at(2026, 11, 18, 10))[0], at(2026, 11, 25, 9))
+        r = Release(os.path.join(tempfile.mkdtemp(prefix="ccd-release-"), "release.json"))
+        r.set_window(3, "09:00")
+        pub = r.public(["samvision"], at(2026, 11, 18, 11, 30))      # after the 9-11 window, before noon
+        self.assertEqual((pub["window"]["next"], pub["cutoff"]), (int(at(2026, 11, 25, 9)), int(at(2026, 11, 25, 9))))
+
     def test_a_running_window_is_still_next(self):
         self.assertEqual(release.next_window(W, at(2026, 11, 18, 23))[0], at(2026, 11, 18, 22))
 

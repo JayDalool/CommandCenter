@@ -52,8 +52,11 @@ def _release_days(window, after):
 
 
 def cutoff_of(window, day):
+    """The merge cutoff for a release day: noon local, or the window's start when the window opens before noon (a
+    change merged after a morning window opened cannot make that window)."""
     tz = _tz(window)
-    return datetime.datetime(day.year, day.month, day.day, CUTOFF_HOUR, 0, tzinfo=tz).timestamp()
+    noon = datetime.datetime(day.year, day.month, day.day, CUTOFF_HOUR, 0, tzinfo=tz).timestamp()
+    return min(noon, window_start(window, day))
 
 
 def slot_for(window, merged_at):

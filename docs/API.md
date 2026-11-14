@@ -411,7 +411,7 @@ anything and who runs a deploy does not change.
 
 | route | who | what |
 |---|---|---|
-| `GET /api/release` | anyone with the token | `{window: {weekday, time, tz, next, hours}, cutoff, projects: {[key]: {live}}}`. `weekday` 0 = Sunday … 6 = Saturday; `time` "HH:MM" local; `next` the unix start of the next window that has not ended; `hours` how long a window stays open (2); `cutoff` the next merge cutoff still ahead (noon local on a release day) |
+| `GET /api/release` | anyone with the token | `{window: {weekday, time, tz, next, hours}, cutoff, projects: {[key]: {live}}}`. `weekday` 0 = Sunday … 6 = Saturday; `time` "HH:MM" local; `next` the unix start of the next window that has not ended; `hours` how long a window stays open (2); `cutoff` the next merge cutoff still ahead (noon local on a release day, or the window's start when it opens before noon) |
 | `PUT /api/release/window` | Jay + Developer Unlock | `{weekday, time}` → the same body as GET. Event `release.window` |
 | `PUT /api/release/projects/{project}` | Jay + Developer Unlock | `{live: true\|false}` → the same body as GET; 404 for an unknown project. Event `release.live` |
 
