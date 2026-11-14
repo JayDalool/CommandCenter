@@ -7,10 +7,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { vi } from "vitest";
-import { Api } from "../src/api/client";
+import { Api, ApiError } from "../src/api/client";
 import { setToken, clearToken } from "../src/api/auth";
-import { askReenter, checkRemembered, devSession, developer, restoreDevSession, setDevSession, setReenterAsker } from "../src/api/developer";
-import { UnlockDialog, devOr, reenterDialog, unlockDialogGone, unlockDialogOpen } from "../src/components/DevMode";
+import { askReenter, checkRemembered, devExpired, devSession, developer, restoreDevSession, setDevSession, setReenterAsker } from "../src/api/developer";
+import { UnlockDialog, devOr, lockDevMode, reenterDialog, unlockDialogGone, unlockDialogOpen } from "../src/components/DevMode";
 import { app } from "../src/store/app";
 import { jsonResponse } from "./helpers";
 
@@ -65,13 +65,85 @@ describe("where the session id is kept", () => {
     expect(localStorage.getItem(KEY)).toBeNull();
   });
 
-  it("this tab's own plain session wins over the browser's remembered one", async () => {
+  it("the browser's remembered session wins over a restored tab's older plain id, and is not erased by it", async () => {
     const soon = Date.now() / 1000 + 3600;
-    localStorage.setItem(KEY, JSON.stringify({ id: "r".repeat(43), expiresAt: soon, remembered: true }));
+    localStorage.setItem(KEY, JSON.stringify({ id: DEV, expiresAt: soon, remembered: true }));
+    sessionStorage.setItem(KEY, JSON.stringify({ id: "p".repeat(43), expiresAt: soon }));
+    await restoreDevSession();
+    expect(devSession()).toBe(DEV);
+    expect(developer.get().remembered).toBe(true);
+    expect(localStorage.getItem(KEY)).toContain(DEV);
+    expect(sessionStorage.getItem(KEY)).toBeNull();   // one copy
+
+    setDevSession(null);                           // an entry in localStorage that is not a remembered one is not trusted
+    localStorage.setItem(KEY, JSON.stringify({ id: "x".repeat(43), expiresAt: soon }));
     sessionStorage.setItem(KEY, JSON.stringify({ id: DEV, expiresAt: soon }));
     await restoreDevSession();
     expect(devSession()).toBe(DEV);
     expect(developer.get().remembered).toBe(false);
+  });
+});
+
+describe("a window still on an old plain id while the browser holds a remembered one", () => {
+  const OLD = "p".repeat(43);
+  // As when another window remembered the device and this one never heard (no BroadcastChannel).
+  const seed = async () => {
+    setDevSession(OLD, 3600);
+    localStorage.setItem(KEY, JSON.stringify({ id: DEV, expiresAt: Date.now() / 1000 + 86400, remembered: true }));
+    expect(devSession()).toBe(OLD);
+  };
+
+  it("ccd refuses the old id: only that id goes, and the tab carries on with the remembered one", async () => {
+    await seed();
+    devExpired();
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toMatchObject({ id: DEV, remembered: true });
+    expect(devSession()).toBe(DEV);
+    expect(developer.get()).toMatchObject({ active: true, remembered: true });
+
+    devExpired();                                  // the remembered one is dead too: now the browser holds nothing
+    expect(devSession()).toBeNull();
+    expect(developer.get().active).toBe(false);
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("Lock still clears everything this browser holds", async () => {
+    await seed();
+    setDevSession(null);
+    expect(devSession()).toBeNull();
+    expect(localStorage.getItem(KEY)).toBeNull();
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+  });
+});
+
+describe("Lock", () => {
+  it("says locked when ccd took it, and when ccd had already dropped the session", async () => {
+    const toast = vi.spyOn(app, "toast");
+    setDevSession(DEV, 86400, true);
+    vi.spyOn(app.api, "lock").mockResolvedValueOnce({ ok: true } as never);
+    await lockDevMode();
+    expect(toast).toHaveBeenLastCalledWith("Developer Mode locked");
+    expect(devSession()).toBeNull();
+
+    setDevSession(DEV, 86400, true);
+    vi.spyOn(app.api, "lock").mockRejectedValueOnce(new ApiError(403, "Developer Unlock required"));
+    await lockDevMode();
+    expect(toast).toHaveBeenLastCalledWith("Developer Mode locked");
+  });
+
+  it("a remembered device, ccd unreachable: locked here, and Jay is told the device is still remembered there", async () => {
+    const toast = vi.spyOn(app, "toast");
+    setDevSession(DEV, 86400, true);
+    vi.spyOn(app.api, "lock").mockRejectedValueOnce(new ApiError(0, "ccd unreachable"));
+    await lockDevMode();
+    expect(devSession()).toBeNull();
+    expect(localStorage.getItem(KEY)).toBeNull();
+    expect(toast).toHaveBeenLastCalledWith(expect.stringMatching(/Locked in this browser only.*Lock all devices in Settings/), "bad");
+
+    setDevSession(DEV, 3600);                      // a plain session ends at ccd by itself within hours
+    vi.spyOn(app.api, "lock").mockRejectedValueOnce(new ApiError(0, "ccd unreachable"));
+    await lockDevMode();
+    expect(toast).toHaveBeenLastCalledWith("Developer Mode locked");
   });
 });
 
@@ -299,6 +371,40 @@ describe("the unlock dialog", () => {
     expect(unlock).toHaveBeenCalledWith(TOKEN, true);   // without it ccd would turn the device into a plain session
     expect(developer.get()).toMatchObject({ active: true, remembered: true });
     expect(devSession()).toBe(DEV);
+  });
+
+  it("asked again, and another window locks meanwhile: the dialog goes, and no token can remember the device again", async () => {
+    setDevSession(DEV, 20 * 86400, true);
+    status({ active: true, remembered: true, reenterIn: 0 });
+    const unlock = vi.spyOn(app.api, "unlock");
+    render(<Host />);
+    let answer: Promise<boolean>;
+    act(() => { answer = reenterDialog(); });
+    await act(async () => {});
+    type(TOKEN);
+    act(() => setDevSession(null));                // Lock, or Lock all devices, from another window
+    await expect(answer!).resolves.toBe(false);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(unlock).not.toHaveBeenCalled();
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("asked again, and another window unlocks without remembering meanwhile: the plain session is not turned into a remembered one", async () => {
+    setDevSession(DEV, 20 * 86400, true);
+    status({ active: true, remembered: true, reenterIn: 0 });
+    const unlock = vi.spyOn(app.api, "unlock");
+    render(<Host />);
+    let answer: Promise<boolean>;
+    act(() => { answer = reenterDialog(); });
+    await act(async () => {});
+    const plain = "p".repeat(43);
+    act(() => setDevSession(plain, 8 * 3600));
+    await expect(answer!).resolves.toBe(false);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(unlock).not.toHaveBeenCalled();
+    expect(devSession()).toBe(plain);
+    expect(developer.get().remembered).toBe(false);
+    expect(localStorage.getItem(KEY)).toBeNull();
   });
 
   it("asked again and cancelled, or the shell gone: the answer is no, and nothing waits for ever", async () => {

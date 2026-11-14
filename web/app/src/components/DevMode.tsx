@@ -3,6 +3,7 @@
 // a password field, sent once, and dropped from memory as soon as ccd answers.
 import { useEffect, useState } from "react";
 import { app } from "../store/app";
+import { ApiError } from "../api/client";
 import { useSelector } from "../lib/store";
 import { developer, setDevSession } from "../api/developer";
 import { Dialog } from "./Dialog";
@@ -42,10 +43,16 @@ export function reenterDialog(): Promise<boolean> {
   return new Promise((resolve) => ask({ reenter: true, then: () => resolve(true), cancel: () => resolve(false) }));
 }
 
-/** Lock Developer Mode in this app session. The session ends here even when ccd cannot be reached. */
+/** Lock Developer Mode in this app session. The session ends here even when ccd cannot be reached. A plain session
+ *  then dies at ccd within hours by itself; a remembered one would stay good there for up to 30 days, so Jay is told
+ *  where to end it. A refusal (ccd already dropped the session) is as good as a lock. */
 export async function lockDevMode() {
-  try { await app.api.lock(); } catch { /* the session ends locally regardless */ }
-  setDevSession(null); app.toast("Developer Mode locked");
+  const remembered = developer.get().remembered === true;
+  let told = true;
+  try { await app.api.lock(); } catch (e) { told = e instanceof ApiError && e.status >= 400 && e.status < 500; }
+  setDevSession(null);
+  if (!told && remembered) app.toast("Locked in this browser only. ccd could not be reached, so it still remembers this device: use Lock all devices in Settings.", "bad");
+  else app.toast("Developer Mode locked");
 }
 
 const REMEMBER = "ccd.dev.remember";   // the box's last answer in this browser: "1" or absent. Not a secret.
@@ -59,6 +66,11 @@ export function UnlockDialog({ onClose }: { onClose: () => void }) {
   // Asked for again on a remembered device: the session is still there, only the token is too old for a terminal
   // or a file write. Decided when the dialog opens.
   const [reenter] = useState(reentering);
+  // Re-entry is only for the remembered session this window holds. Locked or unlocked without remembering in another
+  // window while this was open: the question is void, and answering it must not remember the device after all.
+  const dev = useSelector(developer, (d) => d);
+  const stillRemembered = dev.active && dev.remembered === true;
+  useEffect(() => { if (reenter && !stillRemembered) close(false); }, [reenter, stillRemembered]); // eslint-disable-line react-hooks/exhaustive-deps
   // Something Jay pressed is waiting on this dialog and runs as soon as it is unlocked: the button says so.
   const [carry] = useState(carrying);
   // This ccd's own developer.token (a preview has its own; the live one would be refused here), and whether it can
@@ -77,7 +89,11 @@ export function UnlockDialog({ onClose }: { onClose: () => void }) {
     setBusy(true);
     try {
       // Typed again on a remembered device (ccd asks only those): ccd re-proves the session this request carries.
-      // It must stay remembered: sent without `remember`, ccd would turn it into a plain 8-hour session.
+      // It must stay remembered: sent without `remember`, ccd would turn it into a plain 8-hour session. Checked
+      // now, not when the dialog opened: sent for a session that is gone or plain, `remember` would make a new
+      // 30-day one, or turn the plain one into it.
+      const now = developer.get();
+      if (reenter && !(now.active && now.remembered === true)) { close(false); return; }
       const keep = reenter || (canRemember && remember);
       const r = await app.api.unlock(value.trim(), keep);
       setDevSession(r.session, r.expiresIn, r.remembered === true);
@@ -129,11 +145,7 @@ export function DevDot() {
   return <button type="button" className={`dev-dot${active ? " is-on" : ""}`}
     title={active ? "Developer Mode active for this app session — click to lock" : "Developer Mode locked — click to unlock"}
     aria-label={active ? "Developer Mode active. Lock" : "Developer Mode locked. Unlock"}
-    onClick={async () => {
-      if (!active) { unlockDialogOpen(); return; }
-      try { await app.api.lock(); } catch { /* the session ends locally regardless */ }
-      setDevSession(null); app.toast("Developer Mode locked");
-    }}><span className="dev-dot-l">Developer</span><span className="dev-dot-s">Dev</span><i aria-hidden>{active ? "●" : "○"}</i></button>;
+    onClick={() => { if (!active) unlockDialogOpen(); else void lockDevMode(); }}><span className="dev-dot-l">Developer</span><span className="dev-dot-s">Dev</span><i aria-hidden>{active ? "●" : "○"}</i></button>;
 }
 
 export function DevBadge() {

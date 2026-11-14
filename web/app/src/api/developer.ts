@@ -54,10 +54,24 @@ export function setDevSession(id: string | null, expiresIn: number | null = null
   try { channel?.postMessage({ t: "dev", id, expiresIn, remembered: !!id && remembered } satisfies Msg); } catch { /* closed */ }
 }
 
+/** A session ccd no longer knows, found by this window. Only this window's own id goes: a tab restored with an old
+ *  plain id must not take the browser's remembered one with it (that session would live on at ccd with no browser
+ *  holding it). The remembered one, when it is a different id, is then what this window uses; ccd refuses it on the
+ *  next call if it is dead too, and it is dropped the same way. */
+function drop() {
+  const was = session;
+  const kept = stored(() => localStorage);
+  session = null;
+  try { sessionStorage.removeItem(KEY); } catch { /* storage refused */ }
+  if (!kept || kept.id === was) { try { localStorage.removeItem(KEY); } catch { /* storage refused */ } }
+  developer.set({ active: false, expiresAt: null, error: null, remembered: false });
+  if (kept && kept.id !== was && kept.remembered) apply(kept.id, kept.expiresAt ? kept.expiresAt - Date.now() / 1000 : null, true);
+}
+
 /** Called when ccd answers 403 "Developer Unlock required": the session is gone (here only — the
  *  other windows find out on their own next call). */
 export function devExpired() {
-  if (session) apply(null, null);
+  if (session) drop();
 }
 
 function stored(s: () => Storage): { id: string; expiresAt: number | null; remembered: boolean } | null {
@@ -72,14 +86,16 @@ function stored(s: () => Storage): { id: string; expiresAt: number | null; remem
   } catch { return null; }
 }
 
-/** On start: this tab's stored session, else this browser's remembered one, else ask the other open windows for
- *  theirs. A remembered id may have ended since (Lock all devices, 30 days): the caller checks it with ccd
- *  (`checkRemembered`). */
+/** On start: this browser's remembered session, else this tab's stored one, else ask the other open windows for
+ *  theirs. The remembered one comes first: a tab can only hold a plain id beside it when the tab was restored
+ *  from before the device was remembered, and that older id must not replace the newer choice (taking it would
+ *  also erase the remembered id from this browser while ccd keeps its session). A remembered id may have ended
+ *  since (Lock all devices, 30 days): the caller checks it with ccd (`checkRemembered`). */
 export function restoreDevSession(): Promise<void> {
-  const tab = stored(() => sessionStorage);
-  const kept = tab ?? stored(() => localStorage);
+  const device = stored(() => localStorage);
+  const kept = device?.remembered ? device : stored(() => sessionStorage);
   if (kept) {
-    apply(kept.id, kept.expiresAt ? kept.expiresAt - Date.now() / 1000 : null, !tab && kept.remembered);
+    apply(kept.id, kept.expiresAt ? kept.expiresAt - Date.now() / 1000 : null, kept === device);
     return Promise.resolve();
   }
   try { localStorage.removeItem(KEY); } catch { /* storage refused */ }   // an expired or unreadable one does not linger
@@ -104,7 +120,7 @@ export async function checkRemembered(status: () => Promise<{ active: boolean; e
     const r = await status();
     if (session !== id) return;                       // locked or replaced while ccd answered
     // Here only, as devExpired: another window may hold a newer session, and finds out about this one by itself.
-    if (!r.active) apply(null, null);
+    if (!r.active) drop();
     else apply(id, r.expiresIn, r.remembered !== false);
   } catch { /* ccd unreachable: keep what we have */ }
 }
