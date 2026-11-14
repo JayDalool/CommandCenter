@@ -9,6 +9,7 @@ export * from "./topology";
 export * from "./activity";
 export * from "./milestones";
 export * from "./floor";
+export * from "./seats";
 
 import { evidence, type HqSource } from "./evidence";
 import { buildOffice } from "./office";
