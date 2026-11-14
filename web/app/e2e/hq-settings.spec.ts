@@ -103,6 +103,17 @@ test("Style: Professional has no faces; Childish puts them on Teams and My Offic
         expect(stand, `the floor at ${width}`).toBe(true);
         expect(await page.evaluate(wide), `the floor at ${width}`).toBe(true);
         await page.getByRole("button", { name: "List" }).click();
+      } else {
+        // Teams opens on its seats: a taken seat has its face beside its text, inside the seat
+        const seats = page.locator("#main .hq-seat:not(.is-free)");
+        await expect(seats.first()).toBeVisible();
+        const sit = await seats.evaluateAll((els) => els.every((el) => {
+          const f = el.querySelector(".hq-face")!.getBoundingClientRect(), b = el.querySelector(".hq-seat-body")!.getBoundingClientRect(), c = el.getBoundingClientRect();
+          return f.width === 38 && f.right <= b.left && b.right <= c.right + 0.5 && f.left >= c.left;
+        }));
+        expect(sit, `the seats at ${width}`).toBe(true);
+        expect(await page.evaluate(wide), `the seats at ${width}`).toBe(true);
+        await page.getByRole("button", { name: "List" }).click();
       }
       const cards = page.locator("#main .hq-sess.has-face");
       await expect(cards.first()).toBeVisible();

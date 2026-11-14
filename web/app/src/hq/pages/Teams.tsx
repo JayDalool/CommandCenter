@@ -2,21 +2,24 @@
 // only when the project's coordinator is one of those sessions; nothing is invented. Each session opens Classic's
 // Agents screen at #/agents/<id>, where Open and Focus are, so this page has no actions of its own.
 //
-// Two views of the same data: an org chart (the prototype's hierarchy: Jay, then each project's lead, then the
-// sessions working on it, then the subagents the lead can call) and the list of team panels. The chart is drawn with
-// nested lists and CSS lines, so it reads in order for a screen reader and needs no layout code.
+// Three views of the same data. Seats (Seats.tsx) is the company: each project's seats in the flow, the tickets in
+// flight and where each one is. The org chart (the prototype's hierarchy: Jay, then each project's lead, then the
+// sessions working on it, then the subagents the lead can call) and the list of team panels show every session as
+// a card. The chart is drawn with nested lists and CSS lines, so it reads in order for a screen reader and needs no
+// layout code.
 import { useMemo, useState } from "react";
 import "./office.css";
 import "./teams.css";
 import { href } from "../../lib/router";
 import { ago, dur } from "../../lib/time";
 import { modelOf } from "../../screens/Agents";
-import { buildTeams, PRESENCE_LABEL, type Team, type TeamMember } from "../data";
+import { buildSeats, buildTeams, PRESENCE_LABEL, type Team, type TeamMember } from "../data";
 import { useHqData } from "./live";
 import { Kpi, Pill, PRESENCE_TONE, cx, plural } from "./ui";
 import { Icon } from "../frame/icons";
 import { ProjectLogo } from "../logos";
 import { Fun, Persona, PRESENCE_EMOJI, useFun } from "../persona/mode";
+import { Seats } from "./Seats";
 
 interface Extra { model: string; last: { at: number; text: string } | null }
 
@@ -93,11 +96,10 @@ function OrgChart({ teams, unassigned, extra, now, waiting, stale }: {
   </section>;
 }
 
-const narrow = () => typeof matchMedia === "function" && matchMedia("(max-width: 760px)").matches;
-
 export function Teams() {
   const { src, ev } = useHqData();
   const v = useMemo(() => buildTeams(src, ev), [src, ev]);
+  const seats = useMemo(() => buildSeats(src, ev), [src, ev]);
   const st = src.state;
   // Classic's Agents columns: the model each session runs and its latest event.
   const extra = useMemo(() => {
@@ -109,15 +111,16 @@ export function Teams() {
   const stale = ev.sessions !== "live";
   const s = v.sessions;
   const leads = v.teams.filter((t) => t.lead).length;
-  const [mode, setMode] = useState<"chart" | "list">(() => narrow() ? "list" : "chart");
+  const [mode, setMode] = useState<"seats" | "chart" | "list">("seats");
 
   return <div className="hq-page hq-teams">
     <header className="hq-hero"><div><h2>Teams</h2>
-      <p>Who works on each project, from the sessions herdr reports. Open a session for its details, Open and Focus.</p></div>
+      <p>{mode === "seats" ? "Each project's seats and the tickets in flight. Open a ticket for its stages, who is on it and its live session."
+        : "Who works on each project, from the sessions herdr reports. Open a session for its details, Open and Focus."}</p></div>
       <div className="hq-teams-tools">
         {stale && <Pill tone="warn">Feed not live · status unknown</Pill>}
         <div className="hq-seg" role="group" aria-label="View">
-          {([["chart", "Org chart", "users"], ["list", "List", "list"]] as const).map(([k, label, icon]) =>
+          {([["seats", "Seats", "desk"], ["chart", "Org chart", "users"], ["list", "List", "list"]] as const).map(([k, label, icon]) =>
             <button key={k} type="button" aria-pressed={mode === k} onClick={() => setMode(k)}><Icon name={icon} size={14} />{label}</button>)}
         </div></div></header>
 
@@ -131,6 +134,7 @@ export function Teams() {
     </section>
 
     {!v.teams.length && !v.unassigned.length ? <p className="hq-empty">No projects reported yet.</p>
+      : mode === "seats" ? <Seats v={seats} now={ev.now} />
       : mode === "chart" ? <OrgChart teams={v.teams} unassigned={v.unassigned} extra={extra} now={ev.now} waiting={s.waiting} stale={stale} />
       : v.teams.map((t) => <TeamPanel key={t.key} t={t} extra={extra} now={ev.now} stale={stale} />)}
 

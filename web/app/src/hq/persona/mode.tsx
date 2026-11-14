@@ -39,13 +39,13 @@ function useCast() {
 }
 
 /** An agent's face, in Childish mode only. `lead` is a project key (or "cto") for that project's lead; any other
- *  session gets a face from its `name`. */
-export function Persona({ lead, name, size = 28 }: { lead?: string | null; name?: string; size?: number }) {
-  return useFun() ? <PersonaFace lead={lead} name={name} size={size} /> : null;
+ *  session gets a face from its `name`. `of` says whose face it is when the name is not one to read out (a seat). */
+export function Persona({ lead, name, of, size = 28 }: { lead?: string | null; name?: string; of?: string; size?: number }) {
+  return useFun() ? <PersonaFace lead={lead} name={name} of={of} size={size} /> : null;
 }
 
-function PersonaFace({ lead, name, size }: { lead?: string | null; name?: string; size: number }) {
+function PersonaFace({ lead, name, of, size }: { lead?: string | null; name?: string; of?: string; size: number }) {
   const { leads, sessions } = useCast();
   const who = lead ? leads.get(lead) ?? castFor(`lead:${lead}`) : name ? sessions.get(name.toLowerCase()) ?? castFor(name) : undefined;
-  return who ? <Face who={who} size={size} title={`${who.name}, the face of ${lead ? (lead === "cto" ? "the CTO" : `the ${lead} lead`) : name}`} /> : null;
+  return who ? <Face who={who} size={size} title={`${who.name}, the face of ${of ?? (lead ? (lead === "cto" ? "the CTO" : `the ${lead} lead`) : name)}`} /> : null;
 }

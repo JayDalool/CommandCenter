@@ -287,6 +287,13 @@ export interface Ticket {
   openQuestions?: number;
   deploy?: { env: string; requestedAt: number | null; approvedAt: number | null; result: string | null } | null;
   visibleStage?: VisibleStage;
+  // The new flow (ccd with stages 1-9). Absent from an older ccd, which is why they are optional.
+  size?: TicketSize | null;
+  stage?: FlowStage | null;
+  stale?: boolean;
+  /** The stages this ticket goes through, in order. Its size alone does not say: ccd reads a ticket nobody sized
+   *  as risky when the policy makes it so, and it still runs the route it had before the flow. */
+  route?: FlowStage[];
 }
 
 export const VISIBLE_STAGES = ["Planning", "Implementing", "Reviewing", "UI Testing", "Verifying", "Ready to Merge",
@@ -324,6 +331,32 @@ export interface TaskRecord { key: string; taskMd: string; workflowMd: string; d
 
 export interface TicketRef { key: string; title: string; status: TicketStatus }
 
+/** The nine stages of the new flow, in order, and the seats that do them (flow/contract.md). */
+export type FlowStage = "intake" | "investigate" | "techReview" | "build" | "userCheck" | "codeReview" | "merge" | "release" | "done";
+export type FlowSeat = "lead" | "investigator" | "techReviewer" | "developer" | "userReviewer" | "designReviewer" | "codeReviewer"
+  | "verifier";
+export type TicketSize = "small" | "standard" | "risky";
+export interface FlowStep {
+  stage: FlowStage; state: "done" | "active" | "todo" | "skipped" | "blocked";
+  /** "jay" for the merge, which no agent does. */
+  seat: FlowSeat | "jay" | null; by: string | null; session: string | null; at: number | null;
+}
+export interface TicketFlow {
+  size: TicketSize | null; stages: FlowStep[];
+  /** Where the ticket is, the stages it goes through, and how many of its children are still open. */
+  stage?: FlowStage | null; route?: FlowStage[]; openChildren?: number;
+  holder: { seat: FlowSeat; session: string | null; since: number } | null;
+  next: { stage: FlowStage; seat: FlowSeat | "jay" } | null;
+  waitingOn: "jay" | "lead" | "reviewer" | null;
+  rounds: number; idleSince: number; stale: boolean;
+}
+export interface Handoff {
+  at: number; stage: FlowStage; kind: "advanced" | "sentBack" | "blocked" | "resumed";
+  from: FlowSeat | "jay" | null; to: FlowSeat | "jay" | null; by: string; note: string | null;
+}
+export interface Criterion {
+  id: string; text: string; state: "open" | "pass" | "fail"; by: string | null; at: number | null; head: string | null;
+}
 export type PipelineStage = "PLAN" | "BUILD" | "REVIEW" | "MERGE" | "VERIFY" | "DONE";
 export type PipelineGate = "plan" | "merge" | "ui" | "deploy" | "failure";
 /** GET /api/tasks/{key}/work — the ticket's durable pipeline state (plans/TICKET-PIPELINE-V1.md). */
@@ -355,6 +388,13 @@ export interface TicketWork {
   session?: TaskSession;
   project?: string;
   nudge?: { delivered: boolean; reason: string | null };
+  // The new flow; absent from an older ccd.
+  size?: TicketSize | null;
+  requirements?: string[];
+  criteria?: Criterion[];
+  flow?: TicketFlow;
+  handoffs?: Handoff[];
+  closing?: { note: string; by: string; at: number } | null;
 }
 export interface TimelineEvent {
   id: number; at: number; actor: string; kind: string; field: string | null;

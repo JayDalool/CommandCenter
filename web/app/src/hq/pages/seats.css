@@ -1,0 +1,128 @@
+/* Teams › Seats: seats, tickets in flight, the row of stages and one ticket opened in place (Seats.tsx,
+ * TicketFlow.tsx). Scoped to :root[data-ui="hq"], no custom property declared here (parity.spec.ts). Panels, pills,
+ * buttons and links come from office.css; --pj (the project's colour) is set inline on the panel. */
+
+:root[data-ui="hq"] .hq-seating :is(ul, ol) { margin: 0; padding: 0; list-style: none; }
+:root[data-ui="hq"] .hq-seating :is(h4, h5) { margin: 0; }
+:root[data-ui="hq"] .hq-seating-h { margin-top: 4px; color: var(--hq-text-strong); font: 650 var(--hq-fs-md) var(--hq-font-display); }
+:root[data-ui="hq"] .hq-seating-h small { margin-left: 8px; color: var(--hq-muted); font: var(--hq-fs-sm) var(--hq-font); }
+
+/* seats */
+:root[data-ui="hq"] .hq-seats { display: grid; grid-template-columns: repeat(auto-fill, minmax(214px, 1fr)); gap: 10px; }
+:root[data-ui="hq"] .hq-seat {
+  display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--hq-line);
+  border-radius: var(--hq-r-md); background: var(--hq-tile);
+}
+:root[data-ui="hq"] .hq-seat.is-lead { border-color: var(--pj); }
+:root[data-ui="hq"] .hq-seat.is-free { border-style: dashed; background: none; }
+:root[data-ui="hq"] .hq-seat-av { flex: none; display: grid; place-items: center; width: 38px; height: 38px; }
+:root[data-ui="hq"] .hq-seat.is-free .hq-seat-av { opacity: .55; }
+:root[data-ui="hq"] .hq-seat-mono {
+  display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid var(--hq-line-2); border-radius: var(--hq-r-sm);
+  background: var(--hq-panel-2); color: var(--hq-text-2); font: 700 var(--hq-fs-xs)/1 var(--hq-mono); letter-spacing: .04em;
+}
+:root[data-ui="hq"] .hq-seat.is-lead .hq-seat-mono { border-color: var(--pj); color: var(--hq-text-strong); }
+:root[data-ui="hq"] .hq-seat-body { display: grid; gap: 2px; flex: 1; min-width: 0; }
+:root[data-ui="hq"] .hq-seat-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+:root[data-ui="hq"] .hq-seat-top b { color: var(--hq-text-strong); font-weight: 650; font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-seat.is-free .hq-seat-top b { color: var(--hq-text-2); font-weight: 600; }
+:root[data-ui="hq"] .hq-seat small { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-seating :is(.hq-seat, .hq-loose, .hq-tf-on) a:hover { text-decoration: underline; }
+:root[data-ui="hq"] .hq-seating .hq-seat small a { color: var(--hq-link); font-weight: 600; }
+
+/* tickets in flight */
+:root[data-ui="hq"] .hq-fl + .hq-fl { border-top: 1px solid var(--hq-line); }
+:root[data-ui="hq"] .hq-fl-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(230px, auto) minmax(0, 210px); align-items: center; gap: 6px 14px;
+  padding: 7px 0;
+}
+:root[data-ui="hq"] .hq-fl-tags { grid-column: 2; display: inline-flex; align-items: center; gap: 12px; }
+:root[data-ui="hq"] .hq-fl-size { min-width: 60px; color: var(--hq-muted); font-size: var(--hq-fs-sm); text-align: right; }
+:root[data-ui="hq"] .hq-fl-size.is-risky { color: var(--hq-warn); font-weight: 600; }
+:root[data-ui="hq"] .hq-fl-stage { grid-column: 3; }
+:root[data-ui="hq"] .hq-fl-who { grid-column: 4; }
+:root[data-ui="hq"] .hq-fl-btn {
+  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 6px; border: 0; border-radius: var(--hq-r-sm);
+  background: none; color: var(--hq-text); font: inherit; text-align: left; cursor: pointer;
+}
+:root[data-ui="hq"] .hq-fl-btn:hover { background: var(--hq-hover); }
+:root[data-ui="hq"] .hq-fl-btn svg { flex: none; color: var(--hq-muted); }
+:root[data-ui="hq"] .hq-fl-btn code { flex: none; color: var(--hq-text-2); font: 600 var(--hq-fs-sm) var(--hq-mono); }
+:root[data-ui="hq"] .hq-fl-stage { display: flex; align-items: center; gap: 10px; min-width: 0; }
+:root[data-ui="hq"] .hq-fl-stage b {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--hq-text-strong); font-weight: 600; font-size: var(--hq-fs-sm);
+}
+:root[data-ui="hq"] .hq-fl.is-blocked > .hq-fl-row .hq-fl-stage b { color: var(--hq-bad); }
+:root[data-ui="hq"] .hq-fl-who { display: grid; gap: 1px; min-width: 0; color: var(--hq-text-2); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-fl-who .t-jay { font-weight: 600; }
+:root[data-ui="hq"] .hq-fl-who a:hover { text-decoration: underline; }
+:root[data-ui="hq"] .hq-fl-who :is(.t-none, small) { color: var(--hq-muted); }
+:root[data-ui="hq"] .hq-seating .hq-fl-kids { margin: 0 0 6px 13px; padding-left: 14px; border-left: 1px solid var(--hq-line-2); }
+
+/* the row of stages: filled up to where the ticket is, the current one taller, a skipped one dashed */
+:root[data-ui="hq"] .hq-rail { display: inline-flex; align-items: center; flex: none; gap: 3px; height: 12px; }
+:root[data-ui="hq"] .hq-rail i { width: 13px; height: 5px; border-radius: 3px; background: var(--hq-line-2); }
+:root[data-ui="hq"] .hq-rail i.is-done { background: color-mix(in srgb, var(--pj, var(--hq-accent)) 55%, var(--hq-line-2)); }
+:root[data-ui="hq"] .hq-rail i.is-active { height: 11px; background: var(--pj, var(--hq-accent)); }
+:root[data-ui="hq"] .hq-fl.is-blocked > .hq-fl-row .hq-rail i.is-active { background: var(--hq-bad); }
+:root[data-ui="hq"] .hq-rail i.is-skipped { background: none; border-top: 1px dashed var(--hq-line-2); height: 0; border-radius: 0; }
+
+/* sessions with no ticket */
+:root[data-ui="hq"] .hq-loose { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-loose li { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+:root[data-ui="hq"] .hq-loose small { color: var(--hq-muted); }
+:root[data-ui="hq"] .hq-seating .hq-loose small a { color: var(--hq-link); font-weight: 600; }
+
+/* one ticket, opened in place */
+:root[data-ui="hq"] .hq-tf {
+  display: grid; gap: 10px; margin: 2px 0 10px 28px; padding: 12px 14px; border: 1px solid var(--hq-line); border-radius: var(--hq-r-md);
+  background: var(--hq-panel-2);
+}
+:root[data-ui="hq"] .hq-tf h5 { margin-top: 4px; color: var(--hq-muted); font: 650 var(--hq-fs-xs) var(--hq-font); letter-spacing: .05em; text-transform: uppercase; }
+:root[data-ui="hq"] .hq-tf-on { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-tf-on li { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+:root[data-ui="hq"] .hq-tf-on b { color: var(--hq-text-2); font-weight: 600; }
+:root[data-ui="hq"] .hq-tf-steps { display: grid; gap: 0; }
+:root[data-ui="hq"] .hq-tf-steps li { position: relative; display: grid; grid-template-columns: 14px minmax(120px, 150px) minmax(0, 1fr); align-items: baseline; gap: 10px; padding: 4px 0; }
+:root[data-ui="hq"] .hq-tf-steps li + li::before { content: ""; position: absolute; left: 5px; top: -8px; height: 14px; border-left: 1px solid var(--hq-line-2); }
+:root[data-ui="hq"] .hq-tf-steps i { align-self: center; width: 11px; height: 11px; border: 2px solid var(--hq-line-2); border-radius: 50%; background: var(--hq-panel-2); }
+:root[data-ui="hq"] .hq-tf-steps b { color: var(--hq-text-2); font-weight: 600; font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-tf-steps small { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-tf-steps .is-done i { border-color: var(--hq-ok); background: var(--hq-ok); }
+:root[data-ui="hq"] .hq-tf-steps .is-active i { border-color: var(--hq-accent); background: var(--hq-accent); }
+:root[data-ui="hq"] .hq-tf-steps .is-active b { color: var(--hq-text-strong); }
+:root[data-ui="hq"] .hq-tf-steps .is-active small { color: var(--hq-text-2); }
+:root[data-ui="hq"] .hq-tf-steps .is-blocked i { border-color: var(--hq-bad); background: var(--hq-bad); }
+:root[data-ui="hq"] .hq-tf-steps .is-skipped i { border-style: dashed; }
+:root[data-ui="hq"] .hq-tf-steps .is-skipped b { color: var(--hq-muted); font-weight: 500; }
+:root[data-ui="hq"] .hq-tf-crit { display: grid; gap: 4px; font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-tf-crit li { display: grid; grid-template-columns: 14px minmax(0, 56ch) auto; justify-content: start; align-items: baseline; gap: 10px; }
+:root[data-ui="hq"] .hq-tf-crit i { align-self: center; width: 10px; height: 10px; border: 2px solid var(--hq-line-2); border-radius: 2px; }
+:root[data-ui="hq"] .hq-tf-crit .is-pass i { border-color: var(--hq-ok); background: var(--hq-ok); }
+:root[data-ui="hq"] .hq-tf-crit .is-fail i { border-color: var(--hq-bad); background: var(--hq-bad); }
+:root[data-ui="hq"] .hq-tf-crit small { color: var(--hq-muted); }
+:root[data-ui="hq"] .hq-tf-crit .is-fail small { color: var(--hq-bad); }
+:root[data-ui="hq"] .hq-tf-hist { display: grid; gap: 4px; font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-tf-hist li { display: grid; grid-template-columns: minmax(96px, 132px) minmax(0, 1fr); gap: 10px; }
+:root[data-ui="hq"] .hq-tf-hist time { color: var(--hq-muted); font-variant-numeric: tabular-nums; }
+:root[data-ui="hq"] .hq-tf-close { font-size: var(--hq-fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+:root[data-ui="hq"] .hq-tf-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+:root[data-ui="hq"] .hq-tf button.hq-link { padding: 0; border: 0; background: none; font: inherit; font-weight: 600; cursor: pointer; }
+
+@media (max-width: 560px) {
+  /* a free seat is one line on a phone, so eight seats do not push the tickets off the screen */
+  :root[data-ui="hq"] .hq-seat.is-free { align-items: center; padding: 6px 12px; }
+  :root[data-ui="hq"] .hq-seat.is-free .hq-seat-av { display: none; }
+  :root[data-ui="hq"] .hq-seat.is-free .hq-seat-body { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+}
+@media (max-width: 900px) {
+  :root[data-ui="hq"] .hq-fl-row { grid-template-columns: minmax(0, 1fr) auto; }
+  :root[data-ui="hq"] .hq-fl-size { min-width: 0; }
+  :root[data-ui="hq"] .hq-fl-stage { grid-column: 1 / -1; padding-left: 28px; }
+  :root[data-ui="hq"] .hq-fl-who { grid-column: 1 / -1; padding-left: 28px; }
+  :root[data-ui="hq"] .hq-tf { margin-left: 0; }
+  :root[data-ui="hq"] .hq-tf-steps li { grid-template-columns: 14px minmax(0, 1fr); }
+  :root[data-ui="hq"] .hq-tf-steps small { grid-column: 2; }
+  :root[data-ui="hq"] .hq-tf-steps li + li::before { top: -6px; height: 12px; }
+}
