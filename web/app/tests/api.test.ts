@@ -1,4 +1,5 @@
-import { Api, ApiError } from "../src/api/client";
+import { vi } from "vitest";
+import { Api, ApiError, READ_TIMEOUT_MS } from "../src/api/client";
 import { setToken, clearToken, getToken, isRemembered } from "../src/api/auth";
 import { jsonResponse } from "./helpers";
 
@@ -29,6 +30,55 @@ describe("API adapter", () => {
     const down = new Api(async () => { throw new TypeError("Failed to fetch"); });
     await expect(down.state()).rejects.toBeInstanceOf(ApiError);
     await expect(down.state()).rejects.toMatchObject({ status: 0 });
+  });
+  describe("a read ccd never answers", () => {
+    afterEach(() => { vi.useRealTimers(); });
+    // A stand-in fetch that never answers, but gives up when its request is aborted, as a browser's fetch does.
+    const hang = (seen: RequestInit[] = []) => new Api((_u, init) => new Promise((_ok, fail) => {
+      seen.push(init!);
+      init?.signal?.addEventListener("abort", () => fail(new DOMException("The operation was aborted.", "AbortError")));
+    }));
+
+    it("fails after READ_TIMEOUT_MS as ccd not answering, so nothing waits on it for good", async () => {
+      vi.useFakeTimers();
+      const seen: RequestInit[] = [];
+      const got = hang(seen).release().catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS - 1);
+      expect(seen[0].signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const e = await got;
+      expect(e).toBeInstanceOf(ApiError);
+      expect(e).toMatchObject({ status: 0, message: "ccd did not answer within 30 s" });
+      expect(seen[0].signal?.aborted).toBe(true);
+    });
+
+    it("a body that stops half way is not taken as an empty answer", async () => {
+      vi.useFakeTimers();
+      const api = new Api(async (_u, init) => ({ ok: true, status: 200, json: () => new Promise((_ok, fail) =>
+        init!.signal!.addEventListener("abort", () => fail(new DOMException("aborted", "AbortError")))) }) as unknown as Response);
+      const got = api.state().catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS);
+      expect(await got).toMatchObject({ status: 0, message: "ccd did not answer within 30 s" });
+    });
+
+    it("a write is never cut off: it may still land, and a timeout would invite a second press", async () => {
+      vi.useFakeTimers();
+      const seen: RequestInit[] = [];
+      let settled = false;
+      void hang(seen).updateTask("CC-001", { status: "DONE" }).finally(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(10 * READ_TIMEOUT_MS);
+      expect(settled).toBe(false);
+      expect(seen[0].signal).toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("an answered read leaves no timer behind", async () => {
+      vi.useFakeTimers();
+      await new Api(async () => jsonResponse({ ok: true })).state();
+      await new Api(async () => jsonResponse({ ok: false, error: "token required" }, 401)).state().catch(() => {});
+      await new Api(async () => { throw new TypeError("Failed to fetch"); }).state().catch(() => {});
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
   it("encodes keys and agent ids in paths", async () => {
     const urls: string[] = [];

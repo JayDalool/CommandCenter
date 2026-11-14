@@ -16,6 +16,10 @@ export type Fetch = typeof fetch;
 /** ccd's 403 for a remembered device whose token is more than 8 h old: `{error, reenter: true}`. */
 const reenter = (data: unknown) => !!data && typeof data === "object" && (data as { reenter?: unknown }).reenter === true;
 
+/** How long a read waits for ccd before it is reported as not answered. Only reads: a write that outlives a timeout
+ *  may still land, and calling it failed would invite a second press of the same button. */
+export const READ_TIMEOUT_MS = 30_000;
+
 /** The one place the UI talks HTTP to ccd. Same origin; the token goes in a header. */
 export class Api {
   constructor(private fetchImpl: Fetch = (...a) => fetch(...a), private base = "") {}
@@ -27,17 +31,28 @@ export class Api {
     const dev = devSession();
     if (dev) headers["X-CCD-Developer"] = dev;
     if (body !== undefined) headers["Content-Type"] = "application/json";
+    // A read that hangs (a dropped network on the way to jay-server, a stuck ccd) would otherwise leave whatever waits
+    // on it waiting for good. It gets the same status as an unreachable ccd, so callers treat it the same way.
+    const read = method === "GET" ? new AbortController() : null;
+    const timer = read ? setTimeout(() => read.abort(), READ_TIMEOUT_MS) : undefined;
+    const late = () => new ApiError(0, `ccd did not answer within ${READ_TIMEOUT_MS / 1000} s`);
     let res: Response;
-    try {
-      res = await this.fetchImpl(this.base + path, {
-        method, headers, body: body === undefined ? undefined : JSON.stringify(body),
-        cache: "no-store", credentials: "omit",
-      });
-    } catch (e) {
-      throw new ApiError(0, "ccd unreachable");
-    }
     let data: unknown = null;
-    try { data = await res.json(); } catch { /* empty body */ }
+    try {
+      try {
+        res = await this.fetchImpl(this.base + path, {
+          method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+          cache: "no-store", credentials: "omit", ...(read ? { signal: read.signal } : {}),
+        });
+      } catch (e) {
+        throw read?.signal.aborted ? late() : new ApiError(0, "ccd unreachable");
+      }
+      try { data = await res.json(); } catch { /* empty body */ }
+      // A body cut off by the timeout reads as empty: that is not an answer.
+      if (read?.signal.aborted) throw late();
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) {
       if (res.status === 403 && data && typeof data === "object" && "error" in data &&
         String((data as { error: unknown }).error).startsWith("Developer Unlock")) devExpired();
