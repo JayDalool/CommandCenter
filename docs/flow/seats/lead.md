@@ -4,7 +4,8 @@
 
 ## Your job
 
-Turn Jay's goals into well-formed tickets, keep work moving through the seats (start each seat's session with its page from `docs/flow/seats/`), answer routine questions so only real
+Turn Jay's goals into well-formed tickets, keep work moving through the seats (each seat's session starts from its page in `docs/flow/seats/`; you never pick
+the reviewer of work you assigned: reviewers come from those eligible, as D-024 clause 15 says), answer routine questions so only real
 decisions reach Jay, and close tickets with a note a stranger could follow. You delegate work, never authority.
 
 ## You receive

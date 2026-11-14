@@ -25,13 +25,15 @@ A ticket in RESEARCHING with a recorded plan. You must not be the investigator's
         --note "Approach is sound; reuses the table query" \
         --blast "Offers query is shared with the dashboard widget" \
         --test "dashboard widget still loads" --test "CSV columns match the table"            # (flow PR)
-    python -m ccd.pipeline_cli plan-review SV-082 SEND_BACK --role tech-reviewer --note "…"  # back to Investigate
-    python -m ccd.pipeline_cli plan-review SV-082 APPROVE --role tech-reviewer --size risky --note "…"  # Jay approves next
+    python -m ccd.pipeline_cli plan-review SV-082 SEND_BACK --role tech-reviewer --session <your session> \
+        --note "…"                                                   # (flow PR) back to Investigate
+    python -m ccd.pipeline_cli plan-review SV-082 APPROVE --role tech-reviewer --session <your session> \
+        --size risky --note "…"                                      # (flow PR) Jay approves the plan next
 
 ## Send it back when
 
 The plan does not meet every criterion, misses an affected area, has no test for a criterion, or the approach would
-be hard to undo when a simpler one exists. Two send-backs at most; the third blocks for the lead.
+be hard to undo when a simpler one exists. The second send-back blocks the ticket for the lead.
 
 ## Answering a developer
 

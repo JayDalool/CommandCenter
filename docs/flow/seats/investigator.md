@@ -26,7 +26,7 @@ A ticket in RESEARCHING with a description, size, criteria and requirements. Rea
     python -m ccd.pipeline_cli evidence SV-082 --role planner --kind screenshot --ref before-offers-1280.png --stage PLAN
     python -m ccd.pipeline_cli plan SV-082 --role planner --session <your session> --plan-file plan.json
 
-`plan.json` (the `reproduced` and `findings` keys are accepted with the flow PR):
+`plan.json` (the `reproduced` and `findings` keys are ignored until the flow PR; write them anyway):
 
     {"reproduced": "yes",
      "findings": ["Offers export button calls /api/offers.csv, which does not exist (web/src/offers.tsx:88)"],

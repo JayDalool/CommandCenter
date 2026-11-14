@@ -30,8 +30,8 @@ Read your seat's page, not all of them: [seats/](seats/).
 | 9 | Done | [lead](seats/lead.md) | closing note: what changed, why, how it was checked, docs updated |
 
 The ways back: technical review sends a plan back to Investigate; a failed user check sends the build back to Build;
-a code review asking for changes sends it back to Build. Two rounds at most at each of those three stages; the third
-is blocked for the lead (and Jay) to decide.
+a code review asking for changes sends it back to Build. Two rounds at most at each of those three stages: the second send-back
+blocks the ticket for the lead (and Jay) to decide.
 
 ## Three sizes
 
@@ -39,12 +39,12 @@ The lead sets the size at intake. The technical reviewer may raise it. Only Jay 
 
 | Size | For | Route |
 |---|---|---|
-| small | wording, a setting, a one-file fix with a test | Intake, Build, Code review, Merge, Release, Done. User check too when it changes a screen |
+| small | wording, a setting, a one-file fix with a test | Intake, Build, Code review, Merge, Release, Done. User check too when the ticket is a UI ticket (`ui` label, needs-ui-review flag or DESIGN type) |
 | standard | a feature or a bug across several files | all nine |
 | risky | security, sign-in, money, data migration, licensed or personal data, a redesign clients notice | all nine, plus Jay approves the plan after Technical review and approves the release |
 
 A ticket with a plan-gate label (`security`, `migration`, `destructive`, `architecture`, `product-decision`,
-`ambiguous`, `financial`, `legal`, `gate:plan`), a SECURITY or LEGAL type, or a needs-Jay flag is risky whatever
+`ambiguous`, `financial`, `legal`, `gate:plan`), a SECURITY or LEGAL type, or a needs-Jay or needs-legal flag is risky whatever
 was typed. The route decides which stages run; a skipped stage is refused by ccd, never chosen by an agent.
 
 ## What a ticket carries
@@ -68,8 +68,8 @@ Never put secrets, tokens, customer data, licensed data or pasted terminal outpu
 
 - Two levels only: a parent and its children. A child cannot have children.
 - **Children finish first, then the parent.** ccd refuses to close a parent while any child is open.
-- When the last child closes, the parent goes back to its lead for one user check of the whole feature, then the
-  closing note.
+- When the last child closes and the parent is otherwise finished, the parent waits for its lead's closing note.
+  Nothing closes it automatically.
 - `blocks` stays for order between tickets that are not parent and child.
 
 ## Limits that stop half-finished work
@@ -79,7 +79,7 @@ Never put secrets, tokens, customer data, licensed data or pasted terminal outpu
   4 hours in Technical review, User check or Code review with nobody in that seat. Fill that seat instead.
 - Stale: 48 hours with no recorded step in stages 2 to 6 marks the ticket stale. The lead moves it, sends it back
   or proposes cancelling it (`pipeline_cli stale`; only Jay cancels).
-- Two rounds at most per review stage, then blocked.
+- Two rounds at most per review stage: the second send-back blocks the ticket.
 
 ## Who answers a question
 
@@ -90,13 +90,15 @@ through". Asking does not end your session; the answer comes back to it, or to t
 
 ## Releases
 
-Each project is **Live** or **Not live**; only Jay changes it. Not live: deploy right after merge. Live: one release
+Each project is **Live** or **Not live**; only Jay changes it. Not live: no release window, no banner. Live: one release
 a week, Wednesday 10 p.m. America/Winnipeg; merged after noon on release day waits a week; a risky urgent fix needs
-Jay's approval to go outside the window. A live deploy always waits for Jay. No app is live today.
+Jay's approval to go outside the window. Who runs a deploy does not change: nothing deploys automatically, and a live deploy always waits for Jay. No app is
+live today.
 
 ## Never, in any seat
 
-- Merge, deploy to production, run a migration on production, or touch secrets.
+- Merge or deploy to production without Jay's recorded approval (his merge, Merge ready or Go Live), run a
+  migration on production, or touch secrets.
 - Approve, review or user-check work you planned, built or assigned.
 - Change your own or another agent's permissions, or create an agent. A lead may propose staffing; Jay decides.
 - Mark a stage done that you did not do, or skip one.

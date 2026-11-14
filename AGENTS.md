@@ -16,8 +16,8 @@ seat's page in [docs/flow/seats/](docs/flow/seats/).
 
 ## Before you push
 
-    cd server && python -m unittest discover -s tests -t .      # the backend suite CI runs
-    cd web/app && npm ci && npm run typecheck                    # when you touched web/app
+    cd server && python -m pip install -r requirements-dev.txt && python -m unittest discover -s tests -t .
+    cd web/app && npm ci && npm run typecheck && npm test        # when you touched web/app
 
 CI (`.github/workflows/ci.yml`) runs both on every PR; `web-e2e.yml` runs the browser tests when `web/app/**` or
 `server/ccd/api.py` changes. Never skip, disable or loosen a test to get green.
@@ -27,7 +27,8 @@ CI (`.github/workflows/ci.yml`) runs both on every PR; `web-e2e.yml` runs the br
 - **Loopback only.** ccd binds 127.0.0.1:7777. Never add a public listener, tunnel or TCP bridge to the herdr socket.
 - **herdr owns every Claude pane.** ccd does not start, split or supervise agents beyond the exceptions in README.md.
 - **No dangerous endpoints.** No API merges, deploys, touches production, secrets, Docker, destructive git or rule
-  files. A test asserts the route table exactly; a new route needs its test updated and a reason in the PR.
+  files. The only exceptions are Jay's two presses, Merge ready and Go Live (README.md). A test asserts the route
+  table exactly; a new route needs its test updated and a reason in the PR.
 - **One project registry.** Project names, ticket prefixes and roots live in `server/ccd/registry.py` only.
 - **tasks.db changes are additive** (new columns with defaults, new tables) with a numbered migration, a rollback
   runbook in `docs/runbooks/`, and a migration drill.
@@ -35,11 +36,16 @@ CI (`.github/workflows/ci.yml`) runs both on every PR; `web-e2e.yml` runs the br
 - **New and changed API routes** are documented in `docs/API.md` in the same PR.
 - **Comments say why**, not what: the bug, constraint or decision (with its ticket or D-number) behind a non-obvious line.
 
-## Protected paths: Jay approves every change (D-007, `policy/projects/commandcenter.toml`)
+## Protected paths: Jay approves every change
+
+D-007 names the rails: `server/ccd/autonomy.py`, `broker.py`, `security.py`, `profiles.py`, `merge_policy.py`,
+`policy/**` and agent permission rules. This project's target policy (`policy/projects/commandcenter.toml`,
+`self_protection`, evaluated in shadow, not enforced by ccd yet) widens that to the list below. Treat the whole list as
+a rule for agents now:
+
 
 `server/ccd/**`, `scripts/**`, `launcher/**`, `.github/**`, `policy/**`, `web/app/src/**`, `.claude/**`,
-`AGENTS.md`, `CLAUDE.md`. The autonomy engine, broker, `security.py`, `profiles.py`, `merge_policy.py` and agent
-permission rules are the rails themselves: never weaken them, and never change your own or another agent's authority.
+`AGENTS.md`, `CLAUDE.md`. Never weaken the rails, and never change your own or another agent's authority.
 CI configuration is never changed without Jay's explicit approval.
 
 ## Git and pull requests

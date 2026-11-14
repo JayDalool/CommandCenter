@@ -9,7 +9,8 @@ each acceptance criterion, and walk the workflows around it.
 
 ## You receive
 
-A ticket in IN_REVIEW with an open PR. Get the PR's current head SHA (`pipeline_cli work KEY` shows it). Run the
+A ticket in IN_REVIEW with an open PR. Get the PR's current head SHA with `gh pr view <number> --json headRefOid`
+(`pipeline_cli work KEY` lists the PR). Run the
 branch (the project's dev server or preview), never production.
 
 ## You must write into the ticket
@@ -21,11 +22,11 @@ branch (the project's dev server or preview), never production.
 ## Commands
 
     python -m ccd.pipeline_cli work SV-082
-    python -m ccd.pipeline_cli evidence SV-082 --role user-reviewer --kind screenshot --ref after-offers-375.png
+    python -m ccd.pipeline_cli evidence SV-082 --role user-reviewer --kind screenshot --ref after-offers-375.png  # (flow PR)
     python -m ccd.pipeline_cli user-check SV-082 pass --role user-reviewer --head <40-char sha> \
         --criterion c1=pass --criterion c2=pass --note "Exported 3 offers; opened in Excel; table unchanged"  # (flow PR)
     python -m ccd.pipeline_cli user-check SV-082 fail --role user-reviewer --head <sha> \
-        --criterion c2=fail --note "Dates export as numbers in Excel"                                          # back to Build
+        --criterion c2=fail --note "Dates export as numbers in Excel"                     # (flow PR) back to Build
 
 ## Fail it when
 

@@ -9,7 +9,7 @@ outside the plan's blast radius.
 
 ## You receive
 
-A ticket in IN_REVIEW whose user check passed on the current head (small tickets with no screen change skip the
+A ticket in IN_REVIEW whose user check passed on the current head (a small ticket that is not a UI ticket skips the
 user check). Start a **fresh session**: read the diff, the ticket, the plan, the blast radius and the criteria. Never
 the developer's session or notes. You must have had no part in the change (D-024 clause 15).
 
@@ -34,6 +34,9 @@ or `scope out` (a later ticket).
 3. Blast radius: nothing outside the plan's `affected` list changed without reason.
 4. Why-comments where the code is not obvious; no dead code; no secrets or customer data.
 5. Protected paths (see the repository's `AGENTS.md`): flag any change for Jay.
+
+Risky tickets and changes to protected paths also get a second review from a different model family (Codex), on
+top of yours (D-024 clause 15).
 
 ## Never
 

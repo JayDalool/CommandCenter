@@ -19,8 +19,8 @@ reached by keyboard) goes to the user-reviewer so the check fails; a polish poin
 ## Commands
 
     python -m ccd.pipeline_cli finding SV-082 --role design-reviewer --source review --scope in \
-        --category design --summary "Export button has no label at 375 wide"
-    python -m ccd.pipeline_cli evidence SV-082 --role design-reviewer --kind screenshot --ref design-375.png
+        --category design --summary "Export button has no label at 375 wide"          # (flow PR)
+    python -m ccd.pipeline_cli evidence SV-082 --role design-reviewer --kind screenshot --ref design-375.png  # (flow PR)
 
 ## Never
 

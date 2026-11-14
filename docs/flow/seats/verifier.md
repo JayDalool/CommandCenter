@@ -8,8 +8,8 @@ After the merge, prove the change works where it was released, and record the ev
 
 ## You receive
 
-A ticket in VERIFYING after its PR merged. Check the project's Live setting: not live means it deploys after
-merge; live means it waits for the weekly window and for Jay's approval.
+A ticket in VERIFYING after its PR merged. Check the project's Live setting: not live means no release window;
+live means the weekly window. A live deploy always waits for Jay's approval; nothing deploys automatically.
 
 ## You must write into the ticket
 
