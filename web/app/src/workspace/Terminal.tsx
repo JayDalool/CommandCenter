@@ -14,7 +14,7 @@ import { devExpired, devSession } from "../api/developer";
 import { app } from "../store/app";
 import { handleChunkError } from "../lib/stale";
 import { installClipboard, makeInputSender } from "./termClipboard";
-import { unlockDialogOpen, useDevActive } from "../components/DevMode";
+import { reenterDialog, unlockDialogOpen, useDevActive } from "../components/DevMode";
 import { Overflow, type OverflowItem } from "../components/Overflow";
 import { ConfirmDialog } from "../components/Dialog";
 
@@ -29,9 +29,12 @@ function loadXterm(): Promise<Mods> {
   return mods;
 }
 
-type Conn = "idle" | "connecting" | "live" | "detached" | "ended" | "refused" | "lost" | "elsewhere";
+type Conn = "idle" | "connecting" | "live" | "detached" | "ended" | "refused" | "lost" | "elsewhere" | "reenter";
 const WORD: Record<Conn, string> = { idle: "NOT CONNECTED", connecting: "CONNECTING", live: "LIVE", detached: "DETACHED",
-  ended: "SESSION ENDED", refused: "REFUSED", lost: "TOO SLOW — DROPPED", elsewhere: "ATTACHED ELSEWHERE" };
+  ended: "SESSION ENDED", refused: "REFUSED", lost: "TOO SLOW — DROPPED", elsewhere: "ATTACHED ELSEWHERE", reenter: "TOKEN NEEDED AGAIN" };
+// ccd closes a terminal with this on a remembered device, more than 8 hours after the developer token was typed
+// there. Developer Mode itself is still active; only the terminal and file writes want the token again.
+const REENTER = 4412;
 // herdr allows one writable attach per terminal; its refusal text, as the attach client prints it.
 const HERDR_BUSY = "already has an attached client";
 const PREAMBLE_BYTES = 8 * 1024;
@@ -147,6 +150,7 @@ export function TerminalView({ name, label, active, theme, closeText, info, menu
       if (ended) return;
       // ccd's developer session ended (idle, max age, restart): lock this tab so the Unlock overlay shows.
       if (ev.code === 4403 && ev.reason?.startsWith("Developer Unlock")) devExpired();
+      if (ev.code === REENTER) { setConn("reenter"); return; }
       if (ev.code === 4403 || ev.code === 4401 || ev.code === 4404 || ev.code === 4400) setConn("refused");
       else setConn((c) => (c === "live" || c === "connecting" ? "detached" : c));
     };
@@ -157,7 +161,7 @@ export function TerminalView({ name, label, active, theme, closeText, info, menu
   // Locking Developer Mode ends this view; unlocking again reconnects when the tab is showing.
   // Only a view that was connected comes back by itself; a detached or closed one stays as Jay left it.
   useEffect(() => {
-    if (!dev) { const s = ws.current; ws.current = null; s?.close(); setConn((c) => (c === "live" || c === "connecting" ? "idle" : c)); }
+    if (!dev) { const s = ws.current; ws.current = null; s?.close(); setConn((c) => (c === "live" || c === "connecting" || c === "reenter" ? "idle" : c)); }
   }, [dev]);
   useEffect(() => { if (term.current) term.current.options.theme = termTheme(); }, [theme]);
   useEffect(() => {
@@ -170,6 +174,12 @@ export function TerminalView({ name, label, active, theme, closeText, info, menu
   // Leaving the screen detaches; the shell keeps running on the server.
   useEffect(() => () => { ws.current?.close(); term.current?.dispose(); }, []);
 
+  // The token may have been typed again since this view closed (a file save, another window, another terminal):
+  // then this is only a reconnect. Otherwise ask for it; cancelled, the view stays as it is, with its button.
+  const reenter = async () => {
+    const fresh = await app.api.developerStatus().then((r) => (r.reenterIn ?? 0) > 0, () => false);
+    if (fresh || await reenterDialog()) void connect();
+  };
   const detach = () => { const s = ws.current; ws.current = null; s?.close(); setConn("detached"); };
   const closeSession = async () => {
     if (await app.action(() => app.api.ptyClose(name), `${label} closed`)) { ws.current?.close(); ws.current = null; setConn("ended"); }
@@ -177,13 +187,17 @@ export function TerminalView({ name, label, active, theme, closeText, info, menu
 
   // The xterm host is ALWAYS mounted (the terminal lives in it); the lock notice is an overlay.
   // Primary row: state, context, and only the action that state needs. The rest is under ⋯.
-  const bad = conn === "refused" || conn === "lost" || conn === "elsewhere";
+  const bad = conn === "refused" || conn === "lost" || conn === "elsewhere" || conn === "reenter";
   const recover = conn === "live" || conn === "connecting" ? null
-    : conn === "ended" ? "New session" : conn === "elsewhere" || conn === "refused" ? "Retry" : conn === "idle" ? null : "Reconnect";
+    : conn === "ended" ? "New session" : conn === "elsewhere" || conn === "refused" ? "Retry" : conn === "idle" || conn === "reenter" ? null : "Reconnect";
   return <div className="term-wrap">
     {!dev && <div className="term-lock"><div className="term-lock-card">
       <span className="ro-tag is-off">DEVELOPER LOCKED</span>
       <button type="button" className="btn is-jay is-sm" onClick={unlockDialogOpen}>Unlock</button>
+    </div></div>}
+    {dev && conn === "reenter" && <div className="term-lock"><div className="term-lock-card">
+      <span className="text2">It has been more than 8 hours since the developer token was typed on this device.</span>
+      <button type="button" className="btn is-jay is-sm" onClick={() => void reenter()}>Type the token again</button>
     </div></div>}
     <div className="term-bar" inert={!dev}>
       {conn === "live"

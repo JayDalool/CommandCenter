@@ -9,7 +9,8 @@ import { jayQueue } from "../tickets/model";
 import { Kbd } from "./ui";
 import { CommandPalette } from "./CommandPalette";
 import { NewTicket } from "./NewTicket";
-import { DevDot, UnlockDialog } from "./DevMode";
+import { DevDot, UnlockDialog, reenterDialog, unlockDialogGone } from "./DevMode";
+import { setReenterAsker } from "../api/developer";
 import { NotificationBell } from "./Notifications";
 import { HqPreviewTag } from "./HqPreview";
 import { hasUnsavedWork, staleBuild } from "../lib/stale";
@@ -177,6 +178,8 @@ export function AppShell({ children, flush = false, bare = false, chrome = "full
     window.addEventListener("cc:new-task", openNew);
     const openUnlock = () => setUnlock(true);
     window.addEventListener("cc:dev-unlock", openUnlock);
+    // The unlock dialog lives here, so this is where ccd's "type the token again" can be answered.
+    setReenterAsker(reenterDialog);
     const onKey = (e: KeyboardEvent) => {
       // Ctrl+. focus (Workspace alone) · Ctrl+\ collapse the navigation rail. Neither is a shell key.
       if ((e.ctrlKey || e.metaKey) && e.key === ".") { e.preventDefault(); prefs.patch({ wsFocus: !prefs.get().wsFocus }); return; }
@@ -201,7 +204,8 @@ export function AppShell({ children, flush = false, bare = false, chrome = "full
     };
     window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("cc:palette", openPal);
-      window.removeEventListener("cc:new-task", openNew); window.removeEventListener("cc:dev-unlock", openUnlock); };
+      window.removeEventListener("cc:new-task", openNew); window.removeEventListener("cc:dev-unlock", openUnlock);
+      setReenterAsker(null); unlockDialogGone(); };
   }, []);
   const route = useRoute();
   const railCollapsed = usePrefs((p) => p.railCollapsed);

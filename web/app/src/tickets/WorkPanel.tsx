@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { app } from "../store/app";
 import { href } from "../lib/router";
 import type { TicketDetail, TicketWork } from "../api/types";
-import { unlockDialogOpen, useDevActive } from "../components/DevMode";
+import { devOr } from "../components/DevMode";
 import { DetailRow } from "../components/ui";
 import { useSelector } from "../lib/store";
 import { openAgent } from "../lib/openAgent";
@@ -16,7 +16,6 @@ const GATE_TEXT: Record<string, string> = { plan: "Plan needs your approval", me
 export function WorkPanel({ t }: { t: TicketDetail }) {
   const [w, setW] = useState<TicketWork | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const dev = useDevActive();
   const agents = useSelector(app.store, (d) => d.state?.agents);
   // Re-read whenever the ticket changes (every pipeline step touches updatedAt).
   useEffect(() => { setW(null); setErr(null); }, [t.key]);   // never show the previous ticket's work
@@ -32,7 +31,7 @@ export function WorkPanel({ t }: { t: TicketDetail }) {
   const worker = agents?.find((a) => a.role !== "coordinator" && a.agent_name && sessions.includes(a.agent_name)) ?? null;
 
   const confirm = async (gate: string) => {
-    if (!dev) { unlockDialogOpen(); return; }
+    if (!devOr(() => void confirm(gate))) return;
     const r = await app.action(() => app.api.confirmGate(t.key, gate), `${t.key}: ${gate} confirmed`);
     if (r) setW(r as TicketWork);
   };

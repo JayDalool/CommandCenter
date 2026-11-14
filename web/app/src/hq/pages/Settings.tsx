@@ -16,7 +16,10 @@ import { CAST, Face } from "../persona/characters";
 import { LOGO_MAX, LOGO_TYPES, ProjectLogo, logos, refreshLogos, useLogos } from "../logos";
 import { isRemembered } from "../../api/auth";
 import { jayQueue } from "../../tickets/model";
-import { lockDevMode, unlockDialogOpen, useDevActive } from "../../components/DevMode";
+import { lockDevMode, reenterDialog, unlockDialogOpen, useDevActive } from "../../components/DevMode";
+import { ConfirmDialog } from "../../components/Dialog";
+import { developer, setDevSession } from "../../api/developer";
+import { ago, nowS } from "../../lib/time";
 import { Command } from "../../components/ui";
 import { Policies } from "../../components/Policies";
 import { Decisions as DecisionRecords } from "../../components/Decisions";
@@ -31,7 +34,7 @@ import { canPickScreen, focusView, forgetPlaces, isPopView, listScreens, popOut,
 import { usePageNav } from "./route";
 import { Pill, cx, plural } from "./ui";
 import { ApiError } from "../../api/client";
-import type { NotifySettings, NotifyState } from "../../api/types";
+import type { DevDevice, NotifySettings, NotifyState } from "../../api/types";
 
 // ---------- building blocks ----------
 
@@ -372,19 +375,84 @@ function Windows() {
   </>;
 }
 
+/** A length of time in this page's words: "40 minutes", "3 hours", "29 days". */
+const span = (s: number) => s < 90 ? "a minute" : s < 5400 ? `${Math.round(s / 60)} minutes`
+  : s < 129600 ? `${Math.round(s / 3600)} hours` : `${Math.round(s / 86400)} days`;
+const DEVICE_KIND: Record<DevDevice["kind"], string> = { plain: "Token typed, not remembered", ssh: "Signed in with SSH",
+  remember: "Remembered for 30 days" };
+type DevicesLoad = { s: "loading" } | { s: "ok"; list: DevDevice[] } | { s: "off"; why: string };
+
+/** The devices holding a Developer session and the button that ends them all (GET /api/developer/devices,
+ *  POST /api/developer/lock-all). ccd shows the list only to an unlocked browser, and never a session id. */
+function Devices({ active, stamp }: { active: boolean; stamp: unknown }) {
+  const [st, setSt] = useState<DevicesLoad>({ s: "loading" });
+  const [sure, setSure] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!active) return;
+    let live = true;
+    app.api.devices().then((r) => { if (live) setSt({ s: "ok", list: r.devices }); })
+      .catch((e: unknown) => { if (live) setSt({ s: "off", why: `Could not read the devices: ${e instanceof Error ? e.message : String(e)}` }); });
+    return () => { live = false; };
+  }, [active, stamp]);
+  const lockAll = () => {
+    setBusy(true);
+    app.api.lockAll().then((r) => { setDevSession(null); app.toast(`Developer Mode locked on every device (${plural(r.ended, "session")} ended)`); })
+      .catch((e: unknown) => app.toast(`Could not lock all devices: ${e instanceof Error ? e.message : String(e)}`, "bad"))
+      .finally(() => setBusy(false));
+  };
+  const now = nowS();
+  return <Group id="devices" title="Unlocked devices" foot={<>A remembered device stays unlocked for 30 days, through a closed browser
+    and a ccd restart. Its terminals and file changes ask for the token again 8 hours after it was typed. Lock all devices
+    ends Developer Unlock everywhere, this device included.</>}>
+    {!active ? <Row label="Not shown while locked" hint="Unlock to see which devices are unlocked." />
+      : st.s === "loading" ? <Row label="Reading the devices…" />
+      : st.s === "off" ? <Row label={st.why} />
+      : st.list.length === 0 ? <Row label="No device is unlocked" />
+      : st.list.map((d) => <Row key={d.id} label={<>{d.label || "Browser"}{d.current && <> <Pill tone="info">This device</Pill></>}</>}
+        hint={`${DEVICE_KIND[d.kind] ?? d.kind} · last used ${now - d.lastUsedAt < 60 ? "just now" : `${ago(d.lastUsedAt, now)} ago`} · ends in ${span(d.expiresAt - now)}`} />)}
+    {active && <Row label="Lock all devices" hint="Ends every session at once. Each device then needs the developer token again.">
+      <button type="button" className="hq-btn is-danger" disabled={busy} onClick={() => setSure(true)}>Lock all devices…</button></Row>}
+    {sure && <ConfirmDialog title="Lock all devices?" confirmLabel="Lock all devices" danger onConfirm={lockAll} onClose={() => setSure(false)}>
+      Developer Unlock ends on every device, this one included. Open terminals disconnect; the shells keep running on
+      jay-server.</ConfirmDialog>}
+  </Group>;
+}
+
 function Security() {
   const active = useDevActive();
+  // The store hands out a new object on every unlock, lock and re-entry: what ccd says is read again each time.
+  const dev = useSelector(developer, (d) => d);
+  const remembered = dev.active && dev.remembered === true;
+  // `can`: this ccd remembers devices (an older one does not, and nothing about devices is offered).
+  const [about, setAbout] = useState<{ can: boolean; reenterIn: number | null }>({ can: false, reenterIn: null });
+  useEffect(() => {
+    let live = true;
+    app.api.developerStatus().then((r) => { if (live) setAbout({ can: typeof r.remembered === "boolean", reenterIn: r.reenterIn ?? null }); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, [dev]);
+  const stale = remembered && about.reenterIn === 0;
   return <>
     <Group id="unlock" title="Developer Unlock" foot={<>The ccd token lets this browser read and steer metadata. Terminals, Claude, answers to
       Claude's questions, and saving or uploading repository files and attachments also need Developer Unlock: a separate
       token kept in <code>~/.config/command-center/developer.token</code> on jay-server. The token itself is never stored,
-      only the session id, in this browser session.</>}>
-      <Row label="Status" hint={active ? "Writes to project files are allowed in this app session." : "Browsing works. Saving and uploading need Developer Unlock."}>
-        <Pill tone={active ? "warn" : "idle"}>{active ? "Unlocked" : "Locked"}</Pill>
+      only the session id: in this browser session, or in this browser when the device is remembered.</>}>
+      <Row label="Status" hint={!active ? "Browsing works. Saving and uploading need Developer Unlock."
+        : remembered ? "This device is remembered. Approvals, answers and steering stay unlocked."
+        : "Writes to project files are allowed in this app session."}>
+        <Pill tone={active ? "warn" : "idle"}>{!active ? "Locked" : remembered ? "Unlocked, remembered" : "Unlocked"}</Pill>
         {active ? <button type="button" className="hq-btn" onClick={() => void lockDevMode()}>Lock</button>
           : <button type="button" className="hq-btn" onClick={unlockDialogOpen}>Unlock…</button>}</Row>
-      <Row label="Ends" hint="On lock, closing the browser, 2 idle hours, 8 hours in all, or a ccd restart. Reloads and pop-outs keep it." />
+      {remembered && about.reenterIn != null && <Row label="Terminals and file changes"
+        hint={stale ? "The developer token was typed more than 8 hours ago. They need it again."
+          : `Open for another ${span(about.reenterIn)}. After that they ask for the developer token again.`}>
+        {stale && <button type="button" className="hq-btn" onClick={() => void reenterDialog()}>Type the token…</button>}</Row>}
+      <Row label="Ends" hint={remembered ? "On Lock, on Lock all devices from any device, or 30 days after this device was remembered. Closing the browser and a ccd restart keep it."
+        : about.can ? "On lock, closing the browser, 2 idle hours, or 8 hours in all. Reloads, pop-outs and a ccd restart keep it."
+        : "On lock, closing the browser, 2 idle hours, 8 hours in all, or a ccd restart. Reloads and pop-outs keep it."} />
     </Group>
+    {about.can && <Devices active={active} stamp={dev} />}
     <Group title="Records">
       <Row label="Approvals" hint="Merges and deploys waiting for you, each bound to what it approves">
         <a className="hq-link" href={href("approvals")}>Open Approvals</a></Row>

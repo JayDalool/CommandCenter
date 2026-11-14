@@ -7,7 +7,7 @@ import { app } from "../store/app";
 import type { NightProject, NightShiftState } from "../api/types";
 import { ago, nowS } from "../lib/time";
 import { Dialog } from "./Dialog";
-import { unlockDialogOpen, useDevActive } from "./DevMode";
+import { devOr, useDevActive } from "./DevMode";
 
 /** Every project's night shift, refreshed each minute (and after End / Go Live). */
 export function useNightShift(): [NightShiftState | null, () => void] {
@@ -55,7 +55,7 @@ export function NightReportDialog({ project, name, n, onClose, onChanged }: {
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const act = async (fn: () => Promise<string>) => {
-    if (!dev) { unlockDialogOpen(); return; }
+    if (!devOr(() => void act(fn))) return;
     setBusy(true);
     try { app.toast(await fn()); onChanged(); onClose(); }
     catch (e) { app.toast((e as Error).message, "bad"); }

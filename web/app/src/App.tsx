@@ -14,7 +14,7 @@ import { Workspace } from "./screens/Workspace";
 import { Files } from "./screens/Files";
 import { PaneWindow, PopWindow, RoomWindow } from "./screens/Popout";
 import { restoreToken } from "./api/auth";
-import { restoreDevSession } from "./api/developer";
+import { checkRemembered, restoreDevSession } from "./api/developer";
 import { redeemSignin } from "./api/signin";
 import { PullRequests } from "./screens/PullRequests";
 import { Workspaces } from "./screens/Workspaces";
@@ -46,6 +46,8 @@ export async function start() {
   if (signinError) app.toast(`SSH sign-in: ${signinError}`, "bad");
   await restoreToken();
   await restoreDevSession();
+  // A remembered device's session comes from localStorage: ask ccd whether it still stands, without holding the page up.
+  void checkRemembered(() => app.api.developerStatus());
   await app.boot();
 }
 
