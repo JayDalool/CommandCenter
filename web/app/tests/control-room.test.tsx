@@ -312,7 +312,7 @@ describe("gates in manager words (spec §11, §22)", () => {
   });
 
   describe("a live project's deploy waits for the weekly release (flow contract §5)", () => {
-    const HELD = Date.UTC(2026, 10, 19, 4, 0) / 1000;      // a Wednesday evening in Winnipeg; the card says it in this machine's zone
+    const HELD = Date.UTC(2026, 10, 19, 3, 0) / 1000;      // Wed 18 Nov 2026, 22:00 in Winnipeg (UTC-5 all year from 2026)
     const dep = (over: Partial<DeployState> = {}): DeployState => ({ env: "live", what: "The new Dashboard", verification: "UI tests 14/14",
       requestedAt: 1, requestedBy: "agent:coordinator", approvedAt: null, result: null, ...over });
     const REL: ReleaseState = { window: { weekday: 3, time: "22:00", tz: "America/Winnipeg", next: HELD, hours: 2 }, cutoff: HELD - 10 * 3600,
@@ -344,6 +344,29 @@ describe("gates in manager words (spec §11, §22)", () => {
       await waitFor(() => expect(op).toHaveBeenLastCalledWith("SV-071", "confirm", { gate: "deploy" }));
     });
 
+    it("a risky ticket that only needs a deploy cannot be approved until ccd has said whether the project is live", async () => {
+      let answer!: (r: ReleaseState) => void;
+      vi.spyOn(app.api, "release").mockReturnValue(new Promise<ReleaseState>((ok) => { answer = ok; }));
+      gate({ size: "risky", deploy: null });
+      const approve = within(card()).getByRole("button", { name: "Approve live deploy" });
+      expect(approve).toBeDisabled();
+      expect(urgent()).toBeNull();
+      await act(async () => answer(REL));
+      expect(approve).toBeEnabled();
+      expect(urgent()).toBeEnabled();
+    });
+
+    it("a missing or failing release route never holds the approval", async () => {
+      // beforeEach answers 404 (an older ccd).
+      const { unmount } = gate({ size: "risky", deploy: null });
+      await waitFor(() => expect(within(card()).getByRole("button", { name: "Approve live deploy" })).toBeEnabled());
+      unmount(); resetRelease();
+      vi.spyOn(app.api, "release").mockRejectedValue(new Error("ccd is restarting"));
+      gate({ size: "risky", deploy: null });
+      await waitFor(() => expect(within(card()).getByRole("button", { name: "Approve live deploy" })).toBeEnabled());
+      expect(urgent()).toBeNull();
+    });
+
     it("a deploy that nothing holds has no window line and no urgent, risky or not", () => {
       gate({ size: "risky", deploy: dep({ heldUntil: null }) });
       expect(card()).not.toHaveTextContent("Release window");
@@ -355,7 +378,7 @@ describe("gates in manager words (spec §11, §22)", () => {
       const op = vi.spyOn(app.api, "workOp").mockResolvedValue(work());
       const { unmount } = gate({ size: "risky", deploy: null, gateReason: "Ready for live deployment" });
       await waitFor(() => expect(card()).toHaveTextContent(
-        "Release windowThis project is live, so the deploy waits for the weekly release (Wednesday 10 p.m. Central)."));
+        "Release windowThis project is live, so the deploy goes out in the weekly release (Wednesday 10 p.m. Central)."));
       fireEvent.click(urgent()!);
       await waitFor(() => expect(op).toHaveBeenCalledWith("SV-071", "confirm", { gate: "deploy", urgent: true }));
       unmount();
