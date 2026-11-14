@@ -10,7 +10,7 @@ import { prefs } from "../src/lib/prefs";
 import { loadHqFrame } from "../src/components/Shell";
 import { developer, setDevSession } from "../src/api/developer";
 import { ApiError } from "../src/api/client";
-import { clock, dayText, refreshRelease, release, resetRelease, windowText } from "../src/hq/release";
+import { clock, cutText, dayText, refreshRelease, release, resetRelease, windowText } from "../src/hq/release";
 import type { ReleaseState } from "../src/api/types";
 import { ev, state, tasks } from "./helpers";
 
@@ -63,6 +63,13 @@ describe("the words", () => {
     expect(windowText({ weekday: 5, time: "06:15", tz: "Europe/Paris", next: 0 })).toBe("Friday 6:15 a.m. Europe/Paris");
     expect(dayText(NEXT, "America/Winnipeg")).toBe("Wed, Nov 18");   // the 19th in UTC, still Wednesday in Winnipeg
     expect(dayText(NEXT, "Not/AZone")).toMatch(/2026/);              // an unknown zone still gives a date
+  });
+
+  it("says a cut-off's hour in the window's own zone: noon, or when a morning window opens", () => {
+    expect(cutText(CUTOFF, "America/Winnipeg")).toBe("noon");
+    expect(cutText(CUTOFF - 3 * 3600, "America/Winnipeg")).toBe("9 a.m.");
+    expect(cutText(CUTOFF - 3.5 * 3600, "America/Winnipeg")).toBe("8:30 a.m.");
+    expect(cutText(CUTOFF, "Not/AZone")).toBe("the cut-off");
   });
 });
 
@@ -194,7 +201,25 @@ describe("Settings › Operating profiles", () => {
     vi.setSystemTime(new Date((CUTOFF + 3600) * 1000));
     const main = await show("#/settings?tab=profiles");
     expect(row(main, "Release time")).toHaveTextContent(
-      "Next release: 10 p.m. on Wed, Nov 18. Its noon cut-off has passed: a change merged now goes out on Wed, Nov 25.");
+      "Next release: 10 p.m. on Wed, Nov 18. Its cut-off has passed: a change merged now goes out on Wed, Nov 25.");
+    expect(group(main)).toHaveTextContent("A change merged before noon on release day goes out in that day's release; a later one waits a week.");
+  });
+
+  it("a release that opens before noon cuts off when it opens, and the page says that hour", async () => {
+    // ccd: the cut-off is noon, or the window's start when that is earlier (9 a.m. here).
+    const OPENS = CUTOFF - 3 * 3600;
+    const api = vi.spyOn(app.api, "release").mockResolvedValue(rel(["samvision"], { time: "09:00", next: OPENS }, OPENS));
+    load();
+    let main = await show("#/settings?tab=profiles");
+    expect(row(main, "Release time")).toHaveTextContent("Next release: 9 a.m. on Wed, Nov 18. A change merged by 9 a.m. on Wed, Nov 18 is in it.");
+    expect(group(main)).toHaveTextContent("A change merged before the release opens on release day goes out in that day's release; a later one waits a week.");
+    expect(group(main)).not.toHaveTextContent("noon");
+
+    // While that release is open, the cut-off ahead is next week's.
+    cleanup(); resetRelease();
+    api.mockResolvedValue(rel(["samvision"], { time: "09:00", next: OPENS }, OPENS + 7 * 86400));
+    main = await show("#/settings?tab=profiles");
+    expect(row(main, "Release time")).toHaveTextContent("Next release: 9 a.m. on Wed, Nov 18. Its cut-off has passed: a change merged now goes out on Wed, Nov 25.");
   });
 
   it("locked: a press asks for Developer Unlock and sends nothing", async () => {

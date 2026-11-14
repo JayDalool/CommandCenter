@@ -14,7 +14,7 @@ import { commands, prefs, usePrefs, type Prefs } from "../../lib/prefs";
 import "../persona/persona.css";
 import { CAST, Face } from "../persona/characters";
 import { LOGO_MAX, LOGO_TYPES, ProjectLogo, logos, refreshLogos, useLogos } from "../logos";
-import { WEEKDAYS, clock, dayText, setRelease, useRelease, windowText } from "../release";
+import { WEEKDAYS, clock, cutText, dayText, setRelease, useRelease, windowText } from "../release";
 import { isRemembered } from "../../api/auth";
 import { jayQueue } from "../../tickets/model";
 import { devOr, lockDevMode, reenterDialog, unlockDialogOpen, useDevActive } from "../../components/DevMode";
@@ -505,9 +505,11 @@ function ReleaseDay() {
       <Row label={r.state === "error" ? `Could not read the release settings: ${r.error}` : "Reading the release settings…"} /></Group>;
   }
   const { window: w, cutoff, projects } = r.data;
-  /** ccd sends the cut-off that is still ahead. From noon on release day until that night's window has ended, that is
-   *  next week's noon: tonight's release is still "next", and nothing merged now can be in it. */
+  /** ccd sends the cut-off that is still ahead: noon on release day, or the window's start when it opens before
+   *  noon. Once that has passed and until the window has ended, the cut-off ahead is next week's: this release is
+   *  still "next", and nothing merged now can be in it. */
   const late = dayText(cutoff, w.tz) !== dayText(w.next, w.tz);
+  const early = w.time < "12:00";
   /** Resolves true once ccd took the change; false when it was refused, or not sent yet: locked, the Unlock dialog
    *  opens and the same change goes out once Jay has unlocked, without a second press. */
   const save = (change: () => ReturnType<typeof app.api.release>): Promise<boolean> => {
@@ -519,8 +521,8 @@ function ReleaseDay() {
   };
   const name = (key: string) => configured?.find((p) => p.key === key)?.name ?? tracked.find((p) => p.key === key)?.name ?? key;
   return <Group id="release" title="Live projects and release day" foot={<>A live project has real users, so its changes go out
-    together, once a week. A change merged before noon on release day goes out that night; a later one waits a week. A
-    project that is not live has no window. Nothing here deploys by itself.
+    together, once a week. A change merged before {early ? "the release opens" : "noon"} on release day goes out in that
+    day's release; a later one waits a week. A project that is not live has no window. Nothing here deploys by itself.
     {!active && <> Changing these needs Developer Unlock. <button type="button" className="hq-link" onClick={unlockDialogOpen}>Unlock…</button></>}</>}>
     {Object.keys(projects).map((key) => <Row key={key} label={<span className="hq-with-logo"><ProjectLogo project={key} />{name(key)}</span>}
       hint={projects[key].live ? "Changes wait for the weekly release." : "Changes can go out as soon as they are merged."}>
@@ -530,8 +532,8 @@ function ReleaseDay() {
       <Seg label="Release weekday" value={String(w.weekday)} options={WEEKDAYS.map((d, i) => [String(i), d.slice(0, 3)] as [string, string])} disabled={busy}
         onChange={(v) => { if (+v !== w.weekday) void save(() => app.api.setReleaseWindow(+v, w.time)); }} /></Row>
     <Row label="Release time" hint={`Next release: ${clock(w.time)} on ${dayText(w.next, w.tz)}. ${late
-      ? `Its noon cut-off has passed: a change merged now goes out on ${dayText(cutoff, w.tz)}.`
-      : `A change merged by noon on ${dayText(cutoff, w.tz)} is in it.`}`}>
+      ? `Its cut-off has passed: a change merged now goes out on ${dayText(cutoff, w.tz)}.`
+      : `A change merged by ${cutText(cutoff, w.tz)} on ${dayText(cutoff, w.tz)} is in it.`}`}>
       <TimeBox label="Release time" value={w.time} onSave={(t) => save(() => app.api.setReleaseWindow(w.weekday, t))} /></Row>
     {note && <p className="hq-note t-bad" role="alert">{note}</p>}
   </Group>;
