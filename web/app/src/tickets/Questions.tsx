@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { app } from "../store/app";
 import type { AnswersResult, Question, TicketWork } from "../api/types";
-import { unlockDialogOpen, useDevActive } from "../components/DevMode";
+import { devOr, useDevActive } from "../components/DevMode";
 import { Ago } from "../components/ui";
 
 const OTHER = "\u0000other";
@@ -33,9 +33,9 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
   const value = (q: Question) => (other[q.id] ? `Other: ${vals[q.id] ?? ""}`.trim() : (vals[q.id] ?? "")).trim();
   const filled = open.filter((q) => value(q) && value(q) !== "Other:");
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!dev) { unlockDialogOpen(); return; }
+  const submit = (e: React.FormEvent) => { e.preventDefault(); void send(); };
+  const send = async () => {
+    if (!devOr(() => void send())) return;
     setBusy(true);
     try {
       const r = await app.api.answers(ticketKey, filled.map((q) => ({ id: q.id, answer: value(q) })), scope);
@@ -50,7 +50,7 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
   };
 
   const resend = async () => {
-    if (!dev) { unlockDialogOpen(); return; }
+    if (!devOr(() => void resend())) return;
     setBusy(true);
     try { const r = await app.api.answers(ticketKey, []); setResult(r); onDone(r.work);
       app.toast(r.delivered ? "Answers sent to Claude" : `Not delivered: ${r.reason}`, r.delivered ? "ok" : "bad"); }
@@ -59,7 +59,7 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
 
   // The task check: Claude proposes this task as stale; Jay's one click decides (only "Cancel it" cancels).
   const decide = async (q: Question, answer: string) => {
-    if (!dev) { unlockDialogOpen(); return; }
+    if (!devOr(() => void decide(q, answer))) return;
     setBusy(true);
     try {
       const r = await app.api.answers(ticketKey, [{ id: q.id, answer }]);

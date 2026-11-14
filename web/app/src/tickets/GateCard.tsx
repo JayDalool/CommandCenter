@@ -12,11 +12,10 @@
 import { useState } from "react";
 import { app } from "../store/app";
 import type { TicketWork } from "../api/types";
-import { unlockDialogOpen, useDevActive } from "../components/DevMode";
+import { devOr } from "../components/DevMode";
 import { Ago } from "../components/ui";
 
 export function GateCard({ ticketKey, work, onDone }: { ticketKey: string; work: TicketWork; onDone: (w: TicketWork) => void }) {
-  const dev = useDevActive();
   const [busy, setBusy] = useState(false);
   const [tech, setTech] = useState(false);
   const gate = work.gate;
@@ -25,7 +24,7 @@ export function GateCard({ ticketKey, work, onDone }: { ticketKey: string; work:
   if (!gate && !blocked && !deploying) return null;
 
   const run = async (op: string, body: Record<string, unknown>, ok: string, needsDev = true) => {
-    if (needsDev && !dev) { unlockDialogOpen(); return; }
+    if (needsDev && !devOr(() => void run(op, body, ok, needsDev))) return;
     setBusy(true);
     try {
       const w = await app.api.workOp(ticketKey, op, body);
