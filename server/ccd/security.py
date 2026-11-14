@@ -207,7 +207,8 @@ class DeveloperGate:
 
     def _row_mac(self, key, rec):
         """Binds a saved row's kind, times, id and label to its key: an edited row is dropped, not believed."""
-        raw = json.dumps([key, rec["id"], rec["kind"], rec["made"], rec["used"], rec["proved"], rec["label"]])
+        raw = json.dumps([key, rec["id"], rec["kind"], float(rec["made"]), float(rec["used"]), float(rec["proved"]),
+                          rec["label"]])
         return hmac.new(str(self.secret).encode(), b"ccd-developer-row\0" + raw.encode(), "sha256").hexdigest()
 
     def _find(self, sid):
@@ -229,7 +230,7 @@ class DeveloperGate:
     @classmethod
     def clean_label(cls, label):
         text = re.sub(r"[\x00-\x1f\x7f]+", " ", label if isinstance(label, str) else "")
-        return re.sub(r"\s+", " ", text).strip()[:cls.LABEL_MAX] or "Browser"
+        return re.sub(r"\s+", " ", text).strip()[:cls.LABEL_MAX].strip() or "Browser"
 
     # ---- the disk file ----
 

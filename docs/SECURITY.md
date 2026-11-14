@@ -242,6 +242,11 @@ browser does not copy `sessionStorage` into it.
   processes running as jay can read) cannot lock Jay out. Settings lists the devices holding a session
   (`GET /api/developer/devices`: label, kind, created, last used, expiry; never an id). LOCK ends just this one.
 
+What the file does not defend against: a process running as jay can put back an older copy of it, which would
+bring back sessions that Lock all ended. Such a process can also read `developer.token` itself, so the file adds no
+new power; the unlock defends against clicks that do not come from Jay, not against code already running as jay
+with the token in reach.
+
 Why the unlock stays at all: on this server the ccd token is readable by every process running as jay, agents
 included. Developer Unlock is the one proof that a click came from Jay at a screen and not from an agent approving
 its own work, so it is made to last, not removed.

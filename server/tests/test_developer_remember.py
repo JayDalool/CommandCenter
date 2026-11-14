@@ -97,6 +97,12 @@ class Persistence(Base):
         self.assertFalse(again.check(sid))
         self.assertEqual(again.devices(), [])
 
+    def test_any_label_and_whole_number_times_survive_a_restart(self):
+        self.now[0] = 1_800_000_000                                  # an int clock, not a float
+        g = self.gate()
+        sid, _ = g.unlock(DEV, remember=True, label="a" * 63 + " b")
+        self.assertTrue(self.gate().check(sid))
+
     def test_a_clock_set_back_ends_sessions_instead_of_stretching_them(self):
         g = self.gate()
         sid, _ = g.unlock(DEV, remember=True)
