@@ -208,6 +208,9 @@ def clean_criteria(raw, old=(), at=None, by=None):
         text = _text(text, 300, "criterion", multiline=False)
         if not text:
             raise TaskError(400, "a criterion needs text (1-300 characters)")
+        if cid is None:     # a bare text that is already on the list keeps that criterion (its id and state)
+            cid = next((c["id"] for c in old if c["text"] == _text(text, 300, "criterion", multiline=False)
+                        and c["id"] not in seen), None)
         if cid is not None:
             if cid not in have or cid in seen:
                 raise TaskError(400, f"no criterion {str(cid)[:20]} on this ticket")
@@ -432,7 +435,7 @@ class Pipeline:
 
     @staticmethod
     def list_marks(t, m, now=None):
-        """{size, stage, stale} for one row of GET /api/tasks, from compact()'s marks."""
+        """{size, stage, route, stale} for one row of GET /api/tasks, from compact()'s marks."""
         f = m.get("flowRow") or {}
         pol = policy(t)
         rt = flow_mod.route(f.get("size"), pol)
@@ -441,7 +444,7 @@ class Pipeline:
         waiting = "jay" if m.get("gate") or m.get("openQuestions") else None
         idle = m.get("idleSince") or t.get("createdAt")
         now = time.time() if now is None else now
-        return {"size": flow_mod.shown_size(f.get("size"), pol), "stage": stage,
+        return {"size": flow_mod.shown_size(f.get("size"), pol), "stage": stage, "route": list(rt),
                 "stale": flow_mod.is_stale(stage, t["status"], waiting, idle, now)}
 
     @staticmethod
@@ -517,7 +520,13 @@ class Pipeline:
         pipeline only — GitHub's reviewDecision never promotes it."""
         r = self.db.execute("SELECT plan_state, review_head FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id "
                             "WHERE t.key=?", (str(key).upper(),)).fetchone()
-        return bool(r) and (r[0] in ("proposed", "accepted") or r[1] is not None)
+        if bool(r) and (r[0] in ("proposed", "accepted") or r[1] is not None):
+            return True
+        # A sized ticket is in the flow from intake on (a small one never has a plan): its review state, too,
+        # moves only through pipeline steps.
+        return self._has_flow() and bool(self.db.execute(
+            "SELECT 1 FROM ticket_flow f JOIN tickets t ON t.id=f.ticket_id WHERE t.key=? AND f.size IS NOT NULL",
+            (str(key).upper(),)).fetchone())
 
     def review_head(self, key):
         """The PR head a review was last recorded at, or None before any review."""
@@ -584,10 +593,11 @@ class Pipeline:
             out.append((t, w, fl, hs))
         return out
 
-    def investigating(self, project, exclude=None):
+    def investigating(self, project, exclude=None, flying=None):
         """Keys of the project's tickets in investigate with an investigator in the seat."""
-        return [t["key"] for t, _w, fl, _h in self.in_flight(project)
-                if t["key"] != exclude and fl["stage"] == "investigate" and t["status"] == "RESEARCHING"
+        return [t["key"] for t, _w, fl, _h in (flying if flying is not None else self.in_flight(project))
+                if t["key"] != exclude and fl["size"] is not None and fl["stage"] == "investigate"
+                and t["status"] == "RESEARCHING" and fl["waitingOn"] != "jay"
                 and fl["holder"] and fl["holder"]["seat"] == "investigator"]
 
     def _investigate_free(self, t):
@@ -706,7 +716,7 @@ class Pipeline:
         if t["status"] != "RESEARCHING":
             raise TaskError(409, f"{t['key']} is {t['status']}; run intake first")
         fl, _h = flow_mod.view(t, w, f, self._events(tid), pol)
-        if fl["stage"] == "investigate" and not fl["holder"]:     # an investigator takes the seat now
+        if fl["stage"] == "investigate" and not fl["holder"] and fl["waitingOn"] != "jay":   # a seat is taken now
             self._investigate_free(t)
         work = {"plan": plan, "roles": self._role(w, "planner", model, session, at),
                 "confirmed": [g for g in w["confirmed"] if g != "plan"], "plan_state": "proposed"}
@@ -1012,7 +1022,11 @@ class Pipeline:
                     rounds = dict(self._flow(tid)["rounds"], **{fs: 0})
                     self._flow_set(tid, at, rounds=rounds)
                 return {"status": RESUME_STATUS.get(stage, "RESEARCHING")}, work, events
-            if gate == "deploy" and not (w["deploy"] or {}).get("requestedAt"):
+            if gate == "deploy" and not (w["deploy"] or {}).get("requestedAt") and not policy(t)["deploy"]:
+                # A risky ticket's release approval (the flow): Jay approves the release; nothing is deployed and
+                # no live deploy is requested by it. The ticket goes on as after any owner check.
+                events.append(("pipeline.release_approved", "Jay approved the release", {}))
+            elif gate == "deploy" and not (w["deploy"] or {}).get("requestedAt"):
                 # The deploy gate came from the ticket's needs:deploy flag, with no request yet: Jay's
                 # approval IS the request. Nothing is deployed by clicking — the agent deploys next, records
                 # it with `deployed --env live`, and only then does the ticket close.
@@ -1070,9 +1084,10 @@ class Pipeline:
             raise TaskError(400, f"role must be one of {', '.join(ROLE_NAMES)}")
 
         def fn(tid, t, w, at):
-            if role == "planner" and t["status"] == "RESEARCHING":
-                fl, _h = flow_mod.view(t, w, self._flow(tid), self._events(tid), policy(t))
-                if fl["stage"] == "investigate" and not fl["holder"]:
+            f = self._flow(tid)
+            if role == "planner" and t["status"] == "RESEARCHING" and f["size"] in flow_mod.SIZES:
+                fl, _h = flow_mod.view(t, w, f, self._events(tid), policy(t))
+                if fl["stage"] == "investigate" and not fl["holder"] and not w["gate"]:
                     self._investigate_free(t)
             return {}, {"roles": self._role(w, role, model, session, at)}, \
                 [("pipeline.role", f"{role} reported", {"role": role})]
@@ -1263,7 +1278,7 @@ class Pipeline:
 
         def fn(tid, t, w, at):
             self._need(t, ("IN_REVIEW", "READY_TO_MERGE", "VERIFYING", "BLOCKED"), "rework")
-            if w["planState"] != "accepted":
+            if w["planState"] != "accepted" and self._flow(tid)["size"] != "small":
                 raise TaskError(409, f"{t['key']} has no accepted plan; re-plan instead")
             self._lane_free(t)
             # The change is being rewritten: an approval, a verification, a UI acceptance or a live-deploy
@@ -1439,7 +1454,7 @@ class Pipeline:
                                                            "criteria": len(crit)})]
         return self._tx(key, actor, fn)
 
-    def define(self, key, actor, criteria=None, requirements=None, size=None):
+    def define(self, key, actor, criteria=None, requirements=None, size=None, developer=False):
         """Edit the acceptance criteria, requirements or size. The lead while the ticket is in intake or
         investigation; Jay at any time while it is open. An edited criterion is open again. A size goes up freely;
         only Jay lowers a risky ticket, and a ticket the policy makes risky stays risky."""
@@ -1457,6 +1472,8 @@ class Pipeline:
                                                               and w["gate"] != "plan")
             if actor != "jay" and not early:
                 raise TaskError(409, f"{t['key']} is past investigation; only Jay edits its criteria now")
+            if actor == "jay" and not early and not developer:
+                raise TaskError(403, "Developer Unlock required: changing a ticket past investigation is Jay's")
             cols, said = {}, []
             if criteria is not None:
                 crit = clean_criteria(criteria, f["criteria"])
@@ -1471,13 +1488,13 @@ class Pipeline:
                 new = "risky" if pol["plan"] == "owner" else size
                 old = f["size"]
                 order = {s: i for i, s in enumerate(flow_mod.SIZES)}
-                if old == "risky" and new != "risky" and actor != "jay":
-                    raise TaskError(403, "only Jay lowers a risky ticket")
+                if old == "risky" and new != "risky" and not (actor == "jay" and developer):
+                    raise TaskError(403, "only Jay lowers a risky ticket (with Developer Unlock)")
                 if old in flow_mod.SIZES and order[new] < order[old] and not early and actor != "jay":
                     raise TaskError(403, "only Jay lowers a size after investigation")
                 if new != old:
-                    if new == "small" and t["status"] in ("RESEARCHING",) and (f["reviewDue"] or w["gate"] == "plan"):
-                        raise TaskError(409, f"{t['key']} has a plan in review; it cannot become small now")
+                    if new == "small" and t["status"] not in ("INBOX", "PROPOSED"):
+                        raise TaskError(409, f"{t['key']} is past intake; it cannot become small now")
                     cols["size"] = new
                     said.append(f"size {new}")
             self._flow_set(tid, at, **cols)
@@ -1677,7 +1694,7 @@ class Pipeline:
                 raise TaskError(409, f"{t['key']} has open children: {', '.join(kids[:10])}; finish them first")
             self._flow_set(tid, at, closing={"note": note, "by": actor, "at": at})
             events = [("pipeline.closed_note", "closing note recorded", {})]
-            if t["status"] == "DONE":
+            if t["status"] == "DONE" or w["gate"]:      # an open owner check stays as it is
                 return {}, {}, events
             status, work, ev = self._after_verify(t, w)
             return status, work, events + ev
@@ -1688,6 +1705,9 @@ class Pipeline:
         quiet spell (a later step starts a new one). Returns [(ticket, changes, events)] for the daemon to announce."""
         now = _now() if now is None else now
         out = []
+        # The very first sweep (no stale mark was ever made) marks what is already quiet without events, so
+        # turning the flow on does not flood the briefing with every old ticket.
+        first = not self.db.execute("SELECT 1 FROM ticket_flow WHERE stale_at IS NOT NULL LIMIT 1").fetchone()
         for (key, tid) in self.db.execute(
                 "SELECT key, id FROM tickets WHERE archived=0 AND status IN "
                 "('RESEARCHING','READY_TO_IMPLEMENT','IN_PROGRESS','IN_REVIEW') ORDER BY id").fetchall():
@@ -1700,6 +1720,6 @@ class Pipeline:
 
             def fn(tid, t, w, at):
                 self._flow_set(tid, at, stale_at=at)
-                return {}, {}, [(flow_mod.STALE_KIND, "no step recorded for 48 hours", {})]
+                return {}, {}, ([] if first else [(flow_mod.STALE_KIND, "no step recorded for 48 hours", {})])
             out.append(self._tx(key, "system:automation", fn))
         return out

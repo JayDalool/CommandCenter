@@ -539,6 +539,7 @@ class PipelineApi(Automation):
         self.assertEqual((r.status_code, r.json()["status"], r.json()["flow"]["stage"]), (200, "RESEARCHING", "investigate"))
         row = next(t for t in self.get("/api/tasks").json()["tickets"] if t["key"] == "SV-056")
         self.assertEqual((row["size"], row["stage"], row["stale"]), ("standard", "investigate", False))
+        self.assertEqual(len(row["route"]), 9)
         self.step("role", {"role": "planner", "session": "inv-1"}, "agent:planner")
         self.step("plan", {"plan": {"summary": "the feature"}, "session": "inv-1"}, "agent:planner")
         r = self.step("plan-review", {"verdict": "APPROVE", "note": "ok", "session": "inv-1"}, "agent:tech-reviewer")
@@ -561,6 +562,7 @@ class PipelineApi(Automation):
                                                            "userReviewer", "designReviewer", "codeReviewer", "verifier"])
         self.assertEqual([(t["key"], t["stage"], t["waitingOn"]) for t in sv["inFlight"]],
                          [("SV-056", "codeReview", "reviewer")])
+        self.assertEqual(len(sv["inFlight"][0]["route"]), 9)
         self.assertEqual(sv["limits"], {"investigate": {"used": 0, "max": 2}, "build": {"used": 0, "max": 2}})
         r = self.step("review", {"verdict": "APPROVE", "head": head, "session": "cr-1"}, "agent:reviewer")
         self.assertEqual(r.json()["status"], "READY_TO_MERGE", r.text)

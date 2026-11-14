@@ -375,14 +375,14 @@ next step clears it.
     handoffs: [{at, stage, kind: advanced|sentBack|blocked|resumed, from, to, by, note}]   // oldest first
 
 `handoffs` is derived from the ticket's events; `note` is ccd's own wording (`flow.NOTES`), never agent text. A
-blocked hand-off has `to: null`. `GET /api/tasks` rows add `size`, `stage` (the stage key) and `stale`.
+blocked hand-off has `to: null`. `GET /api/tasks` rows add `size`, `stage` (the stage key), `route` (the stage keys this ticket goes through, as `flow.route`) and `stale`.
 
 `GET /api/flow` (normal sign-in) for Teams and My Office:
 
     {projects: [{key, name,
                  seats: [{seat, session, ticket, stage, since}],    // lead, investigator, techReviewer, developer,
                                                                     // userReviewer, designReviewer, codeReviewer, verifier
-                 inFlight: [{key, title, size, stage, holder, waitingOn, stale, parent, children: {total, done}}],
+                 inFlight: [{key, title, size, stage, route, holder, waitingOn, stale, parent, children: {total, done}}],
                  limits: {investigate: {used, max}, build: {used, max}}}]}
 
 Every seat appears at least once per project; a seat with several holders (two developers, two investigators) has one

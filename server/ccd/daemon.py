@@ -1179,7 +1179,7 @@ class Daemon(LeadChat, HqDaemon):
             m = marks.get(t["id"]) or {"gate": None, "gateReason": None, "openQuestions": 0, "deploy": None}
             t.update(gate=m["gate"], gateReason=m["gateReason"], openQuestions=m["openQuestions"], deploy=m["deploy"])
             t["visibleStage"] = pipeline_mod.visible_stage(t, m)
-            t.update(pipeline_mod.Pipeline.list_marks(t, m))     # size, stage (the flow's stage key), stale
+            t.update(pipeline_mod.Pipeline.list_marks(t, m))     # size, stage (the flow's stage key), route, stale
         return tickets
 
     def task_list(self, project=None, include_archived=False):
@@ -1546,7 +1546,8 @@ class Daemon(LeadChat, HqDaemon):
             r = self._wrap(pl.intake, key, body.get("size"), body.get("criteria"), actor, body.get("requirements"),
                            body.get("parent"))
         elif op == "criteria":
-            r = self._wrap(pl.define, key, actor, body.get("criteria"), body.get("requirements"), body.get("size"))
+            r = self._wrap(pl.define, key, actor, body.get("criteria"), body.get("requirements"), body.get("size"),
+                           developer=developer)
         elif op == "plan-review":
             r = self._wrap(pl.plan_review, key, body.get("verdict"), actor, body.get("note"), body.get("blast"),
                            body.get("tests"), body.get("size"), **meta)
@@ -1625,12 +1626,14 @@ class Daemon(LeadChat, HqDaemon):
                 rows = sorted(held.get(seat) or [], key=lambda r: r["since"] or 0)
                 seats += rows or [{"seat": seat, "session": None, "ticket": None, "stage": None, "since": None}]
             in_flight = [{"key": t["key"], "title": t["title"], "size": fl["size"], "stage": fl["stage"],
+                          "route": fl["route"],
                           "holder": fl["holder"], "waitingOn": fl["waitingOn"], "stale": fl["stale"],
                           "parent": t.get("parent"), "children": {"total": t["subtasks"]["total"],
                                                                   "done": t["subtasks"]["done"]}}
                          for t, _w, fl, _h in flying]
             out.append({"key": key, "name": p.get("name") or key, "seats": seats, "inFlight": in_flight,
-                        "limits": {"investigate": {"used": len(pl.investigating(key)), "max": pl.investigate_limit(key)},
+                        "limits": {"investigate": {"used": len(pl.investigating(key, flying=flying)),
+                                                   "max": pl.investigate_limit(key)},
                                    "build": {"used": pl.lanes(key), "max": pl.lane_limit(key)}}})
         return {"projects": out}
 

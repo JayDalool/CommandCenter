@@ -118,7 +118,9 @@ class Criteria(Base):
         self.pl.role(k, "planner", "agent:planner", session="inv-1")
         self.pl.plan(k, PLAN, "agent:planner", session="inv-1")
         self.refused(409, self.pl.define, k, "agent:coordinator", criteria=["x"])
-        self.pl.define(k, "jay", criteria=[{"id": "c1", "text": "Five comps show"}, {"id": "c3", "text": "XLSX export"}])
+        self.refused(403, self.pl.define, k, "jay", criteria=["x"])            # Jay, but without Developer Unlock
+        self.pl.define(k, "jay", criteria=[{"id": "c1", "text": "Five comps show"}, {"id": "c3", "text": "XLSX export"}],
+                       developer=True)
         self.assertEqual(self.pl.work(k)["criteria"][1]["text"], "XLSX export")
 
     def test_an_edited_criterion_is_open_again(self):
@@ -126,17 +128,26 @@ class Criteria(Base):
         self.in_review(k)
         self.passed(k)
         self.assertEqual({c["state"] for c in self.pl.work(k)["criteria"]}, {"pass"})
-        self.pl.define(k, "jay", criteria=[{"id": "c1", "text": "Five comps show"}, {"id": "c2", "text": "Sold dates, newest first"}])
+        self.pl.define(k, "jay", criteria=["Five comps show", {"id": "c2", "text": "Sold dates, newest first"}],
+                       developer=True)
         crit = self.pl.work(k)["criteria"]
         self.assertEqual([(c["id"], c["state"]) for c in crit], [("c1", "pass"), ("c2", "open")])
 
     def test_only_jay_lowers_a_risky_ticket(self):
         k = self.sized("risky")
         self.refused(403, self.pl.define, k, "agent:coordinator", size="standard")
-        self.pl.define(k, "jay", size="standard")
+        self.refused(403, self.pl.define, k, "jay", size="standard")           # a bare "jay" header is not enough
+        self.pl.define(k, "jay", size="standard", developer=True)
         self.assertEqual(self.pl.work(k)["size"], "standard")
         self.pl.define(k, "agent:coordinator", size="risky")             # raising is anyone's
         self.assertEqual(self.pl.work(k)["size"], "risky")
+
+    def test_only_a_ticket_in_intake_becomes_small(self):
+        k = self.ticket()
+        self.ts.update(k, {"status": "RESEARCHING"}, "jay")
+        self.refused(409, self.pl.define, k, "agent:coordinator", size="small")
+        self.pl.define(k, "agent:coordinator", size="standard", criteria=["works"])
+        self.assertEqual(self.pl.work(k)["flow"]["stage"], "investigate")
 
     def test_twenty_criteria_at_most(self):
         k = self.ticket()
@@ -312,6 +323,17 @@ class Closing(Base):
         self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="cr-1", pr=self.pr())
         self.verified(k)
         self.assertEqual(self.pl.work(k)["gate"], "deploy")
+        t, _, _ = self.pl.confirm(k, "deploy", "jay")       # a release approval: no live deploy is requested
+        w = self.pl.work(k)
+        self.assertEqual((t["status"], w["deploy"], w["flow"]["waitingOn"]), ("VERIFYING", None, "lead"))
+        self.assertEqual(self.pl.close(k, "shipped", "agent:coordinator")[0]["status"], "DONE")
+
+    def test_a_small_ticket_is_in_the_pipeline_and_can_be_reworked(self):
+        k = self.sized("small")
+        self.assertTrue(self.pl.participating(k))           # the GitHub poll leaves its review state alone
+        self.pl.start(k, f"{k}-x", WT + k, "agent:coordinator")
+        self.ts.update(k, {"status": "IN_REVIEW"}, "system:automation", trigger="PR")
+        self.assertEqual(self.pl.rework(k, "fix the copy", "agent:coordinator")[0]["status"], "IN_PROGRESS")
 
 
 class Children(Base):
@@ -345,6 +367,9 @@ class Limits(Base):
         self.pl.role(b, "planner", "agent:planner", session="i-b")
         self.assertIn("investigated", self.refused(409, self.pl.role, c, "planner", "agent:planner", session="i-c"))
         self.refused(409, self.pl.plan, c, PLAN, "agent:planner", session="i-c")
+        legacy = self.ticket(labels=["migration"])                             # unsized, waiting on Jay's plan gate
+        self.pl.plan(legacy, PLAN, "agent:planner", session="i-l")
+        self.pl.role(self.ticket(), "planner", "agent:planner", session="i-u")  # unsized tickets are not limited
         other = self.sized(project="gyst")
         self.pl.role(other, "planner", "agent:planner", session="i-g")          # per project
         self.pl.plan(a, PLAN, "agent:planner", session="i-a")                   # a moves on to technical review
@@ -368,8 +393,12 @@ class Stale(Base):
         self.assertEqual(self.pl.sweep_stale(), [])
         later = pipeline._now() + 49 * 3600
         out = self.pl.sweep_stale(now=later)
-        self.assertEqual([r[0]["key"] for r in out], [k])
+        self.assertEqual([(r[0]["key"], r[2]) for r in out], [(k, [])])     # the very first sweep is silent
         self.assertEqual(self.pl.sweep_stale(now=later + 60), [])
+        k2 = self.sized()
+        out = self.pl.sweep_stale(now=later + 49 * 3600)
+        self.assertEqual([(r[0]["key"], [e[0] for e in r[2]]) for r in out],
+                         [(k2, ["pipeline.flow_stale"])])                  # k is still in the same spell
         with mock.patch.object(flow, "_now", return_value=later):
             self.assertTrue(self.pl.work(k)["flow"]["stale"])
         marks = self.pl.compact([self.ts.get(k)["id"]])
@@ -410,7 +439,13 @@ class Shapes(Base):
         k = self.planned()
         t = self.ts.get(k)
         m = self.pl.compact([t["id"]])[t["id"]]
-        self.assertEqual(Pipeline.list_marks(t, m), {"size": "standard", "stage": "techReview", "stale": False})
+        self.assertEqual(Pipeline.list_marks(t, m), {"size": "standard", "stage": "techReview", "stale": False,
+                                                     "route": list(flow.STAGES)})
+        r = self.ticket(labels=["security"])                     # risky by policy, not sized: today's route
+        t = self.ts.get(r)
+        m = self.pl.compact([t["id"]]).get(t["id"]) or {"gate": None, "openQuestions": 0}
+        self.assertEqual((Pipeline.list_marks(t, m)["size"], Pipeline.list_marks(t, m)["route"]),
+                         ("risky", list(flow.LEGACY_ROUTE)))
 
 
 class Cli(unittest.TestCase):
