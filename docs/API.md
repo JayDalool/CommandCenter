@@ -103,7 +103,7 @@ closing or editing GitHub issues.
 ## Workspace (go-live)
 
 DEV = also needs `X-CCD-Developer: <session>` from `/api/developer/unlock`. File writes (`/api/files/save|upload|mkdir|rename|duplicate|remove`,
-`/api/scm/*`) and the terminal additionally need the token typed within 8 h on a remembered device: past that they
+`/api/scm/*`), `/api/action/prompt` and the terminal additionally need the token typed within 8 h on a remembered device: past that they
 answer 403 `{error, reenter: true}` (the terminal closes with 4412), and `POST /api/developer/unlock` with the same
 session re-opens them.
 

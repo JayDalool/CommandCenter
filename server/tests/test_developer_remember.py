@@ -85,6 +85,24 @@ class Persistence(Base):
         self.now[0] += 3 * HOUR                                     # past the plain idle limit, whatever the file says
         self.assertFalse(self.gate().check(sid))
 
+    def test_a_plain_session_edited_into_a_remembered_one_is_dropped(self):
+        g = self.gate()
+        sid, _ = g.unlock(DEV)
+        self.now[0] += HOUR
+        data = json.load(open(self.path))
+        data["sessions"][0].update(kind="remember", proved=self.now[0])
+        with open(self.path, "w") as f:
+            json.dump(data, f)
+        again = self.gate()
+        self.assertFalse(again.check(sid))
+        self.assertEqual(again.devices(), [])
+
+    def test_a_clock_set_back_ends_sessions_instead_of_stretching_them(self):
+        g = self.gate()
+        sid, _ = g.unlock(DEV, remember=True)
+        self.now[0] -= DAY
+        self.assertFalse(g.check(sid))
+
     def test_an_entry_written_without_the_secret_matches_nothing(self):
         g = self.gate()
         g.unlock(DEV)

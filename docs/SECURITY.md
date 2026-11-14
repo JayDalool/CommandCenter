@@ -216,24 +216,27 @@ browser does not copy `sessionStorage` into it.
   The file also carries an HMAC of a fixed string under the same key, so a file written under another
   `developer.token` is ignored whole: changing `developer.token` ends every session. Consequences: reading the file
   gives no session (it holds no id, and the HMAC cannot be reversed); writing an entry into it without the token
-  matches no id; and the limits come from the kind in code, never from the file, so an edited file cannot make a
-  session last longer than its kind allows (a time in the future is dropped). A file another user can read or that
+  matches no id; the limits come from the kind in code, never from the file; and each row carries an HMAC over its
+  kind, times, id and label, so an edited row (say, a plain session turned into a remembered one) is dropped. A time
+  in the future is dropped too, and if the server clock goes backwards the sessions it would stretch end. A file another user can read or that
   another uid owns is ignored and replaced on the next save. "Last used" reaches the disk at most once a minute;
   unlock, lock, lock-all and expiry are written at once. If the file cannot be written, sessions keep working from
   memory and simply do not survive the next restart. Wrong-token counts stay in memory (a restart clears them;
   only jay can restart ccd).
-- **"Remember this device"** (`remember: true` at unlock): 30 days, no idle limit. The browser keeps that session
-  id in `localStorage` instead of `sessionStorage` so it outlives the tab; anything running in Command Center's own
+- **"Remember this device"** (`remember: true` at unlock): 30 days, no idle limit. The browser is to keep that
+  session id in `localStorage` (the unlock-dialog checkbox, the Settings device list and the re-entry prompt are the
+  web side's part of contract §6 and land after this server change) instead of `sessionStorage` so it outlives the tab; anything running in Command Center's own
   origin could read either, so the defences against script injection (CSP, no third-party script, sanitised
   rendering) are what protect it, as they protect the ccd token beside it. Plain and SSH sessions keep their limits
   above.
 - **The terminal and file writes keep short limits.** A remembered session older than 8 hours since the token was
-  last typed can still approve, steer and answer, but the live terminal (`WS /api/pty/*`) and every file write
+  last typed can still approve and answer, but the live terminal (`WS /api/pty/*`), typing a free-text prompt into a Claude pane
+  (`/api/action/prompt`, which can make that agent run anything) and every file write
   (`/api/files/save|upload|mkdir|rename|duplicate|remove`, `/api/scm/*`) refuse it: 403 `{reenter: true}`, and an
   open terminal closes with code 4412. Typing the token again (`POST /api/developer/unlock` with the same
   `X-CCD-Developer`) re-proves that session in place for another 8 hours. Plain sessions (8 h) and SSH sign-in
   (12 h, proved by Jay's SSH key) are unaffected. So a stolen remembered id can do what Jay's clicks do for up to a
-  month, but cannot open a shell or change code past one working day, and Jay can end it at once with:
+  month, but cannot open a shell, prompt an agent or change code past one working day, and Jay can end it at once with:
 - **Lock all devices** (`POST /api/developer/lock-all`, Settings): every session on every device ends, with every
   unredeemed sign-in code, in memory and on disk. It needs a live Developer session, so the ccd token alone (which
   processes running as jay can read) cannot lock Jay out. Settings lists the devices holding a session

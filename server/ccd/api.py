@@ -1586,7 +1586,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/scm/ticket-branch", ws_route(scm_ticket_branch), methods=["GET"]),
         *[Route(f"/api/scm/{op}", ws_route(scm_op, dev=True, fresh=True), methods=["POST"])
           for op in SCM_OPS],
-        Route("/api/action/prompt", ws_route(claude_prompt, dev=True), methods=["POST"]),
+        Route("/api/action/prompt", ws_route(claude_prompt, dev=True, fresh=True), methods=["POST"]),
         Route("/api/action/key", ws_route(claude_key, dev=True), methods=["POST"]),
         Route("/api/pty", ws_route(pty_list), methods=["GET"]),
         Route("/api/coordinators/adopt", ws_route(coord_adopt, dev=True), methods=["POST"]),

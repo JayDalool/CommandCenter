@@ -137,7 +137,8 @@ class DeveloperGate:
     its id keyed with the developer secret, never the id and never the secret. So the file alone cannot be turned
     into a session, an entry written by someone without the secret matches nothing, and changing developer.token
     ends every session. Limits come from the kind, never from the file: an edited file cannot make a session
-    last longer than its kind allows. Lock, "Lock all devices" and expiry remove entries from memory and disk.
+    last longer than its kind allows, and each row carries an HMAC over its kind, times, id and label, so an edited
+    row is dropped. A clock that goes backwards ends the sessions it would otherwise stretch. Lock, "Lock all devices" and expiry remove entries from memory and disk.
     """
     TTL = 8 * 3600
     IDLE = 2 * 3600
@@ -181,6 +182,9 @@ class DeveloperGate:
         return self.TTL, self.IDLE
 
     def _left(self, rec, now):
+        # The wall clock went back (or a time is from the future): the session's age can't be trusted, so it ends.
+        if max(rec["made"], rec["used"], rec["proved"]) > now + 60:
+            return 0
         ttl, idle = self._limits(rec["kind"])
         left = ttl - (now - rec["made"])
         if idle is not None:
@@ -200,6 +204,11 @@ class DeveloperGate:
     def _file_check(self):
         """Ties the file to this developer.token without holding it: an HMAC of a fixed string."""
         return hmac.new(str(self.secret).encode(), b"ccd-developer-sessions-file", "sha256").hexdigest()
+
+    def _row_mac(self, key, rec):
+        """Binds a saved row's kind, times, id and label to its key: an edited row is dropped, not believed."""
+        raw = json.dumps([key, rec["id"], rec["kind"], rec["made"], rec["used"], rec["proved"], rec["label"]])
+        return hmac.new(str(self.secret).encode(), b"ccd-developer-row\0" + raw.encode(), "sha256").hexdigest()
 
     def _find(self, sid):
         """(key, record) for a live session id, else (None, None). Prunes nothing."""
@@ -255,10 +264,14 @@ class DeveloperGate:
             # A time from the future (an edited file, or a clock set back) is not believed: it could stretch a limit.
             if max(made, used, proved) > now + 60 or not made <= used or not made <= proved:
                 continue
-            rid = r.get("id") if isinstance(r.get("id"), str) and re.fullmatch(r"[A-Za-z0-9_-]{8,32}", r["id"]) \
-                else secrets.token_urlsafe(9)
+            rid = r.get("id")
+            if not (isinstance(rid, str) and re.fullmatch(r"[A-Za-z0-9_-]{8,32}", rid)):
+                continue
             rec = {"id": rid, "kind": kind, "made": made, "used": used, "proved": proved,
                    "label": self.clean_label(r.get("label"))}
+            mac = r.get("mac")
+            if not isinstance(mac, str) or not hmac.compare_digest(mac, self._row_mac(key, rec)):
+                continue
             if self._left(rec, now) > 0:
                 self.sessions[key] = rec
 
@@ -268,7 +281,7 @@ class DeveloperGate:
         now = self.clock()
         if not force and self._saved_at is not None and now - self._saved_at < self.SAVE_EVERY:
             return
-        rows = [{"key": k, **r} for k, r in self.sessions.items()]
+        rows = [{"key": k, **r, "mac": self._row_mac(k, r)} for k, r in self.sessions.items()]
         raw = json.dumps({"version": self.FILE_VERSION, "check": self._file_check(), "sessions": rows},
                          separators=(",", ":"))
         tmp = None
