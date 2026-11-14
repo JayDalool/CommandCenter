@@ -152,6 +152,7 @@ describe("faces on the pages", () => {
     load();
     prefs.patch({ style: "childish" });
     const main = await show("#/agents");
+    fireEvent.click(within(main).getByRole("button", { name: "List" }));   // the session cards; Seats has its own test
     const cards = [...main.querySelectorAll<HTMLElement>("a.hq-sess")];
     expect(cards).toHaveLength(app.store.get().state!.agents.length);
     for (const c of cards) {
@@ -169,7 +170,7 @@ describe("faces on the pages", () => {
     prefs.patch({ style: "childish" });
     const expected = castLeads(leadKeys(app.store.get()));
     let main = await show("#/agents");
-    const team = who(main.querySelector(".hq-sess.is-lead")!);
+    const team = who(main.querySelector(".hq-seat.is-lead")!);   // the lead's seat, on Teams' first view
     const key = [...expected].find(([, c]) => c.id === team)![0];
     expect(["samvision", "gauzemate"]).toContain(key);
     cleanup();
@@ -199,7 +200,7 @@ describe("faces on the pages", () => {
     expect(app.store.get().state!.projects.some((p) => p.key === "samvision")).toBe(true);
     const main = await show("#/agents");
     const expected = castLeads(leadKeys(app.store.get())).get("samvision")!.id;
-    const card = [...main.querySelectorAll<HTMLElement>(".hq-sess.is-lead")].find((c) => c.querySelector("b")?.textContent === "samvision")!;
+    const card = [...main.querySelectorAll<HTMLElement>(".hq-seat.is-lead")].find((c) => c.querySelector("a")?.textContent === "samvision")!;
     expect(who(card)).toBe(expected);
   });
 });

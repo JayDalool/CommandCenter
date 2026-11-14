@@ -1,6 +1,7 @@
 // Teams (hq/pages/Teams.tsx) on the test fixture: every session herdr reports, once, under its project; a lead only
-// where the coordinator is a session; each session opens Classic's Agents screen; presence only from evidence. Both
-// views: the org chart (the default on a desktop) and the list of team panels (the default on a phone).
+// where the coordinator is a session; each session opens Classic's Agents screen; presence only from evidence. The
+// two views of sessions as cards: the org chart and the list of team panels. Seats, the view the page opens on, is
+// in hq-seats.test.tsx.
 import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
 import { vi } from "vitest";
 import { App } from "../src/App";
@@ -29,10 +30,11 @@ async function show(hash = "#/agents") {
   await act(async () => {});
   return document.querySelector<HTMLElement>("#main > .hq-teams");
 }
+const pick = (page: HTMLElement, name: string) =>
+  fireEvent.click(within(within(page).getByRole("group", { name: "View" })).getByRole("button", { name }));
 /** Switch the page to its list of team panels. */
-function list(page: HTMLElement) {
-  fireEvent.click(within(within(page).getByRole("group", { name: "View" })).getByRole("button", { name: "List" }));
-}
+const list = (page: HTMLElement) => pick(page, "List");
+const chart = (page: HTMLElement) => pick(page, "Org chart");
 
 const view = () => buildTeams(app.store.get(), evidence(app.store.get(), Date.now() / 1000));
 
@@ -50,6 +52,7 @@ describe("Teams", () => {
     const ids = app.store.get().state!.agents.map((a) => a.id);
     const sessions = () => [...page.querySelectorAll<HTMLAnchorElement>("a.hq-sess")].map((a) => a.getAttribute("href")).sort();
     const actions = () => [...page.querySelectorAll("button")].filter((b) => !b.closest(".hq-seg"));
+    chart(page);
     expect(page.querySelector(".hq-org")).not.toBeNull();
     expect(sessions()).toEqual(ids.map((id) => href("agents", id)).sort());
     expect(actions()).toHaveLength(0);
@@ -63,9 +66,10 @@ describe("Teams", () => {
     load(true);
     const page = (await show())!;
     const v = view();
-    const chart = within(page).getByRole("region", { name: "Org chart" });
-    expect(within(chart).getByRole("link", { name: /^Jay Directs/ })).toHaveAttribute("href", href("needs"));
-    const branches = [...chart.querySelectorAll<HTMLElement>(".hq-org-branch")];
+    chart(page);
+    const org = within(page).getByRole("region", { name: "Org chart" });
+    expect(within(org).getByRole("link", { name: /^Jay Directs/ })).toHaveAttribute("href", href("needs"));
+    const branches = [...org.querySelectorAll<HTMLElement>(".hq-org-branch")];
     expect(branches.map((b) => b.querySelector(".hq-org-proj b")!.textContent)).toEqual(v.teams.map((t) => t.name));
     v.teams.forEach((t, i) => {
       const b = branches[i];
@@ -78,16 +82,23 @@ describe("Teams", () => {
       if (t.defined.length) { for (const d of t.defined) expect(defined).toHaveTextContent(d.name); }
       else expect(defined).toBeNull();
     });
-    expect(chart.querySelectorAll(".hq-org-loose a.hq-sess")).toHaveLength(v.unassigned.length);
+    expect(org.querySelectorAll(".hq-org-loose a.hq-sess")).toHaveLength(v.unassigned.length);
   });
 
-  it("opens as the list on a phone-width window", async () => {
+  it("opens on Seats at any width, with the chart and the list one press away", async () => {
     load(true);
     vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("max-width: 760px"), media: q, addEventListener() {},
       removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false }));
     const page = (await show())!;
-    expect(page.querySelector(".hq-org")).toBeNull();
-    expect(within(page).getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
+    const pressed = () => within(within(page).getByRole("group", { name: "View" })).getAllByRole("button")
+      .filter((b) => b.getAttribute("aria-pressed") === "true").map((b) => b.textContent);
+    expect(pressed()).toEqual(["Seats"]);
+    expect(page.querySelector(".hq-org, a.hq-sess")).toBeNull();
+    chart(page);
+    expect(pressed()).toEqual(["Org chart"]);
+    list(page);
+    expect(pressed()).toEqual(["List"]);
+    expect(page.querySelector(".hq-seats")).toBeNull();
   });
 
   it("names a lead only where the coordinator is a session, and says why otherwise", async () => {
@@ -116,8 +127,11 @@ describe("Teams", () => {
   it("shows no session as Working when the feed is not live", async () => {
     load(false);
     const page = (await show())!;
-    expect(page.querySelectorAll("a.hq-sess").length).toBeGreaterThan(0);
-    expect(within(page).queryAllByText("Working")).toHaveLength(0);
+    for (const [view, sessions] of [["Seats", ".hq-seating a[href^='#/agents/']"], ["Org chart", "a.hq-sess"], ["List", "a.hq-sess"]]) {
+      pick(page, view);
+      expect(page.querySelectorAll(sessions).length, view).toBeGreaterThan(0);
+      expect(within(page).queryAllByText("Working"), view).toHaveLength(0);
+    }
     expect(within(page).getByText(/Feed not live/)).toBeInTheDocument();
     // The Sessions figure reads Unknown, as on My Office, with the last count beside it.
     const kpi = within(page).getByText("Sessions").closest(".hq-kpi")!;
