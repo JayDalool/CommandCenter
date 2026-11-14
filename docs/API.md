@@ -360,7 +360,9 @@ be a parent; a parent cannot become DONE (any path, `PATCH` included) while a ch
 count); a verified parent waits in VERIFYING with `waitingOn: "lead"` and the lead's `close` finishes it. Stale: a
 ticket in stages 2-6 with no pipeline step or status move for 48 hours (and not waiting on Jay) reads `stale: true`;
 ccd records one `pipeline.flow_stale` event per quiet spell (the briefing shows it as "gone quiet for 48 hours"); the
-next step clears it.
+next step clears it. Until ccd has made its first stale mark, marks are made without events, so switching the flow on does not flood the briefing with old tickets.
+
+A sized ticket is in the pipeline from the moment it is sized (even in INBOX): like a ticket with a plan, its status, labels, type, flags and archive change only through pipeline steps or by Jay with Developer Unlock, and GitHub's review decision never promotes it. Jay's `criteria` edits past investigation, and lowering a risky size, also need Developer Unlock (`X-CCD-Developer`).
 
 `GET /api/tasks/{key}/work` adds:
 
