@@ -130,16 +130,19 @@ function DeployGate({ work, busy, onApprove, onRework }: { work: TicketWork; bus
   // was approved. So on a live project it will wait for a window, and urgent has to be chosen now.
   const willWait = !d?.requestedAt && !!work.project && rel.data?.projects[work.project]?.live === true ? rel.data.window : null;
   const urgent = work.size === "risky" && (held !== null || willWait !== null);
+  // Until ccd has said whether the project is live, a risky ticket may still get the urgent choice: hold both
+  // approvals so a quick press cannot skip it. A failed or missing release route lets them go.
+  const deciding = work.size === "risky" && !d?.requestedAt && !!work.project && (rel.state === "idle" || rel.state === "loading");
   return <section className="gate is-deploy" aria-label="Ready for live deployment" id="gate">
     <h3>Ready for live deployment</h3>
     <dl className="gate-dl">
       <dt>What will go live</dt><dd>{d?.what || work.gateReason || "This ticket's merged change."}</dd>
       <dt>Verification completed</dt><dd>{d?.verification || work.verification?.evidence || "—"}</dd>
       {held !== null && <><dt>Release window</dt><dd>Held for the weekly release. It can go out from {releaseAt(held)}.</dd></>}
-      {willWait && <><dt>Release window</dt><dd>This project is live, so the deploy waits for the weekly release ({windowText(willWait)}).</dd></>}
+      {willWait && <><dt>Release window</dt><dd>This project is live, so the deploy goes out in the weekly release ({windowText(willWait)}).</dd></>}
     </dl>
     <div className="gate-actions">
-      <button type="button" className="btn is-primary" disabled={busy} onClick={() => onApprove(false)}>Approve live deploy</button>
+      <button type="button" className="btn is-primary" disabled={busy || deciding} onClick={() => onApprove(false)}>Approve live deploy</button>
       {urgent && <button type="button" className="btn" disabled={busy} onClick={() => onApprove(true)}>Approve as urgent</button>}
       <button type="button" className="btn" disabled={busy} onClick={onRework}>Not yet — fix first</button>
     </div>
