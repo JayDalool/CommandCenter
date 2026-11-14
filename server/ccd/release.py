@@ -88,15 +88,19 @@ class Release:
         except (OSError, ValueError, AttributeError):
             pass
 
-    def _save(self):
+    def _save(self, data):
+        """Write `data` to disk, then (only then) make it the settings in memory."""
         d = os.path.dirname(self.path) or "."
         os.makedirs(d, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=d, prefix=".release-")
         try:
             os.fchmod(fd, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, indent=2, sort_keys=True)
+                json.dump(data, f, indent=2, sort_keys=True)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, self.path)
+            self.data = data
         except BaseException:
             try:
                 os.unlink(tmp)
@@ -116,22 +120,26 @@ class Release:
             raise ReleaseError(400, "unknown project")
         if not isinstance(live, bool):
             raise ReleaseError(400, "live must be true or false")
+        data = json.loads(json.dumps(self.data))
         if live:
-            self.data["live"][project] = True
+            data["live"][project] = True
         else:
-            self.data["live"].pop(project, None)
-        self._save()
+            data["live"].pop(project, None)
+        self._save(data)
 
     def set_window(self, weekday, time_):
         if isinstance(weekday, bool) or not isinstance(weekday, int) or not 0 <= weekday <= 6:
             raise ReleaseError(400, "weekday is 0 (Sunday) to 6 (Saturday)")
         if not isinstance(time_, str) or not TIME_RE.match(time_):
             raise ReleaseError(400, "time is HH:MM, 24-hour")
-        self.data["window"] = {"weekday": weekday, "time": time_, "tz": DEFAULT_WINDOW["tz"]}
-        self._save()
+        data = json.loads(json.dumps(self.data))
+        data["window"] = {"weekday": weekday, "time": time_, "tz": DEFAULT_WINDOW["tz"]}
+        self._save(data)
 
     def public(self, projects, now):
-        start, cut = next_window(self.window, now)
+        start, _ = next_window(self.window, now)
+        # The merge cutoff still ahead: past noon on release day, that is next week's.
+        cut = next(cutoff_of(self.window, d) for d in _release_days(self.window, now) if cutoff_of(self.window, d) > now)
         return {"window": dict(self.window, next=int(start), hours=WINDOW_HOURS), "cutoff": int(cut),
                 "projects": {p: {"live": self.live(p)} for p in projects}}
 
@@ -141,8 +149,12 @@ class Release:
         if not self.live(project):
             return None
         w = self.window
-        start, _cut = slot_for(w, merged_at if merged_at is not None else now)
+        if merged_at is None:          # nothing says when it was ready: any window that is open now will do
+            start, _cut = next_window(w, now)
+            return None if now >= start else start
+        start, _cut = slot_for(w, merged_at)
+        day = datetime.datetime.fromtimestamp(start, _tz(w)).date()
         while now >= start + WINDOW_HOURS * 3600:      # its window passed without a deploy: the next one
-            start += 7 * 86400
-            start = window_start(w, datetime.datetime.fromtimestamp(start, _tz(w)).date())
+            day += datetime.timedelta(days=7)          # local dates, so a clock change never shifts the day
+            start = window_start(w, day)
         return None if now >= start else start

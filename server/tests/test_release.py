@@ -124,11 +124,37 @@ class InThePipeline(unittest.TestCase):
         self.pl.deployed(k, "live", "pass", "health ok", "agent:coordinator")
         self.assertEqual(self.pl.work(k)["deploy"]["result"], "pass")
 
+    def test_a_deploy_with_no_merge_record_goes_in_an_open_window(self):
+        r = self.pl.releases
+        self.assertIsNone(r.hold("samvision", None, at(2026, 11, 18, 22, 30)))
+        self.assertEqual(r.hold("samvision", None, at(2026, 11, 18, 21)), at(2026, 11, 18, 22))
+
+    def test_urgent_on_a_needs_deploy_gate_carries_into_the_deploy(self):
+        k = self.ts.create("samvision", "x", description="why", labels=["security"], needs_deploy=True)[0]["key"]
+        self.ts.update(k, {"status": "VERIFYING"}, "jay")          # risky by policy, never sized
+        self.pl.verify(k, "pass", "ok", "agent:verifier")
+        self.assertEqual(self.pl.work(k)["gate"], "deploy")
+        self.pl.confirm(k, "deploy", "jay", urgent=True)
+        self.assertTrue(self.pl.work(k)["deploy"]["urgent"])
+        self.pl.deployed(k, "live", "pass", "health ok", "agent:coordinator")
+
+    def test_a_failed_deploy_is_recorded_even_when_held(self):
+        k = self.verifying("small")
+        self.pl.deploy_request(k, "live", "the fix", "ok", "agent:coordinator")
+        self.pl.confirm(k, "deploy", "jay")
+        self.assertTrue(self.pl.work(k)["deploy"]["heldUntil"])
+        t, _, _ = self.pl.deployed(k, "live", "fail", "it went out early and broke", "agent:coordinator")
+        self.assertEqual(t["status"], "BLOCKED")
+
+    def test_the_cutoff_shown_is_still_ahead(self):
+        pub = self.pl.releases.public(["samvision"], at(2026, 11, 18, 15))
+        self.assertEqual((pub["window"]["next"], pub["cutoff"]), (int(at(2026, 11, 18, 22)), int(at(2026, 11, 25, 12))))
+
     def test_a_project_that_is_not_live_deploys_when_approved(self):
         self.pl.releases.set_live("samvision", False)
         k = self.verifying("small")
         self.pl.deploy_request(k, "live", "the fix", "ok", "agent:coordinator")
-        self.assertNotIn("heldUntil", self.pl.work(k)["deploy"])
+        self.assertIsNone(self.pl.work(k)["deploy"].get("heldUntil"))
         self.pl.confirm(k, "deploy", "jay")
         self.pl.deployed(k, "live", "pass", "health ok", "agent:coordinator")
 

@@ -363,6 +363,10 @@ class Pipeline:
                    questions=questions, openQuestions=sum(1 for q in questions if q["answer"] is None),
                    evidence=evidence)
         out["visibleStage"] = visible_stage(t, out)
+        d = out.get("deploy") or {}
+        if d.get("env") == "live" and d.get("requestedAt") and not d.get("result") and not d.get("urgent"):
+            # Worked out on every read: a missed window, or a project marked live after the request, moves it.
+            out["deploy"] = dict(d, heldUntil=self._held(t, out, _now()))
         f = self._flow(tid)
         out.update(size=flow_mod.shown_size(f["size"], out["policy"]), requirements=f["requirements"],
                    criteria=f["criteria"], planReview=f["planReview"], userCheck=f["userCheck"], closing=f["closing"])
@@ -991,7 +995,10 @@ class Pipeline:
         """The unix start of the release window this ticket's live deploy waits for, or None."""
         if self.releases is None:
             return None
-        return self.releases.hold(t["project"], (w.get("merge") or {}).get("at"), at)
+        # A change with no recorded merge (a needs:deploy or config-only ticket) is placed by when its deploy was
+        # asked for; with neither, by now (and an open window then lets it through: release.hold).
+        when = (w.get("merge") or {}).get("at") or (w.get("deploy") or {}).get("requestedAt")
+        return self.releases.hold(t["project"], when, at)
 
     def confirm(self, key, gate, actor, via=None, urgent=False):
         """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock). `via` marks a
@@ -1012,10 +1019,11 @@ class Pipeline:
             if w["gate"] != gate:
                 raise TaskError(409, f"{t['key']} has no open {gate} gate")
             if urgent:
-                f = self._flow(tid)
-                if gate != "deploy" or f["size"] not in flow_mod.SIZES \
-                        or flow_mod.effective_size(f["size"], policy(t)) != "risky":
+                # Risky as the flow reads it: sized risky, or made risky by its labels / flags / type.
+                if gate != "deploy" or flow_mod.effective_size(self._flow(tid)["size"], policy(t)) != "risky":
                     raise TaskError(409, "only a risky ticket's live deploy can be approved as urgent")
+                if not (w["deploy"] or {}).get("requestedAt") and not policy(t)["deploy"]:
+                    raise TaskError(409, "no live deploy is waiting: approve the release, then request the deploy")
                 if (w["deploy"] or {}).get("requestedAt"):
                     w = dict(w, deploy=dict(w["deploy"], urgent=True, heldUntil=None))
             add = {f"merge:{w['review']['head']}"} if gate == "merge" else {gate} - {"failure"}
@@ -1049,7 +1057,7 @@ class Pipeline:
                 # it with `deployed --env live`, and only then does the ticket close.
                 work["deploy"] = {"env": "live", "what": t["title"], "verification": (w["verification"] or {}).get("evidence") or "",
                                   "requestedAt": at, "requestedBy": "policy:needs_deploy", "approvedAt": at,
-                                  "approvedBy": by, "result": None}
+                                  "approvedBy": by, "result": None, **({"urgent": True} if urgent else {})}
                 events.append(("pipeline.deploy_approved", said, {}))
                 return {}, work, events
             if gate == "deploy" and (w["deploy"] or {}).get("requestedAt") and not (w["deploy"] or {}).get("result"):
@@ -1411,7 +1419,8 @@ class Pipeline:
                 raise TaskError(409, f"no {env} deployment was requested for {t['key']}")
             if not d.get("approvedAt"):
                 raise TaskError(409, "Jay has not approved this live deployment")
-            if env == "live" and not d.get("urgent"):
+            if env == "live" and not d.get("urgent") and result == "pass":
+                # A failure is always recorded (it happened); a pass before the window is refused.
                 held = self._held(t, w, at)
                 if held:
                     when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(held))
