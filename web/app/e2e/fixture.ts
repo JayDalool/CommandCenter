@@ -17,6 +17,15 @@ export const NOW = Math.round(fx.state.at * 1000) + 5_000;
 
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
 
+/** The first Wednesday 22:00 in Winnipeg after NOW, as ccd's default release window gives it (unix seconds). */
+export const RELEASE_NEXT = (() => {
+  const at = new Intl.DateTimeFormat("en-US", { timeZone: "America/Winnipeg", weekday: "short", hour: "numeric", hourCycle: "h23" });
+  for (let t = Math.ceil(NOW / 3_600_000) * 3600; ; t += 3600) {
+    const parts = at.formatToParts(new Date(t * 1000));
+    if (parts.find((x) => x.type === "weekday")!.value === "Wed" && parts.find((x) => x.type === "hour")!.value === "22") return t;
+  }
+})();
+
 /** One honest answer per endpoint the screens read on load. Anything else is "unanswered" and fails the test. */
 function answer(path: string): unknown {
   const seq = fx.state.seq;
@@ -60,6 +69,10 @@ function answer(path: string): unknown {
     case "/api/milestones":
       return { projects: Object.fromEntries(fx.tasks.projects.map((p) => [p.key, { technical: [], business: [], revision: 0 }])) };
     case "/api/projects/logos": return {};
+    // The release store with nothing set: no project is live, and the window is the default.
+    case "/api/release":
+      return { window: { weekday: 3, time: "22:00", tz: "America/Winnipeg", next: RELEASE_NEXT, hours: 2 }, cutoff: RELEASE_NEXT - 10 * 3600,
+        projects: Object.fromEntries(fx.tasks.projects.map((p) => [p.key, { live: false }])) };
     case "/api/briefing": {
       const zero = { merged: 0, done: 0, failedChecks: 0, opened: 0, questionsAsked: 0, questionsAnswered: 0, deploys: 0, needsYou: 0 };
       return { since: Math.floor(NOW / 1000) - 12 * 3600, until: Math.floor(NOW / 1000), totals: zero, quiet: true,
