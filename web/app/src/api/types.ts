@@ -317,6 +317,11 @@ export interface Checkpoint {
 export interface DeployState {
   env: "live" | "preview" | "dev"; what: string; verification: string; requestedAt: number; requestedBy: string;
   approvedAt: number | null; approvedBy?: string; result: "pass" | "fail" | null; evidence?: string; deployedAt?: number;
+  /** A live deploy on a live project waits for the weekly release (flow contract §5): the start of the window it
+   *  can go out in (epoch seconds), or null when nothing holds it. ccd works it out on every read. */
+  heldUntil?: number | null;
+  /** Jay approved it as urgent, so it does not wait for a window. Only a risky ticket's deploy can be. */
+  urgent?: boolean;
 }
 export interface TaskSession { state: "ready" | "multiple" | "none"; paneId: string | null; sessionId: string | null; status: string }
 export interface AnswersResult { work: TicketWork; complete: boolean; delivered: boolean; reason: string | null; replanned?: boolean;

@@ -6,6 +6,7 @@
 //   merge     reviewed and green, needs acceptance [Accept — allow merge] [Request changes]
 //   ui        UI review ready                      [UI accepted] [Needs fixes]
 //   deploy    Ready for live deployment — what will go live · verification completed  [Approve live deploy]
+//             on a live project it waits for the weekly release; a risky one can go as urgent  [Approve as urgent]
 //
 // Every button is an existing pipeline step recorded as Jay; the ones that close a gate need
 // Developer Unlock (ccd checks it too). The task's Claude session is told what Jay decided.
@@ -14,6 +15,11 @@ import { app } from "../store/app";
 import type { TicketWork } from "../api/types";
 import { devOr } from "../components/DevMode";
 import { Ago } from "../components/ui";
+import { useRelease, windowText } from "../hq/release";
+
+/** When a held deploy can go out, in this browser's own time: "Wed, Nov 18, 10:00 PM". */
+export const releaseAt = (at: number) => new Date(at * 1000)
+  .toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
 export function GateCard({ ticketKey, work, onDone }: { ticketKey: string; work: TicketWork; onDone: (w: TicketWork) => void }) {
   const [busy, setBusy] = useState(false);
@@ -35,7 +41,7 @@ export function GateCard({ ticketKey, work, onDone }: { ticketKey: string; work:
   const ask = (q: string, dflt: string) => window.prompt(q, dflt)?.trim();
   const rework = (dflt: string) => { const r = ask("What needs fixing? (Claude gets this)", dflt); if (r) void run("rework", { reason: r }, `${ticketKey} back to implementation`); };
   const replan = (dflt: string) => { const r = ask("Why does it go back to planning? (Claude gets this)", dflt); if (r) void run("replan", { reason: r }, `${ticketKey} back to planning`); };
-  const confirm = (g: string, ok: string) => void run("confirm", { gate: g }, ok);
+  const confirm = (g: string, ok: string, more: Record<string, unknown> = {}) => void run("confirm", { gate: g, ...more }, ok);
 
   if (blocked) {
     const b = work.blocked;
@@ -66,21 +72,15 @@ export function GateCard({ ticketKey, work, onDone }: { ticketKey: string; work:
     return <section className="gate is-deploy" aria-label="Deploying" id="gate">
       <h3>Approved — confirm the deploy in Claude's pane</h3>
       <p className="muted">You approved it <Ago at={work.deploy!.approvedAt} />. Claude prepares the deploy (steps, checks, rollback) and waits for you there; then it deploys, verifies and records it.</p>
+      {work.deploy!.heldUntil != null && <p className="muted">Held for the weekly release: it can go out from {releaseAt(work.deploy!.heldUntil)}. ccd does not record it as deployed before then.</p>}
+      {work.deploy!.urgent && <p className="muted">Approved as urgent: it does not wait for the release window.</p>}
     </section>;
   }
   if (gate === "deploy") {
-    const d = work.deploy;
-    return <section className="gate is-deploy" aria-label="Ready for live deployment" id="gate">
-      <h3>Ready for live deployment</h3>
-      <dl className="gate-dl">
-        <dt>What will go live</dt><dd>{d?.what || work.gateReason || "This ticket's merged change."}</dd>
-        <dt>Verification completed</dt><dd>{d?.verification || work.verification?.evidence || "—"}</dd>
-      </dl>
-      <div className="gate-actions">
-        <button type="button" className="btn is-primary" disabled={busy} onClick={() => confirm("deploy", "Live deploy approved — Claude prepares; confirm in its pane")}>Approve live deploy</button>
-        <button type="button" className="btn" disabled={busy} onClick={() => rework("not ready to go live: ")}>Not yet — fix first</button>
-      </div>
-    </section>;
+    return <DeployGate work={work} busy={busy} onRework={() => rework("not ready to go live: ")}
+      onApprove={(urgent) => urgent
+        ? confirm("deploy", "Urgent live deploy approved: no release window. Confirm in Claude's pane", { urgent: true })
+        : confirm("deploy", "Live deploy approved — Claude prepares; confirm in its pane")} />;
   }
   if (gate === "plan") {
     return <section className="gate is-plan" aria-label="Plan needs approval" id="gate">
@@ -117,4 +117,32 @@ export function GateCard({ ticketKey, work, onDone }: { ticketKey: string; work:
     </section>;
   }
   return null;
+}
+
+/** The deploy gate. On a live project a live deploy waits for the weekly release (flow contract §5), and only a risky
+ *  ticket can skip the wait, when Jay approves it as urgent. Its own component so that only a ticket at this gate
+ *  asks ccd for the release settings. */
+function DeployGate({ work, busy, onApprove, onRework }: { work: TicketWork; busy: boolean; onApprove: (urgent: boolean) => void; onRework: () => void }) {
+  const rel = useRelease();
+  const d = work.deploy;
+  const held = d?.heldUntil ?? null;
+  // A ticket that only needs a deploy has none yet: this approval creates it, and ccd then places it by when it
+  // was approved. So on a live project it will wait for a window, and urgent has to be chosen now.
+  const willWait = !d?.requestedAt && !!work.project && rel.data?.projects[work.project]?.live === true ? rel.data.window : null;
+  const urgent = work.size === "risky" && (held !== null || willWait !== null);
+  return <section className="gate is-deploy" aria-label="Ready for live deployment" id="gate">
+    <h3>Ready for live deployment</h3>
+    <dl className="gate-dl">
+      <dt>What will go live</dt><dd>{d?.what || work.gateReason || "This ticket's merged change."}</dd>
+      <dt>Verification completed</dt><dd>{d?.verification || work.verification?.evidence || "—"}</dd>
+      {held !== null && <><dt>Release window</dt><dd>Held for the weekly release. It can go out from {releaseAt(held)}.</dd></>}
+      {willWait && <><dt>Release window</dt><dd>This project is live, so the deploy waits for the weekly release ({windowText(willWait)}).</dd></>}
+    </dl>
+    <div className="gate-actions">
+      <button type="button" className="btn is-primary" disabled={busy} onClick={() => onApprove(false)}>Approve live deploy</button>
+      {urgent && <button type="button" className="btn" disabled={busy} onClick={() => onApprove(true)}>Approve as urgent</button>}
+      <button type="button" className="btn" disabled={busy} onClick={onRework}>Not yet — fix first</button>
+    </div>
+    {urgent && <p className="muted">Urgent is for a risky change that cannot wait: its deploy does not wait for the release window.</p>}
+  </section>;
 }

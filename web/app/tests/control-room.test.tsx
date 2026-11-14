@@ -16,14 +16,16 @@ import { jayQueue } from "../src/tickets/model";
 import { Dashboard, newsText, projectPanels } from "../src/screens/Dashboard";
 import { Workspace } from "../src/screens/Workspace";
 import { QuestionsForm } from "../src/tickets/Questions";
-import { GateCard } from "../src/tickets/GateCard";
+import { GateCard, releaseAt } from "../src/tickets/GateCard";
+import { resetRelease } from "../src/hq/release";
+import { ApiError } from "../src/api/client";
 import { works } from "../src/tickets/useWork";
 import {
   MAX_ROOMS, addPane, popOutRoom, popOutPane, settle, closeRoom, detachPane, detachRoom, layout, openRoom, paneAreas, parseLayout, popPaneState, popRoomState,
   reattachPane, resetLayout, returnRoom, sessionName, toggleTool, wallShape,
 } from "../src/workspace/rooms";
 import { ev, state, tasks } from "./helpers";
-import type { Question, Ticket, TicketWork } from "../src/api/types";
+import type { DeployState, Question, ReleaseState, Ticket, TicketWork } from "../src/api/types";
 
 function work(over: Partial<TicketWork> = {}): TicketWork {
   return { key: "SV-071", status: "IN_PROGRESS", stage: "BUILD", stages: [], plan: { summary: "Rework the layout" }, planState: "accepted",
@@ -282,7 +284,12 @@ it("the scope tick never carries over to another ticket", () => {
 });
 
 describe("gates in manager words (spec §11, §22)", () => {
-  beforeEach(() => developer.set({ active: true, expiresAt: null, error: null }));
+  beforeEach(() => {
+    developer.set({ active: true, expiresAt: null, error: null });
+    // The deploy gate asks ccd for the release settings. By default: an older ccd, which has none.
+    resetRelease();
+    vi.spyOn(app.api, "release").mockRejectedValue(new ApiError(404, "not found"));
+  });
 
   it("a live deployment waits for Jay: Approve live deploy closes the deploy gate", async () => {
     const op = vi.spyOn(app.api, "workOp").mockResolvedValue(work({ deploy: { approvedAt: 2 } as never }));
@@ -302,6 +309,87 @@ describe("gates in manager words (spec §11, §22)", () => {
     expect(within(card).getByText("Approved — confirm the deploy in Claude's pane")).toBeInTheDocument();
     expect(card.textContent).toMatch(/Claude prepares the deploy \(steps, checks, rollback\) and waits for you there/);
     expect(card.textContent).not.toMatch(/Claude deploys/);
+  });
+
+  describe("a live project's deploy waits for the weekly release (flow contract §5)", () => {
+    const HELD = Date.UTC(2026, 10, 19, 4, 0) / 1000;      // a Wednesday evening in Winnipeg; the card says it in this machine's zone
+    const dep = (over: Partial<DeployState> = {}): DeployState => ({ env: "live", what: "The new Dashboard", verification: "UI tests 14/14",
+      requestedAt: 1, requestedBy: "agent:coordinator", approvedAt: null, result: null, ...over });
+    const REL: ReleaseState = { window: { weekday: 3, time: "22:00", tz: "America/Winnipeg", next: HELD, hours: 2 }, cutoff: HELD - 10 * 3600,
+      projects: { samvision: { live: true }, gyst: { live: false } } };
+    const gate = (over: Partial<TicketWork>) => render(<GateCard ticketKey="SV-071" onDone={() => {}}
+      work={work({ status: "VERIFYING", gate: "deploy", project: "samvision", ...over })} />);
+    const card = () => screen.getByRole("region", { name: "Ready for live deployment" });
+    const urgent = () => within(card()).queryByRole("button", { name: "Approve as urgent" });
+
+    it("says from when a held deploy can go out, in words a clock shows", () => {
+      expect(releaseAt(HELD)).toMatch(/^[A-Z][a-z]{2}, Nov 1[89], \d{1,2}:\d{2} [AP]M$/);
+      gate({ size: "standard", deploy: dep({ heldUntil: HELD }) });
+      expect(card()).toHaveTextContent(`Release windowHeld for the weekly release. It can go out from ${releaseAt(HELD)}.`);
+    });
+
+    it("only a risky ticket's held deploy can be approved as urgent, and that sends urgent", async () => {
+      const op = vi.spyOn(app.api, "workOp").mockResolvedValue(work());
+      for (const size of ["small", "standard", null] as const) {
+        const { unmount } = gate({ size, deploy: dep({ heldUntil: HELD }) });
+        expect(urgent(), String(size)).toBeNull();
+        unmount();
+      }
+      gate({ size: "risky", deploy: dep({ heldUntil: HELD }) });
+      expect(card()).toHaveTextContent("Urgent is for a risky change that cannot wait");
+      fireEvent.click(urgent()!);
+      await waitFor(() => expect(op).toHaveBeenCalledWith("SV-071", "confirm", { gate: "deploy", urgent: true }));
+      // The plain approval is what it was: no urgent in it.
+      fireEvent.click(within(card()).getByRole("button", { name: "Approve live deploy" }));
+      await waitFor(() => expect(op).toHaveBeenLastCalledWith("SV-071", "confirm", { gate: "deploy" }));
+    });
+
+    it("a deploy that nothing holds has no window line and no urgent, risky or not", () => {
+      gate({ size: "risky", deploy: dep({ heldUntil: null }) });
+      expect(card()).not.toHaveTextContent("Release window");
+      expect(urgent()).toBeNull();
+    });
+
+    it("a ticket that only needs a deploy: on a live project the card says it will wait, and a risky one can go as urgent", async () => {
+      vi.spyOn(app.api, "release").mockResolvedValue(REL);
+      const op = vi.spyOn(app.api, "workOp").mockResolvedValue(work());
+      const { unmount } = gate({ size: "risky", deploy: null, gateReason: "Ready for live deployment" });
+      await waitFor(() => expect(card()).toHaveTextContent(
+        "Release windowThis project is live, so the deploy waits for the weekly release (Wednesday 10 p.m. Central)."));
+      fireEvent.click(urgent()!);
+      await waitFor(() => expect(op).toHaveBeenCalledWith("SV-071", "confirm", { gate: "deploy", urgent: true }));
+      unmount();
+
+      // Not risky: it is told about the wait, with no way round it.
+      const plain = gate({ size: "standard", deploy: null });
+      await waitFor(() => expect(card()).toHaveTextContent("This project is live"));
+      expect(urgent()).toBeNull();
+      plain.unmount();
+
+      // A project that is not live has no window, so nothing to say and nothing to skip.
+      gate({ size: "risky", deploy: null, project: "gyst" });
+      await act(async () => {});
+      expect(card()).not.toHaveTextContent("Release window");
+      expect(urgent()).toBeNull();
+    });
+
+    it("on an older ccd the card is what it was", async () => {
+      gate({ size: "risky", deploy: null });
+      await act(async () => {});
+      expect(card()).not.toHaveTextContent("Release window");
+      expect(within(card()).getAllByRole("button").map((b) => b.textContent)).toEqual(["Approve live deploy", "Not yet — fix first"]);
+    });
+
+    it("once approved, the Deploying card says from when it can go out, or that it is urgent", () => {
+      const { unmount } = render(<GateCard ticketKey="SV-071" onDone={() => {}} work={work({ status: "VERIFYING", deploy: dep({ approvedAt: 2, heldUntil: HELD }) })} />);
+      expect(screen.getByRole("region", { name: "Deploying" })).toHaveTextContent(
+        `Held for the weekly release: it can go out from ${releaseAt(HELD)}. ccd does not record it as deployed before then.`);
+      unmount();
+      render(<GateCard ticketKey="SV-071" onDone={() => {}} work={work({ status: "VERIFYING", deploy: dep({ approvedAt: 2, urgent: true }) })} />);
+      const done = screen.getByRole("region", { name: "Deploying" });
+      expect(done).toHaveTextContent("Approved as urgent: it does not wait for the release window.");
+      expect(done).not.toHaveTextContent("Held for the weekly release");
+    });
   });
 
   it("a blocker explains first, offers Fix and continue / Re-plan, and keeps technical details folded", async () => {

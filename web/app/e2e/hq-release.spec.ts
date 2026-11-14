@@ -178,3 +178,43 @@ test("a ccd without the release store shows no label and no settings group", asy
   expect(found.filter((p) => !/404/.test(p))).toEqual([]);
   expect(found.filter((p) => /404/.test(p))).toHaveLength(1);
 });
+
+test("a held deploy: the ticket says from when it can go out; Approve as urgent sends urgent once, after the unlock", async ({ page, watch }) => {
+  const ccd = await serveRelease(page, { live: ["samvision"] });
+  const sent: string[] = [];
+  // SV-031 as ccd would send it at the deploy gate of a live project: risky, and held for the window.
+  const work = (over: object = {}, deploy: object = {}) => ({ key: "SV-031", status: "VERIFYING", stage: null, stages: [], plan: {}, planState: "none",
+    policy: { plan: "owner", planReasons: ["label:risky"], merge: "owner", ui: false, deploy: false }, gate: "deploy",
+    gateReason: "Ready for live deployment", confirmed: [], branch: null, worktree: null, prs: [], roles: {},
+    review: { verdict: null, head: null, cycles: 0 }, verification: null, merge: null, handoff: null, blocked: null, findings: [],
+    size: "risky", project: "samvision",
+    deploy: { env: "live", what: "The worktree prune script", verification: "Ran clean on preview", requestedAt: RELEASE_NEXT - 86400,
+      requestedBy: "agent:coordinator", approvedAt: null, result: null, heldUntil: RELEASE_NEXT, ...deploy }, ...over });
+  await page.route(/\/api\/tasks\/SV-031\/work(\/confirm)?$/, async (route) => {
+    const req = route.request();
+    if (req.method() === "GET") return route.fulfill({ json: work() });
+    sent.push(req.postData() ?? "");
+    if (!(ccd.unlocked && req.headers()["x-ccd-developer"] === SESSION)) return route.fulfill({ status: 403, json: { ok: false, error: "Developer Unlock required" } });
+    return route.fulfill({ json: work({ gate: null, gateReason: null }, { approvedAt: RELEASE_NEXT - 3600, approvedBy: "jay:gate", urgent: true, heldUntil: null }) });
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await open(page, "tasks/SV-031");
+  const card = page.getByRole("region", { name: "Ready for live deployment" });
+  // The moment is shown in the browser's own time (the test browser is on UTC, so not 10 p.m. here).
+  await expect(card).toContainText(/Held for the weekly release\. It can go out from [A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, \d{1,2}:00\s[AP]M\./);
+  await expect(card.getByRole("button")).toHaveText(["Approve live deploy", "Approve as urgent", "Not yet — fix first"]);
+
+  // Locked: nothing is sent until Jay has unlocked, then the urgent approval goes out once.
+  await card.getByRole("button", { name: "Approve as urgent" }).click();
+  const dialog = page.getByRole("dialog", { name: "Developer Unlock" });
+  await expect(dialog).toBeVisible();
+  expect(sent).toEqual([]);
+  await dialog.getByLabel("Developer token").fill(DEV_TOKEN);
+  await dialog.getByRole("button", { name: "Unlock and continue" }).click();
+  const after = page.getByRole("region", { name: "Deploying" });
+  await expect(after).toContainText("Approved as urgent: it does not wait for the release window.");
+  await expect(after).not.toContainText("Held for the weekly release");
+  expect(sent).toEqual(['{"gate":"deploy","urgent":true}']);
+  expect(ccd.problems).toEqual([]);
+  expect(await problems(page, watch)).toEqual([]);
+});
