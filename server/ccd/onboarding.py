@@ -414,7 +414,6 @@ def _team_rules(v, aid, body, team):
                                                 f"{registry.name_of(key)} has none yet: use jay.")
 
 
-
 def _budget(v, budget):
     if not isinstance(budget, dict):
         v.error("budget", "bad_budget", "budget must be an object.")
