@@ -55,7 +55,7 @@ ALLOWED = {
     ("POST", "/api/scm/discard"), ("POST", "/api/scm/commit"), ("POST", "/api/scm/branch"),
     ("POST", "/api/action/prompt"), ("POST", "/api/action/key"),
     ("POST", "/api/coordinators/adopt"),
-    ("GET", "/api/tasks/{key}/work"), ("POST", "/api/tasks/{key}/work/{op}"),
+    ("GET", "/api/tasks/{key}/work"), ("POST", "/api/tasks/{key}/work/{op}"), ("GET", "/api/flow"),
     # Control room: Jay answers Claude's questions (resumes the same task session); the readable record
     ("POST", "/api/tasks/{key}/answers"), ("GET", "/api/tasks/{key}/record"),
     # SSH sign-in: cc-session (over Jay's SSH login) mints a one-time code; the page redeems it once

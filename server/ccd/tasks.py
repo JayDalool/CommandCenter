@@ -751,6 +751,25 @@ CREATE TRIGGER broker_observations_no_replace BEFORE INSERT ON broker_observatio
   WHEN EXISTS (SELECT 1 FROM broker_observations WHERE id = NEW.id OR sha = NEW.sha)
   BEGIN SELECT RAISE(ABORT, 'broker observations are append-only'); END;
 """),
+    # 14: the delivery flow (ccd/flow.py, the shared flow contract). One row per ticket that has been sized or
+    # reviewed under the nine-stage flow: its size, requirements and acceptance criteria, the technical reviewer's
+    # plan review, the user check, the lead's closing note, send-back rounds per review stage, when its plan entered
+    # technical review, and when ccd last marked it stale. A new table only, so the way back is to drop it.
+    (14, """
+CREATE TABLE ticket_flow (
+  ticket_id    INTEGER PRIMARY KEY REFERENCES tickets(id),
+  size         TEXT CHECK (size IS NULL OR size IN ('small', 'standard', 'risky')),
+  requirements TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(requirements)),
+  criteria     TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(criteria)),
+  plan_review  TEXT CHECK (plan_review IS NULL OR json_valid(plan_review)),
+  user_check   TEXT CHECK (user_check IS NULL OR json_valid(user_check)),
+  closing      TEXT CHECK (closing IS NULL OR json_valid(closing)),
+  rounds       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(rounds)),
+  review_due   REAL,
+  stale_at     REAL,
+  updated_at   REAL NOT NULL
+);
+"""),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
@@ -782,6 +801,7 @@ DOWNGRADES = {
     11: ("identity_observations", "identity_tokens"),
     12: ("node_nonces", "node_observations", "node_keys"),
     13: ("broker_observations",),
+    14: ("ticket_flow",),
 }
 
 
@@ -1412,6 +1432,12 @@ class TaskStore:
             if st not in ALL_STATUSES:
                 raise TaskError(400, f"status must be one of {', '.join(ALL_STATUSES)}")
             if st != cur["status"]:
+                if st == "DONE":
+                    # Children first: a parent closes only after every child is DONE, DENIED or CANCELLED.
+                    kids = self._open_children(tid)
+                    if kids:
+                        raise TaskError(409, f"{self._key_of(tid)} has open children: {', '.join(kids[:10])}"
+                                             f"{' …' if len(kids) > 10 else ''}; finish them first")
                 change("status", "status", cur["status"], st, kind="status")
                 if st == "IN_PROGRESS" and not cur["started_at"]:
                     sets["started_at"] = at
@@ -1459,6 +1485,16 @@ class TaskStore:
                         break
                     seen.add(walk)
                     walk = self.db.execute("SELECT parent_id FROM tickets WHERE id=?", (walk,)).fetchone()[0]
+                # Two levels at most (the flow contract): a child cannot itself be a parent.
+                if pid != cur["parent_id"]:
+                    grand = self.db.execute("SELECT parent_id FROM tickets WHERE id=?", (pid,)).fetchone()[0]
+                    if grand:
+                        raise TaskError(400, f"{self._key_of(pid)} is already a child of {self._key_of(grand)}; "
+                                             f"tickets nest two levels at most")
+                    kids = self._open_children(tid, closed_too=True)
+                    if kids:
+                        raise TaskError(400, f"{self._key_of(tid)} has children of its own ({', '.join(kids[:5])}); "
+                                             f"tickets nest two levels at most")
             if pid != cur["parent_id"]:
                 old_k = self._key_of(cur["parent_id"]) if cur["parent_id"] else None
                 new_k = self._key_of(pid) if pid else None
@@ -1505,6 +1541,14 @@ class TaskStore:
             cols = ", ".join(f"{c}=?" for c in sets)
             self.db.execute(f"UPDATE tickets SET {cols} WHERE id=?", (*sets.values(), tid))
         return changes
+
+    def _open_children(self, tid, closed_too=False):
+        """Keys of this ticket's children that are still open (or all of them, closed_too), in number order.
+        An archived child has been set aside, so it does not hold its parent open."""
+        q = "SELECT key FROM tickets WHERE parent_id=?"
+        if not closed_too:
+            q += " AND status NOT IN ('DONE','DENIED','CANCELLED') AND archived=0"
+        return [k for (k,) in self.db.execute(q + " ORDER BY number", (tid,))]
 
     def note(self, key, kind, actor="jay", data=None, name=None):
         """One audit row with no field change (attachment added/removed). Names and sizes, never contents."""

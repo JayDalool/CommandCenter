@@ -1,7 +1,7 @@
 """Migration safety (Jay, 2026-10-23: "Before backend merge, demonstrate migration v10 backup, restore, backward
 compatibility and recovery testing"). The drill in ccd/migration_safety.py rehearses the newest migration on a
 populated older database; these tests run it, show it catches a migration that touches existing data, and test the
-in-place rollback and its refusals for each migration that has one (Downgrade, DowngradeV11, V12, V13)."""
+in-place rollback and its refusals for each migration that has one (Downgrade, DowngradeV11, V12, V13, V14)."""
 import contextlib
 import hashlib
 import io
@@ -22,6 +22,7 @@ V9 = [m for m in tasks.MIGRATIONS if m[0] <= 9]
 V10 = [m for m in tasks.MIGRATIONS if m[0] <= 10]
 V11 = [m for m in tasks.MIGRATIONS if m[0] <= 11]
 V12 = [m for m in tasks.MIGRATIONS if m[0] <= 12]
+V13 = [m for m in tasks.MIGRATIONS if m[0] <= 13]
 TO = tasks.SCHEMA_VERSION
 
 
@@ -380,7 +381,13 @@ class DowngradeV12(unittest.TestCase):
 
 
 class DowngradeV13(unittest.TestCase):
-    """Migration 13 (Broker observations) and its way back."""
+    """Migration 13 (Broker observations) and its way back, as a v13 ccd runs it."""
+    def setUp(self):
+        for name, value in (("MIGRATIONS", V13), ("SCHEMA_VERSION", 13)):
+            p = mock.patch.object(tasks, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
     def v13(self):
         path = tmp("tasks.db")
         build_v9(path)
@@ -419,6 +426,50 @@ class DowngradeV13(unittest.TestCase):
         code, _, err = run("rollback", "--db", path, "--to", "12", "--backup-dir", tmp("backups"))
         self.assertEqual(code, 1)
         self.assertIn("broker_observations (1 row)", err)
+
+
+class DowngradeV14(unittest.TestCase):
+    """Migration 14 (the delivery flow's ticket_flow) and its way back."""
+    def v14(self):
+        path = tmp("tasks.db")
+        build_v9(path)
+        ts = tasks.TaskStore(path, PROJECTS)
+        self.assertEqual(ts.applied, [10, 11, 12, 13, 14])
+        ts.close()
+        return path
+
+    def test_the_downgrade_list_names_exactly_the_tables_migration_14_adds(self):
+        added = {o[1] for o in tasks.reference_schema(14) - tasks.reference_schema(13) if o[0] == "table"}
+        self.assertEqual(added, set(tasks.DOWNGRADES[14]))
+
+    def test_migration_14_changes_no_existing_table(self):
+        old, new = tasks.reference_schema(13), tasks.reference_schema(14)
+        self.assertTrue(old <= new)
+        self.assertEqual({o[1] for o in new - old}, {"ticket_flow"})
+
+    def test_rollback_to_v13_keeps_every_row(self):
+        path = self.v14()
+        db = ms.connect(path)
+        before = ms.digests(db)
+        db.close()
+        code, out, _ = run("rollback", "--db", path, "--to", "13", "--backup-dir", tmp("backups"))
+        self.assertEqual(code, 0, out)
+        db = ms.connect(path)
+        self.assertEqual(ms.version(db), 13)
+        self.assertEqual(tasks.schema_objects(db), tasks.reference_schema(13))
+        self.assertEqual(ms.digests(db), {t: v for t, v in before.items() if t not in tasks.DOWNGRADES[14]})
+        self.assertEqual(tasks.migrate(db, V13), [])
+        db.close()
+
+    def test_it_refuses_when_a_ticket_was_sized(self):
+        path = self.v14()
+        ts = tasks.TaskStore(path, PROJECTS)
+        k = ts.create("samvision", "Sized", description="why")[0]["key"]
+        Pipeline(ts).intake(k, "small", ["it works"], "jay")
+        ts.close()
+        code, _, err = run("rollback", "--db", path, "--to", "13", "--backup-dir", tmp("backups"))
+        self.assertEqual(code, 1)
+        self.assertIn("ticket_flow (1 row)", err)
 
 
 if __name__ == "__main__":
