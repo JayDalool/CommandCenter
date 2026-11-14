@@ -14,11 +14,22 @@ import { clock, cutText, dayText, refreshRelease, release, resetRelease, windowT
 import type { ReleaseState } from "../src/api/types";
 import { ev, state, tasks } from "./helpers";
 
-// Wednesday 18 November 2026, 22:00 in Winnipeg (UTC-6 in November) is 04:00 UTC on the 19th.
-const NEXT = Date.UTC(2026, 10, 19, 4, 0) / 1000;
-const CUTOFF = Date.UTC(2026, 10, 18, 18, 0) / 1000;
+const TZ = "America/Winnipeg";
+// The unix time at which a clock in `tz` reads this wall time. It is read from the machine's own time-zone data and
+// never from a fixed offset: machines disagree about Winnipeg's offset in November 2026 (UTC-6 on one set of zone
+// data, UTC-5 on another), and the page formats with the same data this reads.
+function at(tz: string, year: number, month: number, day: number, hour: number, minute = 0): number {
+  const want = Date.UTC(year, month - 1, day, hour, minute);
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "numeric",
+    day: "numeric", hour: "numeric", minute: "numeric" }).formatToParts(new Date(want));
+  const n = (type: string) => Number(parts.find((x) => x.type === type)?.value);
+  return (2 * want - Date.UTC(n("year"), n("month") - 1, n("day"), n("hour"), n("minute"))) / 1000;
+}
+// Wednesday 18 November 2026 in Winnipeg: the window opens at 22:00 and the cut-off is noon.
+const NEXT = at(TZ, 2026, 11, 18, 22);
+const CUTOFF = at(TZ, 2026, 11, 18, 12);
 const rel = (live: string[] = ["samvision"], window: Partial<ReleaseState["window"]> = {}, cutoff = CUTOFF): ReleaseState => ({
-  window: { weekday: 3, time: "22:00", tz: "America/Winnipeg", next: NEXT, hours: 2, ...window }, cutoff,
+  window: { weekday: 3, time: "22:00", tz: TZ, next: NEXT, hours: 2, ...window }, cutoff,
   projects: Object.fromEntries(["samvision", "gyst", "mfe", "gauzemate", "commandcenter"].map((k) => [k, { live: live.includes(k) }])),
 });
 
@@ -61,14 +72,14 @@ describe("the words", () => {
   it("names the window and the day in the window's own zone", () => {
     expect(windowText(rel().window)).toBe("Wednesday 10 p.m. Central");
     expect(windowText({ weekday: 5, time: "06:15", tz: "Europe/Paris", next: 0 })).toBe("Friday 6:15 a.m. Europe/Paris");
-    expect(dayText(NEXT, "America/Winnipeg")).toBe("Wed, Nov 18");   // the 19th in UTC, still Wednesday in Winnipeg
+    expect(dayText(NEXT, TZ)).toBe("Wed, Nov 18");   // the 19th in UTC, still Wednesday in Winnipeg
     expect(dayText(NEXT, "Not/AZone")).toMatch(/2026/);              // an unknown zone still gives a date
   });
 
   it("says a cut-off's hour in the window's own zone: noon, or when a morning window opens", () => {
-    expect(cutText(CUTOFF, "America/Winnipeg")).toBe("noon");
-    expect(cutText(CUTOFF - 3 * 3600, "America/Winnipeg")).toBe("9 a.m.");
-    expect(cutText(CUTOFF - 3.5 * 3600, "America/Winnipeg")).toBe("8:30 a.m.");
+    expect(cutText(CUTOFF, TZ)).toBe("noon");
+    expect(cutText(CUTOFF - 3 * 3600, TZ)).toBe("9 a.m.");
+    expect(cutText(CUTOFF - 3.5 * 3600, TZ)).toBe("8:30 a.m.");
     expect(cutText(CUTOFF, "Not/AZone")).toBe("the cut-off");
   });
 });
