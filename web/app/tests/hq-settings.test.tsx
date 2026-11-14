@@ -12,9 +12,9 @@ import { classicTab } from "../src/screens/Settings";
 import { SECTIONS, settingsSection } from "../src/hq/pages/Settings";
 import { popped, resetWindows, savePlace } from "../src/hq/windows/manager";
 import { state, tasks } from "./helpers";
-import { developer } from "../src/api/developer";
+import { developer, setDevSession } from "../src/api/developer";
 import { ApiError } from "../src/api/client";
-import type { NotifyState } from "../src/api/types";
+import type { DevDevice, NotifyState } from "../src/api/types";
 
 function load() {
   vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-27T15:00:00Z") });
@@ -261,6 +261,119 @@ describe("HQ Settings", () => {
     fireEvent.click(within(page).getByRole("button", { name: "Unlock…" }));
     await act(async () => {});
     expect(document.querySelector("[role=dialog]")).not.toBeNull();
+  });
+
+  // Developer Unlock that lasts (flow contract §6): what ccd says about this session, the devices holding one, and
+  // the button that ends them all. An older ccd says nothing about remembering, and nothing about devices is shown.
+  describe("Security: remembered devices", () => {
+    const NOW = Date.parse("2026-10-27T15:00:00Z") / 1000;
+    const DEVICES: DevDevice[] = [
+      { id: "d1", label: "Chrome on Windows", kind: "remember", remembered: true, createdAt: NOW - 86400, lastUsedAt: NOW - 20,
+        expiresAt: NOW + 29 * 86400, current: true },
+      { id: "d2", label: "Safari on iPhone", kind: "remember", remembered: true, createdAt: NOW - 5 * 86400, lastUsedAt: NOW - 3 * 3600,
+        expiresAt: NOW + 25 * 86400, current: false },
+      { id: "d3", label: "SSH sign-in", kind: "ssh", remembered: false, createdAt: NOW - 3600, lastUsedAt: NOW - 600,
+        expiresAt: NOW + 11 * 3600, current: false },
+    ];
+    const status = (extra: object) => vi.spyOn(app.api, "developerStatus").mockResolvedValue({ active: false, expiresIn: null, tokenFile: null, ...extra });
+    const SID = "s".repeat(43);
+    afterEach(() => { act(() => setDevSession(null)); });
+
+    it("an older ccd: no device list, and the session is said to end with a ccd restart", async () => {
+      load();
+      status({});
+      const devices = vi.spyOn(app.api, "devices");
+      const page = await show("#/settings?tab=security");
+      expect(within(page).queryByRole("heading", { name: "Unlocked devices" })).toBeNull();
+      expect(within(page).getByText(/8 hours in all, or a ccd restart/)).toBeInTheDocument();
+      expect(devices).not.toHaveBeenCalled();
+    });
+
+    it("locked: the list is not asked for", async () => {
+      load();
+      status({ remembered: false });
+      const devices = vi.spyOn(app.api, "devices");
+      const page = await show("#/settings?tab=security");
+      expect(within(page).getByRole("heading", { name: "Unlocked devices" })).toBeInTheDocument();
+      expect(within(page).getByText("Not shown while locked")).toBeInTheDocument();
+      expect(within(page).getByText(/Reloads, pop-outs and a ccd restart keep it/)).toBeInTheDocument();
+      expect(within(page).queryByRole("button", { name: "Lock all devices…" })).toBeNull();
+      expect(devices).not.toHaveBeenCalled();
+    });
+
+    it("a remembered device: says so, lists every device with this one marked, and never shows a session id", async () => {
+      load();
+      setDevSession(SID, 29 * 86400, true);
+      status({ active: true, expiresIn: 29 * 86400, remembered: true, reenterIn: 5 * 3600 });
+      vi.spyOn(app.api, "devices").mockResolvedValue({ devices: DEVICES });
+      const page = await show("#/settings?tab=security");
+      expect(within(page).getByText("Unlocked, remembered")).toBeInTheDocument();
+      expect(within(page).getByText(/Open for another 5 hours/)).toBeInTheDocument();
+      expect(within(page).queryByRole("button", { name: "Type the token…" })).toBeNull();
+      expect(within(page).getByText(/30 days after this device was remembered/)).toBeInTheDocument();
+      const group = within(page).getByRole("heading", { name: "Unlocked devices" }).closest("section")!;
+      const rows = [...group.querySelectorAll(".hq-set-row")].map((r) => r.textContent);
+      expect(rows[0]).toMatch(/^Chrome on Windows This device/);
+      expect(rows[0]).toContain("Remembered for 30 days · last used just now · ends in 29 days");
+      expect(rows[1]).toContain("Safari on iPhone");
+      expect(rows[1]).toContain("last used 3h ago · ends in 25 days");
+      expect(rows[1]).not.toContain("This device");
+      expect(rows[2]).toContain("Signed in with SSH · last used 10m ago · ends in 11 hours");
+      expect(page.textContent).not.toContain(SID);
+    });
+
+    it("the token is too old for terminals: a button to type it again", async () => {
+      load();
+      setDevSession(SID, 29 * 86400, true);
+      status({ active: true, expiresIn: 29 * 86400, remembered: true, reenterIn: 0 });
+      vi.spyOn(app.api, "devices").mockResolvedValue({ devices: DEVICES.slice(0, 1) });
+      const page = await show("#/settings?tab=security");
+      expect(within(page).getByText(/typed more than 8 hours ago/)).toBeInTheDocument();
+      fireEvent.click(within(page).getByRole("button", { name: "Type the token…" }));
+      await act(async () => {});
+      expect(document.querySelector("[role=dialog]")).toHaveTextContent(/more than 8 hours since the developer token was typed/);
+    });
+
+    it("Lock all devices asks first, then ends every session and locks this browser", async () => {
+      load();
+      setDevSession(SID, 29 * 86400, true);
+      status({ active: true, expiresIn: 29 * 86400, remembered: true, reenterIn: 5 * 3600 });
+      vi.spyOn(app.api, "devices").mockResolvedValue({ devices: DEVICES });
+      const lockAll = vi.spyOn(app.api, "lockAll").mockResolvedValue({ ok: true, ended: 3 });
+      const toast = vi.spyOn(app, "toast");
+      const page = await show("#/settings?tab=security");
+      fireEvent.click(within(page).getByRole("button", { name: "Lock all devices…" }));
+      const dialog = within(document.querySelector<HTMLElement>("[role=dialog]")!);
+      fireEvent.click(dialog.getByRole("button", { name: "Cancel" }));
+      expect(lockAll).not.toHaveBeenCalled();
+      expect(developer.get().active).toBe(true);
+
+      fireEvent.click(within(page).getByRole("button", { name: "Lock all devices…" }));
+      fireEvent.click(within(document.querySelector<HTMLElement>("[role=dialog]")!).getByRole("button", { name: "Lock all devices" }));
+      for (let i = 0; i < 3; i++) await act(async () => {});
+      expect(lockAll).toHaveBeenCalledTimes(1);
+      expect(developer.get().active).toBe(false);
+      expect(localStorage.getItem("ccd.dev")).toBeNull();
+      expect(toast).toHaveBeenCalledWith("Developer Mode locked on every device (3 sessions ended)");
+      expect(within(page).getByText("Not shown while locked")).toBeInTheDocument();
+    });
+
+    it("a refused Lock all devices says so and keeps this browser unlocked", async () => {
+      load();
+      setDevSession(SID, 3600);
+      status({ active: true, expiresIn: 3600, remembered: false, reenterIn: 3600 });
+      vi.spyOn(app.api, "devices").mockResolvedValue({ devices: [] });
+      vi.spyOn(app.api, "lockAll").mockRejectedValue(new ApiError(0, "ccd unreachable"));
+      const toast = vi.spyOn(app, "toast");
+      const page = await show("#/settings?tab=security");
+      expect(within(page).getByText("Unlocked")).toBeInTheDocument();
+      expect(within(page).queryByText("Terminals and file changes")).toBeNull();   // only a remembered device has that row
+      fireEvent.click(within(page).getByRole("button", { name: "Lock all devices…" }));
+      fireEvent.click(within(document.querySelector<HTMLElement>("[role=dialog]")!).getByRole("button", { name: "Lock all devices" }));
+      for (let i = 0; i < 3; i++) await act(async () => {});
+      expect(toast).toHaveBeenCalledWith("Could not lock all devices: ccd unreachable", "bad");
+      expect(developer.get().active).toBe(true);
+    });
   });
 
   it("Help lists the digit keys from the sidebar, and no section shows demo or sample data", async () => {

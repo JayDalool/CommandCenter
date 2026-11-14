@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { app } from "../../store/app";
 import type { AnswersResult, Question } from "../../api/types";
-import { unlockDialogOpen, useDevActive } from "../../components/DevMode";
+import { devOr, useDevActive } from "../../components/DevMode";
 import { useWork } from "../../tickets/useWork";
 import { usePageNav } from "./route";
 import { cx } from "./ui";
@@ -69,7 +69,7 @@ export function AnswerInPlace({ ticket, project, projectName }: { ticket: string
 
   const ready = open.filter((q) => answerOf(q, pick[q.id], text[q.id] ?? ""));
   const run = async (fn: () => Promise<void>) => {
-    if (!dev) { unlockDialogOpen(); return; }
+    if (!devOr(() => void run(fn))) return;
     setBusy(true);
     try { await fn(); } catch (e) { setSaid({ ok: false, text: (e as Error).message }); } finally { setBusy(false); }
   };

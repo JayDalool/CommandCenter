@@ -13,7 +13,7 @@ import { Store, useSelector } from "../lib/store";
 import { usePrefs } from "../lib/prefs";
 import type { WorkspaceProject } from "../api/types";
 import { initials, pjVar, stageOf, STAGE } from "../lib/control";
-import { unlockDialogOpen, useDevActive } from "../components/DevMode";
+import { devOr } from "../components/DevMode";
 import { TerminalView } from "./Terminal";
 import { ClaudeDock } from "./ClaudeDock";
 import { StagePill } from "./Dossier";
@@ -55,13 +55,12 @@ function useTaskSession(key: string | null) {
 /** Claude for a Task Room: attach to the task session, or say plainly that none is running. */
 function TaskClaude({ room, proj, active }: { room: RoomT; proj: WorkspaceProject; active: boolean }) {
   const theme = useTheme();
-  const dev = useDevActive();
   const s = useTaskSession(room.key);
   const [asked, setAsked] = useState(false);
   if (!s || !s.paneId) {
     const coord = proj.coordinator;
     const ask = async () => {
-      if (!dev) { unlockDialogOpen(); return; }
+      if (!devOr(() => void ask())) return;
       if (!coord?.id) { app.toast(`${proj.name} has no coordinator running`, "bad"); return; }
       const ok = await app.action(() => app.api.prompt(coord.id!, `Start the Claude task session for ${room.key} (a herdr pane named ` +
         `${room.key!.toLowerCase()}, so Command Center can attach to it) and continue the ticket from its recorded work state ` +

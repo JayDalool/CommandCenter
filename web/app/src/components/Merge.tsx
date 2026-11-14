@@ -8,7 +8,7 @@ import { useSelector } from "../lib/store";
 import { byProjectOrder, initials, pjVar, taskHref } from "../lib/control";
 import type { MergeReady } from "../api/types";
 import { Dialog } from "./Dialog";
-import { unlockDialogOpen, useDevActive } from "./DevMode";
+import { devOr, useDevActive } from "./DevMode";
 
 type Result = { ok: boolean; text: string };
 
@@ -37,7 +37,7 @@ export function MergeDialog({ onClose }: { onClose: () => void }) {
   const count = (keys: string[]) => keys.reduce((n, k) => n + (data?.projects[k]?.ready.length ?? 0), 0);
 
   const run = async (keys: string[]) => {
-    if (!dev) { unlockDialogOpen(); return; }
+    if (!devOr(() => void run(keys))) return;
     setConfirm(null);
     for (const k of keys) {
       setBusy(k);

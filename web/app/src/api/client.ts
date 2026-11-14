@@ -1,10 +1,10 @@
 import { getToken } from "./auth";
-import { devExpired, devSession } from "./developer";
+import { askReenter, devExpired, devSession } from "./developer";
 import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
   Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, InboxState, WorkersState, WorkerNode, AuditState, ActorsState, ActorToken, UsageState, BudgetsState, NotifyState, NotifySettings,
   ChatOverview, ChatMessage, ChatLead, ChatSendResult, ChatStartResult, ChatFile,
-  Briefing, MilestoneResult, MilestoneState, MilestoneTrack, MilestonesView, ProjectLogo } from "./types";
+  Briefing, MilestoneResult, MilestoneState, MilestoneTrack, MilestonesView, ProjectLogo, DevDevice } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -12,11 +12,14 @@ export class ApiError extends Error {
 
 export type Fetch = typeof fetch;
 
+/** ccd's 403 for a remembered device whose token is more than 8 h old: `{error, reenter: true}`. */
+const reenter = (data: unknown) => !!data && typeof data === "object" && (data as { reenter?: unknown }).reenter === true;
+
 /** The one place the UI talks HTTP to ccd. Same origin; the token goes in a header. */
 export class Api {
   constructor(private fetchImpl: Fetch = (...a) => fetch(...a), private base = "") {}
 
-  private async req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async req<T>(method: string, path: string, body?: unknown, again = false): Promise<T> {
     const headers: Record<string, string> = {};
     const token = getToken();
     if (token) headers["X-CCD-Token"] = token;
@@ -37,6 +40,9 @@ export class Api {
     if (!res.ok) {
       if (res.status === 403 && data && typeof data === "object" && "error" in data &&
         String((data as { error: unknown }).error).startsWith("Developer Unlock")) devExpired();
+      // A remembered device, more than 8 h after the token was typed: ccd wants it again before this write. Ask once,
+      // then send the same request again, so the save Jay asked for still happens.
+      if (res.status === 403 && !again && reenter(data) && await askReenter()) return this.req<T>(method, path, body, true);
       if (res.status === 409 && data && typeof data === "object") {
         throw Object.assign(new ApiError(409, String((data as { error?: unknown }).error ?? "conflict")), { data });
       }
@@ -213,11 +219,23 @@ export class Api {
     return this.req<{ attachments: Attachment[] }>("GET", `/api/attachments?${new URLSearchParams({ owner, key })}`);
   }
   removeAttachment(id: string) { return this.req<{ ok: true }>("DELETE", `/api/attachments/${encodeURIComponent(id)}`, {}); }
-  developerStatus() { return this.req<{ active: boolean; expiresIn: number | null; tokenFile?: string | null }>("GET", "/api/developer"); }
-  unlock(token: string) {
-    return this.req<{ ok: true; session: string; expiresIn: number }>("POST", "/api/developer/unlock", { token });
+  /** `remembered` and `reenterIn` come from a ccd that can remember a device; an older one leaves them out. */
+  developerStatus() {
+    return this.req<{ active: boolean; expiresIn: number | null; tokenFile?: string | null; remembered?: boolean; reenterIn?: number | null }>(
+      "GET", "/api/developer");
+  }
+  /** `remember`: keep this device unlocked for 30 days. `reprove`: the token typed again on a remembered device.
+   *  ccd then only re-proves the remembered session this request carries (same id back); it never creates a session
+   *  or changes its kind, and answers 409 `{ended: true}` when that session is gone or is not a remembered one. */
+  unlock(token: string, remember = false, reprove = false) {
+    return this.req<{ ok: true; session: string; expiresIn: number; remembered?: boolean }>("POST", "/api/developer/unlock",
+      reprove ? { token, reprove: true } : remember ? { token, remember: true } : { token });
   }
   lock() { return this.req<{ ok: true }>("POST", "/api/developer/lock", {}); }
+  /** Lock all devices (Developer Unlock): every Developer session on every device ends, this one included. */
+  lockAll() { return this.req<{ ok: true; ended: number }>("POST", "/api/developer/lock-all", {}); }
+  /** The devices holding a Developer session (Developer Unlock). Never a session id. */
+  devices() { return this.req<{ devices: DevDevice[] }>("GET", "/api/developer/devices"); }
   launcher() { return this.req<LauncherInfo>("GET", "/api/desktop/launcher"); }
 
   // ---------- explorer operations (Developer Mode) ----------
@@ -378,7 +396,7 @@ export class Api {
 }
 
 /** A raw-bytes upload with progress (fetch has no upload progress). */
-export function uploadBytes(path: string, file: Blob, onProgress: (fraction: number) => void): Promise<UploadResult & Attachment> {
+export function uploadBytes(path: string, file: Blob, onProgress: (fraction: number) => void, again = false): Promise<UploadResult & Attachment> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", path);
@@ -394,7 +412,13 @@ export function uploadBytes(path: string, file: Blob, onProgress: (fraction: num
       try { data = JSON.parse(xhr.responseText); } catch { /* empty */ }
       if (xhr.status >= 200 && xhr.status < 300) return resolve(data as unknown as UploadResult & Attachment);
       if (xhr.status === 403 && String(data.error ?? "").startsWith("Developer Unlock")) devExpired();
-      reject(Object.assign(new ApiError(xhr.status, String(data.error ?? `HTTP ${xhr.status}`)), { data }));
+      const fail = () => reject(Object.assign(new ApiError(xhr.status, String(data.error ?? `HTTP ${xhr.status}`)), { data }));
+      // as Api.req: the token is asked for again, then the same upload is sent once more
+      if (xhr.status === 403 && !again && reenter(data)) {
+        void askReenter().then((ok) => { if (ok) uploadBytes(path, file, onProgress, true).then(resolve, reject); else fail(); });
+        return;
+      }
+      fail();
     };
     xhr.send(file);
   });

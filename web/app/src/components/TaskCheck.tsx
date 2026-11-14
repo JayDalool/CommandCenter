@@ -8,7 +8,7 @@ import { useSelector } from "../lib/store";
 import { byProjectOrder, initials, isActive, pjVar } from "../lib/control";
 import { Dialog } from "./Dialog";
 import { useNightShift } from "./NightShift";
-import { unlockDialogOpen, useDevActive } from "./DevMode";
+import { devOr, unlockDialogOpen, useDevActive } from "./DevMode";
 
 type Result = { ok: boolean; text: string };
 /** check: the task check. night: night shift — each coordinator works its open tasks until morning, never deploys. */
@@ -59,7 +59,7 @@ export function TaskCheckDialog({ onClose, mode = "check" }: { onClose: () => vo
   };
 
   const run = async (keys: string[]) => {
-    if (!dev) { unlockDialogOpen(); return; }
+    if (!devOr(() => void run(keys))) return;
     for (const k of keys) {
       setBusy(k);
       try {

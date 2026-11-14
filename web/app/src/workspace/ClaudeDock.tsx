@@ -7,7 +7,7 @@
 import { useState } from "react";
 import { app } from "../store/app";
 import type { Agent, Coordinator, WorkspaceProject } from "../api/types";
-import { unlockDialogOpen, useDevActive } from "../components/DevMode";
+import { devOr } from "../components/DevMode";
 import { TerminalView } from "./Terminal";
 import { nativeUri } from "./Native";
 import { workspace } from "./transport";
@@ -16,14 +16,13 @@ export function ClaudeDock({ proj, coord, agent, model, active, theme }: {
   proj: WorkspaceProject; coord: Coordinator | null; agent: Agent | null; model: string | null;
   active: boolean; theme: "dark" | "light";
 }) {
-  const dev = useDevActive();
   const [busy, setBusy] = useState(false);
   // An older ccd without `state` behaves as before: a pane id means ready.
   const state = coord?.state ?? (coord?.paneId ? "ready" : "none");
   const candidates = coord?.candidates ?? [];
 
   const adopt = async (sessionId: string) => {
-    if (!dev) { unlockDialogOpen(); return; }
+    if (!devOr(() => void adopt(sessionId))) return;
     setBusy(true);
     // On success the button stays disabled: the next snapshot turns this tab into the terminal.
     const ok = await app.action(() => app.api.adoptCoordinator(proj.key, sessionId), `${proj.name}: coordinator adopted`);

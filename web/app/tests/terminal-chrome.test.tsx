@@ -24,6 +24,7 @@ import { TerminalView } from "../src/workspace/Terminal";
 import { setToken } from "../src/api/auth";
 import { developer, setDevSession } from "../src/api/developer";
 import { app } from "../src/store/app";
+import { unlockDialogGone } from "../src/components/DevMode";
 
 type Sock = { onmessage: ((e: { data: unknown }) => void) | null; onclose: ((e: { code: number; reason?: string }) => void) | null; readyState: number };
 const socks: Sock[] = [];
@@ -133,4 +134,67 @@ it("Close session asks in the app's dialog (with the caller's wording); Cancel k
   await waitFor(() => expect(screen.getByText("SESSION ENDED")).toBeInTheDocument());
   expect(native).not.toHaveBeenCalled();
   vi.restoreAllMocks();
+});
+
+// A remembered device, more than 8 hours after the token was typed: ccd closes the terminal with 4412.
+describe("the token is needed again (4412)", () => {
+  const closeStale = async () => {
+    setDevSession("s".repeat(43), 20 * 86400, true);
+    render(<TerminalView name="server" label="Server" active theme="dark" />);
+    await waitFor(() => expect(socks.length).toBe(1));
+    hello();
+    act(() => socks[0].onclose!({ code: 4412 }));
+  };
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("stays unlocked and offers one button, not Reconnect, Retry or Unlock", async () => {
+    await closeStale();
+    expect(developer.get()).toMatchObject({ active: true, remembered: true });
+    expect(screen.getByText("TOKEN NEEDED AGAIN")).toBeInTheDocument();
+    expect(screen.getByText(/more than 8 hours since the developer token was typed/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Type the token again" })).toBeInTheDocument();
+    for (const n of ["Reconnect", "Retry", "Unlock"]) expect(screen.queryByRole("button", { name: n })).toBeNull();
+    expect(screen.queryByText("DEVELOPER LOCKED")).toBeNull();
+    expect(socks.length).toBe(1);                  // it does not retry by itself
+  });
+
+  it("asks for the token, then reconnects; cancelled, it stays as it is", async () => {
+    vi.spyOn(app.api, "developerStatus").mockResolvedValue({ active: true, expiresIn: 1000, remembered: true, reenterIn: 0 });
+    const asked: Event[] = [];
+    const on = (e: Event) => asked.push(e);
+    window.addEventListener("cc:dev-unlock", on);
+    try {
+      await closeStale();
+      fireEvent.click(screen.getByRole("button", { name: "Type the token again" }));
+      await waitFor(() => expect(asked).toHaveLength(1));
+      act(() => unlockDialogGone());               // cancelled
+      await act(async () => {});
+      expect(socks.length).toBe(1);
+      expect(screen.getByRole("button", { name: "Type the token again" })).toBeInTheDocument();
+    } finally { window.removeEventListener("cc:dev-unlock", on); }
+  });
+
+  it("only reconnects when the token was typed again somewhere else meanwhile", async () => {
+    vi.spyOn(app.api, "developerStatus").mockResolvedValue({ active: true, expiresIn: 1000, remembered: true, reenterIn: 7 * 3600 });
+    const asked = vi.fn();
+    window.addEventListener("cc:dev-unlock", asked);
+    try {
+      await closeStale();
+      fireEvent.click(screen.getByRole("button", { name: "Type the token again" }));
+      await waitFor(() => expect(socks.length).toBe(2));
+      hello();
+      expect(screen.getByRole("status", { name: "live" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Type the token again" })).toBeNull();
+      expect(asked).not.toHaveBeenCalled();
+    } finally { window.removeEventListener("cc:dev-unlock", asked); }
+  });
+
+  it("Lock, then a fresh unlock, connects again without the notice", async () => {
+    await closeStale();
+    act(() => setDevSession(null));
+    expect(screen.getByText("DEVELOPER LOCKED")).toBeInTheDocument();
+    act(() => setDevSession("n".repeat(43), 3600));
+    await waitFor(() => expect(socks.length).toBe(2));
+    expect(screen.queryByRole("button", { name: "Type the token again" })).toBeNull();
+  });
 });

@@ -8,7 +8,7 @@ import { useSelector } from "../lib/store";
 import { byProjectOrder, initials, pjVar, taskHref } from "../lib/control";
 import type { UiRun, UiTestsState } from "../api/types";
 import { Dialog } from "./Dialog";
-import { unlockDialogOpen, useDevActive } from "./DevMode";
+import { devOr, useDevActive } from "./DevMode";
 
 const when = (run: string) => { const [y, m, d, hm] = run.split("-"); return `${y}-${m}-${d} ${hm.slice(0, 2)}:${hm.slice(2)}`; };
 const counts = (r: UiRun) => {
@@ -38,7 +38,7 @@ export function UiTestsDialog({ onClose }: { onClose: () => void }) {
   const rows = byProjectOrder(taskProjects).filter((p) => st?.projects[p.key]);
 
   const start = async (k: string) => {
-    if (!dev) { unlockDialogOpen(); return; }
+    if (!devOr(() => void start(k))) return;
     setBusy(k);
     try { const r = await app.api.uiTest(k); setSent((m) => ({ ...m, [k]: `${r.coordinator} is testing` })); }
     catch (e) { setSent((m) => ({ ...m, [k]: (e as Error).message })); }
@@ -80,11 +80,10 @@ export function UiTestsDialog({ onClose }: { onClose: () => void }) {
 function UiReport({ project, name, run, onBack, onClose, onChanged }: {
   project: string; name: string; run: UiRun; onBack: () => void; onClose: () => void; onChanged: () => void;
 }) {
-  const dev = useDevActive();
   const [busy, setBusy] = useState<string | null>(null);
   const [findings, setFindings] = useState(run.findings);
   const decide = async (id: string, decision: "fix" | "skip") => {
-    if (!dev) { unlockDialogOpen(); return; }
+    if (!devOr(() => void decide(id, decision))) return;
     setBusy(id);
     try {
       const r = await app.api.uiDecide(project, run.run, id, decision);

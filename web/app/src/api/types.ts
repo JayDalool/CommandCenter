@@ -680,3 +680,9 @@ export interface BriefingProject extends BriefingCounts {
 export interface Briefing { since: number; until: number; totals: BriefingCounts; projects: BriefingProject[]; quiet: boolean }
 /** A project's logo as ccd lists it (GET /api/projects/logos). The bytes are fetched apart and shown from a blob:. */
 export interface ProjectLogo { mime: string; sha256: string; updatedAt: number }
+/** A device holding a Developer session (GET /api/developer/devices), in epoch seconds. ccd never sends the session
+ *  id: `id` only names the row. `kind`: typed token, SSH sign-in, or a remembered device. */
+export interface DevDevice {
+  id: string; label: string; kind: "plain" | "ssh" | "remember"; remembered: boolean;
+  createdAt: number; lastUsedAt: number; expiresAt: number; current: boolean;
+}
