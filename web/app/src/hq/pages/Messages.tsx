@@ -213,8 +213,9 @@ function LeadBanner({ conv, canStart, onDone }: { conv: ChatConversation; canSta
   const name = conv.kind === "cto" ? "The CTO" : `The ${conv.name} lead`;
   const room = conv.kind === "project" ? href("workspace", null, { console: conv.id, open: "1" }) : href("workspace");
   if (l.running && l.status === "blocked" && !l.paused) {
-    return <p className="hq-chat-banner">{name} is waiting for you in its pane. Once you answer it there, it is told about
-      your messages.</p>;
+    return <p className="hq-chat-banner">{name} is waiting for you in its pane. Answer it there
+      {conv.kind === "project" && <> (<a className="hq-link" href={room}>open it in Workspace</a>)</>}; it is told about your
+      messages when it is free.</p>;
   }
   if (l.running || l.state === "unknown") return null;
   if (l.paused) return <p className="hq-chat-banner">{conv.name} is paused. Messages wait until you resume it.</p>;
@@ -234,8 +235,10 @@ function LeadBanner({ conv, canStart, onDone }: { conv: ChatConversation; canSta
     <span>{name} is not running. {conv.waiting > 0 ? `${plural(conv.waiting, "message")} wait${conv.waiting === 1 ? "s" : ""} for it.` : "Messages wait for it."}</span>
     {canStart ? <button type="button" className="hq-btn is-primary" disabled={busy} onClick={() => start(false)}>{busy ? "Starting…" : "Start it"}</button>
       : <span className="hq-note">{conv.kind === "project"
-        ? <>To start it, open a herdr pane in its folder and run <code>claude -n {l.name}</code>.</>
-        : "Open a herdr pane for it to start it."} Starting leads from Messages is switched off.</span>}
+        ? <>To start it, open a herdr pane in its project folder (not a worktree) and run <code>claude -n {l.name}</code>. </>
+        // ccd finds the CTO only by herdr's agent name (leadchat.chat_lead), not by a title or an adoption.
+        : <>ccd finds the CTO only when herdr starts it as the agent <code>cto</code>. </>}
+        Starting leads from Messages is switched off.</span>}
     {over && <div className="hq-chat-over" role="alertdialog" aria-label="Over budget">
       <p><b>Starting it would go over budget.</b> {over.map((o) => `${o.scope === "company" ? "Company" : o.key} ${o.period}: ${o.pct ?? "?"}% of $${o.limitUsd ?? "?"}`).join("; ")}.</p>
       <div><button type="button" className="hq-btn is-primary" disabled={busy} onClick={() => start(true)}>Start anyway</button>

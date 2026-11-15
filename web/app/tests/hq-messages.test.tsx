@@ -211,8 +211,10 @@ describe("Messages", () => {
       vi.spyOn(app.api, "chatHistory").mockResolvedValue({ conversation: "mfe", messages: [], lead: ALL.conversations[3].lead });
       load();
       let c = await show("#/messages?c=mfe");
-      expect(within(c).getByRole("region", { name: "Conversation with the MFE lead" }))
-        .toHaveTextContent("The MFE lead is waiting for you in its pane. Once you answer it there, it is told about your messages.");
+      const mfe = within(c).getByRole("region", { name: "Conversation with the MFE lead" });
+      expect(mfe).toHaveTextContent(
+        "The MFE lead is waiting for you in its pane. Answer it there (open it in Workspace); it is told about your messages when it is free.");
+      expect(within(mfe).getByRole("link", { name: "open it in Workspace" })).toHaveAttribute("href", expect.stringMatching(/^#\/workspace\?.*console=mfe/));
       cleanup();
 
       const off = { ...ALL, conversations: ALL.conversations.map((x) => x.id === "gyst"
@@ -220,8 +222,17 @@ describe("Messages", () => {
       vi.spyOn(app.api, "chat").mockResolvedValue(off);
       c = await show("#/messages?c=gyst");
       const thread = within(c).getByRole("region", { name: "Conversation with the GYST lead" });
-      expect(thread).toHaveTextContent("To start it, open a herdr pane in its folder and run claude -n gyst. Starting leads from Messages is switched off.");
+      expect(thread).toHaveTextContent(
+        "To start it, open a herdr pane in its project folder (not a worktree) and run claude -n gyst. Starting leads from Messages is switched off.");
       expect(within(thread).queryByRole("button", { name: "Start it" })).toBeNull();
+      cleanup();
+
+      // The CTO has no title or adoption path: only herdr's agent name finds it, so no command that would not work.
+      vi.spyOn(app.api, "chatHistory").mockResolvedValue({ conversation: "cto", messages: [], lead: ALL.conversations[0].lead });
+      c = await show("#/messages?c=cto");
+      const cto = within(c).getByRole("region", { name: "Conversation with the CTO" });
+      expect(cto).toHaveTextContent("ccd finds the CTO only when herdr starts it as the agent cto. Starting leads from Messages is switched off.");
+      expect(cto).not.toHaveTextContent("claude -n");
     });
 
     it("when herdr does not answer, it says so instead of calling every lead not running", async () => {
