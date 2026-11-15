@@ -8,7 +8,7 @@ import { app, initial } from "../src/store/app";
 import { prefs } from "../src/lib/prefs";
 import { loadHqFrame } from "../src/components/Shell";
 import type { ChatConversation, ChatMessage, ChatOverview } from "../src/api/types";
-import { dayLabel } from "../src/hq/pages/Messages";
+import { _test, dayLabel } from "../src/hq/pages/Messages";
 import { castLeads, leadKeys } from "../src/hq/persona/assign";
 import { state, tasks } from "./helpers";
 
@@ -148,6 +148,103 @@ describe("Messages", () => {
     await act(async () => { fireEvent.click(within(ask).getByRole("button", { name: "Start anyway" })); });
     expect(start.mock.calls).toEqual([["cto", false], ["cto", true]]);
     expect(thread.querySelector(".hq-chat-notice")).toHaveTextContent("The CTO is starting");
+  });
+
+  describe("who can answer now (Jay, 2026-11-15: ready, replying, or needs a pane)", () => {
+    const ALL: ChatOverview = { ...OVERVIEW, canStart: false, conversations: [
+      conv({ id: "cto", name: "CTO", kind: "cto", lead: lead({ name: "cto", state: "none", status: null, running: false, idle: false }) }),
+      conv({ unread: 2 }),
+      conv({ id: "gyst", name: "GYST", lead: lead({ name: "gyst", status: "working", idle: false }) }),
+      conv({ id: "mfe", name: "MFE", lead: lead({ name: "mfe", status: "blocked", idle: false }) }),
+      conv({ id: "commandcenter", name: "CommandCenter", lead: lead({ name: "command-center", state: "found", status: null, running: false, idle: false }) }),
+      conv({ id: "gauzemate", name: "GauzeMate", lead: lead({ name: "gauzemate", paused: true }) }),
+    ] };
+    const names = (c: HTMLElement) => within(within(c).getByRole("navigation", { name: "Conversations" })).getAllByRole("button")
+      .map((r) => r.querySelector("b")!.textContent);
+
+    it("sorts each lead into ready, working, needs a pane or paused", () => {
+      const g = (o: Partial<ChatConversation["lead"]>) => _test.leadGroup(lead(o));
+      expect(g({})).toBe("ready");
+      expect(g({ status: "done" })).toBe("ready");
+      expect(g({ status: "working", idle: false })).toBe("working");
+      expect(g({ status: "blocked", idle: false })).toBe("pane");      // waiting for Jay in its pane
+      expect(g({ state: "none", status: null, running: false, idle: false })).toBe("pane");
+      expect(g({ state: "found", status: null, running: false, idle: false })).toBe("pane");
+      expect(g({ state: "multiple", status: null, running: false, idle: false })).toBe("pane");
+      expect(g({ paused: true })).toBe("paused");
+      expect(g({ state: "none", running: false, idle: false, paused: true })).toBe("paused");
+      expect(g({ state: "unknown", status: null, running: false, idle: false })).toBe("unknown");
+    });
+
+    it("counts them above the list, and a count shows only those conversations", async () => {
+      vi.spyOn(app.api, "chat").mockResolvedValue(ALL);
+      load();
+      const c = await show("#/messages");
+      const sum = within(c).getByRole("group", { name: "Show conversations by who can answer now" });
+      expect(within(sum).getAllByRole("button").map((b) => b.textContent)).toEqual(["Ready 1", "Working 1", "Needs a pane 3", "Paused 1"]);
+      expect(names(c)).toEqual(["CTO", "SamVision lead", "GYST lead", "MFE lead", "CommandCenter lead", "GauzeMate lead"]);
+
+      const pane = within(sum).getByRole("button", { name: /Needs a pane/ });
+      await act(async () => { fireEvent.click(pane); });
+      expect(pane).toHaveAttribute("aria-pressed", "true");
+      expect(names(c)).toEqual(["CTO", "MFE lead", "CommandCenter lead"]);
+      expect(c.querySelector(".hq-chat-sum")).toHaveTextContent("Not running, not identified as the lead, or waiting for you in its pane.");
+
+      await act(async () => { fireEvent.click(within(sum).getByRole("button", { name: /Ready/ })); });
+      expect(names(c)).toEqual(["SamVision lead"]);
+      await act(async () => { fireEvent.click(within(sum).getByRole("button", { name: /Ready/ })); });
+      expect(names(c)).toHaveLength(6);
+    });
+
+    it("every row says its status, an unread one too", async () => {
+      vi.spyOn(app.api, "chat").mockResolvedValue(ALL);
+      load();
+      const c = await show("#/messages");
+      const rows = within(within(c).getByRole("navigation", { name: "Conversations" })).getAllByRole("button");
+      expect(rows.map((r) => r.querySelector(".hq-pill")!.textContent))
+        .toEqual(["Not running", "Ready", "Working", "Waiting on you", "Not identified", "Paused"]);
+      expect(within(rows[1]).getByLabelText("2 unread")).toBeInTheDocument();
+    });
+
+    it("the open conversation says what to do: answer it in its pane, or open a pane and run claude -n", async () => {
+      vi.spyOn(app.api, "chat").mockResolvedValue(ALL);
+      vi.spyOn(app.api, "chatHistory").mockResolvedValue({ conversation: "mfe", messages: [], lead: ALL.conversations[3].lead });
+      load();
+      let c = await show("#/messages?c=mfe");
+      const mfe = within(c).getByRole("region", { name: "Conversation with the MFE lead" });
+      expect(mfe).toHaveTextContent(
+        "The MFE lead is waiting for you in its pane. Answer it there (open it in Workspace); it is told about your messages when it is free.");
+      expect(within(mfe).getByRole("link", { name: "open it in Workspace" })).toHaveAttribute("href", expect.stringMatching(/^#\/workspace\?.*console=mfe/));
+      cleanup();
+
+      const off = { ...ALL, conversations: ALL.conversations.map((x) => x.id === "gyst"
+        ? conv({ id: "gyst", name: "GYST", lead: lead({ name: "gyst", state: "none", status: null, running: false, idle: false }) }) : x) };
+      vi.spyOn(app.api, "chat").mockResolvedValue(off);
+      c = await show("#/messages?c=gyst");
+      const thread = within(c).getByRole("region", { name: "Conversation with the GYST lead" });
+      expect(thread).toHaveTextContent(
+        "To start it, open a herdr pane in its project folder (not a worktree) and run claude -n gyst. Starting leads from Messages is switched off.");
+      expect(within(thread).queryByRole("button", { name: "Start it" })).toBeNull();
+      cleanup();
+
+      // The CTO has no title or adoption path: only herdr's agent name finds it, so no command that would not work.
+      vi.spyOn(app.api, "chatHistory").mockResolvedValue({ conversation: "cto", messages: [], lead: ALL.conversations[0].lead });
+      c = await show("#/messages?c=cto");
+      const cto = within(c).getByRole("region", { name: "Conversation with the CTO" });
+      expect(cto).toHaveTextContent("ccd finds the CTO only when herdr starts it as the agent cto. Starting leads from Messages is switched off.");
+      expect(cto).not.toHaveTextContent("claude -n");
+    });
+
+    it("when herdr does not answer, it says so instead of calling every lead not running", async () => {
+      const blind = { ...ALL, conversations: ALL.conversations.slice(0, 2).map((x) =>
+        ({ ...x, lead: lead({ name: x.lead.name, state: "unknown", status: null, running: false, idle: false }) })) };
+      vi.spyOn(app.api, "chat").mockResolvedValue(blind);
+      load();
+      const c = await show("#/messages");
+      expect(c.querySelector(".hq-chat-sum")).toHaveTextContent("herdr is not answering, so ccd cannot see which leads are running.");
+      const rows = within(within(c).getByRole("navigation", { name: "Conversations" })).getAllByRole("button");
+      expect(rows.map((r) => r.querySelector(".hq-pill")!.textContent)).toEqual(["Unknown", "Unknown"]);
+    });
   });
 
   it("says when Messages is not set up on the server", async () => {

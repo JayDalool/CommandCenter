@@ -8,11 +8,17 @@
   background: var(--hq-panel); overflow: hidden;
 }
 
-/* the list */
-:root[data-ui="hq"] .hq-chat-list {
-  display: flex; flex-direction: column; gap: 2px; padding: 8px; overflow-y: auto; border-right: 1px solid var(--hq-line);
+/* the list, and who can answer now above it */
+:root[data-ui="hq"] .hq-chat-side {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--hq-line);
   background: var(--hq-panel-2);
 }
+:root[data-ui="hq"] .hq-chat-sum { display: grid; gap: 6px; padding: 10px 10px 4px; }
+:root[data-ui="hq"] .hq-chat-sum .hq-seg button { display: inline-flex; align-items: center; gap: 6px; }
+:root[data-ui="hq"] .hq-chat-sum .hq-seg i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+:root[data-ui="hq"] .hq-chat-sum .hq-seg b { color: var(--hq-text-strong); font-weight: 600; }
+:root[data-ui="hq"] .hq-chat-sum .hq-note { margin: 0; font-size: var(--hq-fs-xs); }
+:root[data-ui="hq"] .hq-chat-list { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 8px; overflow-y: auto; }
 :root[data-ui="hq"] .hq-chat-row {
   display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%;
   padding: 9px 10px; border: 1px solid transparent; border-radius: var(--hq-r-md); background: none; color: var(--hq-text);
@@ -31,6 +37,7 @@
 :root[data-ui="hq"] .hq-chat-row-top b { font-weight: 600; }
 :root[data-ui="hq"] .hq-chat-row-top time { color: var(--hq-faint); font-size: var(--hq-fs-xs); white-space: nowrap; }
 :root[data-ui="hq"] .hq-chat-row-sub { color: var(--hq-muted); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-chat-row-end { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 :root[data-ui="hq"] .hq-chat-row-end .hq-pill { font-size: var(--hq-fs-xs); }
 
 /* the thread */
@@ -133,8 +140,8 @@
   :root[data-ui="hq"] .hq-messages.has-thread .hq-hero { display: none; }
   :root[data-ui="hq"] .hq-messages.has-thread .hq-chat { height: calc(100dvh - 190px); }
   :root[data-ui="hq"] .hq-chat-box .hq-btn.is-primary { padding: 0 12px; }
-  :root[data-ui="hq"] .hq-chat-list { border-right: 0; }
-  :root[data-ui="hq"] .hq-messages.has-thread .hq-chat-list { display: none; }
+  :root[data-ui="hq"] .hq-chat-side { border-right: 0; }
+  :root[data-ui="hq"] .hq-messages.has-thread .hq-chat-side { display: none; }
   :root[data-ui="hq"] .hq-messages:not(.has-thread) .hq-chat-thread { display: none; }
   :root[data-ui="hq"] .hq-chat-back { display: inline-grid; place-items: center; }
   :root[data-ui="hq"] .hq-msg { max-width: 92%; }
