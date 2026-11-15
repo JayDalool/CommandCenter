@@ -60,7 +60,8 @@
 :root[data-ui="hq"] .hq-shell.is-icons .hq-brand-t,
 :root[data-ui="hq"] .hq-shell.is-icons .hq-nav-label { display: none; }
 :root[data-ui="hq"] .hq-shell.is-icons .hq-nav-item { position: relative; justify-content: center; padding: 10px 0; }
-:root[data-ui="hq"] .hq-shell.is-icons .hq-badge { position: absolute; top: 2px; right: 4px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; }
+/* Only the rail's own counts sit on the corner of their icon; a count inside a page (Messages' unread) stays where it is. */
+:root[data-ui="hq"] .hq-shell.is-icons .hq-nav-item .hq-badge { position: absolute; top: 2px; right: 4px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; }
 :root[data-ui="hq"] .hq-shell.is-icons .hq-side-foot { justify-content: center; }
 :root[data-ui="hq"] .hq-shell.is-icons .hq-side .hq-tag { justify-content: center; margin: 4px 0 0; padding: 6px 0; border: 0; }
 

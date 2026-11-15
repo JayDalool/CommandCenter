@@ -3,6 +3,8 @@
 // typed into a terminal. Files: images, PDF and Markdown. The server sends every file as a download; an image is shown
 // by fetching its bytes and making a blob of the type the server read from them. A lead that is not running waits;
 // Start asks the server, which checks the budgets first and says when starting would go over.
+// Above the list, who can answer now: Ready (its session is open and idle), Working (busy, reads a message when free),
+// Needs a pane (no session ccd can reach, or one waiting for Jay in its pane). Each is a filter for the list.
 import { Fragment, useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import "./office.css";
 import "./governance.css";
@@ -35,9 +37,41 @@ function useChatPulse() {
 
 function leadPill(l: ChatLead): [string, string] {
   if (l.paused) return ["Paused", "idle"];
+  if (l.state === "unknown") return ["Unknown", "idle"];
   if (!l.running) return l.state === "found" || l.state === "multiple" ? ["Not identified", "warn"] : ["Not running", "idle"];
   if (l.status === "blocked") return ["Waiting on you", "jay"];
   return l.idle ? ["Ready", "ok"] : ["Working", "info"];
+}
+
+/** Who can answer now. A lead waiting for Jay in its pane needs the pane as much as one that has none. */
+export type LeadGroup = "ready" | "working" | "pane" | "paused" | "unknown";
+export function leadGroup(l: ChatLead): LeadGroup {
+  if (l.paused) return "paused";
+  if (l.state === "unknown") return "unknown";
+  if (!l.running || l.status === "blocked") return "pane";
+  return l.idle ? "ready" : "working";
+}
+const GROUPS: { key: LeadGroup; label: string; tone: string; hint: string }[] = [
+  { key: "ready", label: "Ready", tone: "ok", hint: "Its session is open and idle, so it reads a message right away." },
+  { key: "working", label: "Working", tone: "info", hint: "Its session is busy. It reads a message when it is free." },
+  { key: "pane", label: "Needs a pane", tone: "jay", hint: "Not running, not identified as the lead, or waiting for you in its pane." },
+  { key: "paused", label: "Paused", tone: "idle", hint: "Its project is paused. Messages wait until you resume it." },
+];
+
+/** The counts above the list, in the words Jay uses; pressing one shows only those conversations. */
+function LeadSummary({ convs, show, onShow }: { convs: ChatConversation[]; show: LeadGroup | null; onShow: (g: LeadGroup | null) => void }) {
+  const count = (g: LeadGroup) => convs.filter((c) => leadGroup(c.lead) === g).length;
+  const on = GROUPS.find((g) => g.key === show);
+  return <div className="hq-chat-sum">
+    <div className="hq-seg" role="group" aria-label="Show conversations by who can answer now">
+      {GROUPS.filter((g) => g.key !== "paused" || count("paused") > 0).map((g) =>
+        <button type="button" key={g.key} aria-pressed={show === g.key} title={g.hint} onClick={() => onShow(show === g.key ? null : g.key)}>
+          <i className={`t-${g.tone}`} aria-hidden />{g.label} <b>{count(g.key)}</b></button>)}
+    </div>
+    {on && <p className="hq-note">{on.hint}</p>}
+    {convs.some((c) => c.lead.state === "unknown") &&
+      <p className="hq-note">herdr is not answering, so ccd cannot see which leads are running.</p>}
+  </div>;
 }
 
 function useOverview(pulse: number) {
@@ -60,16 +94,22 @@ export function Messages() {
   const sel = route.params.get("c");
   const current = convs.find((c) => c.id === sel) ?? null;
   const pick = (id: string | null) => go("messages", null, id ? { c: id } : {});
+  const [show, setShow] = useState<LeadGroup | null>(null);
+  const rows = show ? convs.filter((c) => leadGroup(c.lead) === show) : convs;
 
   return <div className={cx("hq-page hq-messages", current && "has-thread")}>
     <header className="hq-hero"><div><h2>Messages</h2>
       <p>Talk to the CTO and each project's lead.</p></div></header>
     {error && !data ? <section className="hq-panel"><p className="hq-note" role="alert">{error}</p></section>
       : <div className="hq-chat">
-        <nav className="hq-chat-list" aria-label="Conversations">
-          {!data && <p className="hq-empty">Loading…</p>}
-          {convs.map((c) => <ConvRow key={c.id} c={c} on={c.id === sel} onPick={() => pick(c.id)} />)}
-        </nav>
+        <div className="hq-chat-side">
+          {data && convs.length > 0 && <LeadSummary convs={convs} show={show} onShow={setShow} />}
+          <nav className="hq-chat-list" aria-label="Conversations">
+            {!data && <p className="hq-empty">Loading…</p>}
+            {data && rows.length === 0 && <p className="hq-empty">None right now.</p>}
+            {rows.map((c) => <ConvRow key={c.id} c={c} on={c.id === sel} onPick={() => pick(c.id)} />)}
+          </nav>
+        </div>
         {current ? <Thread key={current.id} conv={current} canStart={!!data?.canStart} pulse={pulse}
           limits={data!.limits} onBack={() => pick(null)} onChange={reload} />
           : <section className="hq-chat-thread is-empty" aria-label="Conversation">
@@ -103,8 +143,8 @@ function ConvRow({ c, on, onPick }: { c: ChatConversation; on: boolean; onPick: 
         : "No messages yet"}</span>
     </span>
     <span className="hq-chat-row-end">
-      {c.unread > 0 ? <span className="hq-badge is-jay" aria-label={`${c.unread} unread`}>{c.unread}</span>
-        : <Pill tone={tone}>{label}</Pill>}
+      {c.unread > 0 && <span className="hq-badge is-jay" aria-label={`${c.unread} unread`}>{c.unread}</span>}
+      <Pill tone={tone}>{label}</Pill>
     </span>
   </button>;
 }
@@ -170,12 +210,17 @@ function LeadBanner({ conv, canStart, onDone }: { conv: ChatConversation; canSta
   const [over, setOver] = useState<ChatOverBudget[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const l = conv.lead;
-  if (l.running || l.state === "unknown") return null;
   const name = conv.kind === "cto" ? "The CTO" : `The ${conv.name} lead`;
+  const room = conv.kind === "project" ? href("workspace", null, { console: conv.id, open: "1" }) : href("workspace");
+  if (l.running && l.status === "blocked" && !l.paused) {
+    return <p className="hq-chat-banner">{name} is waiting for you in its pane. Once you answer it there, it is told about
+      your messages.</p>;
+  }
+  if (l.running || l.state === "unknown") return null;
   if (l.paused) return <p className="hq-chat-banner">{conv.name} is paused. Messages wait until you resume it.</p>;
   if (l.state === "found" || l.state === "multiple") {
     return <p className="hq-chat-banner">A Claude is running in {conv.name}'s folder but is not set as its lead. Adopt it in
-      {" "}<a className="hq-link" href={href("workspace")}>Workspace</a>, and messages reach it.</p>;
+      {" "}<a className="hq-link" href={room}>Workspace</a>, and messages reach it.</p>;
   }
   const start = (ok = false) => {
     setBusy(true); setErr(null);
@@ -188,7 +233,9 @@ function LeadBanner({ conv, canStart, onDone }: { conv: ChatConversation; canSta
   return <div className="hq-chat-banner" role="note">
     <span>{name} is not running. {conv.waiting > 0 ? `${plural(conv.waiting, "message")} wait${conv.waiting === 1 ? "s" : ""} for it.` : "Messages wait for it."}</span>
     {canStart ? <button type="button" className="hq-btn is-primary" disabled={busy} onClick={() => start(false)}>{busy ? "Starting…" : "Start it"}</button>
-      : <span className="hq-note">Starting leads from here is switched off.</span>}
+      : <span className="hq-note">{conv.kind === "project"
+        ? <>To start it, open a herdr pane in its folder and run <code>claude -n {l.name}</code>.</>
+        : "Open a herdr pane for it to start it."} Starting leads from Messages is switched off.</span>}
     {over && <div className="hq-chat-over" role="alertdialog" aria-label="Over budget">
       <p><b>Starting it would go over budget.</b> {over.map((o) => `${o.scope === "company" ? "Company" : o.key} ${o.period}: ${o.pct ?? "?"}% of $${o.limitUsd ?? "?"}`).join("; ")}.</p>
       <div><button type="button" className="hq-btn is-primary" disabled={busy} onClick={() => start(true)}>Start anyway</button>
@@ -323,4 +370,4 @@ export function useChatUnread(): number {
   return useSelector(app.store, (d) => d.state?.chat?.unread ?? 0);
 }
 
-export const _test = { DELIVERY, leadPill };
+export const _test = { DELIVERY, leadPill, leadGroup };

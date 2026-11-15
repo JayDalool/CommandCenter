@@ -57,3 +57,34 @@ test("an open conversation: who it is with, a line per day, the lead's face besi
   }
   expect(await problems(page, watch)).toEqual([]);
 });
+
+test("who can answer now: the counts above the list fit a desktop and a phone, and a count filters the list", async ({ page, watch }) => {
+  const off = { state: "none", status: null, running: false, idle: false };
+  const at = (id: string, name: string, l: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+    ({ ...conv(id, name, id === "cto" ? "cto" : "project"), lead: { ...lead, name: id, ...l }, ...extra });
+  await page.route("**/api/chat", (r) => r.fulfill({ json: { canStart: false, unread: 2, limits: { text: 16000, fileBytes: 20971520, filesPerMessage: 10 },
+    conversations: [at("cto", "CTO", off), at("samvision", "SamVision", {}, { unread: 2 }), at("gyst", "GYST", { status: "working", idle: false }),
+      at("mfe", "MFE", { status: "blocked", idle: false }), at("commandcenter", "CommandCenter", off)] } }));
+
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await open(page, "messages");
+    const sum = page.getByRole("group", { name: "Show conversations by who can answer now" });
+    await expect(sum.getByRole("button")).toHaveText(["Ready 1", "Working 1", "Needs a pane 3"]);
+    const rows = page.getByRole("navigation", { name: "Conversations" }).getByRole("button");
+    await expect(rows).toHaveCount(5);
+    await expect(rows.locator(".hq-pill")).toHaveText(["Not running", "Ready", "Working", "Waiting on you", "Not running"]);
+    expect(await page.evaluate(wide)).toBe(true);
+    // The unread count stays in its row. With the sidebar as icons (up to 1440 wide) it used to jump to a corner.
+    const unread = await rows.nth(1).getByLabel("2 unread").boundingBox(), row = await rows.nth(1).boundingBox();
+    expect(unread!.y).toBeGreaterThanOrEqual(row!.y);
+    expect(unread!.y + unread!.height).toBeLessThanOrEqual(row!.y + row!.height);
+    expect(unread!.x + unread!.width).toBeLessThanOrEqual(row!.x + row!.width);
+
+    await sum.getByRole("button", { name: /Needs a pane/ }).click();
+    await expect(rows.locator("b")).toHaveText(["CTO", "MFE lead", "CommandCenter lead"]);
+    await sum.getByRole("button", { name: /Needs a pane/ }).click();
+    await expect(rows).toHaveCount(5);
+  }
+  expect(await problems(page, watch)).toEqual([]);
+});
