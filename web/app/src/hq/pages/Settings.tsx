@@ -35,7 +35,7 @@ import { canPickScreen, focusView, forgetPlaces, isPopView, listScreens, popOut,
 import { usePageNav } from "./route";
 import { Pill, cx, plural } from "./ui";
 import { ApiError } from "../../api/client";
-import type { DevDevice, NotifySettings, NotifyState } from "../../api/types";
+import type { DevDevice, NotifySettings, NotifyState, WorkModeProject, WorkModeState } from "../../api/types";
 
 // ---------- building blocks ----------
 
@@ -539,8 +539,80 @@ function ReleaseDay() {
   </Group>;
 }
 
+/** ccd's reason for sending a lead nothing, in Jay's words. An unknown one shows as ccd wrote it. */
+const WORK_WHY: Record<string, string> = {
+  "nothing can move without Jay": "Nothing can move without you.",
+  "lead working": "The lead is working.",
+  "lead waiting for Jay": "The lead is waiting for you in its pane.",
+  "no lead": "No lead is running. Once one is, it is reminded when idle.",
+  "lead idle": "The lead is idle. A reminder goes out after a few minutes.",
+  reminded: "The lead was reminded.",
+  "night shift running": "The night shift is running and reminds the lead itself.",
+  "budget on hold": "A budget is on hold, so nothing is sent.",
+  "project paused": "The project is paused, so nothing is sent.",
+  "input line not empty or not recognised": "Held back: there is text in the lead's input box, and ccd never types over it.",
+  "reminder failed": "The last reminder could not be sent.",
+};
+
+export function workHint(p: WorkModeProject, tz = "America/Winnipeg"): string {
+  if (!p.on) return p.paused ? "Off. The project is paused." : "Off. The lead works when someone messages it.";
+  const why = p.restUntil ? `Resting until ${cutText(p.restUntil, tz)}: no ticket moved after the last reminders.`
+    : !p.why ? "Waiting for the first check." : WORK_WHY[p.why] ?? `${p.why[0].toUpperCase()}${p.why.slice(1)}.`;
+  return [why, p.next.length ? `Next: ${p.next.join(", ")}.` : "",
+    p.remindersToday ? `${plural(p.remindersToday, "reminder")} today.` : ""].filter(Boolean).join(" ");
+}
+
+/** Work mode (ccd/workmode.py, GET and PUT /api/work-mode): per project, Jay's switch for ccd reminding the idle lead
+ *  of the tickets it can move without him. Every project starts off. Changing it is Jay's and needs Developer Unlock;
+ *  ccd checks both. An older ccd has no such route, and then the group is not shown. */
+function WorkModeSwitches() {
+  const active = useDevActive();
+  const configured = useSelector(app.store, (d) => d.state?.projectsConfig);
+  const tracked = useSelector(app.store, (d) => d.taskProjects);
+  // ccd logs every switch and reminder as action.work_mode: read again when one arrives.
+  const pulse = useSelector(app.store, (d) => d.activity.find((e) => e.kind === "action.work_mode")?.seq ?? 0);
+  const [st, setSt] = useState<{ state: "loading" | "ok" | "none" | "error"; data?: WorkModeState; error?: string }>({ state: "loading" });
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    app.api.workMode().then((data) => { if (live) setSt({ state: "ok", data }); })
+      .catch((e: unknown) => {
+        if (live) setSt((s) => s.data ? s : e instanceof ApiError && e.status === 404 ? { state: "none" }
+          : { state: "error", error: e instanceof Error ? e.message : String(e) });
+      });
+    return () => { live = false; };
+  }, [pulse]);
+  if (st.state === "none") return null;
+  if (!st.data) {
+    return <Group id="work-mode" title="Work mode">
+      <Row label={st.state === "error" ? `Could not read work mode: ${st.error}` : "Reading work mode…"} /></Group>;
+  }
+  /** Locked: the Unlock dialog opens and the same change goes out once Jay has unlocked, without a second press. */
+  const save = (key: string, on: boolean) => {
+    if (!devOr(() => save(key, on))) return;
+    setBusy(true); setNote(null);
+    app.api.setWorkMode(key, on).then((data) => setSt({ state: "ok", data }))
+      .catch((e: unknown) => setNote(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false));
+  };
+  const name = (key: string) => configured?.find((p) => p.key === key)?.name ?? tracked.find((p) => p.key === key)?.name ?? key;
+  const L = st.data.limits;
+  return <Group id="work-mode" title="Work mode" foot={<>With work mode on, Command Center checks every minute and reminds
+    the project's idle lead, at most every {Math.round(L.gapS / 60)} minutes, of the tickets it can move without you: the
+    most important and soonest due first. It never merges or deploys and never types over a draft. It rests
+    {" "}{Math.round(L.restS / 3600)} hours after {L.restAfter} reminders with no ticket moving, and sends at most {L.dayMax} a day.
+    {!active && <> Changing it needs Developer Unlock. <button type="button" className="hq-link" onClick={unlockDialogOpen}>Unlock…</button></>}</>}>
+    {Object.entries(st.data.projects).map(([key, p]) => <Row key={key} label={<span className="hq-with-logo"><ProjectLogo project={key} />{name(key)}</span>}
+      hint={workHint(p)}>
+      <Seg label={`Work mode for ${name(key)}`} value={p.on ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]} disabled={busy}
+        onChange={(v) => { if ((v === "on") !== p.on) save(key, v === "on"); }} /></Row>)}
+    {note && <p className="hq-note t-bad" role="alert">{note}</p>}
+  </Group>;
+}
+
 function Profiles() {
-  return <><ReleaseDay /><Classic id="policies"><Policies /></Classic><Classic id="decisions"><DecisionRecords /></Classic></>;
+  return <><ReleaseDay /><WorkModeSwitches /><Classic id="policies"><Policies /></Classic><Classic id="decisions"><DecisionRecords /></Classic></>;
 }
 
 function Workers() {

@@ -1,4 +1,4 @@
-import type { ReleaseState } from "./types";
+import type { ReleaseState, WorkModeState } from "./types";
 import { getToken } from "./auth";
 import { askReenter, devExpired, devSession } from "./developer";
 import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
@@ -395,6 +395,11 @@ export class Api {
   setLive(project: string, live: boolean) { return this.req<ReleaseState>("PUT", `/api/release/projects/${encodeURIComponent(project)}`, { live }); }
   /** Jay with Developer Unlock. `weekday` 0 = Sunday … 6 = Saturday, `time` "HH:MM" (24-hour, Winnipeg time). */
   setReleaseWindow(weekday: number, time: string) { return this.req<ReleaseState>("PUT", "/api/release/window", { weekday, time }); }
+
+  // ---------- Work mode: ccd reminds a project's idle lead of tickets it can move (ccd/workmode.py) ----------
+  workMode() { return this.req<WorkModeState>("GET", "/api/work-mode"); }
+  /** Jay with Developer Unlock. ccd answers with the whole state, as GET does. */
+  setWorkMode(project: string, on: boolean) { return this.req<WorkModeState>("PUT", `/api/work-mode/projects/${encodeURIComponent(project)}`, { on }); }
 
   /** GET a file with the token header and hand it to the browser as a download. */
   async download(path: string, fallbackName: string) {

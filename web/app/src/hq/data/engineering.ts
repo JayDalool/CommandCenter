@@ -15,6 +15,8 @@ export interface EngTask {
   stage: VisibleStage;
   status: TicketStatus;
   priority: Priority;
+  /** When it is due (epoch s), or null when nobody set a date. */
+  dueAt: number | null;
   assignee: string;
   assigneeKind: ReturnType<typeof assigneeKind>;
   pr: { number: number; url: string | null } | null;
@@ -50,7 +52,7 @@ export function engTask(t: Ticket, byKey: Map<string, Ticket>, agents: Map<strin
   const paneId = t.agentPaneId ?? [...agents.values()]
     .find((a) => a.role !== "coordinator" && ticketForAgent([t], a)?.key === t.key)?.id ?? null;
   return {
-    key: t.key, project: t.project, title: t.title, stage, status: t.status, priority: t.priority,
+    key: t.key, project: t.project, title: t.title, stage, status: t.status, priority: t.priority, dueAt: t.dueAt ?? null,
     assignee: assigneeLabel(t.assignee), assigneeKind: assigneeKind(t.assignee),
     pr: t.prNumber != null ? { number: t.prNumber, url: t.prUrl } : null,
     gate: t.gate ?? null, gateReason: t.gateReason ?? null, openQuestions: t.openQuestions ?? 0,

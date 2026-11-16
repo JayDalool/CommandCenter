@@ -53,6 +53,7 @@
 :root[data-ui="hq"] .hq-table .c-project { width: 124px; }
 :root[data-ui="hq"] .hq-table .c-stage { width: 150px; }
 :root[data-ui="hq"] .hq-table .c-priority { width: 82px; }
+:root[data-ui="hq"] .hq-table .c-due { width: 124px; }
 :root[data-ui="hq"] .hq-table .c-assignee { width: 116px; }
 :root[data-ui="hq"] .hq-table .c-session { width: 124px; }
 :root[data-ui="hq"] .hq-table .c-pr { width: 60px; }

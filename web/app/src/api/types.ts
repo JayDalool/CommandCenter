@@ -732,6 +732,16 @@ export interface ReleaseWindow { weekday: number; time: string; tz: string; next
  *  day's window. Once it has passed it is next week's, while `window.next` is still this week's window until that
  *  has ended. */
 export interface ReleaseState { window: ReleaseWindow; cutoff: number; projects: Record<string, { live: boolean }> }
+/** Work mode for one project (GET /api/work-mode, ccd/workmode.py), in epoch seconds. `why` is ccd's last reason for
+ *  sending its idle lead nothing (or "reminded"); `next` the ticket keys a reminder would name, in its order. */
+export interface WorkModeProject {
+  on: boolean; since: number | null; why: string | null; lastReminderAt: number | null; remindersToday: number;
+  restUntil: number | null; next: string[]; paused: boolean;
+}
+export interface WorkModeState {
+  projects: Record<string, WorkModeProject>;
+  limits: { idleS: number; gapS: number; restAfter: number; restS: number; dayMax: number };
+}
 /** A project's logo as ccd lists it (GET /api/projects/logos). The bytes are fetched apart and shown from a blob:. */
 export interface ProjectLogo { mime: string; sha256: string; updatedAt: number }
 /** A device holding a Developer session (GET /api/developer/devices), in epoch seconds. ccd never sends the session
