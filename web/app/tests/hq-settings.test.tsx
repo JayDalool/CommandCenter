@@ -137,6 +137,7 @@ describe("HQ Settings", () => {
     status: { slack: "off", socket: "off", ntfy: "off", lastError: null, lastSentAt: null },
     configured: { slackTokens: true, slackTokensError: null, jayMemberId: false, ntfy: true },
     channels: { cto: "cto" }, clientProjects: ["gauzemate"], slackGates: ["failure", "ui"], quietNow: false, held: 0,
+    slackPlans: true,
   };
 
   it("Slack and phone show ccd's settings and what is not set up, and changes ask for Developer Unlock", async () => {
@@ -257,7 +258,14 @@ describe("HQ Settings", () => {
     vi.spyOn(app.api, "notify").mockResolvedValue(NOTIFY);
     const page = await show("#/settings?tab=notifications");
     const gauze = app.store.get().state!.projectsConfig.find((p) => p.key === "gauzemate")?.name ?? "gauzemate";
-    expect(within(page).getByText(`Answers, plus clearing a blocker or accepting a UI review. Never a plan, merge or deploy. ${gauze} is a client project: replies there are passed on as text and never answer or approve.`)).toBeInTheDocument();
+    expect(within(page).getByText(`Answers and plans, plus clearing a blocker or accepting a UI review. Never a merge or deploy. ${gauze} is a client project: replies there are passed on as text and never answer or approve.`)).toBeInTheDocument();
+  });
+
+  it("with answers only, the reply rule still says plans are approved from Slack", async () => {
+    load();
+    vi.spyOn(app.api, "notify").mockResolvedValue({ ...NOTIFY, settings: { ...NOTIFY.settings, replyScope: "answers" } });
+    const page = await show("#/settings?tab=notifications");
+    expect(within(page).getByText(/^Answer agents' questions and approve plans\. Other approvals open Command Center\./)).toBeInTheDocument();
   });
 
   it("Windows lists pop-outs with Return here, and forgets the remembered places", async () => {

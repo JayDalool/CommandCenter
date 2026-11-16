@@ -672,6 +672,8 @@ export interface NotifyState {
   status: { slack: string; socket: string; ntfy: string; lastError: string | null; lastSentAt: number | null };
   configured: { slackTokens: boolean; slackTokensError: string | null; jayMemberId: boolean; ntfy: boolean };
   channels: Record<string, string>; clientProjects: string[]; slackGates: string[]; quietNow: boolean; held: number;
+  /** A plan waiting for Jay can be approved by his reply in the Slack DM, whatever replyScope says (ccd/notify.py PLAN_GATES). */
+  slackPlans: boolean;
 }
 
 /** Messages (ccd/chat.py, ccd/leadchat.py): Jay's conversations with the CTO and each project lead. */

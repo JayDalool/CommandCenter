@@ -120,6 +120,8 @@ class FakeDaemon:
         self.answered = []
         self.confirmed = []
         self.delivered = []
+        self.plans = {}
+        self.reviews = {}
         self._stopping = False
         self.tasks = None
 
@@ -137,7 +139,8 @@ class FakeDaemon:
                 "byProject": [{"key": "gyst", "costUsd": 3.0}]}
 
     def task_work(self, key):
-        return {"questions": self.questions.get(key, [])}
+        return {"questions": self.questions.get(key, []), "plan": self.plans.get(key) or {},
+                "planReview": self.reviews.get(key)}
 
     async def task_answers(self, key, body, actor="jay", developer=False, via=None):
         self.answered.append((key, body, actor, developer, via))
@@ -432,24 +435,70 @@ class Replies(ReplyBase):
         for gate in ("failure", "ui"):
             ts = self.send(need(f"SV-{gate}", "gate", gate))
             self.assertEqual(self.reply("approve", ts)["did"], f"approved_{gate}")
-        for gate in ("merge", "deploy", "plan"):
+        for gate in ("merge", "deploy"):
             ts = self.send(need(f"SV-{gate}", "gate", gate))
             r = self.reply("approve", ts)
             self.assertEqual(r["did"], "approval_refused", gate)
         self.assertEqual(self.d.confirmed, [("SV-failure", "failure"), ("SV-ui", "ui")])
 
-    def test_answers_only_is_the_default_and_approves_nothing(self):
+    def test_answers_only_is_the_default_and_approves_no_low_risk_gate(self):
         self.assertEqual(self.n.settings["replyScope"], "answers")
-        ts = self.send(need("SV-5", "gate", "failure"))
-        self.assertEqual(self.reply("yes", ts)["did"], "approval_refused")
+        for gate in ("failure", "ui", "merge", "deploy"):
+            ts = self.send(need(f"SV-5{gate}", "gate", gate))
+            self.assertEqual(self.reply("yes", ts)["did"], "approval_refused", gate)
         self.assertEqual(self.d.confirmed, [])
 
-    def test_client_items_never_answer_or_approve_they_go_to_the_lead(self):
-        ts = self.send(need("GM-1", "gate", "failure", "gauzemate"))
+    PLAN = {"summary": "Let the lead type into a draft only after Jay's own edit is saved", "approach": "Check the draft's owner",
+            "affected": ["server/ccd/leadchat.py", "web/app/src/hq/pages/Messages.tsx"], "risk": "loosens the draft guard"}
+    PLAN_NEED = "Plan needs approval: technical review approved; risky: sized risky"
+
+    def test_a_plan_is_approved_from_the_dm_whatever_the_scope(self):
+        self.d.plans["SV-30"] = dict(self.PLAN)
+        self.d.reviews["SV-30"] = {"verdict": "APPROVE", "note": "sound; one extra test", "blast": "Jay's draft text"}
+        ts = self.send(dict(need("SV-30", "gate", "plan", text=self.PLAN_NEED), since=50.0))
+        dm = self.slack.posts[-1]["text"]
+        for line in ("*Plan:* Let the lead type into a draft only after Jay's own edit is saved",
+                     "*Approach:* Check the draft's owner",
+                     "*Touches:* server/ccd/leadchat.py, web/app/src/hq/pages/Messages.tsx",
+                     "*Risk:* loosens the draft guard", "*Technical review:* APPROVE: sound; one extra test",
+                     "*Blast radius:* Jay's draft text", "Reply *approve* to approve this plan"):
+            self.assertIn(line, dm)
+        self.assertEqual(self.n.settings["replyScope"], "answers")
         r = self.reply("approve", ts)
-        self.assertEqual(r["did"], "lead_nudged")
+        self.assertEqual(r["did"], "approved_plan")
+        self.assertEqual(self.d.confirmed, [("SV-30", "plan")])
+        self.assertIn("Plan approved", self.slack.posts[-1]["text"])
+
+    def test_a_plan_changed_since_the_dm_is_not_approved(self):
+        self.d.plans["SV-31"] = dict(self.PLAN)
+        ts = self.send(dict(need("SV-31", "gate", "plan", text=self.PLAN_NEED), since=50.0))
+        self.d.plans["SV-31"] = dict(self.PLAN, approach="Drop the draft guard")      # same gate, same time, new plan
+        self.assertEqual(self.reply("approve", ts)["did"], "approval_stale")
         self.assertEqual(self.d.confirmed, [])
-        self.assertEqual(self.d.delivered[-1][:4], ("gauzemate", "approve", "slack", "GM-1"))
+
+    def test_a_plan_that_cannot_be_shown_is_approved_in_commandcenter_only(self):
+        ts = self.send(need("SV-32", "gate", "plan", text=self.PLAN_NEED))
+        self.assertIn("could not be read here", self.slack.posts[-1]["text"])
+        self.d.plans["SV-32"] = dict(self.PLAN)                                     # readable now, but not what Jay saw
+        self.assertEqual(self.reply("approve", ts)["did"], "approval_stale")
+        self.assertEqual(self.d.confirmed, [])
+
+    def test_a_plan_dm_shows_agent_text_as_plain_text(self):
+        self.d.plans["SV-33"] = dict(self.PLAN, summary="<!channel> see <https://evil.example|ccd>")
+        self.send(need("SV-33", "gate", "plan", text=self.PLAN_NEED))
+        dm = self.slack.posts[-1]["text"]
+        self.assertNotIn("<!channel>", dm)
+        self.assertIn("&lt;!channel&gt; see &lt;https://evil.example|ccd&gt;", dm)
+
+    def test_client_items_never_answer_or_approve_they_go_to_the_lead(self):
+        self.d.plans["GM-2"] = {"summary": "client plan"}
+        for ref, gate in (("GM-1", "failure"), ("GM-2", "plan")):
+            ts = self.send(need(ref, "gate", gate, "gauzemate"))
+            self.assertNotIn("client plan", self.slack.posts[-1]["text"])
+            r = self.reply("approve", ts)
+            self.assertEqual(r["did"], "lead_nudged")
+            self.assertEqual(self.d.delivered[-1][:4], ("gauzemate", "approve", "slack", ref))
+        self.assertEqual(self.d.confirmed, [])
 
     def test_other_text_goes_to_the_lead_and_outside_a_thread_by_channel(self):
         ts = self.send(need("SV-6", "gate", "merge"))
@@ -753,7 +802,7 @@ class Socket(unittest.TestCase):
 
 
 class InTheDaemon(unittest.IsolatedAsyncioTestCase):
-    """The daemon's own guard: whatever calls it, Slack closes only the Low-risk gates."""
+    """The daemon's own guard: whatever calls it, Slack closes only a plan or a Low-risk gate."""
 
     async def asyncSetUp(self):
         self.store = Store(os.path.join(tempfile.mkdtemp(), "ccd.db"))
@@ -762,9 +811,9 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         self.d = Daemon(cfg(meter={"enabled": False}), self.store, None, tasks=self.ts)
         self.d.notifier = notify.Notifier(self.d, {"notify": {}}, slack=FakeSlack())
 
-    async def test_merge_deploy_and_plan_are_refused(self):
+    async def test_merge_and_deploy_are_refused(self):
         t, _ = self.ts.create("samvision", "Valuation")
-        for gate in ("merge", "deploy", "plan"):
+        for gate in ("merge", "deploy", "owner", "anything"):
             with self.assertRaises(ActionError) as e:
                 await self.d.slack_confirm(t["key"], gate)
             self.assertEqual(e.exception.status, 403)
@@ -776,6 +825,16 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         r = await self.d.slack_confirm(t["key"], "failure")
         self.assertIsNone(r["work"]["gate"])
         self.assertFalse(r["delivered"])                # no task session in this test
+        (data,) = self.ts.db.execute("SELECT data FROM ticket_events WHERE kind='pipeline.gate_confirmed'").fetchone()
+        self.assertEqual(json.loads(data).get("via"), "slack")
+
+    async def test_a_plan_is_approved_with_via_slack(self):
+        t, _ = self.ts.create("samvision", "Valuation", needs_jay=True)
+        self.d.pipeline.plan(t["key"], {"summary": "s", "risk": "high"}, "agent:planner")
+        self.assertEqual(self.d.task_work(t["key"])["gate"], "plan")
+        r = await self.d.slack_confirm(t["key"], "plan")
+        self.assertIsNone(r["work"]["gate"])
+        self.assertEqual(r["work"]["planState"], "accepted")
         (data,) = self.ts.db.execute("SELECT data FROM ticket_events WHERE kind='pipeline.gate_confirmed'").fetchone()
         self.assertEqual(json.loads(data).get("via"), "slack")
 
@@ -795,6 +854,11 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         self.d.pipeline.block(t["key"], "x", "agent:coordinator")
         with self.assertRaises(ActionError):
             await self.d.slack_confirm(t["key"], "failure")
+        t2, _ = self.ts.create("gauzemate", "Intake 2", needs_jay=True)
+        self.d.pipeline.plan(t2["key"], {"summary": "s", "risk": "high"}, "agent:planner")
+        with self.assertRaises(ActionError):
+            await self.d.slack_confirm(t2["key"], "plan")
+        self.assertEqual(self.d.task_work(t2["key"])["gate"], "plan")
 
 
 if __name__ == "__main__":

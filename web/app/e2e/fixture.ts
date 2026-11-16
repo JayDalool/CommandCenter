@@ -57,7 +57,8 @@ function answer(path: string): unknown {
         timezone: "America/Winnipeg", replyScope: "answers" },
         status: { slack: "off", socket: "off", ntfy: "off", lastError: null, lastSentAt: null },
         configured: { slackTokens: false, slackTokensError: null, jayMemberId: false, ntfy: false },
-        channels: { cto: "cto" }, clientProjects: ["gauzemate"], slackGates: ["failure", "ui"], quietNow: false, held: 0 };
+        channels: { cto: "cto" }, clientProjects: ["gauzemate"], slackGates: ["failure", "ui"], quietNow: false, held: 0,
+        slackPlans: true };
     case "/api/ui-tests": return { projects: {} };
     case "/api/jay/merge": return { projects: {} };
     case "/api/desktop/launcher": return { available: false };
