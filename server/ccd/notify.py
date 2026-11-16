@@ -61,7 +61,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from . import registry
-from .pipeline import plan_digest
+from .pipeline import plan_digest, unshown
 from .security import redact
 
 log = logging.getLogger("ccd.notify")
@@ -627,9 +627,10 @@ class Notifier:
                 lines.append("_The plan could not be read here: approve it in CommandCenter. A reply here goes to the lead._")
             else:
                 lines += plan_lines(p["plan"], p["review"])
-                if redact("\n".join(lines))[1]:   # post() would hide part of it: send_need gives it no planHash
-                    lines.append("_Part of this plan shows as [redacted] here, so it is approved in CommandCenter only. "
-                                 "A reply here goes to the lead._")
+                if redact("\n".join(lines))[1] or unshown("\n".join(lines)):
+                    # Part of it would not show (post() redacts; Slack draws no invisible character): no planHash.
+                    lines.append("_Part of this plan cannot be shown here, so it is approved in CommandCenter only. A "
+                                 "reply here goes to the lead._")
                 else:
                     lines.append("_Reply *approve* to approve this plan and start implementation, or write to the "
                                  "lead._")
@@ -690,7 +691,7 @@ class Notifier:
                          "a *deploy* reply before then is refused._")
         body = "\n".join([head, *quoted, hint]) + open_
         shown, hidden = redact(body)
-        if hidden or len(shown) > POST_LIMIT:
+        if hidden or unshown(body) or len(shown) > POST_LIMIT:
             # post() would hide part of it or cut it, so Jay would not see all of what "deploy" approves.
             # (pipeline.deploy_plan refuses such a plan; this holds for one recorded before that check.)
             plan_hash = None
@@ -728,8 +729,8 @@ class Notifier:
             p = self._plan(n.get("ref"))
             item["planHash"] = plan_digest(p["plan"]) if p else None
         text = self.need_text(n, plan=p, review=rv)
-        if p is not None and redact(text)[1]:
-            # The secret filter would hide part of what an approve approves: CommandCenter only.
+        if p is not None and (redact(text)[1] or unshown(text)):
+            # Part of what an approve approves would not show: CommandCenter only.
             item["planHash"] = None
         await self.post("dm", text, item=item)
         await self.push(self.push_title(n), self.link(n))

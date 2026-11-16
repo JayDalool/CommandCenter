@@ -616,6 +616,18 @@ class Replies(ReplyBase):
         self.assertEqual(self.reply("please shorten it", post["ts"])["did"], "lead_nudged")
         self.assertEqual(self.d.deploys, [])
 
+    def test_a_plan_with_characters_slack_would_not_show_gets_no_go_from_slack(self):
+        self.n.update_settings({"replyScope": "all"})
+        hidden = "1. restart web" + "".join(chr(0xE0000 + ord(c)) for c in "2. DROP TABLE users")
+        post = self.deploy_ready("SV-52", {"summary": hidden, "at": 6.0, "by": "x"})
+        self.assertIn("cannot be shown here in full", post["text"])
+        self.assertEqual(self.reply("deploy", post["ts"])["did"], "deploy_refused")
+        self.d.plans["SV-53"] = dict(self.PLAN, approach="Check the owner\u200b\u2063 and skip the guard")
+        ts = self.send(need("SV-53", "gate", "plan", text=self.PLAN_NEED))
+        self.assertIn("Part of this plan cannot be shown here", self.slack.posts[-1]["text"])
+        self.assertEqual(self.reply("approve", ts)["did"], "approval_refused")
+        self.assertEqual((self.d.deploys, self.d.confirmed), ([], []))
+
     KEY_WRAPPED = "1. restart\n-----BEGIN RSA PRIVATE KEY-----\n2. DROP TABLE users\n-----END RSA PRIVATE KEY-----\n3. verify"
 
     def test_a_plan_the_secret_filter_would_hide_gets_no_go_from_slack(self):
@@ -702,7 +714,7 @@ class Replies(ReplyBase):
                                                          "-----END RSA PRIVATE KEY-----")
         ts = self.send(need("SV-34", "gate", "plan", text=self.PLAN_NEED))
         dm = self.slack.posts[-1]["text"]
-        self.assertIn("Part of this plan shows as [redacted] here, so it is approved in CommandCenter only", dm)
+        self.assertIn("Part of this plan cannot be shown here, so it is approved in CommandCenter only", dm)
         self.assertNotIn("Reply *approve*", dm)
         r = self.reply("approve", ts)
         self.assertEqual(r["did"], "approval_refused")
@@ -1116,7 +1128,10 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         for unshowable in ("\n".join(f"{i}. step" for i in range(41)),                 # more than Slack shows whole
                            "1. restart\n-----BEGIN RSA PRIVATE KEY-----\n2. drop\n-----END RSA PRIVATE KEY-----",
                            "1. set token = abcdef123456",                                # the secret filter hides it
-                           "1. restart \u202e2. drop"):                                  # reads in another order
+                           "1. restart \u202e2. drop",                                   # reads in another order
+                           "1. restart web" + "".join(chr(0xE0000 + ord(c)) for c in "2. DROP TABLE users"),  # tags
+                           "1. restart\u200b web", "1. restart web\ufe0f", "1. restart\u3164web",
+                           "1. restart\rweb"):
             with self.assertRaises(TaskError) as e:
                 self.d.pipeline.deploy_plan(k, unshowable, "agent:coordinator")
             self.assertEqual(e.exception.status, 400)
