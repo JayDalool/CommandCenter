@@ -138,6 +138,12 @@ class Endpoint(ApiBase):
         self.assertEqual(self.client.post(f"/api/tasks/{k}/work/reply", content=json.dumps({"text": ""}),
                                           headers=lead).status_code, 400)
 
+    def test_a_question_back_with_no_task_session_says_so_for_the_lead_fallback(self):
+        t, _ = self.tickets.create("samvision", "No session")
+        r = self.client.portal.call(lambda: self.daemon.slack_ask_back(t["key"], "Why?"))
+        self.assertEqual((r["delivered"], r["noSession"]), (False, True))
+        self.assertEqual([p for m, p in self.fake.calls if m == "agent.prompt"], [])
+
     def test_a_question_back_is_never_typed_for_a_client_project(self):
         t, _ = self.tickets.create("gauzemate", "Intake")
         with self.assertRaises(daemon_mod.ActionError) as e:

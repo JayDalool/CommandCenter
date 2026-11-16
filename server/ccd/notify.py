@@ -361,18 +361,39 @@ def pick_option(q, text):
         return text            # the option's own text ("2" when the options are 2 / 4 / 8)
     if q.get("kind") != "choice" or not opts:
         return text
-    marks = re.fullmatch(r"\s*([1-8a-hA-H])[.)]?((?:\s*(?:,|&|\band\b|\s)\s*[1-8a-hA-H][.)]?)*)\s*", text or "")
-    if not marks:
+    marks = _marks(text)
+    if not marks or any(not 0 <= j < len(opts) for j in marks):
         return text
     picked = []
-    for t in re.findall(r"(?<![A-Za-z])[1-8a-hA-H](?![A-Za-z])", text.replace("and", " ")):
-        t = t.lower()
-        j = int(t) - 1 if t.isdigit() else LETTERS.index(t)
-        if not 0 <= j < len(opts):
-            return text
+    for j in marks:
         if opts[j] not in picked:
             picked.append(opts[j])
-    return "; ".join(picked) if picked else text
+    return "; ".join(picked)
+
+
+def _marks(text):
+    """The option indexes a reply made only of option numbers or letters names ("2", "b.", "1, 3", "a and c"), or
+    None for anything else. A number past 8 or a letter past h still counts, so a wrong pick can be refused."""
+    if not re.fullmatch(r"\s*(\d{1,2}|[a-zA-Z])[.)]?(?:\s*(?:,|&|\band\b|\s)\s*(\d{1,2}|[a-zA-Z])[.)]?)*\s*",
+                        text or ""):
+        return None
+    out = []
+    for t in re.findall(r"(?<![A-Za-z0-9])(\d{1,2}|[a-zA-Z])(?![A-Za-z0-9])", re.sub(r"\band\b", " ", text)):
+        t = t.lower()
+        out.append(int(t) - 1 if t.isdigit() else ord(t) - ord("a"))
+    return out
+
+
+def bad_pick(q, text):
+    """A reply that only picks options of a choice question and names one it does not have ("4" of three, "1, 9").
+    Not when an option's own text is a number: then "5" may be Jay's own value ("2 / 4 / 8 replicas")."""
+    opts = q.get("options") or []
+    if q.get("kind") != "choice" or not opts or any(re.fullmatch(r"\s*\d+\s*", str(o)) for o in opts):
+        return False
+    if any(str(o).strip().lower() == (text or "").strip().lower() for o in opts):
+        return False
+    marks = _marks(text)
+    return bool(marks) and any(not 0 <= j < len(opts) for j in marks)
 
 
 def _cut(text, n):
@@ -1113,6 +1134,13 @@ class Notifier:
             if not all(parts):
                 return {"did": "answer_incomplete",
                         "say": f"There are {len(qs)} questions. Reply with numbered lines (1. …, 2. …), one per question."}
+        for i, (q, a) in enumerate(zip(qs, parts), 1):
+            if bad_pick(q, a):
+                which = f"Question {i} has" if len(qs) > 1 else "This question has"
+                n = len(q["options"])
+                return {"did": "answer_invalid",
+                        "say": f"{which} options " + (f"a–{LETTERS[n - 1]}" if len(qs) > 1 else f"1–{n}")
+                               + ". Reply with those, or start with Other: for your own answer."}
         parts = [pick_option(q, a) for q, a in zip(qs, parts)]
         for q, a in zip(qs, parts):
             if q.get("kind") == "yesno" and a.strip().lower() not in ("yes", "no") and not a.lower().startswith("other:"):

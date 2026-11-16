@@ -442,6 +442,8 @@ class Replies(ReplyBase):
         self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 51, "answer": "CSV; PDF"}])
         q2 = [dict(q, id=52, answer=None), {"id": 53, "text": "Who?", "kind": "text", "answer": None}]
         ts = self.send(need("SV-52", "questions", None), q2)
+        self.assertEqual(self.reply("1. a and d\n2. admins", ts)["did"], "answer_invalid")
+        self.assertIn("Question 1 has options a–c", self.slack.posts[-1]["text"])
         self.assertEqual(self.reply("1. a and b\n2. admins", ts)["did"], "answered")
         self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 52, "answer": "CSV; XLSX"},
                                                              {"id": 53, "answer": "admins"}])
@@ -486,8 +488,13 @@ class Replies(ReplyBase):
         self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 41, "answer": "3"}])
         ts = self.send(need("SV-8", "questions", None), [{"id": 42, "text": "Pick", "kind": "choice",
                                                           "options": ["x", "y"], "answer": None}])
-        self.reply("5", ts)
-        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 42, "answer": "5"}])
+        for wrong in ("5", "1, 9"):                            # a pick of an option it does not have is refused
+            self.assertEqual(self.reply(wrong, ts)["did"], "answer_invalid", wrong)
+            self.assertIn("This question has options 1–2. Reply with those, or start with Other:",
+                          self.slack.posts[-1]["text"])
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 41, "answer": "3"}])
+        self.reply("Other: 5", ts)
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 42, "answer": "Other: 5"}])
         ts = self.send(need("SV-9", "questions", None), [{"id": 43, "text": "Replicas?", "kind": "choice",
                                                           "options": ["2", "4", "8"], "answer": None}])
         self.reply("2", ts)                                    # the option "2", not the second option

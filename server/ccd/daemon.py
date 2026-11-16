@@ -1993,12 +1993,16 @@ class Daemon(LeadChat, HqDaemon):
     async def slack_ask_back(self, key, text):
         """Jay's question back, from Slack, about a ticket's open questions: his words typed into the ticket's task
         session (like his answers), which answers with `pipeline_cli reply` into his thread. Never a client project
-        (its details stay in CommandCenter). Returns {delivered, reason}."""
+        (its details stay in CommandCenter). Returns {delivered, reason}, and noSession when herdr says no task
+        session is running (the notifier then sends it to the project's lead)."""
         t = self._wrap(self._need_tasks().get, key)
         if self.notifier is None or self.notifier.client(t["project"]):
             raise ActionError(403, "client projects are answered in CommandCenter")
         if not isinstance(text, str) or not ANSWER_RE.match(" ".join(text.split())):
             raise ActionError(400, "a question is 1–2000 printable characters")
+        # Only when herdr answers: with herdr down every session looks absent (as in task_answers).
+        if self.herdr_state.get("ok") and self.task_session(t["key"])["state"] == "none":
+            return {"delivered": False, "noSession": True, "reason": f"no task Claude session is running for {t['key']}"}
         delivered, reason = await self._nudge_task(t["key"], ASK_BACK_TEMPLATE.format(key=t["key"], text=text.strip()))
         if delivered:
             self._event("tasks", "task.pipeline", f"{t['key']} Jay asked the task session a question from Slack",
