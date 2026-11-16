@@ -1913,9 +1913,9 @@ class Daemon(LeadChat, HqDaemon):
         return False, f"saved in Messages for the {project} lead, but {why}; it reads them when it runs", "lead"
 
     async def slack_confirm(self, key, gate):
-        """Jay approves a Low-risk gate by replying in Slack (ccd/notify.py). Only the gates in notify.SLACK_GATES,
-        never in a client project, and recorded with via "slack". Plans, merges and deploys are refused here as well
-        as in the notifier, so no caller can widen it."""
+        """Jay approves a gate by replying in Slack (ccd/notify.py): a plan, or a Low-risk gate. Only the gates in
+        notify.SLACK_GATES, never in a client project, and recorded with via "slack". Merges and deploys are refused
+        here as well as in the notifier, so no caller can widen it."""
         from . import notify as notify_mod
         if gate not in notify_mod.SLACK_GATES:
             raise ActionError(403, f"a {gate} gate is approved in CommandCenter, not from Slack")

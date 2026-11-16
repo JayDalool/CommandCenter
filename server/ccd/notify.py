@@ -32,9 +32,11 @@ with the bot or a channel the bot is in, are read; everything else is ignored. A
                 Answer button does, and the answers go to the task's own session (or, with none running, to the
                 project's lead). A choice question's options are listed numbered (lettered when there are several
                 questions) with the recommended one marked; a reply of just "2" (or "1. b") picks that option.
-    gate        "approve" (or yes / ok / go / lgtm) closes the gate ONLY for the Low-risk gates in SLACK_GATES, and
-                only while `replyScope` is "answers_low_risk" (default "answers": off until Jay decides). Plans, merges, deploys and anything else open
-                CommandCenter from the link: a stolen Slack login cannot merge, deploy or change a plan.
+    gate        "approve" (or yes / ok / go / lgtm) closes only the gates in SLACK_GATES. A plan (PLAN_GATES): always,
+                and only the plan that DM showed (its summary, approach, risk and technical review are in it). The
+                Low-risk gates (LOW_RISK_GATES): only while `replyScope` is "answers_low_risk" (default "answers": off
+                until Jay decides). Merges, deploys and anything else open CommandCenter from the link: a stolen Slack
+                login can approve a plan but never merge or deploy.
     otherwise   the text goes to the project's lead (Daemon.deliver_to_lead, the in-app chat's store), and the
                 lead's reply comes back in the same thread.
 
@@ -64,10 +66,16 @@ log = logging.getLogger("ccd.notify")
 SLACK_ENV = Path(os.environ.get("CCD_SLACK_ENV", Path.home() / ".config" / "command-center" / "slack.env"))
 SLACK_API = "https://slack.com/api/"
 
-# The gates a Slack reply may close. Fixed in code on purpose: no setting widens it to plans, merges or deploys.
+# The gates a Slack reply may close. Fixed in code on purpose: no setting widens it to merges or deploys.
 # failure = clear a blocker so the task resumes; ui = accept a UI review. Both are reversible and neither merges,
-# deploys, changes a plan, a credential or a permission.
-SLACK_GATES = frozenset({"failure", "ui"})
+# deploys, changes a plan, a credential or a permission. They need replyScope "answers_low_risk".
+LOW_RISK_GATES = frozenset({"failure", "ui"})
+# plan = approve a plan Jay must approve (a risky one, after the technical review), whatever replyScope says: Jay's
+# decision of 2026-11-16, so a risky ticket does not wait for him to open CommandCenter. Only the plan the DM
+# showed. It starts implementation; the PR still needs its review, Jay's merge and his deploy approval in
+# CommandCenter, so a stolen Slack login can approve a plan but never merge or deploy.
+PLAN_GATES = frozenset({"plan"})
+SLACK_GATES = LOW_RISK_GATES | PLAN_GATES
 REPLY_SCOPES = ("answers", "answers_low_risk")
 APPROVE_RE = re.compile(r"^\s*(approve|approved|yes|y|ok|okay|go|go ahead|lgtm|:\+1:|👍|✅)\s*[.!]*\s*$", re.I)
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -79,8 +87,9 @@ SETTINGS_DEFAULTS = {
     "quietEnd": "07:00",
     "summaryAt": "07:00",           # owner's and technical summaries, daily
     "timezone": "America/Winnipeg",
-    # "answers": every approval opens CommandCenter (D-024 clause 12 as it stands). "answers_low_risk" lets a Slack
-    # reply clear a blocker or accept a UI review; it waits on Jay's decision and is never the default.
+    # "answers": approvals other than a plan open CommandCenter (D-024 clause 12, with Jay's 2026-11-16 decision that
+    # plans are approvable from the DM: PLAN_GATES). "answers_low_risk" also lets a Slack reply clear a blocker or
+    # accept a UI review; it waits on Jay's decision and is never the default.
     "replyScope": "answers",
 }
 CONFIG_DEFAULTS = {
@@ -340,6 +349,34 @@ def pick_option(q, text):
     return opts[j] if 0 <= j < len(opts) else text
 
 
+def _cut(text, n):
+    text = str(text or "").strip()
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+
+
+def _plan_hash(plan):
+    return _digest(json.dumps(plan or {}, sort_keys=True))
+
+
+def plan_lines(plan, review):
+    """A plan waiting for Jay, short enough for one DM: what it does, how, what it touches, its risk, and what the
+    technical reviewer said."""
+    out = [f"*Plan:* {esc(_cut(plan.get('summary'), 500))}"]
+    if plan.get("approach"):
+        out.append(f"*Approach:* {esc(_cut(plan['approach'], 700))}")
+    if plan.get("affected"):
+        out.append("*Touches:* " + esc(_cut(", ".join(str(a) for a in plan["affected"]), 300)))
+    if plan.get("risk"):
+        out.append(f"*Risk:* {esc(_cut(plan['risk'], 300))}")
+    if review:
+        out.append(f"*Technical review:* {esc(review.get('verdict'))}: {esc(_cut(review.get('note'), 300))}")
+        if review.get("blast"):
+            out.append(f"*Blast radius:* {esc(_cut(review['blast'], 300))}")
+    else:
+        out.append("*Technical review:* none on this route")
+    return out
+
+
 def need_label(n):
     return NEED_LABEL.get(n.get("gate") or n.get("kind"), "Needs you")
 
@@ -399,7 +436,8 @@ class Notifier:
                                "slackTokensError": env_error, "jayMemberId": bool(self.conf["jay_member_id"]),
                                "ntfy": bool(self.ntfy_url)},
                 "channels": {"cto": self.conf["cto_channel"], **self.conf["channels"]},
-                "clientProjects": list(self.conf["client_projects"]), "slackGates": sorted(SLACK_GATES),
+                "clientProjects": list(self.conf["client_projects"]), "slackGates": sorted(LOW_RISK_GATES),
+                "slackPlans": bool(PLAN_GATES),
                 "quietNow": in_quiet(self.settings, self.clock()), "held": len(self.held)}
 
     def update_settings(self, body):
@@ -522,8 +560,9 @@ class Notifier:
                           "text": f"{b.get('name') or 'an agent'} is waiting for you"})
         return items
 
-    def need_text(self, n):
-        """The DM for one item. A client project's carries its ID and a risk line only."""
+    def need_text(self, n, plan=None):
+        """The DM for one item. A client project's carries its ID and a risk line only. `plan` is a plan gate's
+        plan as send_need read it (so the DM shows exactly what its planHash covers)."""
         proj = n.get("project")
         label = need_label(n)
         link = self.link(n)
@@ -546,12 +585,29 @@ class Notifier:
             else:
                 lines.append("_Reply in this thread with " + ("an option's number, or your own answer" if choice
                                                               else "your answer") + "._")
-        elif n.get("kind") == "gate" and n.get("gate") in SLACK_GATES and self.settings["replyScope"] == "answers_low_risk":
+        elif n.get("kind") == "gate" and n.get("gate") in PLAN_GATES:
+            p = plan
+            if p is None:
+                lines.append("_The plan could not be read here: approve it in CommandCenter. A reply here goes to the lead._")
+            else:
+                lines += plan_lines(p["plan"], p["review"])
+                lines.append("_Reply *approve* to approve this plan and start implementation, or write to the lead. "
+                             "The merge and the deploy stay in CommandCenter._")
+        elif n.get("kind") == "gate" and n.get("gate") in LOW_RISK_GATES and self.settings["replyScope"] == "answers_low_risk":
             lines.append("_Reply *approve* to " + ("clear the blocker" if n["gate"] == "failure" else "accept the UI")
                          + ", or write to the lead._")
         elif n.get("kind") == "gate":
             lines.append("_Approve this in CommandCenter. A reply here goes to the lead._")
         return "\n".join(lines) + open_
+
+    def _plan(self, key):
+        """The ticket's plan and its technical review as ccd has them now; None when there is no plan to show."""
+        try:
+            w = self.d.task_work(key) or {}
+        except Exception:  # noqa: BLE001
+            return None
+        plan = w.get("plan") or {}
+        return {"plan": plan, "review": w.get("planReview")} if plan.get("summary") else None
 
     def push_title(self, n):
         proj = n.get("project")
@@ -560,11 +616,15 @@ class Notifier:
         return f"{self.name(proj)}: {need_label(n)} · {n.get('ref')}"
 
     async def send_need(self, n):
-        await self.post("dm", self.need_text(n), item={"type": "need", "project": n.get("project"),
-                                                        "kind": n.get("kind"), "gate": n.get("gate"),
-                                                        "ref": n.get("ref"), "stale": bool(n.get("stale")),
-                                                        "qids": list(n.get("qids") or []),
-                                                        "textHash": _digest(n.get("text")), "since": n.get("since")})
+        item = {"type": "need", "project": n.get("project"), "kind": n.get("kind"), "gate": n.get("gate"),
+                "ref": n.get("ref"), "stale": bool(n.get("stale")), "qids": list(n.get("qids") or []),
+                "textHash": _digest(n.get("text")), "since": n.get("since")}
+        p = None
+        if n.get("kind") == "gate" and n.get("gate") in PLAN_GATES and not self.client(n.get("project")):
+            # The plan this DM shows, read once. An approve applies to this plan only (approve()).
+            p = self._plan(n.get("ref"))
+            item["planHash"] = _plan_hash(p["plan"]) if p else None
+        await self.post("dm", self.need_text(n, plan=p), item=item)
         await self.push(self.push_title(n), self.link(n))
 
     async def check_needs(self):
@@ -906,13 +966,18 @@ class Notifier:
 
     async def approve(self, key, gate, item=None):
         link = self.link({"ref": key})
-        if gate not in SLACK_GATES or self.settings["replyScope"] != "answers_low_risk":
+        if not (gate in PLAN_GATES or (gate in LOW_RISK_GATES and self.settings["replyScope"] == "answers_low_risk")):
             return {"did": "approval_refused",
                     "say": "That one is approved in CommandCenter, not from Slack." + (f" <{link}|Open it>" if link else "")}
-        # Only the gate that message showed: same ticket, gate, reason and time. Anything else is refused.
+        # Only the gate that message showed: same ticket, gate, reason and time, and for a plan the same plan.
+        # Anything else is refused.
         now = [n for n in self.needs() if n.get("kind") == "gate" and n.get("ref") == key and n.get("gate") == gate]
-        if not item or not any(_digest(n.get("text")) == item.get("textHash") and n.get("since") == item.get("since")
-                               for n in now):
+        same = bool(item) and any(_digest(n.get("text")) == item.get("textHash") and n.get("since") == item.get("since")
+                                  for n in now)
+        if same and gate in PLAN_GATES:
+            p = self._plan(key)
+            same = p is not None and bool(item.get("planHash")) and _plan_hash(p["plan"]) == item["planHash"]
+        if not same:
             return {"did": "approval_stale",
                     "say": "This has changed since this message, so nothing was approved." + (f" <{link}|Open it>" if link else "")}
         try:
@@ -920,7 +985,8 @@ class Notifier:
         except Exception as e:  # noqa: BLE001
             return {"did": "approve_failed", "say": f"Could not approve: {esc(getattr(e, 'message', None) or e)}"}
         return {"did": f"approved_{gate}",
-                "say": ("Blocker cleared; the task resumes." if gate == "failure" else "UI accepted.")
+                "say": {"failure": "Blocker cleared; the task resumes.", "ui": "UI accepted.",
+                        "plan": "Plan approved; implementation starts."}.get(gate, "Approved.")
                 + ("" if (r or {}).get("delivered", True) else " The task session was not running to hear it.")}
 
     async def to_lead(self, conversation, text, ref):

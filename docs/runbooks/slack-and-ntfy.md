@@ -56,16 +56,22 @@ ccd reads only messages whose author is `jay_member_id`, never edits or bot mess
 
 - **Questions:** the reply is the answer (several questions: numbered lines `1. …`, `2. …`). It goes to the task's
   session, exactly like the Answer button.
-- **Gates:** `approve` (or yes, ok, go, lgtm) closes a gate only if it is a blocker (`failure`) or a UI review (`ui`),
-  and only while the scope is `answers_low_risk`. The default is `answers`, so nothing is approvable from Slack until Jay runs `notify_cli scope answers_low_risk`. This list is fixed in code (`notify.SLACK_GATES`) and checked again
-  in `Daemon.slack_confirm`. Plans, merges and deploys are approved in CommandCenter.
+- **Plans:** a plan waiting for Jay (a risky ticket's, after the technical review) comes as a DM with its summary,
+  approach, what it touches, its risk and the technical review. `approve` (or yes, ok, go, lgtm) in that DM's thread
+  approves that plan and implementation starts, whatever the scope is (Jay, 2026-11-16). It approves only the plan the
+  DM showed: if the plan or the gate changed since, nothing is approved. The PR still needs its review, Jay's merge
+  and his deploy approval in CommandCenter.
+- **Other gates:** `approve` closes a gate only if it is a blocker (`failure`) or a UI review (`ui`), and only while the
+  scope is `answers_low_risk`. The default is `answers`, so neither is approvable from Slack until Jay runs
+  `notify_cli scope answers_low_risk`. Both lists are fixed in code (`notify.PLAN_GATES`, `notify.LOW_RISK_GATES`) and
+  checked again in `Daemon.slack_confirm`. Merges and deploys are approved in CommandCenter, never from Slack.
 - **A ticket's thread:** the reply goes to the project's lead, tagged with the ticket. It never answers a
   question or approves a gate: answer a question in the DM it came in (its own thread there).
 - **Anything else** goes to the project's lead through Messages (`Daemon.deliver_to_lead`), and the lead's reply comes
   back in the same thread. Outside a thread, a project channel goes to its lead; `#cto` and the DM go to the CTO.
 
 Set `team_id` (Slack: workspace settings, or the `T…` id in any Slack URL) and turn on two-factor sign-in for
-Jay's Slack account: that account can answer agents' questions and instruct leads. A reply answers only the questions
+Jay's Slack account: that account can answer agents' questions, approve plans and instruct leads. A reply answers only the questions
 its message showed, and approves only the gate it showed; if either changed since, nothing is recorded. Leads treat a
 `via: "slack"` message as unable to approve gated actions.
 

@@ -224,7 +224,8 @@ type NotifyLoad = { s: "loading" } | { s: "ok"; d: NotifyState } | { s: "off"; w
 const notifyOff = (e: unknown) => e instanceof ApiError && e.status === 404 ? "This ccd has no Slack or phone alerts yet."
   : e instanceof ApiError && e.status === 503 ? "Alerts are not set up in this ccd." : "Could not read the alert settings.";
 
-/** What a Slack reply may close, in words, from ccd's own fixed list (SLACK_GATES in server/ccd/notify.py). */
+/** What "Answers and low-risk" lets a Slack reply close, in words, from ccd's own fixed list (LOW_RISK_GATES in
+ *  server/ccd/notify.py). */
 const GATE_WORDS: Record<string, string> = { failure: "clearing a blocker", ui: "accepting a UI review" };
 const gateWords = (gates: string[]) => {
   const w = gates.map((g) => GATE_WORDS[g] ?? `the ${g} gate`);
@@ -275,6 +276,7 @@ function SlackAndPhone() {
       .finally(() => setBusy(false));
   };
   const clients = st.d.clientProjects.map((k) => names.find((p) => p.key === k)?.name ?? k);
+  const plans = st.d.slackPlans === true;
   const clientRule = clients.length ? ` ${clients.join(" and ")} ${clients.length > 1 ? "are client projects" : "is a client project"}: replies there are passed on as text and never answer or approve.` : "";
   const slackWhy = !c.slackTokens ? (c.slackTokensError ?? "Tokens not set up on jay-server (slack.env)")
     : !c.jayMemberId ? "Your Slack member ID is not in config.json" : `Connection: ${status.slack}`;
@@ -286,8 +288,9 @@ function SlackAndPhone() {
     <Row label="Phone alerts (ntfy)" hint={c.ntfy ? `Connection: ${status.ntfy}` : "No ntfy topic in config.json"}>
       <Seg label="Phone alerts" value={v.ntfy ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]} disabled={busy}
         onChange={(x) => x === (v.ntfy ? "on" : "off") || void save({ ntfy: x === "on" })} /></Row>
-    <Row label="Your Slack replies" hint={(v.replyScope === "answers" ? "Answer agents' questions. Approvals open Command Center."
-      : `Answers, plus ${gateWords(st.d.slackGates)}. Never a plan, merge or deploy.`) + clientRule}>
+    <Row label="Your Slack replies" hint={(v.replyScope === "answers"
+      ? (plans ? "Answer agents' questions and approve plans. Other approvals open Command Center." : "Answer agents' questions. Approvals open Command Center.")
+      : `Answers${plans ? " and plans" : ""}, plus ${gateWords(st.d.slackGates)}. Never ${plans ? "a" : "a plan,"} merge or deploy.`) + clientRule}>
       <Seg label="Your Slack replies" value={v.replyScope} options={[["answers", "Answers only"], ["answers_low_risk", "Answers and low-risk"]]}
         disabled={busy} onChange={(x) => x === v.replyScope || void save({ replyScope: x })} /></Row>
     <Row label="Quiet hours" hint={`${v.timezone}${st.d.quietNow ? " · quiet now" : ""}${st.d.held ? ` · ${plural(st.d.held, "alert")} held` : ""}`}>
