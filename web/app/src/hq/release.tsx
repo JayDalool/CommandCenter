@@ -64,6 +64,13 @@ export function clock(time: string): string {
 }
 /** "Wednesday 10 p.m. Central" */
 export const windowText = (w: ReleaseWindow) => `${WEEKDAYS[w.weekday] ?? "Day " + w.weekday} ${clock(w.time)} ${ZONES[w.tz] ?? w.tz}`;
+/** The calendar day of a moment in a time zone, as "2026-11-18": compares as a string. The browser's own day for a
+ *  zone it does not know. */
+export function dateKey(at: number, tz: string): string {
+  const d = new Date(at * 1000);
+  try { return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(d); }
+  catch { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+}
 /** The day of a moment, in the window's own time zone: "Wed, Nov 18". */
 export function dayText(at: number, tz: string): string {
   const d = new Date(at * 1000);

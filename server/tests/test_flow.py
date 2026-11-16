@@ -144,6 +144,9 @@ class PriorityAndDue(Base):
         k = self.ticket(dueAt=self.end_of(2026, 12, 1))                          # already on the ticket: kept
         self.pl.intake(k, "standard", ["works"], "agent:coordinator", priority="HIGH")
         self.assertEqual(self.ts.get(k)["dueAt"], self.end_of(2026, 12, 1))
+        k = self.ticket(dueAt=self.end_of(2026, 11, 10))                         # …even past: it shows overdue
+        self.pl.intake(k, "standard", ["works"], "agent:coordinator", priority="HIGH")
+        self.assertEqual(self.ts.get(k)["dueAt"], self.end_of(2026, 11, 10))
         k = self.ticket()
         self.pl.intake(k, "small", ["works"], "agent:coordinator", priority="LOW", due="2026-11-16")   # today is fine
         k = self.ticket()
@@ -156,7 +159,8 @@ class PriorityAndDue(Base):
     def test_the_lead_sets_priority_and_due_at_any_open_stage_but_not_the_criteria(self):
         k = self.sized("small")
         self.ts.update(k, {"status": "IN_REVIEW"}, "jay")
-        self.pl.define(k, "agent:coordinator", priority="URGENT", due="2026-11-17")
+        _, _, events = self.pl.define(k, "agent:coordinator", priority="URGENT", due="2026-11-17")
+        self.assertEqual(events[0][1], "updated: priority urgent, due 2026-11-17")       # not "criteria updated"
         t = self.ts.get(k)
         self.assertEqual((t["priority"], t["dueAt"]), ("URGENT", self.end_of(2026, 11, 17)))
         self.assertIn("past investigation", self.refused(409, self.pl.define, k, "agent:coordinator",

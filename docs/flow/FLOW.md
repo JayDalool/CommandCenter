@@ -55,7 +55,7 @@ was typed. The route decides which stages run; a skipped stage is refused by ccd
 | Acceptance criteria: up to 20 lines that must be true when it is done | lead or Jay (only Jay edits them after Investigate) |
 | Requirements: what must not change, what it depends on | lead |
 | Size, parent | lead |
-| Priority (urgent, high, medium, low) and due date | lead at intake, and at any stage while the ticket is open; Jay any time. No due date given: 2, 5 or 10 days from intake for small, standard or risky |
+| Priority (urgent, high, medium, low) and due date | lead at intake, and at any stage while the ticket is open; Jay any time. No due date given: the ticket's own, even a past one (it shows overdue and comes first), else 2, 5 or 10 days from intake for small, standard or risky |
 | Findings and plan | investigator |
 | Blast radius and required tests | tech-reviewer |
 | Screenshots: before (investigator), after (user-reviewer) | `pipeline_cli evidence` |
@@ -88,9 +88,10 @@ A lead acts when someone messages it. With **work mode** on for a project (Jay's
 profiles; every project starts off), ccd checks once a minute and reminds the idle lead, at most every 10 minutes,
 of the tickets that can move without Jay, in this order: priority, then the earliest due date, then the later stage, then the
 oldest. Take them in that order, within the limits above. A ticket that needs Jay: ask or block it, then take the
-next one. The reminder grants nothing; every gate still waits for Jay. It stays quiet while the project is paused,
+next one. A ticket in intake flagged needs-Jay is not named; a release-stage ticket is named for verifying only.
+The reminder grants nothing; every gate still waits for Jay. It stays quiet while the project is paused,
 the night shift runs or a budget is on hold, rests 2 hours after 3 reminders with no ticket change, and stops for
-the day after 36.
+the day after 36 (per Winnipeg day, even if the switch goes off and on).
 
 ## Who answers a question
 

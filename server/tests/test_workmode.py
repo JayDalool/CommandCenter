@@ -35,7 +35,10 @@ class Movable(unittest.TestCase):
                 row("CC-9", stage="done", status="DONE"),
                 row("CC-10", type_="OWNER_ACTION"),                      # Jay's own to-do
                 row("CC-11", flags=["needs_legal"]),                     # a lawyer's question
-                row("CC-12", flags=["needs_jay"])]                       # risky, but the investigation can go on
+                row("CC-12", flags=["needs_jay"]),                       # risky, but the investigation can go on
+                row("CC-13", stage="intake", status="INBOX", flags=["needs_jay"]),     # the board: Needs Jay
+                row("CC-14", stage="intake", status="PROPOSED", flags=["needs:jay"]),  # the label spelling
+                row("CC-15", stage="intake", status="INBOX", flags=["needs-legal"])]
         self.assertEqual(sorted(r["key"] for r in movable(rows)), ["CC-1", "CC-12", "CC-6", "CC-7", "CC-8"])
 
     def test_order_is_priority_then_due_date_then_later_stage_then_oldest(self):
@@ -59,7 +62,10 @@ class Movable(unittest.TestCase):
                       "Sun 15 Nov); then CC-055 (investigate).", text)
         self.assertNotIn("CC-056", text)                                       # three at most
         self.assertIn("never merge or deploy", text)
+        self.assertIn("fill an empty seat per FLOW.md", text)
         self.assertIn("pipeline_cli ask", text)
+        text = reminder_text("commandcenter", movable([row("CC-060", stage="release", status="DEPLOYING")]), now=T0)
+        self.assertIn("Next: CC-060 (release, verify only).", text)
 
 
 class Supervisor(unittest.TestCase):
@@ -137,6 +143,12 @@ class Supervisor(unittest.TestCase):
             at += workmode.NUDGE_GAP
             self.assertEqual(self.remind(at, activity=at - 1), "nudge", i)
         self.assertIsNone(self.remind(at + workmode.NUDGE_GAP, activity=at))
+        self.assertIn("again tomorrow", self.w.get("commandcenter")["why"])
+        self.w.set("commandcenter", False, now=at + 60)                         # off and on again: still today's 36
+        self.assertEqual(self.w.public("commandcenter", now=at + 60)["remindersToday"], 0)        # off shows none
+        self.w.set("commandcenter", True, now=at + 120)
+        self.assertEqual(self.w.public("commandcenter", now=at + 120)["remindersToday"], workmode.DAY_MAX)
+        self.assertIsNone(self.remind(at + 2 * workmode.NUDGE_GAP, activity=at + 2 * workmode.NUDGE_GAP - 1))
         self.assertIn("again tomorrow", self.w.get("commandcenter")["why"])
         tomorrow = datetime.datetime(2026, 11, 17, 9, 0, tzinfo=workmode.TZ).timestamp()
         self.assertEqual(self.remind(tomorrow, activity=tomorrow - 1), "nudge")
@@ -229,6 +241,28 @@ class WorkModeApi(ApiBase):
         self.idle_long_ago()
         self.tick()
         self.assertEqual(len(self.prompts()), 1)                                 # the 10-minute gap
+
+    def test_a_budget_hold_sends_nothing(self):
+        self.tickets.create("samvision", "feature", number=56, status="INBOX")
+        self.put("samvision", True, self.dev())
+        self.daemon.chat_budget_check = lambda conv: [{"scope": "company", "key": "*", "holdReason": "limit"}]
+        self.idle_long_ago()
+        self.fake.tails["wE:p2"] = self.EMPTY_PROMPT
+        self.tick()
+        self.assertEqual(self.prompts(), [])
+        self.assertEqual(self.daemon.work.get("samvision")["why"], "budget on hold")
+
+    def test_a_lead_that_turns_busy_before_the_send_gets_nothing_and_nothing_is_counted(self):
+        self.tickets.create("samvision", "feature", number=56, status="INBOX")
+        self.put("samvision", True, self.dev())
+        self.idle_long_ago()
+        self.fake.tails["wE:p2"] = self.EMPTY_PROMPT
+        self.fake.set_status("wE:p2", "working")      # herdr has it working; ccd's cached view still says idle
+        self.tick()
+        self.assertEqual(self.prompts(), [])
+        self.assertNotEqual(self.daemon.work.get("samvision").get("why"), "lead working")   # decide() saw it idle
+        st = self.get("/api/work-mode").json()["projects"]["samvision"]
+        self.assertEqual((st["remindersToday"], st["lastReminderAt"]), (0, None))
 
     def test_paused_night_shift_or_nothing_to_move_sends_nothing(self):
         dev = self.dev()
