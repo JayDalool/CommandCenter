@@ -73,6 +73,11 @@ function answer(path: string): unknown {
     case "/api/release":
       return { window: { weekday: 3, time: "22:00", tz: "America/Winnipeg", next: RELEASE_NEXT, hours: 2 }, cutoff: RELEASE_NEXT - 10 * 3600,
         projects: Object.fromEntries(fx.tasks.projects.map((p) => [p.key, { live: false }])) };
+    // Work mode as every project starts: off, nothing sent yet.
+    case "/api/work-mode":
+      return { projects: Object.fromEntries(fx.tasks.projects.map((p) => [p.key, { on: false, since: null, why: null,
+        lastReminderAt: null, remindersToday: 0, restUntil: null, next: [], paused: false }])),
+        limits: { idleS: 180, gapS: 600, restAfter: 3, restS: 7200, dayMax: 36 } };
     case "/api/briefing": {
       const zero = { merged: 0, done: 0, failedChecks: 0, opened: 0, questionsAsked: 0, questionsAnswered: 0, deploys: 0, needsYou: 0 };
       return { since: Math.floor(NOW / 1000) - 12 * 3600, until: Math.floor(NOW / 1000), totals: zero, quiet: true,

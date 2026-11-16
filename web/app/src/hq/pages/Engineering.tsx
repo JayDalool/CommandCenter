@@ -8,6 +8,7 @@ import "./engineering.css";
 import { href } from "../../lib/router";
 import { usePageNav, type PageNav } from "./route";
 import { ago } from "../../lib/time";
+import { dayText } from "../release";
 import { PRIORITY_META } from "../../tickets/model";
 import { TicketDetailPane } from "../../screens/TicketDetail";
 import { VISIBLE_STAGES, type VisibleStage } from "../../api/types";
@@ -28,7 +29,19 @@ function matches(t: EngTask, q: string) {
 }
 
 const COLS = [["key", "Key"], ["title", "Title"], ["project", "Project"], ["stage", "Stage"], ["priority", "Priority"],
-  ["assignee", "Assignee"], ["session", "Session"], ["pr", "PR"], ["updated", "Updated"]] as const;
+  ["due", "Due"], ["assignee", "Assignee"], ["session", "Session"], ["pr", "PR"], ["updated", "Updated"]] as const;
+
+/** The due date in Winnipeg time, as ccd stores it (23:59 on the day). Past it, the cell says so in red. */
+function Due({ at, now }: { at: number | null; now: number }) {
+  if (at == null) return <td className="c-due hq-dim">—</td>;
+  const day = dayText(at, DUE_TZ);
+  let short = day;
+  try { short = new Intl.DateTimeFormat("en-US", { timeZone: DUE_TZ, month: "short", day: "numeric" }).format(new Date(at * 1000)); }
+  catch { /* a zone this browser does not know: the long form */ }
+  return at < now ? <td className="c-due t-bad" title={`Overdue since ${day}`}>Overdue · {short}</td>
+    : <td className="c-due" title={`Due ${day}`}>{short}</td>;
+}
+const DUE_TZ = "America/Winnipeg";
 
 function Row({ t, sel, now, name, go }: { t: EngTask; sel: boolean; now: number; name: string; go: PageNav["go"] }) {
   return <tr className={cx(sel && "is-sel")} onClick={() => go("tasks", t.key)}>
@@ -39,6 +52,7 @@ function Row({ t, sel, now, name, go }: { t: EngTask; sel: boolean; now: number;
     <td className="c-project">{name}</td>
     <td className="c-stage"><Pill tone={STAGE_TONE[t.stage]}>{t.stage}</Pill></td>
     <td className={cx("c-priority", t.priority === "URGENT" && "t-bad", t.priority === "HIGH" && "t-warn")}>{PRIORITY_META[t.priority].label}</td>
+    <Due at={t.dueAt} now={now} />
     <td className="c-assignee" title={t.assignee}>{t.assignee}</td>
     <td className="c-session">{t.session ? <Pill tone={PRESENCE_TONE[t.session.presence]}>{PRESENCE_LABEL[t.session.presence]}</Pill> : <span className="hq-dim">None recorded</span>}</td>
     <td className="c-pr">{t.pr ? `#${t.pr.number}` : <span className="hq-dim">—</span>}</td>
