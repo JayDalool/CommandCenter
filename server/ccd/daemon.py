@@ -2155,6 +2155,14 @@ class Daemon(LeadChat, HqDaemon):
     def onboarding_drafts(self, state=None):
         return {"drafts": self._onboarding_call(self._need_onboarding().drafts, state)}
 
+    def onboarding_roles(self):
+        """The agent roster's roles and the defaults the Add agent form starts from."""
+        return {"roles": self._onboarding_call(self._need_onboarding().roles)}
+
+    def onboarding_project_agents(self, project):
+        """One project's team from the registration records (none of them active)."""
+        return self._onboarding_call(self._need_onboarding().project_agents, project)
+
     def onboarding_draft(self, draft_id):
         return self._onboarding_call(self._need_onboarding().draft, draft_id)
 
@@ -2189,6 +2197,13 @@ class Daemon(LeadChat, HqDaemon):
             self._event("security", "onboarding.registered",
                         f"Jay registered {out['id']}: a record only, with no credential and nothing started",
                         data={"agent": out["id"]})
+            return out
+        if op == "amend":
+            out = self._onboarding_call(o.amend_agent, kw.get("id"), kw.get("changes"), kw.get("version"),
+                                        kw.get("acknowledge"), actor)
+            self._event("security", "onboarding.amended",
+                        f"Jay changed {out['id']} (version {out['version']}): a record only; nothing is granted",
+                        data={"agent": out["id"], "version": out["version"]})
             return out
         if op == "retire":
             out = self._onboarding_call(o.retire_agent, kw.get("id"), actor, kw.get("reason") or "")

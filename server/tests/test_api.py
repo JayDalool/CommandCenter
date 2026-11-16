@@ -67,7 +67,8 @@ ALLOWED = {
     ("POST", "/api/workers/heartbeat"), ("POST", "/api/workers/approve"), ("POST", "/api/workers/revoke"),
     # Onboarding groundwork (D-024 proposed): 404 unless config onboarding_groundwork is true; records only.
     ("GET", "/api/onboarding"), ("GET", "/api/onboarding/agents"), ("GET", "/api/onboarding/agents/{id}"),
-    ("POST", "/api/onboarding/agents/{id}/retire"), ("GET", "/api/onboarding/drafts"), ("POST", "/api/onboarding/drafts"),
+    ("POST", "/api/onboarding/agents/{id}/retire"), ("POST", "/api/onboarding/agents/{id}/amend"),
+    ("GET", "/api/onboarding/roles"), ("GET", "/api/onboarding/projects/{project}/agents"), ("GET", "/api/onboarding/drafts"), ("POST", "/api/onboarding/drafts"),
     ("GET", "/api/onboarding/drafts/{id}"), ("PUT", "/api/onboarding/drafts/{id}"),
     ("POST", "/api/onboarding/drafts/{id}/discard"), ("POST", "/api/onboarding/drafts/{id}/register"),
     ("POST", "/api/onboarding/validate"), ("GET", "/api/onboarding/events"), ("GET", "/api/onboarding/budgets"),
