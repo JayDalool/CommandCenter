@@ -24,6 +24,7 @@ import hashlib
 import json
 import re
 import time
+import unicodedata
 import zoneinfo
 
 from . import flow as flow_mod
@@ -175,7 +176,22 @@ def needs_acceptance(t, w):
     return pol["merge"] == "owner" or pol["ui"] or "needs_jay" in flags or "owner:accept" in (w.get("confirmed") or [])
 
 
-BIDI_RE = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")   # characters that change how a line reads
+# Letters and symbols that Slack (like most fonts) draws as nothing: Hangul fillers, the braille blank, Khmer vowels.
+BLANK_CHARS = frozenset("\u115f\u1160\u3164\uffa0\u2800\u180e\u17b4\u17b5")
+UNSHOWN_CATEGORIES = ("Cc", "Cf", "Co", "Cn", "Cs", "Zl", "Zp", "Mn", "Me")
+
+
+def unshown(text):
+    """The first character of `text` that a reader may not see, or None: control and format characters (zero-width,
+    bidirectional controls, tag characters), private-use, unassigned and surrogate code points, line and paragraph
+    separators, combining marks (variation selectors among them) and the blank letters above. Line breaks and tabs
+    are shown. Text Jay approves from Slack must have none: the approval covers what he could read."""
+    for ch in unicodedata.normalize("NFC", str(text or "")):   # an accent typed as a combining mark is shown
+        if ch in "\n\t":
+            continue
+        if ch in BLANK_CHARS or unicodedata.category(ch) in UNSHOWN_CATEGORIES:
+            return ch
+    return None
 
 
 def _text(v, limit, field, multiline=True):
@@ -1466,15 +1482,17 @@ class Pipeline:
         if not summary:
             raise TaskError(400, "say what the deploy will do (--summary)")
         # Jay's "deploy" approves the whole plan, so the DM must show all of it (notify.send_deploy_plan): no more lines
-        # than it shows, nothing Slack's secret filter would hide, nothing that reorders how a line reads.
+        # than it shows, nothing Slack's secret filter would hide, no character Slack would not draw.
         if len(summary.splitlines()) > self.DEPLOY_PLAN_LINES:
             raise TaskError(400, f"keep the deploy plan to {self.DEPLOY_PLAN_LINES} lines: Jay reads all of it in Slack")
         if redact(summary)[1]:
             raise TaskError(400, "the deploy plan has text Slack's secret filter would hide (a key, token, password or "
                                  "connection string, or a word like token or secret followed by a value): reword it so "
                                  "Jay can read all of it")
-        if BIDI_RE.search(summary):
-            raise TaskError(400, "the deploy plan has bidirectional control characters")
+        ch = unshown(summary)
+        if ch:
+            raise TaskError(400, f"the deploy plan has a character Slack would not show (U+{ord(ch):04X}): use plain "
+                                 "text, so Jay can read all of it")
 
         def fn(tid, t, w, at):
             self._need(t, ("VERIFYING",), "a deploy plan")

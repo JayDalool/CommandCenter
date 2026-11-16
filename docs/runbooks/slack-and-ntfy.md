@@ -59,8 +59,9 @@ ccd reads only messages whose author is `jay_member_id`, never edits or bot mess
 - **Plans:** a plan waiting for Jay (a risky ticket's, after the technical review) comes as a DM with its summary,
   approach, what it touches, its risk and the technical review. `approve` (or yes, ok, go, lgtm) in that DM's thread
   approves that plan and implementation starts, whatever the scope is (Jay, 2026-11-16). It approves only the plan the
-  DM showed: if the plan or the gate changed since, nothing is approved. A plan that would show as [redacted] anywhere
-  is approved in CommandCenter only. The PR still needs its review and Jay's merge.
+  DM showed: if the plan or the gate changed since, nothing is approved. A plan that would show as [redacted]
+  anywhere, or has characters Slack would not show, is approved in CommandCenter only. The PR still needs its review
+  and Jay's merge.
 - **Blockers and UI reviews:** `approve` clears a blocker (`failure`) or accepts a UI review (`ui`) with the scope
   `answers_low_risk` or `all`.
 - **Merges** (scope `all`): the "Ready to merge" DM shows the PR, its head and the review. Only `merge` (or "merge
@@ -69,15 +70,15 @@ ccd reads only messages whose author is `jay_member_id`, never edits or bot mess
   `yes` or 👍 merges nothing (ccd says so); other text goes to the lead.
 - **Deploys** (scope `all`), two replies (Jay, 2026-11-16: "only deploy if asked to"): `approve` (or `deploy`) on the
   "Deploy approval" DM asks the agent to PREPARE (`daemon.SLACK_DEPLOY_TEMPLATE`). It records its plan with
-  `pipeline_cli deploy-plan` (at most 40 lines, and nothing the secret filter would show as [redacted]), which comes
-  to the DM as a new message with the whole plan quoted. Only `deploy` (or "deploy it", "go live", "ship it") there
-  tells it to deploy by that plan (`Daemon.slack_deploy`, bound to the plan's digest); `ok`, `yes` or 👍 deploys
-  nothing, and other text goes to the lead. A plan that cannot be shown whole in one Slack post gets no go from Slack:
-  reply in its thread to ask the agent for a shorter one. A deploy approved from Slack is confirmed only from Slack;
-  if the scope was lowered since, set it back to `all` and reply `deploy` again. On a live project the go waits for
-  the release window like any live deploy: the plan DM says until when, and a `deploy` reply before then is refused
-  (reply again once it opens). Until the go `deployed --result pass` is refused for that ticket. A deploy approved in
-  CommandCenter is unchanged: Jay confirms it in the agent's pane.
+  `pipeline_cli deploy-plan` (at most 40 lines, nothing the secret filter would show as [redacted], no invisible
+  characters), which comes to the DM as a new message with the whole plan quoted. Only `deploy` (or "deploy it", "go
+  live", "ship it") there tells it to deploy by that plan (`Daemon.slack_deploy`, bound to the plan's digest); `ok`,
+  `yes` or 👍 deploys nothing, and other text goes to the lead. A plan that cannot be shown whole in one Slack post
+  gets no go from Slack: reply in its thread to ask the agent for a shorter one. A deploy approved from Slack is
+  confirmed only from Slack; if the scope was lowered since, set it back to `all` and reply `deploy` again. On a live
+  project the go waits for the release window like any live deploy: the plan DM says until when, and a `deploy` reply
+  before then is refused (reply again once it opens). Until the go `deployed --result pass` is refused for that
+  ticket. A deploy approved in CommandCenter is unchanged: Jay confirms it in the agent's pane.
 - The scope is `answers` by default; Jay changes it in Settings → Slack and phone, or `notify_cli scope …`, both
   with Developer Unlock. The gate lists are fixed in code (`notify.PLAN_GATES`, `LOW_RISK_GATES`, `SHIP_GATES`) and
   checked again in the daemon, which also checks the scope for merges and deploys. Client projects never approve.
