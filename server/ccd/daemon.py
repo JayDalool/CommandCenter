@@ -1657,10 +1657,10 @@ class Daemon(LeadChat, HqDaemon):
             r = self._wrap(pl.stale, key, body.get("reason"), actor)
         elif op == "intake":
             r = self._wrap(pl.intake, key, body.get("size"), body.get("criteria"), actor, body.get("requirements"),
-                           body.get("parent"))
+                           body.get("parent"), body.get("priority"), body.get("due"))
         elif op == "criteria":
             r = self._wrap(pl.define, key, actor, body.get("criteria"), body.get("requirements"), body.get("size"),
-                           developer=developer)
+                           developer=developer, priority=body.get("priority"), due=body.get("due"))
         elif op == "plan-review":
             r = self._wrap(pl.plan_review, key, body.get("verdict"), actor, body.get("note"), body.get("blast"),
                            body.get("tests"), body.get("size"), **meta)

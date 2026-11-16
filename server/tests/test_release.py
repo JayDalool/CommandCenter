@@ -118,7 +118,7 @@ class InThePipeline(unittest.TestCase):
 
     def verifying(self, size):
         k = self.ts.create("samvision", "x", description="why")[0]["key"]
-        self.pl.intake(k, size, ["works"], "jay")
+        self.pl.intake(k, size, ["works"], "jay", priority="MEDIUM")
         self.ts.update(k, {"status": "VERIFYING"}, "jay")
         self.pl.merged(k, "JayDalool/SamVisionAI#1", "f" * 40)
         return k

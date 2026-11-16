@@ -19,7 +19,7 @@ Read your seat's page, not all of them: [seats/](seats/).
 
 | # | Stage | Seat | Ends when the ticket has |
 |---|---|---|---|
-| 1 | Intake | [lead](seats/lead.md) | description, size, at least one acceptance criterion, requirements, parent if any |
+| 1 | Intake | [lead](seats/lead.md) | description, size, priority, due date, at least one acceptance criterion, requirements, parent if any |
 | 2 | Investigate | [investigator](seats/investigator.md) | reproduced yes/no/n.a., findings, plan (approach, files affected, risk, tests), "before" screenshots |
 | 3 | Technical review | [tech-reviewer](seats/tech-reviewer.md) | APPROVE or SEND_BACK, the blast radius, the tests that must exist |
 | 4 | Build | [developer](seats/developer.md) | a PR with the change, its tests, and why-comments; handoff written |
@@ -55,6 +55,7 @@ was typed. The route decides which stages run; a skipped stage is refused by ccd
 | Acceptance criteria: up to 20 lines that must be true when it is done | lead or Jay (only Jay edits them after Investigate) |
 | Requirements: what must not change, what it depends on | lead |
 | Size, parent | lead |
+| Priority (urgent, high, medium, low) and due date | lead at intake, and at any stage while the ticket is open; Jay any time. No due date given: 2, 5 or 10 days from intake for small, standard or risky |
 | Findings and plan | investigator |
 | Blast radius and required tests | tech-reviewer |
 | Screenshots: before (investigator), after (user-reviewer) | `pipeline_cli evidence` |

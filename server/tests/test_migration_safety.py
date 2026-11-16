@@ -465,7 +465,7 @@ class DowngradeV14(unittest.TestCase):
         path = self.v14()
         ts = tasks.TaskStore(path, PROJECTS)
         k = ts.create("samvision", "Sized", description="why")[0]["key"]
-        Pipeline(ts).intake(k, "small", ["it works"], "jay")
+        Pipeline(ts).intake(k, "small", ["it works"], "jay", priority="LOW")
         ts.close()
         code, _, err = run("rollback", "--db", path, "--to", "13", "--backup-dir", tmp("backups"))
         self.assertEqual(code, 1)

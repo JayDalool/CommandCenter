@@ -552,7 +552,7 @@ class PipelineApi(Automation):
     def test_the_delivery_flow_over_http_and_the_flow_view(self):
         """Intake, technical review, user check, code review, merge, verify, the closing note; /api/flow shows it."""
         self.tickets.create("samvision", "feature", number=56, status="INBOX", description="Comps miss sold homes")
-        r = self.step("intake", {"size": "standard", "criteria": ["Five comps show"]})
+        r = self.step("intake", {"size": "standard", "criteria": ["Five comps show"], "priority": "HIGH"})
         self.assertEqual((r.status_code, r.json()["status"], r.json()["flow"]["stage"]), (200, "RESEARCHING", "investigate"))
         row = next(t for t in self.get("/api/tasks").json()["tickets"] if t["key"] == "SV-056")
         self.assertEqual((row["size"], row["stage"], row["stale"]), ("standard", "investigate", False))

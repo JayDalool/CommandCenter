@@ -17,18 +17,21 @@ decisions reach Jay, and close tickets with a note a stranger could follow. You 
 
 ## You must write into the ticket
 
-At intake: a plain-words description, the size, 1 to 20 acceptance criteria (each one testable by a person in a
-browser or by a test), the requirements (what must not change, what it depends on), and the parent if it has one.
+At intake: a plain-words description, the size, the priority (urgent, high, medium or low), the due date when you
+know one (otherwise ccd sets 2, 5 or 10 days from today for small, standard or risky), 1 to 20 acceptance criteria
+(each one testable by a person in a browser or by a test), the requirements (what must not change, what it depends
+on), and the parent if it has one. An older ticket without a priority or due date: set them with `criteria`.
 At the end: the closing note.
 
 ## Commands
 
     python -m ccd.pipeline_cli tasks samvision                                  # open tickets
     python -m ccd.pipeline_cli work SV-082                                      # one ticket's full state
-    python -m ccd.pipeline_cli intake SV-082 --role coordinator --size standard \
+    python -m ccd.pipeline_cli intake SV-082 --role coordinator --size standard --priority high [--due 2026-11-20] \
         --criterion "A REALTOR can export offers as CSV from the Offers page" \
         --criterion "The export opens in Excel with the same columns as the table" \
         --requirement "The Offers table layout does not change" [--parent SV-080]   # (flow PR)
+    python -m ccd.pipeline_cli criteria SV-071 --role coordinator --priority medium --due 2026-11-21   # any stage
     python -m ccd.pipeline_cli start SV-082 --role coordinator --branch SV-082-csv --worktree /srv/…/SV-082
     python -m ccd.pipeline_cli handoff SV-082 --role coordinator --done "…" --next "…"
     python -m ccd.pipeline_cli ask SV-082 --role coordinator --question "Export which columns?" \
