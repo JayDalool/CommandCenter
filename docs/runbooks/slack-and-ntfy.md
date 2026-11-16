@@ -62,14 +62,20 @@ ccd reads only messages whose author is `jay_member_id`, never edits or bot mess
   DM showed: if the plan or the gate changed since, nothing is approved. The PR still needs its review and Jay's merge.
 - **Blockers and UI reviews:** `approve` clears a blocker (`failure`) or accepts a UI review (`ui`) with the scope
   `answers_low_risk` or `all`.
-- **Merges** (scope `all`): the "Ready to merge" DM shows the PR, its head and the review. `merge` (or `approve`)
-  merges that one PR at that head, exactly as the Merge button does (`Daemon.slack_merge` → `act_merge`): the lead
-  merges it, and nothing is merged if the head, the review, CI or another gate moved.
+- **Merges** (scope `all`): the "Ready to merge" DM shows the PR, its head and the review. Only `merge` (or "merge
+  it", "merge now") merges that one PR at that head, exactly as the Merge button does (`Daemon.slack_merge` →
+  `act_merge`): the lead merges it, and nothing is merged if the head, the review, CI or another gate moved. `ok`,
+  `yes` or 👍 merges nothing (ccd says so); other text goes to the lead.
 - **Deploys** (scope `all`), two replies (Jay, 2026-11-16: "only deploy if asked to"): `approve` (or `deploy`) on the
   "Deploy approval" DM asks the agent to PREPARE (`daemon.SLACK_DEPLOY_TEMPLATE`). It records its plan with
-  `pipeline_cli deploy-plan`, which comes to the DM as a new message with the plan quoted. `deploy` there tells it to
-  deploy by that plan (`Daemon.slack_deploy`, bound to the plan's digest). Until then `deployed --result pass` is
-  refused for that ticket. A deploy approved in CommandCenter is unchanged: Jay confirms it in the agent's pane.
+  `pipeline_cli deploy-plan` (at most 40 lines), which comes to the DM as a new message with the whole plan quoted.
+  Only `deploy` (or "deploy it", "go live", "ship it") there tells it to deploy by that plan (`Daemon.slack_deploy`,
+  bound to the plan's digest); `ok`, `yes` or 👍 deploys nothing, and other text goes to the lead. A plan too long for
+  one Slack post gets no go from Slack: reply in its thread to ask the agent for a shorter one. A deploy approved from
+  Slack is confirmed only from Slack; if the scope was lowered since, set it back to `all` and reply `deploy` again.
+  On a live project the go waits for the release window like any live deploy: the plan DM says until when, and a
+  `deploy` reply before then is refused (reply again once it opens). Until the go `deployed --result pass` is refused
+  for that ticket. A deploy approved in CommandCenter is unchanged: Jay confirms it in the agent's pane.
 - The scope is `answers` by default; Jay changes it in Settings → Slack and phone, or `notify_cli scope …`, both
   with Developer Unlock. The gate lists are fixed in code (`notify.PLAN_GATES`, `LOW_RISK_GATES`, `SHIP_GATES`) and
   checked again in the daemon, which also checks the scope for merges and deploys. Client projects never approve.

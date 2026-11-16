@@ -41,7 +41,7 @@
                                      model, day and ticket, plus month-to-date against profile budgets. ?days=
     GET   /api/notify                Slack and ntfy: settings, status, what is configured (never a token or the ntfy URL)
     PUT   /api/notify                JAY + DEVELOPER UNLOCK. change those settings: slack, ntfy (on/off), quiet hours,
-                                     summary time, time zone, replyScope ("answers" | "answers_low_risk")
+                                     summary time, time zone, replyScope ("answers" | "answers_low_risk" | "all")
     POST  /api/notify/test           JAY + DEVELOPER UNLOCK. one test DM and one test push, now
     POST  /api/notify/summary        JAY + DEVELOPER UNLOCK. post the owner's and technical summaries now
     GET   /api/actors                per-agent actor tokens (fingerprints only; a token is shown once, on issue)

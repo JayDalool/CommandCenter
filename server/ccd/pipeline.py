@@ -1198,6 +1198,7 @@ class Pipeline:
     EVIDENCE_KINDS = ("screenshot", "image", "link", "file", "test", "pr", "ci", "deploy", "note")
     WRITERS = ("claude", "codex", "jay", "none")
     DEPLOY_ENVS = ("live", "preview", "dev")
+    DEPLOY_PLAN_LINES = 40   # a deploy plan Jay confirms from Slack is shown whole there
     MAX_QUESTIONS = 10
 
     def _open(self, t, op):
@@ -1460,12 +1461,18 @@ class Pipeline:
         summary = _text(summary, 2000, "summary")
         if not summary:
             raise TaskError(400, "say what the deploy will do (--summary)")
+        if len(summary.splitlines()) > self.DEPLOY_PLAN_LINES:
+            # Jay's "deploy" approves the whole plan, so the DM shows all of it (notify.send_deploy_plan).
+            raise TaskError(400, f"keep the deploy plan to {self.DEPLOY_PLAN_LINES} lines: Jay reads all of it in Slack")
 
         def fn(tid, t, w, at):
             self._need(t, ("VERIFYING",), "a deploy plan")
             d = w.get("deploy") or {}
             if d.get("env") != "live" or not d.get("approvedAt") or d.get("result"):
                 raise TaskError(409, f"{t['key']} has no approved live deployment waiting")
+            if not str(d.get("approvedBy") or "").endswith(":slack"):
+                raise TaskError(409, f"{t['key']}'s deploy was approved in CommandCenter: Jay confirms it in the pane, "
+                                     "not from Slack")
             if d.get("goAt"):
                 raise TaskError(409, f"Jay already confirmed {t['key']}'s deploy; deploy it as planned")
             d = dict(d, plan={"summary": summary, "at": at, "by": actor})
@@ -1486,6 +1493,13 @@ class Pipeline:
                 raise TaskError(409, f"{t['key']}'s deploy was already confirmed")
             if not d.get("plan") or plan_digest(d["plan"]) != plan_digest_seen:
                 raise TaskError(409, f"{t['key']}'s deploy plan changed since Jay saw it; nothing was confirmed")
+            if not d.get("urgent"):
+                # The same release window `deployed` holds a pass to: a go before it opens is refused, not queued.
+                held = self._held(t, w, at)
+                if held:
+                    when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(held))
+                    raise TaskError(409, f"{t['project']} is live: this deploy waits for the release window ({when}); "
+                                         "nothing was confirmed")
             d = dict(d, goAt=at, goBy=f"{actor}:{via}")
             return {}, {"deploy": d}, [("pipeline.deploy_confirmed", "Jay confirmed the deploy", {"via": via})]
         return self._tx(key, actor, fn)

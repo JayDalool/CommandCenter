@@ -289,8 +289,9 @@ nothing: it records that the sessions were left running.
 not by a click at a screen. It closes a plan gate always; a blocker or a UI review with `replyScope`
 `answers_low_risk` or `all`; and only with `all`, a merge (`Daemon.slack_merge`: the Merge button's own checks, for
 the one head the DM showed) and a live deploy. A Slack deploy takes two replies: the approval only asks the agent for
-a plan (`pipeline.deploy_plan`), and `deployed --result pass` is refused until Jay's "deploy" reply on that plan's
-digest is recorded (`pipeline.deploy_go`). The scope changes only in CommandCenter with Developer Unlock, so a stolen
+a plan (`pipeline.deploy_plan`, shown whole in the DM), and `deployed --result pass` is refused until Jay's
+"deploy" reply on that plan's digest is recorded (`pipeline.deploy_go`, which also holds to the release window). Only
+the words "merge" and "deploy" merge or deploy; a casual "ok" does neither. The scope changes only in CommandCenter with Developer Unlock, so a stolen
 Slack login cannot widen it; the daemon checks the gate list, the scope and client projects again whatever the
 notifier did. A plan is approved only as the DM showed it: its digest (`pipeline.plan_digest`) is checked by the
 notifier and again inside the transaction that closes the gate. Jay accepted the risk (2026-11-16): with `all`, a

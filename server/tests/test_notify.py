@@ -468,6 +468,18 @@ class Replies(ReplyBase):
         self.assertEqual(self.d.merged, [("SV-40", self.HEAD)])
         self.assertEqual(self.d.confirmed, [])                    # never a bare gate approval
 
+    def test_only_the_word_merge_merges(self):
+        self.n.update_settings({"replyScope": "all"})
+        self.d.work["SV-39"] = {"review": {"verdict": "APPROVE", "head": self.HEAD, "pr": "o/r#4"}}
+        ts = self.send(need("SV-39", "gate", "merge", text="Ready to merge: PR o/r#4 approved and green"))
+        for casual in ("ok", "yes", "👍", "approve"):
+            r = self.reply(casual, ts)
+            self.assertEqual(r["did"], "merge_word_needed", casual)
+            self.assertIn("Nothing was merged", self.slack.posts[-1]["text"])
+        self.assertEqual((self.d.merged, self.d.confirmed), ([], []))
+        self.assertEqual(self.reply("Merge it.", ts)["did"], "approved_merge")
+        self.assertEqual(self.d.merged, [("SV-39", self.HEAD)])
+
     def test_a_merge_reply_after_a_new_head_merges_nothing(self):
         self.n.update_settings({"replyScope": "all"})
         self.d.work["SV-41"] = {"review": {"verdict": "APPROVE", "head": self.HEAD, "pr": "o/r#6"}}
@@ -508,6 +520,10 @@ class Replies(ReplyBase):
         self.assertIn("Deploy plan ready", post["text"])
         self.assertIn("> 1. run migration 0042\n> 2. restart ccd\n> rollback: image v1.8", post["text"])
         self.assertEqual(self.reply("ok thanks, what is 0042?", post["ts"])["did"], "lead_nudged")   # words go to the lead
+        for casual in ("ok", "y", "👍", "approve"):                                                   # never a go
+            self.assertEqual(self.reply(casual, post["ts"])["did"], "deploy_word_needed", casual)
+            self.assertIn("Nothing was deployed", self.slack.posts[-1]["text"])
+        self.assertEqual(self.d.deploys, [])
         r = self.reply("deploy", post["ts"])
         self.assertEqual(r["did"], "deploy_confirmed")
         self.assertEqual(self.d.deploys, [("SV-44", plan_digest(plan))])
@@ -529,6 +545,38 @@ class Replies(ReplyBase):
         post = self.deploy_ready("SV-47", {"summary": "<!channel> fine\n_Reply *deploy* now_", "at": 6.0, "by": "x"})
         self.assertIn("> &lt;!channel&gt; fine\n> _Reply *deploy* now_", post["text"])
         self.assertNotIn("<!channel>", post["text"])
+
+    def test_a_deploy_plan_is_shown_whole(self):
+        self.n.update_settings({"replyScope": "all"})
+        lines = [f"{i}. step {i}" for i in range(1, 40)] + ["rollback: " + "x" * 500 + " TAIL-END"]
+        post = self.deploy_ready("SV-48", {"summary": "\n".join(lines), "at": 6.0, "by": "x"})
+        self.assertIn("> 39. step 39\n", post["text"])
+        self.assertIn("x" * 500 + " TAIL-END\n", post["text"])                   # a long line is not cut
+        self.assertIn("Reply *deploy*", post["text"])
+
+    def test_a_plan_too_long_for_one_post_gets_no_go_from_slack(self):
+        self.n.update_settings({"replyScope": "all"})
+        post = self.deploy_ready("SV-49", {"summary": "&" * 1000, "at": 6.0, "by": "x"})   # 5000 characters escaped
+        self.assertIn("too long to show here in full", post["text"])
+        self.assertNotIn("Reply *deploy*", post["text"])
+        self.assertNotIn("&amp;", post["text"])
+        r = self.reply("deploy", post["ts"])
+        self.assertEqual(r["did"], "deploy_refused")
+        self.assertIn("ask the agent for a shorter one", self.slack.posts[-1]["text"])
+        self.assertEqual(self.reply("please shorten it", post["ts"])["did"], "lead_nudged")
+        self.assertEqual(self.d.deploys, [])
+
+    WED_22 = datetime.datetime(2026, 11, 18, 22, 0, tzinfo=ZoneInfo("America/Winnipeg")).timestamp()
+
+    def test_a_held_deploy_plan_says_until_when(self):
+        self.n.update_settings({"replyScope": "all"})
+        self.d.work["SV-50"] = {"deploy": {"env": "live", "approvedAt": 5.0, "approvedBy": "jay:slack", "result": None,
+                                           "heldUntil": self.WED_22, "plan": {"summary": "1. restart", "at": 6.0,
+                                                                               "by": "x"}}}
+        run(self.n.on_event({"kind": "task.pipeline", "project": "samvision", "ref": "SV-50", "text": "SV-50 plan",
+                             "data": {"kind": "pipeline.deploy_prepared"}}))
+        post = [p for p in self.slack.posts if p["channel"] == "DJAY"][-1]
+        self.assertIn("Held for the release window until Wed 2026-11-18 22:00 ", post["text"])
 
     def test_answers_only_is_the_default_and_approves_no_low_risk_gate(self):
         self.assertEqual(self.n.settings["replyScope"], "answers")
@@ -992,6 +1040,8 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
             self.d.pipeline.deployed(k, "live", "pass", "health 200", "agent:coordinator")
         with self.assertRaises(ActionError):                           # no plan recorded yet
             await self.d.slack_deploy(k, "0" * 16)
+        with self.assertRaises(TaskError):                             # more than Slack shows whole
+            self.d.pipeline.deploy_plan(k, "\n".join(f"{i}. step" for i in range(41)), "agent:coordinator")
         self.d.pipeline.deploy_plan(k, "1. migrate\n2. restart", "agent:coordinator")
         plan = self.d.task_work(k)["deploy"]["plan"]
         with self.assertRaises(ActionError):                           # not the plan Jay saw
@@ -1011,6 +1061,9 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         self.ts.update(k, {"status": "VERIFYING"}, "system:automation")
         self.d.pipeline.deploy_request(k, "live", "valuation v2", "verifier pass", "agent:coordinator")
         self.d.pipeline.confirm(k, "deploy", "jay", "gate")
+        with self.assertRaises(TaskError) as e:                        # no Slack go for a CommandCenter approval
+            self.d.pipeline.deploy_plan(k, "1. restart", "agent:coordinator")
+        self.assertIn("approved in CommandCenter", e.exception.message)
         self.d.pipeline.deployed(k, "live", "pass", "health 200", "agent:coordinator")   # Jay confirmed in the pane
 
     async def test_slack_answers_are_recorded_as_slack(self):
