@@ -891,8 +891,10 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
             await self.d.slack_confirm(t["key"], "failure")
         t2, _ = self.ts.create("gauzemate", "Intake 2", needs_jay=True)
         self.d.pipeline.plan(t2["key"], {"summary": "s", "risk": "high"}, "agent:planner")
-        with self.assertRaises(ActionError):
-            await self.d.slack_confirm(t2["key"], "plan")
+        seen = plan_digest(self.d.task_work(t2["key"])["plan"])
+        with self.assertRaises(ActionError) as e:                     # refused as a client project, digest or not
+            await self.d.slack_confirm(t2["key"], "plan", plan_hash=seen)
+        self.assertIn("client projects", e.exception.message)
         self.assertEqual(self.d.task_work(t2["key"])["gate"], "plan")
 
 
