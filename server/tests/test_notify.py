@@ -398,6 +398,38 @@ class Replies(ReplyBase):
         self.assertEqual(self.d.delivered[-1][0], "cto")
         self.assertEqual(self.slack.posts[-1]["text"], "Sent to the CTO.")
 
+    def test_a_channel_the_bot_joined_after_connecting_reaches_its_lead(self):
+        # The socket read the list before #commandcenter's invite: Slack lists a private channel only to members.
+        self.n._ids = {k: v for k, v in FakeSlack().channels().items() if k != "commandcenter"}
+        r = self.reply("what's next?", channel="CCC")
+        self.assertEqual(r["did"], "lead_nudged")
+        self.assertEqual(self.d.delivered[-1][:2], ("commandcenter", "what's next?"))
+        self.assertEqual(self.n._ids["commandcenter"], "CCC")
+
+    def test_an_unknown_channel_rereads_the_list_at_most_once_a_minute(self):
+        calls = []
+        real = self.slack.channels
+        self.slack.channels = lambda: calls.append(1) or real()
+        self.n._ids = real()
+        self.assertEqual(self.reply("hello", channel="CCC")["did"], "lead_nudged")   # a known channel: no re-read
+        self.assertEqual(calls, [])
+        self.assertEqual(self.reply("hello", channel="CRANDOM")["did"], "ignored")
+        self.assertEqual(self.reply("hello again", channel="CRANDOM")["did"], "ignored")
+        self.assertEqual(len(calls), 1)
+        clock = self.n.clock
+        self.n.clock = lambda: clock() + notify.IDS_REFRESH_S
+        self.assertEqual(self.reply("hello?", channel="CRANDOM")["did"], "ignored")
+        self.assertEqual(len(calls), 2)
+
+    def test_a_failed_reread_is_recorded_and_the_message_ignored(self):
+        def broken():
+            raise notify.SlackError("conversations.list: ratelimited")
+        self.slack.channels = broken
+        self.n._ids = {"cto": "CCTO"}
+        self.assertEqual(self.reply("what's next?", channel="CCC")["did"], "ignored")
+        self.assertEqual(self.d.delivered, [])
+        self.assertIn("slack channels", self.n.status["lastError"])
+
     def test_without_the_chat_store_a_reply_says_so(self):
         del FakeDaemon.deliver_to_lead
         try:

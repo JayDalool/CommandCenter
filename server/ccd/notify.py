@@ -94,6 +94,7 @@ CONFIG_DEFAULTS = {
 HELD_MAX = 50
 THREADS_MAX = 1000
 SEEN_EVENTS_MAX = 500
+IDS_REFRESH_S = 60              # at most one re-read of the channel list a minute, for a message from an unknown channel
 ALERT_KINDS = ("pr.opened", "pr.closed", "ci.main_changed", "pr.ci_changed", "task.pipeline")
 PIPELINE_ALERTS = {"pipeline.merged": "merged", "pipeline.auto_merged": "auto-merged", "pipeline.deployed": "deployed",
                    "pipeline.done": "done", "pipeline.auto_merge_failed": "auto-merge failed"}
@@ -328,6 +329,7 @@ class Notifier:
         self._slack = slack            # a SlackWeb, or a fake in tests; built from slack.env when None
         self._ntfy = ntfy or ntfy_send
         self._ids = {}                 # channel name -> id
+        self._ids_at = 0.0             # when a message from an unknown channel last re-read it
         self._dm = None
         self.status = {"slack": "off", "socket": "off", "ntfy": "off", "lastError": None, "lastSentAt": None}
         saved, _ = self.store.get("notify:settings", {})
@@ -732,12 +734,33 @@ class Notifier:
                 if (item.get("kind") == "gate" and APPROVE_RE.match(text)):
                     return dict(await self.approve(ref, item.get("gate"), item), project=proj)
             return await self.to_lead(proj, text, ref)
-        if cid == self._dm or self._ids.get(self.conf["cto_channel"]) == cid:
-            return await self.to_lead("cto", text, None)
-        proj = self.project_of_channel(cid)
-        if proj:
-            return await self.to_lead(proj, text, None)
+        to = self._route(cid)
+        if to is None and cid not in self._ids.values() and await self._reread_channels():
+            to = self._route(cid)
+        if to:
+            return await self.to_lead(to, text, None)
         return {"did": "ignored"}
+
+    def _route(self, cid):
+        """Whose a message outside an item's thread is: "cto" (the DM or #cto), a project key, or None."""
+        if cid == self._dm or self._ids.get(self.conf["cto_channel"]) == cid:
+            return "cto"
+        return self.project_of_channel(cid)
+
+    async def _reread_channels(self):
+        """The channel list is read when the socket connects, and Slack lists a private channel only once the bot is
+        in it. A message from a channel the list lacks means the bot was invited since: read it again, at most once a
+        minute. Returns whether it was read."""
+        now = self.clock()
+        if now - self._ids_at < IDS_REFRESH_S:
+            return False
+        self._ids_at = now
+        try:
+            self._ids = await self._call(self.slack().channels)
+        except SlackError as e:
+            self._fail("slack channels", e)
+            return False
+        return True
 
     async def answer(self, key, text, qids):
         """Answers exactly the questions that message showed. If any of them was answered since, or there are
