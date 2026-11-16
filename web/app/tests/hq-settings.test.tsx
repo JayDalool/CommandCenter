@@ -261,6 +261,14 @@ describe("HQ Settings", () => {
     expect(within(page).getByText(`Answers and plans, plus clearing a blocker or accepting a UI review. Never a merge or deploy. ${gauze} is a client project: replies there are passed on as text and never answer or approve.`)).toBeInTheDocument();
   });
 
+  it("with Everything, the reply rule names merges and the two-reply deploy", async () => {
+    load();
+    vi.spyOn(app.api, "notify").mockResolvedValue({ ...NOTIFY, settings: { ...NOTIFY.settings, replyScope: "all" } });
+    const page = await show("#/settings?tab=notifications");
+    expect(within(page).getByText(/^Answers, plans, clearing a blocker or accepting a UI review, merges and deploys\. A merge is one reply; a deploy takes two: approve, then deploy once its plan is back\./)).toBeInTheDocument();
+    expect(within(within(page).getByRole("group", { name: "Your Slack replies" })).getByRole("button", { name: "Everything" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("with answers only, the reply rule still says plans are approved from Slack", async () => {
     load();
     vi.spyOn(app.api, "notify").mockResolvedValue({ ...NOTIFY, settings: { ...NOTIFY.settings, replyScope: "answers" } });

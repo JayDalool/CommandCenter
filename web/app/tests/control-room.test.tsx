@@ -311,6 +311,21 @@ describe("gates in manager words (spec §11, §22)", () => {
     expect(card.textContent).not.toMatch(/Claude deploys/);
   });
 
+  it("a deploy approved from Slack says the plan and the go are in Slack", () => {
+    const base = { env: "live", what: "x", verification: "y", requestedAt: 1, requestedBy: "agent:coordinator", approvedAt: 2,
+      approvedBy: "jay:slack", result: null };
+    const { unmount } = render(<GateCard ticketKey="CC-031" work={work({ status: "VERIFYING", deploy: base as never })} onDone={() => {}} />);
+    let card = screen.getByRole("region", { name: "Deploying" });
+    expect(within(card).getByText("Approved from Slack — confirm the deploy in Slack")).toBeInTheDocument();
+    expect(card.textContent).toMatch(/sends the plan to your Slack DM; reply deploy there to deploy it/);
+    expect(card.textContent).not.toMatch(/Claude's pane/);
+    unmount();
+    render(<GateCard ticketKey="CC-031" work={work({ status: "VERIFYING", deploy: { ...base, plan: { summary: "s", at: 3, by: "agent:coordinator" },
+      goAt: 4 } as never })} onDone={() => {}} />);
+    card = screen.getByRole("region", { name: "Deploying" });
+    expect(within(card).getByText("Confirmed from Slack — deploying")).toBeInTheDocument();
+  });
+
   describe("a live project's deploy waits for the weekly release (flow contract §5)", () => {
     const HELD = Date.UTC(2026, 10, 19, 3, 0) / 1000;      // Wed 18 Nov 2026, 22:00 in Winnipeg (UTC-5 all year from 2026)
     const dep = (over: Partial<DeployState> = {}): DeployState => ({ env: "live", what: "The new Dashboard", verification: "UI tests 14/14",

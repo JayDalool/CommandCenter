@@ -1048,7 +1048,9 @@ class Pipeline:
         """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock). `via` marks a
         live-deploy approval whose message only asks Claude to PREPARE: "go-live" (Go Live) gives approvedBy
         "jay:go-live", "gate" (the ticket's deploy gate) gives "jay:gate". Either way the event says the deploy was
-        approved for a PREPARED deploy that Jay confirms in the pane. The record is still a full live-deploy approval
+        approved for a PREPARED deploy that Jay confirms in the pane. "slack" (his reply in the Slack DM) gives
+        "jay:slack": the agent records its plan (deploy_plan) and Jay confirms it from Slack (deploy_go), which
+        `deployed --result pass` requires. The record is still a full live-deploy approval
         and permits `deployed` (it checks only approvedAt; the pane confirmation is Jay's, and nothing here can
         check it). `plan_digest_seen` (a plan approved from a Slack DM): the plan gate closes only if the plan is still
         the one Jay saw, checked in this transaction."""
@@ -1058,6 +1060,7 @@ class Pipeline:
             raise TaskError(400, f"gate must be one of {', '.join(GATES)}")
         by = f"{actor}:{via}" if via else actor
         said = ("approved for a prepared deploy (Jay confirms in the pane)" if via in ("go-live", "gate")
+                else "approved for a prepared deploy (Jay confirms it from Slack)" if via == "slack"
                 else "Jay approved the live deployment")
 
         def fn(tid, t, w, at):
@@ -1451,6 +1454,42 @@ class Pipeline:
                               ("pipeline.gate_opened", "deploy gate", {"gate": "deploy"})]
         return self._tx(key, actor, fn)
 
+    def deploy_plan(self, key, summary, actor):
+        """A live deploy Jay approved from Slack was PREPARED: the agent records its plan (steps, migrations, checks,
+        rollback) and ccd sends it to Jay's Slack DM. Nothing deploys until he confirms it there (deploy_go)."""
+        summary = _text(summary, 2000, "summary")
+        if not summary:
+            raise TaskError(400, "say what the deploy will do (--summary)")
+
+        def fn(tid, t, w, at):
+            self._need(t, ("VERIFYING",), "a deploy plan")
+            d = w.get("deploy") or {}
+            if d.get("env") != "live" or not d.get("approvedAt") or d.get("result"):
+                raise TaskError(409, f"{t['key']} has no approved live deployment waiting")
+            if d.get("goAt"):
+                raise TaskError(409, f"Jay already confirmed {t['key']}'s deploy; deploy it as planned")
+            d = dict(d, plan={"summary": summary, "at": at, "by": actor})
+            return {}, {"deploy": d}, [("pipeline.deploy_prepared", "deploy plan ready for Jay", {})]
+        return self._tx(key, actor, fn)
+
+    def deploy_go(self, key, actor, via, plan_digest_seen):
+        """Jay confirms a prepared live deploy from Slack: the plan he saw (its digest), approved and not yet done.
+        `deployed --result pass` is refused for a Slack-approved deploy until this is recorded."""
+        if actor != "jay":
+            raise TaskError(403, "only Jay confirms a deploy")
+
+        def fn(tid, t, w, at):
+            d = w.get("deploy") or {}
+            if d.get("env") != "live" or not d.get("approvedAt") or d.get("result"):
+                raise TaskError(409, f"{t['key']} has no approved live deployment waiting")
+            if d.get("goAt"):
+                raise TaskError(409, f"{t['key']}'s deploy was already confirmed")
+            if not d.get("plan") or plan_digest(d["plan"]) != plan_digest_seen:
+                raise TaskError(409, f"{t['key']}'s deploy plan changed since Jay saw it; nothing was confirmed")
+            d = dict(d, goAt=at, goBy=f"{actor}:{via}")
+            return {}, {"deploy": d}, [("pipeline.deploy_confirmed", "Jay confirmed the deploy", {"via": via})]
+        return self._tx(key, actor, fn)
+
     def deployed(self, key, env, result, evidence, actor):
         """The deployment happened. A live one only after Jay approved it; then verify live, then close."""
         if result not in ("pass", "fail"):
@@ -1466,6 +1505,10 @@ class Pipeline:
                 raise TaskError(409, f"no {env} deployment was requested for {t['key']}")
             if not d.get("approvedAt"):
                 raise TaskError(409, "Jay has not approved this live deployment")
+            if result == "pass" and str(d.get("approvedBy") or "").endswith(":slack") and not d.get("goAt"):
+                # Approved from Slack: that approval only asked for a plan; Jay's "deploy" reply is the go.
+                raise TaskError(409, "Jay approved this from Slack and has not confirmed the deploy yet: record the "
+                                     "plan with deploy-plan and wait for his reply")
             if env == "live" and not d.get("urgent") and result == "pass":
                 # A failure is always recorded (it happened); a pass before the window is refused.
                 held = self._held(t, w, at)

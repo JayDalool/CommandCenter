@@ -32,11 +32,13 @@ with the bot or a channel the bot is in, are read; everything else is ignored. A
                 Answer button does, and the answers go to the task's own session (or, with none running, to the
                 project's lead). A choice question's options are listed numbered (lettered when there are several
                 questions) with the recommended one marked; a reply of just "2" (or "1. b") picks that option.
-    gate        "approve" (or yes / ok / go / lgtm) closes only the gates in SLACK_GATES. A plan (PLAN_GATES): always,
-                and only the plan that DM showed (its summary, approach, risk and technical review are in it). The
-                Low-risk gates (LOW_RISK_GATES): only while `replyScope` is "answers_low_risk" (default "answers": off
-                until Jay decides). Merges, deploys and anything else open CommandCenter from the link: a stolen Slack
-                login can approve a plan but never merge or deploy.
+    gate        "approve" (or yes / ok / go / lgtm) closes only the gates in SLACK_GATES, each only as its DM showed
+                it. A plan (PLAN_GATES): always (its summary, approach, risk and technical review are in the DM). The
+                Low-risk gates (LOW_RISK_GATES): with `replyScope` "answers_low_risk" or "all". A merge or a live
+                deploy (SHIP_GATES): only with "all", which Jay sets in CommandCenter with Developer Unlock (default
+                "answers"). "merge" merges that one PR at the head the DM showed, as the Merge button does. A
+                deploy takes two replies: "approve" (or "deploy") asks the agent to PREPARE; its plan comes back as
+                a new DM (deploy_go), and only "deploy" there tells it to deploy.
     otherwise   the text goes to the project's lead (Daemon.deliver_to_lead, the in-app chat's store), and the
                 lead's reply comes back in the same thread.
 
@@ -67,18 +69,25 @@ log = logging.getLogger("ccd.notify")
 SLACK_ENV = Path(os.environ.get("CCD_SLACK_ENV", Path.home() / ".config" / "command-center" / "slack.env"))
 SLACK_API = "https://slack.com/api/"
 
-# The gates a Slack reply may close. Fixed in code on purpose: no setting widens it to merges or deploys.
+# The gates a Slack reply may close, fixed in code; replyScope (Jay's setting, changed only in CommandCenter with
+# Developer Unlock) says which of them a reply closes now.
 # failure = clear a blocker so the task resumes; ui = accept a UI review. Both are reversible and neither merges,
-# deploys, changes a plan, a credential or a permission. They need replyScope "answers_low_risk".
+# deploys, changes a plan, a credential or a permission. They need replyScope "answers_low_risk" or "all".
 LOW_RISK_GATES = frozenset({"failure", "ui"})
 # plan = approve a plan Jay must approve (a risky one, after the technical review), whatever replyScope says: Jay's
 # decision of 2026-11-16, so a risky ticket does not wait for him to open CommandCenter. Only the plan the DM
-# showed. It starts implementation; the PR still needs its review, Jay's merge and his deploy approval in
-# CommandCenter, so a stolen Slack login can approve a plan but never merge or deploy.
+# showed. It starts implementation; the PR still needs its review and Jay's merge.
 PLAN_GATES = frozenset({"plan"})
-SLACK_GATES = LOW_RISK_GATES | PLAN_GATES
-REPLY_SCOPES = ("answers", "answers_low_risk")
+# merge = merge one reviewed, green PR at the head the DM showed (Daemon.slack_merge, the Merge button's path);
+# deploy = approve a live deploy, which only asks for a plan, then confirm that plan with a second reply. Jay's
+# decision of 2026-11-16 ("Slack should be able to do everything … only deploy if asked to"). Only with replyScope
+# "all": a stolen Slack login alone cannot turn it on.
+SHIP_GATES = frozenset({"merge", "deploy"})
+SLACK_GATES = LOW_RISK_GATES | PLAN_GATES | SHIP_GATES
+REPLY_SCOPES = ("answers", "answers_low_risk", "all")
 APPROVE_RE = re.compile(r"^\s*(approve|approved|yes|y|ok|okay|go|go ahead|lgtm|:\+1:|👍|✅)\s*[.!]*\s*$", re.I)
+MERGE_RE = re.compile(r"^\s*(merge|merge it|merge now)\s*[.!]*\s*$", re.I)
+DEPLOY_RE = re.compile(r"^\s*(deploy|deploy it|deploy now|go live|ship it)\s*[.!]*\s*$", re.I)
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 SETTINGS_DEFAULTS = {
@@ -88,9 +97,9 @@ SETTINGS_DEFAULTS = {
     "quietEnd": "07:00",
     "summaryAt": "07:00",           # owner's and technical summaries, daily
     "timezone": "America/Winnipeg",
-    # "answers": approvals other than a plan open CommandCenter (D-024 clause 12, with Jay's 2026-11-16 decision that
-    # plans are approvable from the DM: PLAN_GATES). "answers_low_risk" also lets a Slack reply clear a blocker or
-    # accept a UI review; it waits on Jay's decision and is never the default.
+    # "answers": answers and plans (PLAN_GATES, Jay's 2026-11-16 decision); other approvals open CommandCenter.
+    # "answers_low_risk" also clears a blocker or accepts a UI review. "all" also merges and deploys (SHIP_GATES).
+    # Changed only in CommandCenter with Developer Unlock; never the default beyond "answers".
     "replyScope": "answers",
 }
 CONFIG_DEFAULTS = {
@@ -124,6 +133,7 @@ TEAM_KINDS = frozenset({
     "pipeline.rework", "pipeline.blocked", "pipeline.questions", "pipeline.answered", "pipeline.gate_opened",
     "pipeline.gate_confirmed", "pipeline.ready_to_merge", "pipeline.unreviewed_merge", "pipeline.verified",
     "pipeline.released", "pipeline.deploy_requested", "pipeline.deploy_approved", "pipeline.closed_note",
+    "pipeline.deploy_prepared", "pipeline.deploy_confirmed",
     *PIPELINE_ALERTS})
 CUSTOMIZE = "chat:write.customize"     # the scope Slack needs before a bot may post under another name and icon
 TICKETS_MAX = 500
@@ -600,14 +610,54 @@ class Notifier:
                 lines.append("_The plan could not be read here: approve it in CommandCenter. A reply here goes to the lead._")
             else:
                 lines += plan_lines(p["plan"], p["review"])
-                lines.append("_Reply *approve* to approve this plan and start implementation, or write to the lead. "
-                             "The merge and the deploy stay in CommandCenter._")
-        elif n.get("kind") == "gate" and n.get("gate") in LOW_RISK_GATES and self.settings["replyScope"] == "answers_low_risk":
+                lines.append("_Reply *approve* to approve this plan and start implementation, or write to the lead._")
+        elif n.get("kind") == "gate" and n.get("gate") == "merge" and self.allows("merge"):
+            rv = self._review(n.get("ref"))
+            if rv.get("head"):
+                lines.append(f"*PR:* {esc(rv.get('pr') or 'linked PR')} · head `{esc(str(rv['head'])[:12])}` · review "
+                             f"{esc(rv.get('verdict'))}")
+                lines.append("_Reply *merge* to merge this PR at this head, as the Merge button does, or write to the "
+                             "lead._")
+            else:
+                lines.append("_Merge this in CommandCenter. A reply here goes to the lead._")
+        elif n.get("kind") == "gate" and n.get("gate") == "deploy" and self.allows("deploy"):
+            lines.append("_Reply *approve* and the agent prepares it: its deploy plan comes to you as a new message, "
+                         "and nothing deploys until you reply *deploy* to that one._")
+        elif n.get("kind") == "gate" and n.get("gate") in LOW_RISK_GATES and self.allows(n.get("gate")):
             lines.append("_Reply *approve* to " + ("clear the blocker" if n["gate"] == "failure" else "accept the UI")
                          + ", or write to the lead._")
         elif n.get("kind") == "gate":
             lines.append("_Approve this in CommandCenter. A reply here goes to the lead._")
         return "\n".join(lines) + open_
+
+    def _work(self, key):
+        try:
+            return self.d.task_work(key) or {}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _review(self, key):
+        return self._work(key).get("review") or {}
+
+    def _deploy(self, key):
+        return self._work(key).get("deploy") or {}
+
+    async def send_deploy_plan(self, key, project):
+        """The plan an agent recorded for a deploy Jay approved (pipeline.deploy_plan): a new DM, its own item, whose
+        "deploy" reply is the go (deploy_go). The agent's lines are quoted, so they read as its text, not ccd's."""
+        d = self._deploy(key)
+        if self.client(project) or not d.get("plan") or d.get("goAt") or d.get("result"):
+            return
+        text = str(d["plan"].get("summary") or "")
+        quoted = [f"> {esc(line[:300])}" for line in text.splitlines()[:20] if line.strip()]
+        hint = ("_Reply *deploy* to deploy it now by this plan. Nothing deploys until you do._" if self.allows("deploy")
+                else "_Deploys from Slack are off: confirm it in the agent's pane._")
+        link = self.link({"ref": key})
+        body = "\n".join([f"*{self.name(project)}* · {esc(key)} · Deploy plan ready", *quoted, hint]) \
+            + (f"\n<{link}|Open in CommandCenter>" if link else "")
+        await self.post("dm", body, item={"type": "deploy_go", "project": project, "ref": key,
+                                          "planHash": plan_digest(d["plan"])})
+        await self.push(f"{self.name(project)}: deploy plan ready · {key}", link)
 
     def _plan(self, key):
         """The ticket's plan and its technical review as ccd has them now; None when there is no plan to show."""
@@ -629,6 +679,9 @@ class Notifier:
                 "ref": n.get("ref"), "stale": bool(n.get("stale")), "qids": list(n.get("qids") or []),
                 "textHash": _digest(n.get("text")), "since": n.get("since")}
         p = None
+        if n.get("kind") == "gate" and n.get("gate") == "merge" and not self.client(n.get("project")):
+            # The head this DM shows: a merge reply merges exactly it (approve()).
+            item["head"] = self._review(n.get("ref")).get("head")
         if n.get("kind") == "gate" and n.get("gate") in PLAN_GATES and not self.client(n.get("project")):
             # The plan this DM shows, read once. An approve applies to this plan only (approve()).
             p = self._plan(n.get("ref"))
@@ -693,6 +746,9 @@ class Notifier:
         if kind not in ALERT_KINDS:
             return
         proj = ev.get("project")
+        if kind == "task.pipeline" and (ev.get("data") or {}).get("kind") == "pipeline.deploy_prepared" \
+                and is_ticket(ev.get("ref")):
+            await self.send_deploy_plan(ev["ref"], proj)
         chan = self.conf["channels"].get(proj)
         if not chan or self.client(proj):
             return
@@ -899,8 +955,15 @@ class Notifier:
                     r = await self.answer(ref, text, item.get("qids") or [])
                     if r:
                         return dict(r, project=proj)
-                if (item.get("kind") == "gate" and APPROVE_RE.match(text)):
-                    return dict(await self.approve(ref, item.get("gate"), item), project=proj)
+                gate = item.get("gate")
+                if item.get("kind") == "gate" and (APPROVE_RE.match(text) or (gate == "merge" and MERGE_RE.match(text))
+                                                   or (gate == "deploy" and DEPLOY_RE.match(text))):
+                    return dict(await self.approve(ref, gate, item), project=proj)
+            return await self.to_lead(proj, text, ref)
+        if item and item.get("type") == "deploy_go":
+            proj, ref = item.get("project"), item.get("ref")
+            if not self.client(proj) and (DEPLOY_RE.match(text) or APPROVE_RE.match(text)):
+                return dict(await self.deploy_go(ref, item), project=proj)
             return await self.to_lead(proj, text, ref)
         to = self._route(cid)
         if to is None and cid not in self._ids.values() and await self._reread_channels(cid):
@@ -973,9 +1036,15 @@ class Notifier:
                 said = "Answered. Not delivered yet: " + esc(str(r.get("reason") or "no session was reached")) + "."
         return {"did": "answered", "say": said}
 
+    def allows(self, gate):
+        """Whether a Slack reply closes this gate now: fixed in code (SLACK_GATES), then Jay's replyScope."""
+        scope = self.settings["replyScope"]
+        return (gate in PLAN_GATES or (gate in LOW_RISK_GATES and scope in ("answers_low_risk", "all"))
+                or (gate in SHIP_GATES and scope == "all"))
+
     async def approve(self, key, gate, item=None):
         link = self.link({"ref": key})
-        if not (gate in PLAN_GATES or (gate in LOW_RISK_GATES and self.settings["replyScope"] == "answers_low_risk")):
+        if not self.allows(gate):
             return {"did": "approval_refused",
                     "say": "That one is approved in CommandCenter, not from Slack." + (f" <{link}|Open it>" if link else "")}
         # Only the gate that message showed: same ticket, gate, reason and time, and for a plan the same plan.
@@ -986,20 +1055,57 @@ class Notifier:
         if same and gate in PLAN_GATES:
             p = self._plan(key)
             same = p is not None and bool(item.get("planHash")) and plan_digest(p["plan"]) == item["planHash"]
+        if same and gate == "merge":
+            same = bool(item.get("head")) and self._review(key).get("head") == item["head"]
         if not same:
             return {"did": "approval_stale",
                     "say": "This has changed since this message, so nothing was approved." + (f" <{link}|Open it>" if link else "")}
         try:
+            if gate == "merge":
+                # The Merge button's own path, for this one PR at the head the DM showed.
+                m = await self.d.slack_merge(key, item["head"])
+                if not m.get("merging"):
+                    why = "; ".join(esc(s.get("reason")) for s in m.get("skipped") or []) or "it is no longer ready"
+                    return {"did": "merge_skipped", "say": f"Not merged: {why}."}
+                return {"did": "approved_merge", "say": "Merging: the lead merges this PR at that head and reports "
+                                                       "in the ticket's thread."}
             # A plan: the daemon checks the hash again as it closes the gate, so a plan replaced after the check
             # above is not approved either.
             r = await (self.d.slack_confirm(key, gate, plan_hash=item.get("planHash")) if gate in PLAN_GATES
                        else self.d.slack_confirm(key, gate))
         except Exception as e:  # noqa: BLE001
             return {"did": "approve_failed", "say": f"Could not approve: {esc(getattr(e, 'message', None) or e)}"}
+        said = {"failure": "Blocker cleared; the task resumes.", "ui": "UI accepted.",
+                "plan": "Plan approved; implementation starts."}.get(gate, "Approved.")
+        d = ((r or {}).get("work") or {}).get("deploy") or {}
+        if gate == "deploy" and d.get("approvedAt") and not d.get("result"):
+            said = ("Approved to prepare. The agent writes the deploy plan and it comes to you here as a new message; "
+                    "nothing deploys until you reply *deploy* to that one.")
+        elif gate == "deploy":
+            said = "Release approved."
         return {"did": f"approved_{gate}",
-                "say": {"failure": "Blocker cleared; the task resumes.", "ui": "UI accepted.",
-                        "plan": "Plan approved; implementation starts."}.get(gate, "Approved.")
-                + ("" if (r or {}).get("delivered", True) else " The task session was not running to hear it.")}
+                "say": said + ("" if (r or {}).get("delivered", True) else " The task session was not running to hear it.")}
+
+    async def deploy_go(self, key, item):
+        """Jay's "deploy" reply to a deploy plan DM: the go for exactly that plan (Daemon.slack_deploy checks it again
+        in the transaction that records it)."""
+        link = self.link({"ref": key})
+        if not self.allows("deploy"):
+            return {"did": "deploy_refused",
+                    "say": "Deploys from Slack are off: confirm it in the agent's pane." + (f" <{link}|Open it>" if link else "")}
+        d = self._deploy(key)
+        if not item.get("planHash") or not d.get("plan") or plan_digest(d["plan"]) != item["planHash"] \
+                or d.get("goAt") or d.get("result"):
+            return {"did": "deploy_stale",
+                    "say": "This plan changed or was already handled, so nothing was deployed." + (f" <{link}|Open it>" if link else "")}
+        try:
+            r = await self.d.slack_deploy(key, item["planHash"])
+        except Exception as e:  # noqa: BLE001
+            return {"did": "deploy_failed", "say": f"Could not confirm: {esc(getattr(e, 'message', None) or e)}"}
+        return {"did": "deploy_confirmed",
+                "say": "Deploying by this plan. The result comes in the ticket's thread."
+                + ("" if (r or {}).get("delivered", True) else " The task session was not running to hear it: open "
+                   "CommandCenter to start it.")}
 
     async def to_lead(self, conversation, text, ref):
         deliver = getattr(self.d, "deliver_to_lead", None)

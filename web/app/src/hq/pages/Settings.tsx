@@ -290,8 +290,10 @@ function SlackAndPhone() {
         onChange={(x) => x === (v.ntfy ? "on" : "off") || void save({ ntfy: x === "on" })} /></Row>
     <Row label="Your Slack replies" hint={(v.replyScope === "answers"
       ? (plans ? "Answer agents' questions and approve plans. Other approvals open Command Center." : "Answer agents' questions. Approvals open Command Center.")
-      : `Answers${plans ? " and plans" : ""}, plus ${gateWords(st.d.slackGates)}. Never ${plans ? "a" : "a plan,"} merge or deploy.`) + clientRule}>
-      <Seg label="Your Slack replies" value={v.replyScope} options={[["answers", "Answers only"], ["answers_low_risk", "Answers and low-risk"]]}
+      : v.replyScope === "all"
+        ? `Answers, plans, ${gateWords(st.d.slackGates)}, merges and deploys. A merge is one reply; a deploy takes two: approve, then deploy once its plan is back.`
+        : `Answers${plans ? " and plans" : ""}, plus ${gateWords(st.d.slackGates)}. Never ${plans ? "a" : "a plan,"} merge or deploy.`) + clientRule}>
+      <Seg label="Your Slack replies" value={v.replyScope} options={[["answers", "Answers only"], ["answers_low_risk", "Answers and low-risk"], ["all", "Everything"]]}
         disabled={busy} onChange={(x) => x === v.replyScope || void save({ replyScope: x })} /></Row>
     <Row label="Quiet hours" hint={`${v.timezone}${st.d.quietNow ? " · quiet now" : ""}${st.d.held ? ` · ${plural(st.d.held, "alert")} held` : ""}`}>
       <TimeBox label="Quiet hours start" value={v.quietStart} onSave={(t) => save({ quietStart: t })} />

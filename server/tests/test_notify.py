@@ -13,7 +13,7 @@ from ccd import notify, security
 from ccd.daemon import ActionError, Daemon
 from ccd.pipeline import plan_digest
 from ccd.store import Store
-from ccd.tasks import TaskStore
+from ccd.tasks import TaskError, TaskStore
 
 from .helpers import cfg
 
@@ -123,6 +123,9 @@ class FakeDaemon:
         self.delivered = []
         self.plans = {}
         self.reviews = {}
+        self.work = {}
+        self.merged = []
+        self.deploys = []
         self._stopping = False
         self.tasks = None
 
@@ -140,8 +143,8 @@ class FakeDaemon:
                 "byProject": [{"key": "gyst", "costUsd": 3.0}]}
 
     def task_work(self, key):
-        return {"questions": self.questions.get(key, []), "plan": self.plans.get(key) or {},
-                "planReview": self.reviews.get(key)}
+        return dict({"questions": self.questions.get(key, []), "plan": self.plans.get(key) or {},
+                     "planReview": self.reviews.get(key)}, **self.work.get(key, {}))
 
     async def task_answers(self, key, body, actor="jay", developer=False, via=None):
         self.answered.append((key, body, actor, developer, via))
@@ -154,6 +157,14 @@ class FakeDaemon:
     async def slack_confirm(self, key, gate, plan_hash=None):
         self.confirmed.append((key, gate))
         self.plan_hash = plan_hash
+        return {"delivered": True, "work": self.work.get(key, {})}
+
+    async def slack_merge(self, key, head):
+        self.merged.append((key, head))
+        return {"merging": [{"key": key, "head": head}], "skipped": []}
+
+    async def slack_deploy(self, key, plan_hash):
+        self.deploys.append((key, plan_hash))
         return {"delivered": True}
 
     async def deliver_to_lead(self, conversation, text, *, via="slack", ref=None, author="jay"):
@@ -196,7 +207,7 @@ class Settings(unittest.TestCase):
 
     def test_settings_are_validated_and_survive_a_restart(self):
         n, d, _, _ = make()
-        for bad in ({"slack": "yes"}, {"quietStart": "25:00"}, {"timezone": "Mars/Base"}, {"replyScope": "all"},
+        for bad in ({"slack": "yes"}, {"quietStart": "25:00"}, {"timezone": "Mars/Base"}, {"replyScope": "everything"},
                     {"token": "x"}):
             with self.assertRaises(ValueError):
                 n.update_settings(bad)
@@ -442,6 +453,82 @@ class Replies(ReplyBase):
             r = self.reply("approve", ts)
             self.assertEqual(r["did"], "approval_refused", gate)
         self.assertEqual(self.d.confirmed, [("SV-failure", "failure"), ("SV-ui", "ui")])
+
+    HEAD = "a" * 40
+
+    def test_with_everything_a_merge_reply_merges_the_head_the_dm_showed(self):
+        self.n.update_settings({"replyScope": "all"})
+        self.d.work["SV-40"] = {"review": {"verdict": "APPROVE", "head": self.HEAD, "pr": "o/r#5"}}
+        ts = self.send(need("SV-40", "gate", "merge", text="Ready to merge: PR o/r#5 approved and green"))
+        dm = self.slack.posts[-1]["text"]
+        self.assertIn("*PR:* o/r#5 · head `aaaaaaaaaaaa` · review APPROVE", dm)
+        self.assertIn("Reply *merge*", dm)
+        r = self.reply("merge", ts)
+        self.assertEqual(r["did"], "approved_merge")
+        self.assertEqual(self.d.merged, [("SV-40", self.HEAD)])
+        self.assertEqual(self.d.confirmed, [])                    # never a bare gate approval
+
+    def test_a_merge_reply_after_a_new_head_merges_nothing(self):
+        self.n.update_settings({"replyScope": "all"})
+        self.d.work["SV-41"] = {"review": {"verdict": "APPROVE", "head": self.HEAD, "pr": "o/r#6"}}
+        ts = self.send(need("SV-41", "gate", "merge", text="Ready to merge: PR o/r#6 approved and green"))
+        self.d.work["SV-41"] = {"review": {"verdict": "APPROVE", "head": "b" * 40, "pr": "o/r#6"}}
+        self.assertEqual(self.reply("merge", ts)["did"], "approval_stale")
+        self.assertEqual(self.d.merged, [])
+
+    def test_merges_and_deploys_need_everything(self):
+        self.n.update_settings({"replyScope": "answers_low_risk"})
+        self.d.work["SV-42"] = {"review": {"verdict": "APPROVE", "head": self.HEAD, "pr": "o/r#7"}}
+        ts = self.send(need("SV-42", "gate", "merge"))
+        self.assertNotIn("Reply *merge*", self.slack.posts[-1]["text"])
+        self.assertEqual(self.reply("merge", ts)["did"], "approval_refused")
+        ts = self.send(need("SV-43", "gate", "deploy", text="Deploy approval: Ready for live deployment"))
+        self.assertEqual(self.reply("deploy", ts)["did"], "approval_refused")
+        self.assertEqual((self.d.merged, self.d.confirmed), ([], []))
+
+    def deploy_ready(self, key, plan):
+        self.d.work[key] = {"deploy": {"env": "live", "approvedAt": 5.0, "approvedBy": "jay:slack", "result": None,
+                                       "plan": plan}}
+        run(self.n.on_event({"kind": "task.pipeline", "project": "samvision", "ref": key, "text": f"{key} deploy plan",
+                             "data": {"kind": "pipeline.deploy_prepared"}}))
+        return [p for p in self.slack.posts if p["channel"] == "DJAY"][-1]
+
+    def test_a_deploy_takes_an_approve_then_a_deploy_on_the_plan(self):
+        self.n.update_settings({"replyScope": "all"})
+        self.d.work["SV-44"] = {"deploy": {"env": "live", "approvedAt": 5.0, "approvedBy": "jay:slack", "result": None}}
+        ts = self.send(need("SV-44", "gate", "deploy", text="Deploy approval: Ready for live deployment"))
+        self.assertIn("nothing deploys until you reply *deploy*", self.slack.posts[-1]["text"])
+        r = self.reply("approve", ts)
+        self.assertEqual(r["did"], "approved_deploy")
+        self.assertIn("Approved to prepare", self.slack.posts[-1]["text"])
+        self.assertEqual(self.d.deploys, [])
+        plan = {"summary": "1. run migration 0042\n2. restart ccd\nrollback: image v1.8", "at": 6.0, "by": "agent:coordinator"}
+        post = self.deploy_ready("SV-44", plan)
+        self.assertEqual(post["channel"], "DJAY")
+        self.assertIn("Deploy plan ready", post["text"])
+        self.assertIn("> 1. run migration 0042\n> 2. restart ccd\n> rollback: image v1.8", post["text"])
+        self.assertEqual(self.reply("ok thanks, what is 0042?", post["ts"])["did"], "lead_nudged")   # words go to the lead
+        r = self.reply("deploy", post["ts"])
+        self.assertEqual(r["did"], "deploy_confirmed")
+        self.assertEqual(self.d.deploys, [("SV-44", plan_digest(plan))])
+
+    def test_a_deploy_reply_on_a_changed_plan_deploys_nothing(self):
+        self.n.update_settings({"replyScope": "all"})
+        plan = {"summary": "1. restart", "at": 6.0, "by": "agent:coordinator"}
+        post = self.deploy_ready("SV-45", plan)
+        self.d.work["SV-45"]["deploy"]["plan"] = dict(plan, summary="1. restart\n2. drop table")
+        self.assertEqual(self.reply("deploy", post["ts"])["did"], "deploy_stale")
+        self.n.update_settings({"replyScope": "answers"})
+        post = self.deploy_ready("SV-46", plan)
+        self.assertIn("Deploys from Slack are off", post["text"])
+        self.assertEqual(self.reply("deploy", post["ts"])["did"], "deploy_refused")
+        self.assertEqual(self.d.deploys, [])
+
+    def test_a_deploy_plan_quotes_agent_text(self):
+        self.n.update_settings({"replyScope": "all"})
+        post = self.deploy_ready("SV-47", {"summary": "<!channel> fine\n_Reply *deploy* now_", "at": 6.0, "by": "x"})
+        self.assertIn("> &lt;!channel&gt; fine\n> _Reply *deploy* now_", post["text"])
+        self.assertNotIn("<!channel>", post["text"])
 
     def test_answers_only_is_the_default_and_approves_no_low_risk_gate(self):
         self.assertEqual(self.n.settings["replyScope"], "answers")
@@ -873,6 +960,59 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         w = self.d.task_work(t["key"])
         self.assertEqual((w["gate"], w["plan"]["summary"]), ("plan", "second"))
 
+    async def test_merges_and_deploys_need_everything_in_the_daemon_too(self):
+        t, _ = self.ts.create("samvision", "Valuation")
+        self.d.notifier.update_settings({"replyScope": "answers_low_risk"})
+        with self.assertRaises(ActionError) as e:
+            await self.d.slack_merge(t["key"], "a" * 40)
+        self.assertEqual(e.exception.status, 403)
+        with self.assertRaises(ActionError) as e:
+            await self.d.slack_confirm(t["key"], "deploy")
+        self.assertEqual(e.exception.status, 403)
+        self.d.notifier.update_settings({"replyScope": "all"})
+        with self.assertRaises(ActionError) as e:
+            await self.d.slack_confirm(t["key"], "merge")              # a merge is never a bare gate approval
+        self.assertEqual(e.exception.status, 403)
+        with self.assertRaises(ActionError) as e:
+            await self.d.slack_merge(t["key"], "a" * 40)               # Merge's own checks: nothing is ready
+        self.assertEqual(e.exception.status, 409)
+        with self.assertRaises(ActionError) as e:
+            await self.d.act_merge("samvision", [{"key": t["key"], "head": "a" * 40}], actor="jay")
+        self.assertEqual(e.exception.status, 403)                      # the API path still needs Developer Unlock
+
+    async def test_a_deploy_from_slack_waits_for_its_plan_and_jays_second_reply(self):
+        self.d.notifier.update_settings({"replyScope": "all"})
+        t, _ = self.ts.create("samvision", "Valuation")
+        k = t["key"]
+        self.ts.update(k, {"status": "VERIFYING"}, "system:automation")
+        self.d.pipeline.deploy_request(k, "live", "valuation v2", "verifier pass", "agent:coordinator")
+        r = await self.d.slack_confirm(k, "deploy")
+        self.assertEqual(r["work"]["deploy"]["approvedBy"], "jay:slack")
+        with self.assertRaises(TaskError):                             # approved from Slack: no pass before the go
+            self.d.pipeline.deployed(k, "live", "pass", "health 200", "agent:coordinator")
+        with self.assertRaises(ActionError):                           # no plan recorded yet
+            await self.d.slack_deploy(k, "0" * 16)
+        self.d.pipeline.deploy_plan(k, "1. migrate\n2. restart", "agent:coordinator")
+        plan = self.d.task_work(k)["deploy"]["plan"]
+        with self.assertRaises(ActionError):                           # not the plan Jay saw
+            await self.d.slack_deploy(k, "f" * 16)
+        r = await self.d.slack_deploy(k, plan_digest(plan))
+        self.assertTrue(r["work"]["deploy"]["goAt"])
+        self.assertFalse(r["delivered"])                               # no task session in this test
+        with self.assertRaises(TaskError):                             # the plan is fixed once Jay said go
+            self.d.pipeline.deploy_plan(k, "something else", "agent:coordinator")
+        self.d.pipeline.deployed(k, "live", "pass", "health 200", "agent:coordinator")
+        (data,) = self.ts.db.execute("SELECT data FROM ticket_events WHERE kind='pipeline.deploy_confirmed'").fetchone()
+        self.assertEqual(json.loads(data).get("via"), "slack")
+
+    async def test_a_deploy_approved_in_commandcenter_is_unchanged(self):
+        t, _ = self.ts.create("samvision", "Valuation")
+        k = t["key"]
+        self.ts.update(k, {"status": "VERIFYING"}, "system:automation")
+        self.d.pipeline.deploy_request(k, "live", "valuation v2", "verifier pass", "agent:coordinator")
+        self.d.pipeline.confirm(k, "deploy", "jay", "gate")
+        self.d.pipeline.deployed(k, "live", "pass", "health 200", "agent:coordinator")   # Jay confirmed in the pane
+
     async def test_slack_answers_are_recorded_as_slack(self):
         t, _ = self.ts.create("samvision", "Valuation")
         self.d.pipeline.ask(t["key"], ["Same layout on mobile?"], "agent:coordinator")
@@ -891,8 +1031,10 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
             await self.d.slack_confirm(t["key"], "failure")
         t2, _ = self.ts.create("gauzemate", "Intake 2", needs_jay=True)
         self.d.pipeline.plan(t2["key"], {"summary": "s", "risk": "high"}, "agent:planner")
-        with self.assertRaises(ActionError):
-            await self.d.slack_confirm(t2["key"], "plan")
+        seen = plan_digest(self.d.task_work(t2["key"])["plan"])
+        with self.assertRaises(ActionError) as e:                     # refused as a client project, digest or not
+            await self.d.slack_confirm(t2["key"], "plan", plan_hash=seen)
+        self.assertIn("client projects", e.exception.message)
         self.assertEqual(self.d.task_work(t2["key"])["gate"], "plan")
 
 
