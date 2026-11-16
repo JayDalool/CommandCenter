@@ -81,6 +81,16 @@ Never put secrets, tokens, customer data, licensed data or pasted terminal outpu
   or proposes cancelling it (`pipeline_cli stale`; only Jay cancels).
 - Two rounds at most per review stage: the second send-back blocks the ticket.
 
+## Work mode: work keeps moving
+
+A lead acts when someone messages it. With **work mode** on for a project (Jay's switch in Settings › Operating
+profiles; every project starts off), ccd checks once a minute and reminds the idle lead, at most every 10 minutes,
+of the tickets that can move without Jay, in this order: priority, then the earliest due date, then the later stage, then the
+oldest. Take them in that order, within the limits above. A ticket that needs Jay: ask or block it, then take the
+next one. The reminder grants nothing; every gate still waits for Jay. It stays quiet while the project is paused,
+the night shift runs or a budget is on hold, rests 2 hours after 3 reminders with no ticket change, and stops for
+the day after 36.
+
 ## Who answers a question
 
 A developer's question goes to the technical reviewer first, then the lead, then Jay. A question for Jay is a

@@ -33,6 +33,10 @@ own; when ccd is down, it builds locally exactly as before.
   last run, kept in the repo, findings for Jay to Fix it / Skip. ccd then reminds an
   idle night-shift coordinator to continue until its morning report says
   `Status: complete` (or nothing moves after 3 reminders). A coordinator is never a task session.
+  **Work mode** (Jay's switch per project, every project off until he turns it on): ccd reminds an idle
+  project lead, at most every 10 minutes, of the tickets it can move without Jay, by key, stage, priority and due
+  date (`server/ccd/workmode.py`). Same safety as the night shift: idle pane, empty input line, never over a
+  draft; it rests after 3 reminders with no ticket change and stops for the day after 36.
   **Messages** (Jay's answers C1-C8): Jay's message to a project lead or the CTO is stored, and the idle lead gets one
   fixed nudge to read it with `scripts/cc-inbox` (never Jay's words in the pane). The one place ccd STARTS a Claude:
   Jay's Start in Messages, while `chat_start_leads` is true, after a budget check (`herdr workspace create` +

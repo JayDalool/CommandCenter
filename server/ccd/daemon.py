@@ -43,6 +43,7 @@ from .leadchat import LeadChat
 # A ticket key in an /api/tasks path, in any case (tasks._id_of upper-cases it), for the shadow identity record.
 TICKET_PATH_RE = re.compile(r"/api/tasks/([A-Za-z][A-Za-z0-9-]{0,20}-\d{1,6})(?:/|$)")
 from . import nightshift as nightshift_mod
+from . import workmode as workmode_mod
 from . import uitests as uitests_mod
 from . import records as records_mod
 from . import tasks as tasks_mod
@@ -300,6 +301,8 @@ class Daemon(LeadChat, HqDaemon):
         self.releases = release_mod.Release(cfg.get("release_path") or STATE_DIR / "release.json")
         if self.pipeline is not None:
             self.pipeline.releases = self.releases
+        # Work mode: per project, Jay's switch for reminding an idle lead of tickets it can move (ccd/workmode.py).
+        self.work = workmode_mod.WorkMode(cfg.get("work_mode_path") or STATE_DIR / "work-mode.json")
         # Auto-merge (CC-025): the config switch is read once, here. `gh_cli(args) -> (code, stdout, stderr)` is the
         # only way ccd writes to GitHub; tests give it a fake. The stop file is checked before every merge.
         self.auto_merge_on = cfg.get("auto_merge") is True
@@ -409,7 +412,7 @@ class Daemon(LeadChat, HqDaemon):
 
     def start(self):
         loops = [self.herdr_loop, self.github_loop, self.git_loop, self.host_loop, self.derive_loop,
-                 self.housekeeping_loop, self.night_loop, self.meter_loop, self.chat_loop]
+                 self.housekeeping_loop, self.night_loop, self.work_loop, self.meter_loop, self.chat_loop]
         if self.notifier is not None:
             loops += self.notifier.loops()
         self._loops = [asyncio.create_task(fn(), name=fn.__name__) for fn in loops]
@@ -1059,6 +1062,111 @@ class Daemon(LeadChat, HqDaemon):
                 why = self.night.get(key).get("endReason") or action[4:]
                 self._event("action", "action.night_shift", f"{key} night shift ended: {why}", project=key,
                             data={"kind": "night_shift_ended", "reason": why})
+
+    # ---------- work mode (workmode.py) ----------
+
+    async def work_loop(self):
+        while not self._stopping:
+            await asyncio.sleep(self.NIGHT_TICK)
+            try:
+                await self.work_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 — the supervisor must never take ccd down
+                log.warning(json.dumps({"msg": "work mode tick failed", "error": repr(e)[:200]}))
+
+    def work_rows(self, project):
+        """The project's open tickets as workmode.movable() reads them: the ticket's priority and due date with
+        its flow stage, seat holder and who it waits on."""
+        pl = self.pipeline
+        if pl is None:
+            return []
+        out = []
+        for (key,) in pl.db.execute("SELECT key FROM tickets WHERE project=? AND archived=0 AND status NOT IN "
+                                    "('DONE','DENIED','CANCELLED') ORDER BY number", (project,)).fetchall():
+            t = pl.ts.get(key)
+            fl, _hs = pl.flow_of(key, t)
+            out.append({"key": t["key"], "status": t["status"], "type": t.get("type"), "flags": t.get("flags") or [],
+                        "priority": t.get("priority"), "dueAt": t.get("dueAt"),
+                        "number": t.get("number"), "stage": fl["stage"], "holder": fl["holder"],
+                        "waitingOn": fl["waitingOn"], "stale": fl["stale"]})
+        return out
+
+    async def work_tick(self, now=None):
+        """Remind each idle lead of a project in work mode that tickets can move without Jay (workmode.decide)."""
+        for proj in self._projects():
+            key = proj["key"]
+            if not self.work.active(key):
+                continue
+            if registry.paused(key):
+                self.work.note(key, "project paused")
+                continue
+            if self.night is not None and self.night.active(key):
+                self.work.note(key, "night shift running")
+                continue
+            if self.chat_budget_check(key):
+                self.work.note(key, "budget on hold")
+                continue
+            nxt = workmode_mod.movable(self.work_rows(key))
+            # With herdr down there is no status: never a reminder.
+            r = coordinators.resolution(proj, self.panes) if self.herdr_state["ok"] else {"state": "none"}
+            status = r.get("status") if r["state"] == "ready" else None
+            action = self.work.decide(key, status, self._activity.get(key), len(nxt), now)
+            if action == "rest":
+                self._event("action", "action.work_mode", f"{key} work mode resting: no ticket moved after "
+                            f"{workmode_mod.REST_AFTER} reminders", project=key,
+                            data={"kind": "work_mode_rest", "until": self.work.get(key).get("restUntil")})
+            if action != "nudge":
+                continue
+            try:
+                agent = await self._fresh_agent(r["paneId"])
+                if agent["status"] not in ("idle", "done"):       # busy or blocked now: nothing sent, nothing counted
+                    continue
+                # As the night shift does: send only when the input line is plainly empty, never over a draft.
+                screen = await self.herdr.read_tail(agent["pane_id"], 40)
+                if nightshift_mod.input_is_empty(screen["text"]) is not True:
+                    self.work.note(key, "input line not empty or not recognised")
+                    continue
+                self._broker("pane.input", key, f"work-mode reminder -> pane {agent['pane_id']}")
+                await self.herdr.prompt(agent["pane_id"], workmode_mod.reminder_text(key, nxt, now))
+                self.work.nudged(key, now)                          # counted only once it was delivered
+                self._event("action", "action.work_mode", f"work mode reminder → {coordinators.canonical(proj)}",
+                            project=key, agent_id=agent["pane_id"],
+                            data={"kind": "work_mode_nudge", "tickets": [t["key"] for t in nxt[:workmode_mod.SHOW]]})
+            except (ActionError, OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
+                self.work.note(key, "reminder failed")
+                log.warning(json.dumps({"msg": "work mode reminder failed", "project": key, "error": str(e)[:160]}))
+
+    def work_state(self, now=None):
+        """GET /api/work-mode: per project, on or off, why nothing was sent, and the tickets that can move next."""
+        now = _now() if now is None else now
+        out = {}
+        for proj in self._projects():
+            key = proj["key"]
+            row = self.work.public(key, now)
+            row["next"] = [t["key"] for t in workmode_mod.movable(self.work_rows(key))[:workmode_mod.SHOW]]
+            row["paused"] = bool(registry.paused(key))
+            out[key] = row
+        return {"projects": out, "limits": {"idleS": workmode_mod.IDLE_GRACE, "gapS": workmode_mod.NUDGE_GAP,
+                                            "restAfter": workmode_mod.REST_AFTER, "restS": workmode_mod.REST_S,
+                                            "dayMax": workmode_mod.DAY_MAX}}
+
+    def work_set(self, project, body, actor="jay", developer=False):
+        """PUT /api/work-mode/projects/{project} {on}: Jay with Developer Unlock (it lets ccd type into a lead's pane)."""
+        if actor != "jay" or not developer:
+            raise ActionError(403, "Developer Unlock required: work mode is Jay's switch")
+        if not isinstance(body, dict):
+            raise ActionError(400, "body must be an object")
+        if self._project(project) is None:
+            raise ActionError(404, f"unknown project {project}")
+        try:
+            self.work.set(project, body.get("on"))
+        except workmode_mod.WorkModeError as e:
+            raise ActionError(e.status, e.message)
+        # "action", not "tasks": switching it is not progress on a ticket (_activity counts "tasks" events).
+        self._event("action", "action.work_mode", f"{project} work mode {'on' if body.get('on') else 'off'}",
+                    project=project, data={"kind": "work_mode_set", "on": body.get("on")})
+        return self.work_state()
 
     def night_state(self):
         """Every project's night shift: state, coordinator, the newest morning report."""

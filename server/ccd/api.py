@@ -78,6 +78,9 @@
     GET   /api/release               live per project, the weekly release window (next start) and the merge cutoff
     PUT   /api/release/window        Jay AND Developer Unlock. {weekday 0=Sunday..6, time "HH:MM"} (Winnipeg time)
     PUT   /api/release/projects/{project}  Jay AND Developer Unlock. {live: true|false}
+    GET   /api/work-mode             work mode per project: on/off, why nothing was sent, the tickets that move next
+    PUT   /api/work-mode/projects/{project}  Jay AND Developer Unlock. {on: true|false}: ccd reminds the project's
+                                     idle lead of tickets it can move without Jay (ccd/workmode.py)
     POST  /api/tasks/check           Jay AND Developer Unlock. the task check: a fixed message asks the project's
                                      idle coordinator Claude to propose stale tasks and add missing ones
                                      ({copy: true}: send nothing, return the message to paste by hand)
@@ -598,6 +601,13 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
         return daemon.release_set("project", body, request.state.actor, developer=dev,
                                   project=request.path_params["project"])
+
+    async def work_mode_state(request, _):
+        return daemon.work_state()
+
+    async def work_mode_set(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.work_set(request.path_params["project"], body, request.state.actor, developer=dev)
 
     async def task_work_op(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
@@ -1561,6 +1571,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/release", guarded(release_state), methods=["GET"]),
         Route("/api/release/window", guarded(release_window), methods=["PUT"]),
         Route("/api/release/projects/{project}", guarded(release_live), methods=["PUT"]),
+        Route("/api/work-mode", guarded(work_mode_state), methods=["GET"]),
+        Route("/api/work-mode/projects/{project}", guarded(work_mode_set), methods=["PUT"]),
         Route("/api/tasks/{key}/work/{op}", guarded(task_work_op), methods=["POST"]),
         Route("/api/tasks/{key}/answers", guarded(task_answers), methods=["POST"]),
         Route("/api/tasks/{key}/record", guarded(task_record), methods=["GET"]),
