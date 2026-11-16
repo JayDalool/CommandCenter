@@ -398,9 +398,24 @@ def plan_lines(plan, review):
             out.append(f"*Blast radius:* {esc(_cut(review['blast'], 300))}")
     else:
         out.append("*Technical review:* none on this route")
+    more = [f"{len(plan[k])} {k if len(plan[k]) != 1 else k[:-1]}" for k in ("questions", "findings") if plan.get(k)]
+    if more:
+        out.append(f"*Also in the plan:* {' and '.join(more)}, in CommandCenter")
     if any(line.endswith("…") for line in out):
         out.append("_Some of it is cut short here; the full plan is in CommandCenter._")
     return out
+
+
+def plan_unshown(value):
+    """Whether any text anywhere in a plan (every field, shown in the DM or not) has a character Slack would not
+    show (pipeline.unshown). An approval covers the whole plan, so such a plan is approved in CommandCenter only."""
+    if isinstance(value, str):
+        return unshown(value) is not None
+    if isinstance(value, dict):
+        return any(plan_unshown(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(plan_unshown(v) for v in value)
+    return False
 
 
 def need_label(n):
@@ -618,7 +633,7 @@ class Notifier:
                 lines.append("_The plan could not be read here: approve it in CommandCenter. A reply here goes to the lead._")
             else:
                 lines += plan_lines(p["plan"], p["review"])
-                if redact("\n".join(lines))[1] or unshown("\n".join(lines)):
+                if redact("\n".join(lines))[1] or unshown("\n".join(lines)) or plan_unshown(p["plan"]):
                     # Part of it would not show (post() redacts; Slack draws no invisible character): no planHash.
                     lines.append("_Part of this plan cannot be shown here, so it is approved in CommandCenter only. A "
                                  "reply here goes to the lead._")
@@ -658,7 +673,7 @@ class Notifier:
 
     async def send_deploy_plan(self, key, project):
         """The plan an agent recorded for a deploy Jay approved (pipeline.deploy_plan): a new DM, its own item, whose
-        "deploy" reply is the go (deploy_go). The agent's lines are quoted, so they read as its text, not ccd's.
+        "deploy" reply is the go (deploy_go). The agent's lines are in a code block, so they read as its text, not ccd's.
         Every line is shown whole, since the go approves the whole plan; one that will not fit in a post gets no go
         from Slack. Sent at any hour, like a Slack approval's own reply: Jay asked for this plan, so quiet hours do
         not hold it."""
@@ -666,8 +681,11 @@ class Notifier:
         if self.client(project) or not d.get("plan") or d.get("goAt") or d.get("result"):
             return
         text = str(d["plan"].get("summary") or "")
-        quoted = [f"> {esc(line)}" for line in text.splitlines() if line.strip()]
-        head = f"*{self.name(project)}* · {esc(key)} · Deploy plan ready"
+        shown_lines = [esc(line) for line in text.splitlines() if line.strip()]
+        # A code block: no Slack formatting applies inside it (a struck-through or bold step reads as written), and
+        # pipeline.deploy_plan refuses the ``` that would end it early.
+        quoted = ["```", *shown_lines, "```"]
+        head = f"*{self.name(project)}* · {esc(key)} · Deploy plan ready · {len(shown_lines)} lines"
         link = self.link({"ref": key})
         open_ = f"\n<{link}|Open in CommandCenter>" if link else ""
         plan_hash = plan_digest(d["plan"])
@@ -720,7 +738,7 @@ class Notifier:
             p = self._plan(n.get("ref"))
             item["planHash"] = plan_digest(p["plan"]) if p else None
         text = self.need_text(n, plan=p, review=rv)
-        if p is not None and (redact(text)[1] or unshown(text)):
+        if p is not None and (redact(text)[1] or unshown(text) or plan_unshown(p["plan"])):
             # Part of what an approve approves would not show: CommandCenter only.
             item["planHash"] = None
         await self.post("dm", text, item=item)

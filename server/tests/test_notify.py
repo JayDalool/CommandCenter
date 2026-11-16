@@ -518,7 +518,8 @@ class Replies(ReplyBase):
         post = self.deploy_ready("SV-44", plan)
         self.assertEqual(post["channel"], "DJAY")
         self.assertIn("Deploy plan ready", post["text"])
-        self.assertIn("> 1. run migration 0042\n> 2. restart ccd\n> rollback: image v1.8", post["text"])
+        self.assertIn("Deploy plan ready · 3 lines\n```\n1. run migration 0042\n2. restart ccd\nrollback: image v1.8\n```",
+                      post["text"])
         self.assertEqual(self.reply("ok thanks, what is 0042?", post["ts"])["did"], "lead_nudged")   # words go to the lead
         for casual in ("ok", "y", "👍", "approve"):                                                   # never a go
             self.assertEqual(self.reply(casual, post["ts"])["did"], "deploy_word_needed", casual)
@@ -543,14 +544,15 @@ class Replies(ReplyBase):
     def test_a_deploy_plan_quotes_agent_text(self):
         self.n.update_settings({"replyScope": "all"})
         post = self.deploy_ready("SV-47", {"summary": "<!channel> fine\n_Reply *deploy* now_", "at": 6.0, "by": "x"})
-        self.assertIn("> &lt;!channel&gt; fine\n> _Reply *deploy* now_", post["text"])
+        self.assertIn("```\n&lt;!channel&gt; fine\n_Reply *deploy* now_\n```", post["text"])     # no formatting
         self.assertNotIn("<!channel>", post["text"])
 
     def test_a_deploy_plan_is_shown_whole(self):
         self.n.update_settings({"replyScope": "all"})
         lines = [f"{i}. step {i}" for i in range(1, 40)] + ["rollback: " + "x" * 500 + " TAIL-END"]
         post = self.deploy_ready("SV-48", {"summary": "\n".join(lines), "at": 6.0, "by": "x"})
-        self.assertIn("> 39. step 39\n", post["text"])
+        self.assertIn("\n39. step 39\n", post["text"])
+        self.assertIn("Deploy plan ready · 40 lines", post["text"])
         self.assertIn("x" * 500 + " TAIL-END\n", post["text"])                   # a long line is not cut
         self.assertIn("Reply *deploy*", post["text"])
 
@@ -577,6 +579,22 @@ class Replies(ReplyBase):
         self.assertIn("Part of this plan cannot be shown here", self.slack.posts[-1]["text"])
         self.assertEqual(self.reply("approve", ts)["did"], "approval_refused")
         self.assertEqual((self.d.deploys, self.d.confirmed), ([], []))
+
+    def test_a_plan_with_hidden_text_in_any_field_is_approved_in_commandcenter_only(self):
+        tags = "".join(chr(0xE0000 + ord(c)) for c in " also drop users")
+        for i, extra in enumerate(({"findings": ["looks fine" + tags]}, {"questions": ["q" + tags]},
+                                   {"approach": "x" * 720 + tags})):
+            key = f"SV-7{i}"
+            self.d.plans[key] = dict(self.PLAN, **extra)
+            ts = self.send(need(key, "gate", "plan", text=self.PLAN_NEED))
+            self.assertIn("Part of this plan cannot be shown here", self.slack.posts[-1]["text"], extra)
+            self.assertEqual(self.reply("approve", ts)["did"], "approval_refused", extra)
+        self.assertEqual(self.d.confirmed, [])
+
+    def test_a_plan_dm_says_what_else_the_plan_holds(self):
+        self.d.plans["SV-74"] = dict(self.PLAN, questions=["Keep the old guard?"], findings=["a", "b"])
+        self.send(need("SV-74", "gate", "plan", text=self.PLAN_NEED))
+        self.assertIn("*Also in the plan:* 1 question and 2 findings, in CommandCenter", self.slack.posts[-1]["text"])
 
     KEY_WRAPPED = "1. restart\n-----BEGIN RSA PRIVATE KEY-----\n2. DROP TABLE users\n-----END RSA PRIVATE KEY-----\n3. verify"
 
@@ -1081,7 +1099,10 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
                            "1. restart \u202e2. drop",                                   # reads in another order
                            "1. restart web" + "".join(chr(0xE0000 + ord(c)) for c in "2. DROP TABLE users"),  # tags
                            "1. restart\u200b web", "1. restart web\ufe0f", "1. restart\u3164web",
-                           "1. restart\rweb"):
+                           "1. restart\rweb",
+                           "1. restart web\u00a02. drop",                                # only plain spaces
+                           "1. restart web" + " " * 20 + "2. drop",                      # pushed out of sight
+                           "1. restart\n```\n~2. drop~"):                               # ends the code block
             with self.assertRaises(TaskError) as e:
                 self.d.pipeline.deploy_plan(k, unshowable, "agent:coordinator")
             self.assertEqual(e.exception.status, 400)
