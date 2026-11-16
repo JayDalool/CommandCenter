@@ -98,7 +98,8 @@ def describe(r, now):
         bits.append(r["priority"].lower())
     if isinstance(r.get("dueAt"), (int, float)):
         d = datetime.datetime.fromtimestamp(r["dueAt"], TZ)
-        bits.append(("overdue since " if r["dueAt"] < now else "due ") + f"{d:%a} {d.day} {d:%b}")
+        # By the Winnipeg calendar day, as HQ shows it: a date stored at midnight is not overdue on its own day.
+        bits.append(("overdue since " if _day(r["dueAt"]) < _day(now) else "due ") + f"{d:%a} {d.day} {d:%b}")
     return f"{r['key']} ({', '.join(bits)})"
 
 

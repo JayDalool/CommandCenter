@@ -652,6 +652,15 @@ class TeamThreads(ReplyBase):
         self.assertEqual(r["did"], "lead_nudged")
         self.assertEqual(self.d.delivered[-1][:4], ("samvision", "why risky?", "slack", "SV-43"))
 
+    def test_a_reply_still_finds_its_ticket_after_the_root_was_pruned(self):
+        self.step("SV-46", "pipeline.plan", "plan recorded", "agent:planner")
+        root = self.channel_posts()[0]
+        self.n._ids = FakeSlack().channels()
+        self.n.threads.pop(f"CSV:{root['ts']}")              # a busy week pushed the root out of `threads`
+        r = self.reply("is this still needed?", root["ts"], channel="CSV")
+        self.assertEqual(r["did"], "lead_nudged")
+        self.assertEqual(self.d.delivered[-1][:4], ("samvision", "is this still needed?", "slack", "SV-46"))
+
     def test_the_thread_survives_a_restart(self):
         self.step("SV-44", "pipeline.plan", "plan recorded", "agent:planner")
         root = self.channel_posts()[0]
