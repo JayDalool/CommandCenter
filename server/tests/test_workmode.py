@@ -61,6 +61,9 @@ class Movable(unittest.TestCase):
         self.assertIn("Next: CC-053 (investigate, high, due Wed 18 Nov); then CC-054 (code review, overdue since "
                       "Sun 15 Nov); then CC-055 (investigate).", text)
         self.assertNotIn("CC-056", text)                                       # three at most
+        midnight = datetime.datetime(2026, 11, 16, 0, 0, tzinfo=workmode.TZ).timestamp()   # today, stored at 00:00
+        self.assertIn("CC-057 (investigate, due Mon 16 Nov)", reminder_text("commandcenter", [row("CC-057", due=midnight)],
+                                                                          now=T0))
         self.assertIn("never merge or deploy", text)
         self.assertIn("fill an empty seat per FLOW.md", text)
         self.assertIn("pipeline_cli ask", text)
@@ -215,9 +218,8 @@ class WorkModeApi(ApiBase):
         self.assertEqual(r.status_code, 200, r.text)
         self.assertTrue(r.json()["projects"]["samvision"]["on"])
         self.assertFalse(r.json()["projects"]["gyst"]["on"])
-        kinds = [e["data"].get("kind") for e in self.get("/api/activity?limit=50").json()["events"]
-                 if e["kind"] == "action.work_mode"]
-        self.assertIn("work_mode_set", kinds)
+        data = [e["data"] for e in self.get("/api/activity?limit=50").json()["events"] if e["kind"] == "action.work_mode"]
+        self.assertIn({"kind": "work_mode_set", "on": True}, data)        # the store keeps "on" (EVENT_DATA_KEYS)
         self.assertFalse(self.put("samvision", False, dev).json()["projects"]["samvision"]["on"])
 
     def test_an_idle_lead_is_reminded_of_the_next_tickets_and_never_over_a_draft(self):
@@ -238,6 +240,9 @@ class WorkModeApi(ApiBase):
         self.assertIn("Next: SV-057 (intake, high); then SV-056 (intake).", sent[0]["text"])
         self.assertNotIn("feature", sent[0]["text"])                            # never a title
         self.assertEqual(self.get("/api/work-mode").json()["projects"]["samvision"]["remindersToday"], 1)
+        nudges = [e["data"] for e in self.get("/api/activity?limit=50").json()["events"]
+                  if e["kind"] == "action.work_mode" and e["data"].get("kind") == "work_mode_nudge"]
+        self.assertEqual(nudges[0]["tickets"], ["SV-057", "SV-056"])        # keys only, never titles
         self.idle_long_ago()
         self.tick()
         self.assertEqual(len(self.prompts()), 1)                                 # the 10-minute gap

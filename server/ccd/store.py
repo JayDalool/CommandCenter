@@ -51,7 +51,9 @@ EVENT_DATA_KEYS = ("from", "to", "status", "number", "ci", "stage", "kind", "rea
                    # Milestones (ccd/hq.py): which milestone, its track and state, never its title or note
                    "id", "track", "state",
                    # Pipeline steps: who recorded one (jay, agent:<role>), so Slack posts it under that seat
-                   "actor")
+                   "actor",
+                   # Work mode (ccd/workmode.py): the switch, a rest's end, the ticket keys a reminder named
+                   "on", "until", "tickets")
 
 
 class Store:

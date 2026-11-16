@@ -648,6 +648,14 @@ class Notifier:
             await self.post(chan, esc(text), thread_ts=root, who=SEATS.get(data.get("actor")),
                             broadcast=data.get("kind") in PIPELINE_ALERTS)
 
+    def _ticket_item(self, cid, ts):
+        """A ticket's thread found from notify:tickets, for a root that `threads` has already pruned (it keeps
+        1000 posts; a busy week can push a quiet ticket's root out while the ticket is still open)."""
+        for key, t in self.tickets.items():
+            if t.get("ts") == ts and self._ids.get(t.get("channel")) == cid:
+                return {"type": "ticket", "project": t.get("project") or self.project_of_channel(cid), "ref": key}
+        return None
+
     async def _ticket_thread(self, key, project, chan):
         """The ts of the ticket's thread in `chan`, starting it (key, title, a link) the first time."""
         t = self.tickets.get(key)
@@ -662,7 +670,7 @@ class Notifier:
         ts = await self.post(chan, head, item={"type": "ticket", "project": project, "ref": key})
         if ts is None:
             return None
-        self.tickets[key] = {"channel": chan, "ts": ts, "at": self.clock()}
+        self.tickets[key] = {"channel": chan, "ts": ts, "at": self.clock(), "project": project}
         if len(self.tickets) > TICKETS_MAX:
             for k in sorted(self.tickets, key=lambda k: self.tickets[k].get("at") or 0)[:len(self.tickets) - TICKETS_MAX]:
                 del self.tickets[k]
@@ -787,6 +795,8 @@ class Notifier:
         thread = ev.get("thread_ts")
         here = thread or ev.get("ts")
         item = self.threads.get(f"{cid}:{thread}") if thread else None
+        if item is None and thread:
+            item = self._ticket_item(cid, thread)
         result = await self.handle_reply(cid, item, text)
         self.d._event("notify", "notify.slack_reply", f"Slack reply: {result['did']}",
                       project=result.get("project"), ref=(item or {}).get("ref"),
