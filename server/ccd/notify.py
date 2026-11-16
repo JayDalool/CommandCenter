@@ -98,6 +98,25 @@ IDS_REFRESH_S = 60              # at most one re-read of the channel list a minu
 ALERT_KINDS = ("pr.opened", "pr.closed", "ci.main_changed", "pr.ci_changed", "task.pipeline")
 PIPELINE_ALERTS = {"pipeline.merged": "merged", "pipeline.auto_merged": "auto-merged", "pipeline.deployed": "deployed",
                    "pipeline.done": "done", "pipeline.auto_merge_failed": "auto-merge failed"}
+# Who posts a ticket's steps in its Slack thread: the seat of the actor that recorded the step (pipeline_cli
+# --role), with its icon. Anything else (Jay, ccd's own GitHub poll) posts as the app itself.
+SEATS = {"agent:coordinator": ("Lead", ":compass:"), "agent:planner": ("Investigator", ":mag:"),
+         "agent:tech-reviewer": ("Technical reviewer", ":triangular_ruler:"),
+         "agent:implementer": ("Developer", ":hammer_and_wrench:"), "agent:user-reviewer": ("User reviewer", ":test_tube:"),
+         "agent:design-reviewer": ("Design reviewer", ":art:"), "agent:reviewer": ("Code reviewer", ":eyes:"),
+         "agent:verifier": ("Verifier", ":white_check_mark:")}
+LEAD_ICON, CTO_ICON = ":compass:", ":office:"
+# The steps a ticket's thread shows: each seat's result, the gates, and what happened to it. Not the many small
+# records (criteria edits, evidence, findings one by one, writer checkpoints, stale marks).
+TEAM_KINDS = frozenset({
+    "pipeline.intake", "pipeline.role", "pipeline.plan", "pipeline.plan_reviewed", "pipeline.plan_accepted",
+    "pipeline.replan", "pipeline.started", "pipeline.handoff", "pipeline.user_checked", "pipeline.review",
+    "pipeline.rework", "pipeline.blocked", "pipeline.questions", "pipeline.answered", "pipeline.gate_opened",
+    "pipeline.gate_confirmed", "pipeline.ready_to_merge", "pipeline.unreviewed_merge", "pipeline.verified",
+    "pipeline.released", "pipeline.deploy_requested", "pipeline.deploy_approved", "pipeline.closed_note",
+    *PIPELINE_ALERTS})
+CUSTOMIZE = "chat:write.customize"     # the scope Slack needs before a bot may post under another name and icon
+TICKETS_MAX = 500
 NEED_LABEL = {"plan": "Plan needs approval", "merge": "Ready to merge", "ui": "UI review", "deploy": "Deploy approval",
               "failure": "Blocked", "questions": "Questions", "task": "Your task", "ci": "Main checks failing",
               "blocked": "Agent waiting", "flag": "Needs you"}
@@ -194,6 +213,7 @@ class SlackWeb:
         self.bot = bot_token
         self.app = app_token
         self.open = opener or urllib.request.urlopen
+        self.scopes = None      # the bot token's scopes, from the last response's x-oauth-scopes header
 
     def call(self, method, body=None, token=None, retries=2, form=False):
         if form:
@@ -208,6 +228,9 @@ class SlackWeb:
             try:
                 with self.open(req, timeout=15) as r:
                     out = json.loads(r.read() or b"{}")
+                    granted = (getattr(r, "headers", None) or {}).get("x-oauth-scopes")
+                    if granted is not None and (token or self.bot) == self.bot:
+                        self.scopes = {x.strip() for x in granted.split(",") if x.strip()}
             except urllib.error.HTTPError as e:
                 if e.code == 429 and attempt < retries:
                     time.sleep(min(30, int(e.headers.get("Retry-After") or 1)))
@@ -220,10 +243,16 @@ class SlackWeb:
             return out
         raise SlackError(f"{method}: rate limited")
 
-    def post(self, channel, text, thread_ts=None):
+    def post(self, channel, text, thread_ts=None, as_=None, broadcast=False):
+        """as_: (name, icon emoji) to post under, which needs CUSTOMIZE. broadcast: a thread reply also shown in
+        the channel."""
         body = {"channel": channel, "text": text, "unfurl_links": False, "unfurl_media": False}
         if thread_ts:
             body["thread_ts"] = thread_ts
+            if broadcast:
+                body["reply_broadcast"] = True
+        if as_:
+            body["username"], body["icon_emoji"] = as_
         return self.call("chat.postMessage", body)
 
     def channels(self):
@@ -349,6 +378,7 @@ class Notifier:
         self.seen = set(seen) if seen is not None else None   # None until the first tick sets a baseline
         self.held = list(self.store.get("notify:held", [])[0] or [])
         self.threads = dict(self.store.get("notify:threads", {})[0] or {})
+        self.tickets = dict(self.store.get("notify:tickets", {})[0] or {})    # ticket key -> its thread in Slack
         self.daily = dict(self.store.get("notify:daily", {})[0] or {})
         self._queue = None
         seen_ev, _ = self.store.get("notify:events", [])
@@ -428,13 +458,23 @@ class Notifier:
         self.d._event("notify", "notify.failed", f"{what} failed", severity="warn",
                       data={"kind": what, "error": msg})
 
-    async def post(self, where, text, thread_ts=None, item=None):
+    def _as(self, who):
+        """How a post shows who wrote it, `who` being (name, icon emoji): under that name and icon once Slack has
+        granted CUSTOMIZE, else as the app with the name in bold at the start. Returns (SlackWeb.post's as_, prefix)."""
+        if not who:
+            return None, ""
+        if CUSTOMIZE in (getattr(self.slack(), "scopes", None) or ()):
+            return who, ""
+        return None, f"{who[1]} *{esc(who[0])}*: "
+
+    async def post(self, where, text, thread_ts=None, item=None, who=None, broadcast=False):
         """Post to a channel name, or 'dm'. Records the thread so a reply can find its item. Returns ts or None."""
         if not self.settings["slack"]:
             return None
         try:
             cid = await (self.dm_id() if where == "dm" else self.channel_id(where))
-            r = await self._call(self.slack().post, cid, redact(text)[0][:3900], thread_ts)
+            as_, prefix = self._as(who)
+            r = await self._call(self.slack().post, cid, redact(prefix + text)[0][:3900], thread_ts, as_, broadcast)
         except SlackError as e:
             self._fail(f"slack {where}", e)
             return None
@@ -587,9 +627,47 @@ class Notifier:
         chan = self.conf["channels"].get(proj)
         if not chan or self.client(proj):
             return
+        if kind == "task.pipeline" and is_ticket(ev.get("ref")):
+            if (ev.get("data") or {}).get("kind") in TEAM_KINDS:
+                await self.team_step(ev, chan)
+            return
         text = self.alert_text(ev)
         if text:
             await self.post(chan, text)
+
+    async def team_step(self, ev, chan):
+        """One step of a ticket, in the ticket's own thread in its project's channel, under the seat that recorded
+        it (SEATS). The first step starts the thread. Jay's replies there go to the lead with the ticket's key.
+        Merged, deployed and done also show in the channel itself."""
+        key, data = ev["ref"], ev.get("data") or {}
+        text = str(ev.get("text") or "")
+        if text.startswith(key + " "):
+            text = text[len(key) + 1:]
+        root = await self._ticket_thread(key, ev.get("project"), chan)
+        if root is not None:
+            await self.post(chan, esc(text), thread_ts=root, who=SEATS.get(data.get("actor")),
+                            broadcast=data.get("kind") in PIPELINE_ALERTS)
+
+    async def _ticket_thread(self, key, project, chan):
+        """The ts of the ticket's thread in `chan`, starting it (key, title, a link) the first time."""
+        t = self.tickets.get(key)
+        if t and t.get("channel") == chan:
+            return t["ts"]
+        try:
+            title = str((self.d.tasks.get(key) or {}).get("title") or "") if getattr(self.d, "tasks", None) else ""
+        except Exception:  # noqa: BLE001 — a ticket ccd cannot read still gets its thread
+            title = ""
+        link = self.link({"ref": key})
+        head = f"*{esc(key)}*" + (f" · {esc(title[:150])}" if title else "") + (f"  <{link}|Open>" if link else "")
+        ts = await self.post(chan, head, item={"type": "ticket", "project": project, "ref": key})
+        if ts is None:
+            return None
+        self.tickets[key] = {"channel": chan, "ts": ts, "at": self.clock()}
+        if len(self.tickets) > TICKETS_MAX:
+            for k in sorted(self.tickets, key=lambda k: self.tickets[k].get("at") or 0)[:len(self.tickets) - TICKETS_MAX]:
+                del self.tickets[k]
+        self.store.put("notify:tickets", self.tickets)
+        return ts
 
     # ----- summaries -----
 
@@ -721,17 +799,20 @@ class Notifier:
             self.store.put("notify:threads", self.threads)
         return result
 
-    async def _reply(self, cid, ts, text):
+    async def _reply(self, cid, ts, text, who=None):
         if not self.settings["slack"]:
             return
         try:
-            await self._call(self.slack().post, cid, redact(text)[0][:3900], ts)
+            as_, prefix = self._as(who)
+            await self._call(self.slack().post, cid, redact(prefix + text)[0][:3900], ts, as_)
         except SlackError as e:
             self._fail("slack reply", e)
 
     async def handle_reply(self, cid, item, text):
         if not text:
             return {"did": "empty"}
+        if item and item.get("type") == "ticket":
+            return await self.to_lead(item.get("project"), text, item.get("ref"))
         if item and item.get("type") == "need":
             proj, ref = item.get("project"), item.get("ref")
             if not self.client(proj):
@@ -873,17 +954,18 @@ class Notifier:
             origin = max(recent, key=lambda v: v.get("at") or 0) if recent else None
         who = "CTO" if conv == "cto" else f"{self.name(conv)} lead"
         if self.client(conv):
-            body = f"*{who}* replied. Client project: read it in CommandCenter."
+            body = "replied. Client project: read it in CommandCenter."
         else:
-            body = f"*{who}*: {esc(str(msg.get('text') or '')[:3000])}"
+            body = esc(str(msg.get('text') or '')[:3000])
+        as_ = (who, CTO_ICON if conv == "cto" else LEAD_ICON)
         if origin:
-            await self._reply(origin["channel"], origin["ts"], body)
+            await self._reply(origin["channel"], origin["ts"], body, as_)
         elif conv == "cto":
-            await self.post(self.conf["cto_channel"], body)
+            await self.post(self.conf["cto_channel"], body, who=as_)
         elif self.conf["channels"].get(conv) and not self.client(conv):
-            await self.post(self.conf["channels"][conv], body)
+            await self.post(self.conf["channels"][conv], body, who=as_)
         else:
-            await self.post("dm", body)
+            await self.post("dm", body, who=as_)
 
     # ----- loops -----
 
