@@ -43,6 +43,9 @@
     PUT   /api/notify                JAY + DEVELOPER UNLOCK. change those settings: slack, ntfy (on/off), quiet hours,
                                      summary time, time zone, replyScope ("answers" | "answers_low_risk" | "all")
     POST  /api/notify/test           JAY + DEVELOPER UNLOCK. one test DM and one test push, now
+    POST  /api/hooks/ask             Claude's AskUserQuestion, from scripts/cc-ask-hook: {sessionId, questions}. A ticket's
+                                     task session's questions become the ticket's; a lead's go to its Messages
+                                     conversation; else {routed: null} and Claude shows its own prompt (ccd/ask_hook.py)
     POST  /api/notify/summary        JAY + DEVELOPER UNLOCK. post the owner's and technical summaries now
     GET   /api/actors                per-agent actor tokens (fingerprints only; a token is shown once, on issue)
     POST  /api/actors/issue          JAY + DEVELOPER UNLOCK. {actor: "agent:<name>" | "svc:<name>", ttlDays?, note?,
@@ -71,7 +74,7 @@
     GET   /api/pty                   live terminal sessions (names, cwd, clients)
     GET   /api/tasks/{key}/work      the ticket's durable pipeline state (plan, stage, gate, roles, review head, …)
     POST  /api/tasks/{key}/work/{op} one pipeline step: plan start review verify handoff block role finding
-                                     ask replan rework evidence writer deploy-request deploy-plan deployed stale,
+                                     ask replan rework evidence writer deploy-request deploy-plan deployed stale reply,
                                      and the flow's intake criteria plan-review user-check close;
                                      `confirm` (close an owner gate) needs Jay AND Developer Unlock
     GET   /api/flow                  the delivery flow per project: seats, tickets in flight, WIP limits
@@ -641,6 +644,10 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
             return _notifier().update_settings(body)
         except ValueError as e:
             raise ActionError(400, str(e))
+
+    async def hook_ask(request, body):
+        # Any token holder (Claude's hook runs as the agent). ccd routes only by herdr's own record of the session.
+        return await daemon.ask_from_session_async(body)
 
     async def notify_test(request, body):
         _jay_dev(request, "a test sends to your phone")
@@ -1547,6 +1554,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/notify", guarded(notify_state), methods=["GET"]),
         Route("/api/notify", guarded(notify_update), methods=["PUT"]),
         Route("/api/notify/test", guarded(notify_test), methods=["POST"]),
+        Route("/api/hooks/ask", guarded(hook_ask), methods=["POST"]),
         Route("/api/notify/summary", guarded(notify_summary), methods=["POST"]),
         Route("/api/actors", guarded(actors_state), methods=["GET"]),
         Route("/api/actors/issue", guarded(actor_issue), methods=["POST"]),

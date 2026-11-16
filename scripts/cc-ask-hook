@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""cc-ask-hook: Claude Code's PreToolUse hook for AskUserQuestion. See server/ccd/ask_hook.py."""
+import os
+import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "server"))
+
+from ccd import ask_hook  # noqa: E402
+
+sys.exit(ask_hook.main())

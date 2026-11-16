@@ -354,17 +354,25 @@ def option_lines(q, letters=False):
 
 
 def pick_option(q, text):
-    """A reply of just an option's number or letter ("2", "b", "2.") answers with that option's text. Anything else
-    is Jay's own answer, as written."""
+    """A reply of just an option's number or letter ("2", "b", "2.") answers with that option's text, and several
+    ("1, 3", "a and c") with those options' texts. Anything else is Jay's own answer, as written."""
     opts = q.get("options") or []
     if any(str(o).strip().lower() == (text or "").strip().lower() for o in opts):
         return text            # the option's own text ("2" when the options are 2 / 4 / 8)
-    m = re.fullmatch(r"\s*([1-8]|[a-hA-H])[.)]?\s*", text or "")
-    if q.get("kind") != "choice" or not opts or not m:
+    if q.get("kind") != "choice" or not opts:
         return text
-    t = m.group(1).lower()
-    j = int(t) - 1 if t.isdigit() else LETTERS.index(t)
-    return opts[j] if 0 <= j < len(opts) else text
+    marks = re.fullmatch(r"\s*([1-8a-hA-H])[.)]?((?:\s*(?:,|&|\band\b|\s)\s*[1-8a-hA-H][.)]?)*)\s*", text or "")
+    if not marks:
+        return text
+    picked = []
+    for t in re.findall(r"(?<![A-Za-z])[1-8a-hA-H](?![A-Za-z])", text.replace("and", " ")):
+        t = t.lower()
+        j = int(t) - 1 if t.isdigit() else LETTERS.index(t)
+        if not 0 <= j < len(opts):
+            return text
+        if opts[j] not in picked:
+            picked.append(opts[j])
+    return "; ".join(picked) if picked else text
 
 
 def _cut(text, n):
@@ -612,6 +620,7 @@ class Notifier:
             else:
                 lines.append("_Reply in this thread with " + ("an option's number, or your own answer" if choice
                                                               else "your answer") + "._")
+            lines.append("_A reply that ends with ? goes to the agent as your question; its answer comes back here._")
         elif n.get("kind") == "gate" and n.get("gate") in PLAN_GATES:
             p = plan
             if p is None:
@@ -987,6 +996,9 @@ class Notifier:
         if item and item.get("type") == "need":
             proj, ref = item.get("project"), item.get("ref")
             if not self.client(proj):
+                if item.get("kind") == "questions" and not item.get("stale") and text.rstrip().endswith("?"):
+                    # Jay asks the agent back instead of answering (Jay, 2026-11-16): nothing is recorded as an answer.
+                    return dict(await self.ask_back(ref, text, proj), project=proj)
                 if item.get("kind") == "questions" and not item.get("stale"):
                     r = await self.answer(ref, text, item.get("qids") or [])
                     if r:
@@ -1036,6 +1048,49 @@ class Notifier:
             self._ids = await self._call(self.slack().channels)
         except SlackError as e:
             self._fail("slack channels", e)
+            return False
+        return True
+
+    async def ask_back(self, key, text, project):
+        """Jay's question about a ticket's open questions: typed into its task session (Daemon.slack_ask_back), which
+        answers into this thread (agent_reply). With no task session it goes to the project's lead instead."""
+        try:
+            r = await self.d.slack_ask_back(key, text)
+        except Exception as e:  # noqa: BLE001
+            return {"did": "ask_back_failed", "say": f"Could not send that: {esc(getattr(e, 'message', None) or e)}"}
+        if r.get("delivered"):
+            return {"did": "asked_back",
+                    "say": "Sent to the agent. Its answer comes back in this thread; your answers still go here too."}
+        if r.get("noSession"):
+            return await self.to_lead(project, text, key)
+        return {"did": "ask_back_undelivered",
+                "say": "Not delivered: " + esc(str(r.get("reason") or "the task session was not reached"))
+                + ". Try again in a minute."}
+
+    def _questions_thread(self, key):
+        """(channel id, ts) of the latest questions DM for this ticket, or None."""
+        found = [(item.get("at") or 0, k) for k, item in self.threads.items()
+                 if item.get("type") == "need" and item.get("kind") == "questions" and item.get("ref") == key]
+        if not found:
+            return None
+        cid, _, ts = max(found)[1].partition(":")
+        return (cid, ts) if cid and ts else None
+
+    async def agent_reply(self, key, project, text):
+        """The task session's answer to Jay's question (pipeline_cli reply), in the thread of the ticket's latest
+        questions DM, quoted so it reads as the agent's words; a new DM when there is no such thread. Never a client
+        project's. Returns whether it was posted."""
+        if not self.settings["slack"] or self.client(project) or not str(text or "").strip():
+            return False
+        quoted = "\n".join(f"> {esc(line)}" for line in str(text).splitlines() if line.strip())
+        body = f"*{self.name(project)}* · {esc(key)} · The agent answers:\n{quoted}"
+        where = self._questions_thread(key)
+        if where is None:
+            return bool(await self.post("dm", body, item={"type": "ticket", "project": project, "ref": key}))
+        try:
+            await self._call(self.slack().post, where[0], redact(body)[0][:POST_LIMIT], where[1], None)
+        except SlackError as e:
+            self._fail("slack agent reply", e)
             return False
         return True
 
