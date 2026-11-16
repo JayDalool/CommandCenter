@@ -1,5 +1,6 @@
 """The delivery flow (ccd/flow.py over ccd/pipeline.py): sizes, acceptance criteria, intake, technical review, user
 check, the closing note, WIP limits, children before parents, stale tickets, and the flow / handoffs read shapes."""
+import datetime
 import unittest
 from unittest import mock
 
@@ -25,7 +26,7 @@ class Base(unittest.TestCase):
 
     def sized(self, size="standard", **fields):
         k = self.ticket(**fields)
-        self.pl.intake(k, size, ["Five comps show", "Sold dates are used"], "agent:coordinator")
+        self.pl.intake(k, size, ["Five comps show", "Sold dates are used"], "agent:coordinator", priority="MEDIUM")
         return k
 
     def pr(self, head=HEAD):
@@ -104,6 +105,68 @@ class Intake(Base):
         self.assertEqual(w["flow"]["route"], list(flow.LEGACY_ROUTE))
         t, _, _ = self.pl.plan(k, PLAN, "agent:planner")
         self.assertEqual(t["status"], "READY_TO_IMPLEMENT")          # no technical review for an unsized ticket
+
+
+class PriorityAndDue(Base):
+    """Jay, 2026-11-15: every ticket has a priority and a due date once it is through intake."""
+    NOW = datetime.datetime(2026, 11, 16, 10, 0, tzinfo=pipeline.DUE_TZ).timestamp()    # a Monday morning
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(pipeline, "_now", return_value=self.NOW)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def end_of(self, y, m, d):
+        return datetime.datetime(y, m, d, 23, 59, tzinfo=pipeline.DUE_TZ).timestamp()
+
+    def test_intake_needs_a_priority_unless_the_ticket_has_one(self):
+        k = self.ticket()
+        self.assertIn("needs a priority", self.refused(400, self.pl.intake, k, "small", ["works"], "agent:coordinator"))
+        self.refused(400, self.pl.intake, k, "small", ["works"], "agent:coordinator", priority="NO_PRIORITY")
+        self.refused(400, self.pl.intake, k, "small", ["works"], "agent:coordinator", priority="soon")
+        self.assertEqual(self.status(k), "INBOX")
+        k = self.ticket(priority="URGENT")                                        # Jay set it when he filed it
+        self.pl.intake(k, "small", ["works"], "agent:coordinator")
+        self.assertEqual(self.ts.get(k)["priority"], "URGENT")
+        k = self.ticket(priority="LOW")
+        self.pl.intake(k, "small", ["works"], "agent:coordinator", priority="HIGH")
+        self.assertEqual(self.ts.get(k)["priority"], "HIGH")
+
+    def test_the_due_date_is_given_or_kept_or_comes_from_the_size(self):
+        days = {"small": 18, "standard": 21, "risky": 26}                       # 2, 5 and 10 days from Monday the 16th
+        for size, day in days.items():
+            k = self.sized(size)
+            self.assertEqual(self.ts.get(k)["dueAt"], self.end_of(2026, 11, day), size)
+        k = self.ticket()
+        self.pl.intake(k, "standard", ["works"], "agent:coordinator", priority="HIGH", due="2026-11-19")
+        self.assertEqual(self.ts.get(k)["dueAt"], self.end_of(2026, 11, 19))
+        k = self.ticket(dueAt=self.end_of(2026, 12, 1))                          # already on the ticket: kept
+        self.pl.intake(k, "standard", ["works"], "agent:coordinator", priority="HIGH")
+        self.assertEqual(self.ts.get(k)["dueAt"], self.end_of(2026, 12, 1))
+        k = self.ticket()
+        self.pl.intake(k, "small", ["works"], "agent:coordinator", priority="LOW", due="2026-11-16")   # today is fine
+        k = self.ticket()
+        self.assertIn("already past", self.refused(400, self.pl.intake, k, "small", ["works"], "agent:coordinator",
+                                                   priority="LOW", due="2026-11-15"))
+        for bad in ("next week", "2026-13-01", "2026-11-20T10:00", 1795000000):
+            self.refused(400, self.pl.intake, k, "small", ["works"], "agent:coordinator", priority="LOW", due=bad)
+        self.assertEqual(self.status(k), "INBOX")
+
+    def test_the_lead_sets_priority_and_due_at_any_open_stage_but_not_the_criteria(self):
+        k = self.sized("small")
+        self.ts.update(k, {"status": "IN_REVIEW"}, "jay")
+        self.pl.define(k, "agent:coordinator", priority="URGENT", due="2026-11-17")
+        t = self.ts.get(k)
+        self.assertEqual((t["priority"], t["dueAt"]), ("URGENT", self.end_of(2026, 11, 17)))
+        self.assertIn("past investigation", self.refused(409, self.pl.define, k, "agent:coordinator",
+                                                         criteria=["changed"], priority="LOW"))
+        self.assertEqual(self.ts.get(k)["priority"], "URGENT")                   # all or nothing
+        self.refused(400, self.pl.define, k, "agent:coordinator")
+        self.refused(400, self.pl.define, k, "agent:coordinator", priority="NO_PRIORITY")
+        self.refused(403, self.pl.define, k, "agent:planner", priority="HIGH")
+        self.ts.update(k, {"status": "DONE"}, "jay")
+        self.refused(409, self.pl.define, k, "agent:coordinator", priority="HIGH")
 
 
 class Criteria(Base):
@@ -346,7 +409,7 @@ class Children(Base):
     def test_a_parent_finishes_after_its_children(self):
         parent = self.ticket()
         child = self.ticket()
-        self.pl.intake(child, "small", ["works"], "agent:coordinator", parent=parent)
+        self.pl.intake(child, "small", ["works"], "agent:coordinator", parent=parent, priority="LOW")
         self.assertEqual(self.ts.get(child)["parent"], parent)
         self.assertIn(child, self.refused(409, self.ts.update, parent, {"status": "DONE"}, "jay"))
         # A parent that is verified waits in VERIFYING for its children, then for the lead's close.
@@ -455,6 +518,11 @@ class Cli(unittest.TestCase):
                          ("POST", "/api/tasks/SV-1/work/intake", {"size": "small", "criteria": ["works"],
                                                                   "requirements": ["keep CSV"], "parent": "SV-0"},
                           "agent:coordinator"))
+        self.assertEqual(pipeline_cli.build(["intake", "SV-1", "--size", "small", "--criterion", "works",
+                                             "--priority", "high", "--due", "2026-11-20"])[2],
+                         {"size": "small", "criteria": ["works"], "requirements": [], "priority": "HIGH",
+                          "due": "2026-11-20"})
+        self.assertEqual(pipeline_cli.build(["criteria", "SV-1", "--priority", "URGENT"])[2], {"priority": "URGENT"})
         m, path, body, actor = pipeline_cli.build(["plan-review", "SV-1", "SEND_BACK", "--session", "tr", "--note",
                                                    "no repro", "--test", "unit"])
         self.assertEqual((path, actor, body["verdict"], body["tests"]),

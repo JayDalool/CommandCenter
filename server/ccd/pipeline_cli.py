@@ -23,9 +23,11 @@
 
 The delivery flow (docs/flow/FLOW.md). Each line runs as the seat named in brackets unless --role says otherwise:
 
-    python -m ccd.pipeline_cli intake      SV-056 --size standard --criterion "Comps table shows 5 rows" \
-                                           [--criterion …] [--requirement "keep the CSV export"] [--parent SV-050]   [lead]
+    python -m ccd.pipeline_cli intake      SV-056 --size standard --priority HIGH [--due 2026-11-20] \
+                                           --criterion "Comps table shows 5 rows" [--criterion …] \
+                                           [--requirement "keep the CSV export"] [--parent SV-050]            [lead]
     python -m ccd.pipeline_cli criteria    SV-056 --criterion "…" [--criterion …] [--requirement …] [--size risky]  [lead]
+    python -m ccd.pipeline_cli criteria    SV-056 --priority URGENT --due 2026-11-18     (any stage while open)  [lead]
     python -m ccd.pipeline_cli plan-review SV-056 APPROVE|SEND_BACK --session <fresh> --note "…" [--blast "…"] \
                                            [--test "…"] [--size risky]                                       [tech-reviewer]
     python -m ccd.pipeline_cli user-check  SV-056 pass|fail --head <sha> --session <fresh> --note "…" \
@@ -33,6 +35,8 @@ The delivery flow (docs/flow/FLOW.md). Each line runs as the seat named in brack
     python -m ccd.pipeline_cli close       SV-056 --note "what was done, what to know next time"             [lead]
 
 `criteria` replaces the whole list: repeat every criterion you keep (as its text; an unchanged text keeps its state).
+Intake needs a priority (URGENT, HIGH, MEDIUM or LOW) unless the ticket already has one; without --due the ticket is
+due 2, 5 or 10 days from today for small, standard or risky.
     python -m ccd.pipeline_cli add      samvision --role coordinator --title "…" --note "plans/x.md:12" [--label night-finding]
 
 The task check: `stale` asks Jay "Cancel it / Keep it" (only his answer cancels anything); `add` puts a
@@ -163,6 +167,9 @@ def build(argv):
     p.add_argument("--scope", choices=("in", "out"), default="in")
     p.add_argument("--source", choices=("review", "owner", "verifier"), default="review")
     p.add_argument("--size", choices=("small", "standard", "risky"))
+    p.add_argument("--priority", choices=("URGENT", "HIGH", "MEDIUM", "LOW"), type=str.upper,
+                   help="intake (required unless the ticket has one) and criteria")
+    p.add_argument("--due", help="intake and criteria: YYYY-MM-DD (intake without it: 2/5/10 days by size)")
     p.add_argument("--criterion", action="append", help="intake/criteria: a criterion's text; user-check: ID=pass|fail")
     p.add_argument("--requirement", action="append")
     p.add_argument("--parent")
@@ -198,9 +205,11 @@ def build(argv):
         "deployed": lambda: {"env": a.env, "result": a.result, "evidence": a.evidence},
         "stale": lambda: {"reason": a.reason},
         "intake": lambda: {"size": a.size, "criteria": a.criterion or [], "requirements": a.requirement or [],
-                           **({"parent": a.parent} if a.parent else {})},
+                           **({"parent": a.parent} if a.parent else {}),
+                           **{k: v for k, v in (("priority", a.priority), ("due", a.due)) if v}},
         "criteria": lambda: {k: v for k, v in (("criteria", a.criterion), ("requirements", a.requirement),
-                                               ("size", a.size)) if v is not None},
+                                               ("size", a.size), ("priority", a.priority), ("due", a.due))
+                             if v is not None},
         "plan-review": lambda: {"verdict": a.decision or a.verdict, "note": a.note, "blast": a.blast,
                                 "tests": a.test or [], **({"size": a.size} if a.size else {}), **meta},
         "user-check": lambda: {"result": a.decision or a.result, "head": a.head, "note": a.note,

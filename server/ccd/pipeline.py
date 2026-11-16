@@ -19,9 +19,11 @@ tickets, a merge gate per project merge policy, UI/deploy gates from the ticket'
 flags. Automatic moves come only from deterministic signals: an agent recording a
 stage result through this module, or ccd's GitHub poll (PR head, CI, merge).
 """
+import datetime
 import json
 import re
 import time
+import zoneinfo
 
 from . import flow as flow_mod
 from . import registry
@@ -51,6 +53,42 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")   # the full PR head commit: no prefix ca
 SLUG_RE = r"[a-z0-9][a-z0-9-]{0,60}"
 META_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/@+-]{0,79}$")
 CATEGORY_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
+
+
+# Every ticket has a priority and a due date once it is through intake (Jay, 2026-11-15). The lead picks the priority;
+# the due date is the lead's or, when it gives none, so many days from intake by size. Work mode orders by both.
+PRIORITY_SET = ("URGENT", "HIGH", "MEDIUM", "LOW")
+DUE_DAYS = {"small": 2, "standard": 5, "risky": 10}
+DUE_TZ = zoneinfo.ZoneInfo("America/Winnipeg")
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _end_of(day):
+    """23:59 local on a date: a ticket due that day is overdue only from the next morning."""
+    return datetime.datetime(day.year, day.month, day.day, 23, 59, tzinfo=DUE_TZ).timestamp()
+
+
+def clean_priority(v):
+    if v not in PRIORITY_SET:
+        raise TaskError(400, f"priority must be one of {', '.join(PRIORITY_SET)}")
+    return v
+
+
+def clean_due(v, at):
+    """A due date given as YYYY-MM-DD (local), as the end of that day; refused when it is already past."""
+    if not isinstance(v, str) or not DATE_RE.match(v):
+        raise TaskError(400, "due is a date, YYYY-MM-DD")
+    try:
+        day = datetime.date.fromisoformat(v)
+    except ValueError:
+        raise TaskError(400, "due is a date, YYYY-MM-DD")
+    if day < datetime.datetime.fromtimestamp(at, DUE_TZ).date():
+        raise TaskError(400, f"due {v} is already past")
+    return _end_of(day)
+
+
+def due_by_size(size, at):
+    return _end_of(datetime.datetime.fromtimestamp(at, DUE_TZ).date() + datetime.timedelta(days=DUE_DAYS[size]))
 
 
 def _now():
@@ -1460,12 +1498,16 @@ class Pipeline:
         if actor not in LEADS:
             raise TaskError(403, f"{op} is the lead's (agent:coordinator) or Jay's")
 
-    def intake(self, key, size, criteria, actor, requirements=None, parent=None):
-        """Intake: the lead sizes the ticket and writes its acceptance criteria, then sends it on (small to build,
-        standard and risky to investigation). Refused without a description, a size and one criterion."""
+    def intake(self, key, size, criteria, actor, requirements=None, parent=None, priority=None, due=None):
+        """Intake: the lead sizes the ticket, gives it a priority and writes its acceptance criteria, then sends it
+        on (small to build, standard and risky to investigation). Refused without a description, a size, a priority
+        (given now or already on the ticket) and one criterion. The due date is the one given, else the one already
+        on the ticket, else DUE_DAYS[size] from today."""
         self._lead(actor, "intake")
         if size not in flow_mod.SIZES:
             raise TaskError(400, f"size must be one of {', '.join(flow_mod.SIZES)}")
+        if priority is not None:
+            clean_priority(priority)
         crit = clean_criteria(criteria)
         reqs = _list(requirements, "requirements", flow_mod.MAX_REQUIREMENTS, 500)
         if not crit:
@@ -1479,25 +1521,36 @@ class Pipeline:
                 raise TaskError(409, f"{t['key']} has no description; write what is asked and why first")
             pol = policy(t)
             eff = "risky" if pol["plan"] == "owner" else size
+            prio = priority or (t["priority"] if t["priority"] in PRIORITY_SET else None)
+            if prio is None:
+                raise TaskError(400, f"intake needs a priority: {', '.join(PRIORITY_SET)}")
+            due_at = clean_due(due, at) if due is not None else (t["dueAt"] or due_by_size(eff, at))
             to = "build" if eff == "small" else "investigate"
-            fields = {"status": "READY_TO_IMPLEMENT" if eff == "small" else "RESEARCHING"}
+            fields = {"status": "READY_TO_IMPLEMENT" if eff == "small" else "RESEARCHING", "priority": prio,
+                      "dueAt": due_at}
             if parent:
                 fields["parent"] = parent
             self._flow_set(tid, at, size=eff, criteria=crit, requirements=reqs, review_due=None)
             said = f"intake: {eff}" + (" (the policy makes it risky)" if eff != size else "")
             return fields, {}, [("pipeline.intake", said, {"size": eff, "asked": size, "to": to,
-                                                           "criteria": len(crit)})]
+                                                           "criteria": len(crit), "priority": prio,
+                                                           "due": due_at})]
         return self._tx(key, actor, fn)
 
-    def define(self, key, actor, criteria=None, requirements=None, size=None, developer=False):
+    def define(self, key, actor, criteria=None, requirements=None, size=None, developer=False, priority=None,
+               due=None):
         """Edit the acceptance criteria, requirements or size. The lead while the ticket is in intake or
         investigation; Jay at any time while it is open. An edited criterion is open again. A size goes up freely;
-        only Jay lowers a risky ticket, and a ticket the policy makes risky stays risky."""
+        only Jay lowers a risky ticket, and a ticket the policy makes risky stays risky. Priority and due date change
+        no scope: the lead sets them at any stage while the ticket is open (so older tickets get them too)."""
         self._lead(actor, "editing the criteria")
         if size is not None and size not in flow_mod.SIZES:
             raise TaskError(400, f"size must be one of {', '.join(flow_mod.SIZES)}")
-        if criteria is None and requirements is None and size is None:
-            raise TaskError(400, "say what changes: criteria, requirements or size")
+        if priority is not None:
+            clean_priority(priority)
+        if criteria is None and requirements is None and size is None and priority is None and due is None:
+            raise TaskError(400, "say what changes: criteria, requirements, size, priority or due")
+        scope = criteria is not None or requirements is not None or size is not None
 
         def fn(tid, t, w, at):
             self._open(t, "editing the criteria")
@@ -1505,11 +1558,17 @@ class Pipeline:
             pol = policy(t)
             early = t["status"] in ("INBOX", "PROPOSED") or (t["status"] == "RESEARCHING" and not f["reviewDue"]
                                                               and w["gate"] != "plan")
-            if actor != "jay" and not early:
+            if scope and actor != "jay" and not early:
                 raise TaskError(409, f"{t['key']} is past investigation; only Jay edits its criteria now")
-            if actor == "jay" and not early and not developer:
+            if scope and actor == "jay" and not early and not developer:
                 raise TaskError(403, "Developer Unlock required: changing a ticket past investigation is Jay's")
-            cols, said = {}, []
+            cols, said, fields = {}, [], {}
+            if priority is not None:
+                fields["priority"] = priority
+                said.append(f"priority {priority.lower()}")
+            if due is not None:
+                fields["dueAt"] = clean_due(due, at)
+                said.append(f"due {due}")
             if criteria is not None:
                 crit = clean_criteria(criteria, f["criteria"])
                 if not crit and t["status"] not in ("INBOX", "PROPOSED") and f["size"]:
@@ -1532,9 +1591,11 @@ class Pipeline:
                         raise TaskError(409, f"{t['key']} is past intake; it cannot become small now")
                     cols["size"] = new
                     said.append(f"size {new}")
-            self._flow_set(tid, at, **cols)
-            return {}, {}, [("pipeline.criteria", "criteria updated: " + ", ".join(said),
-                             {k: (len(v) if isinstance(v, list) else v) for k, v in cols.items()})]
+            if cols:
+                self._flow_set(tid, at, **cols)
+            data = {k: (len(v) if isinstance(v, list) else v) for k, v in cols.items()}
+            data.update({k: v for k, v in fields.items()})
+            return fields, {}, [("pipeline.criteria", "criteria updated: " + ", ".join(said), data)]
         return self._tx(key, actor, fn)
 
     def plan_review(self, key, verdict, actor, note, blast=None, tests=None, size=None, model=None, session=None):
