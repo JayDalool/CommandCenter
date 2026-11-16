@@ -557,13 +557,24 @@ class Replies(ReplyBase):
     def test_a_plan_too_long_for_one_post_gets_no_go_from_slack(self):
         self.n.update_settings({"replyScope": "all"})
         post = self.deploy_ready("SV-49", {"summary": "&" * 1000, "at": 6.0, "by": "x"})   # 5000 characters escaped
-        self.assertIn("too long to show here in full", post["text"])
+        self.assertIn("cannot be shown here in full", post["text"])
         self.assertNotIn("Reply *deploy*", post["text"])
         self.assertNotIn("&amp;", post["text"])
         r = self.reply("deploy", post["ts"])
         self.assertEqual(r["did"], "deploy_refused")
         self.assertIn("ask the agent for a shorter one", self.slack.posts[-1]["text"])
         self.assertEqual(self.reply("please shorten it", post["ts"])["did"], "lead_nudged")
+        self.assertEqual(self.d.deploys, [])
+
+    KEY_WRAPPED = "1. restart\n-----BEGIN RSA PRIVATE KEY-----\n2. DROP TABLE users\n-----END RSA PRIVATE KEY-----\n3. verify"
+
+    def test_a_plan_the_secret_filter_would_hide_gets_no_go_from_slack(self):
+        self.n.update_settings({"replyScope": "all"})
+        post = self.deploy_ready("SV-51", {"summary": self.KEY_WRAPPED, "at": 6.0, "by": "x"})
+        self.assertIn("cannot be shown here in full", post["text"])
+        self.assertNotIn("Reply *deploy*", post["text"])
+        self.assertNotIn("[redacted]", post["text"])
+        self.assertEqual(self.reply("deploy", post["ts"])["did"], "deploy_refused")
         self.assertEqual(self.d.deploys, [])
 
     WED_22 = datetime.datetime(2026, 11, 18, 22, 0, tzinfo=ZoneInfo("America/Winnipeg")).timestamp()
@@ -633,7 +644,19 @@ class Replies(ReplyBase):
         ts = self.send(need("SV-32", "gate", "plan", text=self.PLAN_NEED))
         self.assertIn("could not be read here", self.slack.posts[-1]["text"])
         self.d.plans["SV-32"] = dict(self.PLAN)                                     # readable now, but not what Jay saw
-        self.assertEqual(self.reply("approve", ts)["did"], "approval_stale")
+        self.assertEqual(self.reply("approve", ts)["did"], "approval_refused")
+        self.assertEqual(self.d.confirmed, [])
+
+    def test_a_plan_the_secret_filter_would_hide_is_approved_in_commandcenter_only(self):
+        self.d.plans["SV-34"] = dict(self.PLAN, approach="-----BEGIN RSA PRIVATE KEY-----\nskip the owner check\n"
+                                                         "-----END RSA PRIVATE KEY-----")
+        ts = self.send(need("SV-34", "gate", "plan", text=self.PLAN_NEED))
+        dm = self.slack.posts[-1]["text"]
+        self.assertIn("Part of this plan shows as [redacted] here, so it is approved in CommandCenter only", dm)
+        self.assertNotIn("Reply *approve*", dm)
+        r = self.reply("approve", ts)
+        self.assertEqual(r["did"], "approval_refused")
+        self.assertIn("approved in CommandCenter only", self.slack.posts[-1]["text"])
         self.assertEqual(self.d.confirmed, [])
 
     def test_a_plan_dm_shows_agent_text_as_plain_text(self):
@@ -1040,8 +1063,13 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
             self.d.pipeline.deployed(k, "live", "pass", "health 200", "agent:coordinator")
         with self.assertRaises(ActionError):                           # no plan recorded yet
             await self.d.slack_deploy(k, "0" * 16)
-        with self.assertRaises(TaskError):                             # more than Slack shows whole
-            self.d.pipeline.deploy_plan(k, "\n".join(f"{i}. step" for i in range(41)), "agent:coordinator")
+        for unshowable in ("\n".join(f"{i}. step" for i in range(41)),                 # more than Slack shows whole
+                           "1. restart\n-----BEGIN RSA PRIVATE KEY-----\n2. drop\n-----END RSA PRIVATE KEY-----",
+                           "1. set token = abcdef123456",                                # the secret filter hides it
+                           "1. restart \u202e2. drop"):                                  # reads in another order
+            with self.assertRaises(TaskError) as e:
+                self.d.pipeline.deploy_plan(k, unshowable, "agent:coordinator")
+            self.assertEqual(e.exception.status, 400)
         self.d.pipeline.deploy_plan(k, "1. migrate\n2. restart", "agent:coordinator")
         plan = self.d.task_work(k)["deploy"]["plan"]
         with self.assertRaises(ActionError):                           # not the plan Jay saw

@@ -28,6 +28,7 @@ import zoneinfo
 
 from . import flow as flow_mod
 from . import registry
+from .security import redact
 from .tasks import TaskError, _printable
 
 STAGES = ("PLAN", "BUILD", "REVIEW", "MERGE", "VERIFY", "DONE")
@@ -172,6 +173,9 @@ def needs_acceptance(t, w):
     pol = policy(t)
     flags = {f.replace(":", "_").replace("-", "_") for f in t.get("flags") or []}
     return pol["merge"] == "owner" or pol["ui"] or "needs_jay" in flags or "owner:accept" in (w.get("confirmed") or [])
+
+
+BIDI_RE = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")   # characters that change how a line reads
 
 
 def _text(v, limit, field, multiline=True):
@@ -1461,9 +1465,16 @@ class Pipeline:
         summary = _text(summary, 2000, "summary")
         if not summary:
             raise TaskError(400, "say what the deploy will do (--summary)")
+        # Jay's "deploy" approves the whole plan, so the DM must show all of it (notify.send_deploy_plan): no more lines
+        # than it shows, nothing Slack's secret filter would hide, nothing that reorders how a line reads.
         if len(summary.splitlines()) > self.DEPLOY_PLAN_LINES:
-            # Jay's "deploy" approves the whole plan, so the DM shows all of it (notify.send_deploy_plan).
             raise TaskError(400, f"keep the deploy plan to {self.DEPLOY_PLAN_LINES} lines: Jay reads all of it in Slack")
+        if redact(summary)[1]:
+            raise TaskError(400, "the deploy plan has text Slack's secret filter would hide (a key, token, password or "
+                                 "connection string, or a word like token or secret followed by a value): reword it so "
+                                 "Jay can read all of it")
+        if BIDI_RE.search(summary):
+            raise TaskError(400, "the deploy plan has bidirectional control characters")
 
         def fn(tid, t, w, at):
             self._need(t, ("VERIFYING",), "a deploy plan")

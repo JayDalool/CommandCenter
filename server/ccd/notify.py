@@ -618,7 +618,12 @@ class Notifier:
                 lines.append("_The plan could not be read here: approve it in CommandCenter. A reply here goes to the lead._")
             else:
                 lines += plan_lines(p["plan"], p["review"])
-                lines.append("_Reply *approve* to approve this plan and start implementation, or write to the lead._")
+                if redact("\n".join(lines))[1]:   # post() would hide part of it: send_need gives it no planHash
+                    lines.append("_Part of this plan shows as [redacted] here, so it is approved in CommandCenter only. "
+                                 "A reply here goes to the lead._")
+                else:
+                    lines.append("_Reply *approve* to approve this plan and start implementation, or write to the "
+                                 "lead._")
         elif n.get("kind") == "gate" and n.get("gate") == "merge" and self.allows("merge"):
             rv = review if review is not None else self._review(n.get("ref"))
             if rv.get("head"):
@@ -675,11 +680,13 @@ class Notifier:
                 hint += (f"\n_Held for the release window until {local_time(self.settings, d['heldUntil'])}: "
                          "a *deploy* reply before then is refused._")
         body = "\n".join([head, *quoted, hint]) + open_
-        if len(redact(body)[0]) > POST_LIMIT:
-            # The post would be cut, so Jay would not see all of what "deploy" approves.
+        shown, hidden = redact(body)
+        if hidden or len(shown) > POST_LIMIT:
+            # post() would hide part of it or cut it, so Jay would not see all of what "deploy" approves.
+            # (pipeline.deploy_plan refuses such a plan; this holds for one recorded before that check.)
             plan_hash = None
-            body = "\n".join([head, "_This plan is too long to show here in full, so it cannot be confirmed from "
-                                     "Slack. Reply here to ask the agent for a shorter one._"]) + open_
+            body = "\n".join([head, "_This plan cannot be shown here in full, so it cannot be confirmed from Slack. "
+                                     "Reply here to ask the agent for a shorter one with no secrets in it._"]) + open_
         await self.post("dm", body, item={"type": "deploy_go", "project": project, "ref": key, "planHash": plan_hash})
         await self.push(f"{self.name(project)}: deploy plan ready · {key}", link)
 
@@ -711,7 +718,11 @@ class Notifier:
             # The plan this DM shows, read once. An approve applies to this plan only (approve()).
             p = self._plan(n.get("ref"))
             item["planHash"] = plan_digest(p["plan"]) if p else None
-        await self.post("dm", self.need_text(n, plan=p, review=rv), item=item)
+        text = self.need_text(n, plan=p, review=rv)
+        if p is not None and redact(text)[1]:
+            # The secret filter would hide part of what an approve approves: CommandCenter only.
+            item["planHash"] = None
+        await self.post("dm", text, item=item)
         await self.push(self.push_title(n), self.link(n))
 
     async def check_needs(self):
@@ -1085,6 +1096,10 @@ class Notifier:
         now = [n for n in self.needs() if n.get("kind") == "gate" and n.get("ref") == key and n.get("gate") == gate]
         same = bool(item) and any(_digest(n.get("text")) == item.get("textHash") and n.get("since") == item.get("since")
                                   for n in now)
+        if gate in PLAN_GATES and item and not item.get("planHash"):
+            return {"did": "approval_refused",
+                    "say": "This plan could not be shown here in full, so it is approved in CommandCenter only."
+                    + (f" <{link}|Open it>" if link else "")}
         if same and gate in PLAN_GATES:
             p = self._plan(key)
             same = p is not None and bool(item.get("planHash")) and plan_digest(p["plan"]) == item["planHash"]
@@ -1129,8 +1144,8 @@ class Notifier:
                            "reply *deploy* here." + (f" <{link}|Open it>" if link else "")}
         if not item.get("planHash"):
             return {"did": "deploy_refused",
-                    "say": "Nothing was deployed: this plan was too long to show here in full. Reply here to ask the "
-                           "agent for a shorter one."}
+                    "say": "Nothing was deployed: this plan could not be shown here in full. Reply here to ask the "
+                           "agent for a shorter one with no secrets in it."}
         d = self._deploy(key)
         if not d.get("plan") or plan_digest(d["plan"]) != item["planHash"] or d.get("goAt") or d.get("result"):
             return {"did": "deploy_stale",
