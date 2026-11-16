@@ -14,8 +14,9 @@ only whether to remind its idle lead that tickets can move without Jay, and name
   otherwise                                                → remind: one fixed text plus the next tickets
 
 A ticket "can move" when it is open, not blocked, not waiting on Jay (an open question or a gate), not at merge
-(Jay merges), not Jay's own action or a lawyer's question, and nobody holds its seat (or the ticket has gone stale). The order is priority, then the earliest due
-date, then the later stage (finish before start), then the oldest. The reminder grants nothing: the lead follows its
+(Jay merges), not Jay's own action or a lawyer's question, not flagged needs-Jay while still in intake (the board shows
+it as Jay's), and nobody holds its seat (or the ticket has gone stale). The order is priority, then the earliest due
+date, then the later stage (finish before start), then the oldest. A release-stage ticket is named for verifying only. The reminder grants nothing: the lead follows its
 repository's rules and the flow, and every plan, merge and deploy gate still waits for Jay.
 
 Stored in <CCD_STATE_DIR>/work-mode.json (0600), written atomically. Only the on/off switch is Jay's; the rest is
@@ -42,13 +43,13 @@ KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 PRIORITY_RANK = {"URGENT": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}     # NO_PRIORITY and anything else: last
 STAGE_ORDER = ("intake", "investigate", "techReview", "build", "userCheck", "codeReview", "release")
 STAGE_LABEL = {"intake": "intake", "investigate": "investigate", "techReview": "technical review", "build": "build",
-               "userCheck": "user check", "codeReview": "code review", "release": "release"}
+               "userCheck": "user check", "codeReview": "code review", "release": "release, verify only"}
 CLOSED = ("DONE", "DENIED", "CANCELLED")
 
 REMINDER = (
     "Work mode (Command Center): {project} has tickets that can move without Jay. Next: {tickets}. "
     "Take them in this order by your repository's rules and the flow: record each step with pipeline_cli, "
-    "fill an empty seat with a fresh session, and never merge or deploy. If a ticket needs Jay, ask him "
+    "fill an empty seat per FLOW.md, and never merge or deploy. If a ticket needs Jay, ask him "
     "(pipeline_cli ask, with options) or block it, then take the next one."
 )
 
@@ -77,8 +78,11 @@ def movable(rows):
             continue
         if r.get("waitingOn") == "jay" or r.get("stage") not in STAGE_ORDER:
             continue                                    # merge is Jay's; done has nothing left
-        if r.get("type") == "OWNER_ACTION" or "needs_legal" in (r.get("flags") or ()):
+        flags = {f.replace(":", "_").replace("-", "_") for f in r.get("flags") or ()}     # as pipeline.policy
+        if r.get("type") == "OWNER_ACTION" or "needs_legal" in flags:
             continue                                    # Jay's own to-do; a lawyer's question (as the night shift)
+        if "needs_jay" in flags and r.get("status") in ("INBOX", "PROPOSED"):
+            continue                                    # the board shows it as Jay's until it is past intake
         if r.get("holder") and not r.get("stale"):
             continue                                    # somebody is in the seat and still recording steps
         out.append(r)
@@ -142,19 +146,24 @@ class WorkMode:
         return project in self.on
 
     def set(self, project, on, by="jay", now=None):
-        """Switch a project on or off. Switching on starts fresh: no rest, no reminder count carried over."""
+        """Switch a project on or off. Switching on starts fresh (no rest, no idle time), except today's reminder
+        count: DAY_MAX is per local day, whatever the switch did in between."""
         if not isinstance(project, str) or not KEY_RE.match(project):
             raise WorkModeError(400, "unknown project")
         if not isinstance(on, bool):
             raise WorkModeError(400, "on must be true or false")
         now = _now() if now is None else now
+        old = self.state.get(project) or {}
+        day = {k: old[k] for k in ("day", "dayCount") if old.get("day") == _day(now) and k in old}
         if on:
             if project not in self.on:
                 self.on[project] = {"at": now, "by": by}
-                self.state[project] = {}
+                self.state[project] = day
         else:
             self.on.pop(project, None)
-            self.state.pop(project, None)
+            self.state[project] = day
+            if not day:
+                self.state.pop(project)
         self._save()
 
     def get(self, project):

@@ -1502,7 +1502,8 @@ class Pipeline:
         """Intake: the lead sizes the ticket, gives it a priority and writes its acceptance criteria, then sends it
         on (small to build, standard and risky to investigation). Refused without a description, a size, a priority
         (given now or already on the ticket) and one criterion. The due date is the one given, else the one already
-        on the ticket, else DUE_DAYS[size] from today."""
+        on the ticket (even a past one: the ticket is overdue, and saying so is the point), else DUE_DAYS[size] from
+        today."""
         self._lead(actor, "intake")
         if size not in flow_mod.SIZES:
             raise TaskError(400, f"size must be one of {', '.join(flow_mod.SIZES)}")
@@ -1595,7 +1596,9 @@ class Pipeline:
                 self._flow_set(tid, at, **cols)
             data = {k: (len(v) if isinstance(v, list) else v) for k, v in cols.items()}
             data.update({k: v for k, v in fields.items()})
-            return fields, {}, [("pipeline.criteria", "criteria updated: " + ", ".join(said), data)]
+            # A priority or due date alone is no scope change, and the activity line says what it was.
+            return fields, {}, [("pipeline.criteria", ("criteria updated: " if scope else "updated: ") + ", ".join(said),
+                                 data)]
         return self._tx(key, actor, fn)
 
     def plan_review(self, key, verdict, actor, note, blast=None, tests=None, size=None, model=None, session=None):

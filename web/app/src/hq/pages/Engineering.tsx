@@ -8,7 +8,7 @@ import "./engineering.css";
 import { href } from "../../lib/router";
 import { usePageNav, type PageNav } from "./route";
 import { ago } from "../../lib/time";
-import { dayText } from "../release";
+import { dateKey, dayText } from "../release";
 import { PRIORITY_META } from "../../tickets/model";
 import { TicketDetailPane } from "../../screens/TicketDetail";
 import { VISIBLE_STAGES, type VisibleStage } from "../../api/types";
@@ -31,14 +31,15 @@ function matches(t: EngTask, q: string) {
 const COLS = [["key", "Key"], ["title", "Title"], ["project", "Project"], ["stage", "Stage"], ["priority", "Priority"],
   ["due", "Due"], ["assignee", "Assignee"], ["session", "Session"], ["pr", "PR"], ["updated", "Updated"]] as const;
 
-/** The due date in Winnipeg time, as ccd stores it (23:59 on the day). Past it, the cell says so in red. */
+/** The due date in Winnipeg time. Overdue (in red) once that day has passed, whatever time of day the date carries:
+ *  ccd's intake stores 23:59, but a date set another way may be midnight, and a ticket is not late on its own day. */
 function Due({ at, now }: { at: number | null; now: number }) {
   if (at == null) return <td className="c-due hq-dim">—</td>;
   const day = dayText(at, DUE_TZ);
   let short = day;
   try { short = new Intl.DateTimeFormat("en-US", { timeZone: DUE_TZ, month: "short", day: "numeric" }).format(new Date(at * 1000)); }
   catch { /* a zone this browser does not know: the long form */ }
-  return at < now ? <td className="c-due t-bad" title={`Overdue since ${day}`}>Overdue · {short}</td>
+  return dateKey(at, DUE_TZ) < dateKey(now, DUE_TZ) ? <td className="c-due t-bad" title={`Overdue since ${day}`}>Overdue · {short}</td>
     : <td className="c-due" title={`Due ${day}`}>{short}</td>;
 }
 const DUE_TZ = "America/Winnipeg";

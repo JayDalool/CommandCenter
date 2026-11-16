@@ -14,7 +14,7 @@ import { commands, prefs, usePrefs, type Prefs } from "../../lib/prefs";
 import "../persona/persona.css";
 import { CAST, Face } from "../persona/characters";
 import { LOGO_MAX, LOGO_TYPES, ProjectLogo, logos, refreshLogos, useLogos } from "../logos";
-import { WEEKDAYS, clock, cutText, dayText, setRelease, useRelease, windowText } from "../release";
+import { WEEKDAYS, clock, cutText, dateKey, dayText, setRelease, useRelease, windowText } from "../release";
 import { isRemembered } from "../../api/auth";
 import { jayQueue } from "../../tickets/model";
 import { devOr, lockDevMode, reenterDialog, unlockDialogOpen, useDevActive } from "../../components/DevMode";
@@ -554,9 +554,11 @@ const WORK_WHY: Record<string, string> = {
   "reminder failed": "The last reminder could not be sent.",
 };
 
-export function workHint(p: WorkModeProject, tz = "America/Winnipeg"): string {
+export function workHint(p: WorkModeProject, tz = "America/Winnipeg", now = Date.now() / 1000): string {
   if (!p.on) return p.paused ? "Off. The project is paused." : "Off. The lead works when someone messages it.";
-  const why = p.restUntil ? `Resting until ${cutText(p.restUntil, tz)}: no ticket moved after the last reminders.`
+  // A rest that ends tomorrow (one that starts after 10 p.m.) names the day too.
+  const until = p.restUntil && (dateKey(p.restUntil, tz) === dateKey(now, tz) ? "" : `${dayText(p.restUntil, tz)}, `);
+  const why = p.restUntil ? `Resting until ${until}${cutText(p.restUntil, tz)}: no ticket moved after the last reminders.`
     : !p.why ? "Waiting for the first check." : WORK_WHY[p.why] ?? `${p.why[0].toUpperCase()}${p.why.slice(1)}.`;
   return [why, p.next.length ? `Next: ${p.next.join(", ")}.` : "",
     p.remindersToday ? `${plural(p.remindersToday, "reminder")} today.` : ""].filter(Boolean).join(" ");

@@ -68,8 +68,10 @@ describe("what each project's row says", () => {
       .toBe("The lead is working. Next: CC-053, CC-054. 2 reminders today.");
     expect(workHint({ ...off, on: true, why: "input line not empty or not recognised", next: ["CC-053"] }))
       .toBe("Held back: there is text in the lead's input box, and ccd never types over it. Next: CC-053.");
-    expect(workHint({ ...off, on: true, why: "resting: no ticket moved", restUntil: at(TZ, 2026, 11, 16, 15, 40), remindersToday: 3 }))
-      .toBe("Resting until 3:40 p.m.: no ticket moved after the last reminders. 3 reminders today.");
+    expect(workHint({ ...off, on: true, why: "resting: no ticket moved", restUntil: at(TZ, 2026, 11, 16, 15, 40), remindersToday: 3 }, TZ,
+      at(TZ, 2026, 11, 16, 13, 40))).toBe("Resting until 3:40 p.m.: no ticket moved after the last reminders. 3 reminders today.");
+    expect(workHint({ ...off, on: true, why: "resting: no ticket moved", restUntil: at(TZ, 2026, 11, 17, 0, 30) }, TZ,
+      at(TZ, 2026, 11, 16, 22, 30))).toBe("Resting until Tue, Nov 17, 12:30 a.m.: no ticket moved after the last reminders.");
     expect(workHint({ ...off, on: true, why: "something new" })).toBe("Something new.");
   });
 });
@@ -136,11 +138,12 @@ describe("Settings › Operating profiles › Work mode", () => {
 
 describe("Engineering › Due", () => {
   it("shows each open ticket's due date in Winnipeg time, and says when it is overdue", async () => {
-    const due = at(TZ, 2026, 11, 18, 23, 59), late = at(TZ, 2026, 11, 15, 23, 59);
+    // Today (the 16th) at midnight is not late yet: only a day that has passed is.
+    const due = at(TZ, 2026, 11, 18, 23, 59), late = at(TZ, 2026, 11, 15, 23, 59), today = at(TZ, 2026, 11, 16, 0, 0);
     load((all) => {
       const open = all.filter((t) => !["DONE", "DENIED", "CANCELLED"].includes(t.status) && !t.archived);
       return all.map((t) => t.key === open[0].key ? { ...t, dueAt: due } : t.key === open[1].key ? { ...t, dueAt: late }
-        : { ...t, dueAt: null });
+        : t.key === open[2].key ? { ...t, dueAt: today } : { ...t, dueAt: null });
     });
     const main = await show("#/tasks");
     const page = main.querySelector<HTMLElement>(".hq-eng")!;
@@ -151,6 +154,7 @@ describe("Engineering › Due", () => {
     const overdue = cells.find((c) => c.textContent === "Overdue · Nov 15")!;
     expect(overdue).toHaveClass("t-bad");
     expect(overdue).toHaveAttribute("title", "Overdue since Sun, Nov 15");
-    expect(texts.filter((x) => x === "—").length).toBe(cells.length - 2);
+    expect(cells.find((c) => c.textContent === "Nov 16")).not.toHaveClass("t-bad");
+    expect(texts.filter((x) => x === "—").length).toBe(cells.length - 3);
   });
 });
