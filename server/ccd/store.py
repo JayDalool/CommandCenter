@@ -49,7 +49,9 @@ EVENT_DATA_KEYS = ("from", "to", "status", "number", "ci", "stage", "kind", "rea
                    # Messages (ccd/leadchat.py): which conversation and message, never its text
                    "conversation", "messageId", "delivery", "via", "author", "files", "overBudget",
                    # Milestones (ccd/hq.py): which milestone, its track and state, never its title or note
-                   "id", "track", "state")
+                   "id", "track", "state",
+                   # Pipeline steps: who recorded one (jay, agent:<role>), so Slack posts it under that seat
+                   "actor")
 
 
 class Store:

@@ -1678,7 +1678,7 @@ class Daemon(LeadChat, HqDaemon):
         else:
             self._broker_ticket("deploy.record", key, body.get("env"))
             r = self._wrap(pl.deployed, key, body.get("env"), body.get("result"), body.get("evidence"), actor)
-        self._pipeline_result(*r)
+        self._pipeline_result(*r, actor=actor)
         return self.task_work(key)
 
     # What the task Claude session is told after a step that changes its course. Best effort: an
@@ -1814,7 +1814,7 @@ class Daemon(LeadChat, HqDaemon):
         pl = self.pipeline
         before = {q["id"]: q for q in self.task_work(key)["questions"]}
         if answers:
-            self._pipeline_result(*self._wrap(pl.answer, key, answers, actor, via))
+            self._pipeline_result(*self._wrap(pl.answer, key, answers, actor, via), actor=actor)
         # The task check: Jay's answer to a stale proposal. "Cancel it" cancels the ticket (and ends its
         # sessions); "Keep it" keeps it. Neither is typed into any Claude session.
         stale = [a for a in answers if isinstance(a, dict) and (before.get(a.get("id")) or {}).get("purpose") == "stale"]
@@ -1839,7 +1839,8 @@ class Daemon(LeadChat, HqDaemon):
             raise ActionError(409, f"{work['key']} has no questions to answer")
         replanned = False
         if scope and work["status"] != "RESEARCHING":
-            self._pipeline_result(*self._wrap(pl.replan, key, "Jay's answers change the approved scope", actor))
+            self._pipeline_result(*self._wrap(pl.replan, key, "Jay's answers change the approved scope", actor),
+                                  actor=actor)
             replanned = True
         latest = max(q["batch"] for q in answered)
         qa = []
@@ -1921,7 +1922,7 @@ class Daemon(LeadChat, HqDaemon):
         t = self._wrap(self._need_tasks().get, key)
         if self.notifier is not None and self.notifier.client(t["project"]):
             raise ActionError(403, "client projects are approved in CommandCenter")
-        self._pipeline_result(*self._wrap(self.pipeline.confirm, key, gate, "jay", "slack"))
+        self._pipeline_result(*self._wrap(self.pipeline.confirm, key, gate, "jay", "slack"), actor="jay")
         work = self.task_work(key)
         text = self._nudge_text(work["key"], "confirm", {"gate": gate}, work)
         if not text:
@@ -2045,13 +2046,14 @@ class Daemon(LeadChat, HqDaemon):
                 return root, real
         return root, None
 
-    def _pipeline_result(self, ticket, changes, events):
+    def _pipeline_result(self, ticket, changes, events, actor=None):
         """Announce one pipeline step (an agent's or the GitHub poll's): status changes, then its events.
-        An owner gate or a block is owner attention; ordinary transitions are info."""
+        An owner gate or a block is owner attention; ordinary transitions are info. `actor` (jay, agent:<role>)
+        names who recorded it, so Slack can post the step under that seat (notify.SEATS); ccd's own steps have none."""
         self._announce(ticket, changes)
         for kind, text, _data in events:
             self._event("tasks", "task.pipeline", f"{ticket['key']} {text}"[:300], project=ticket["project"],
-                        ref=ticket["key"], data={"kind": kind},
+                        ref=ticket["key"], data={"kind": kind, **({"actor": actor} if actor else {})},
                         severity="action" if kind in ("pipeline.gate_opened", "pipeline.blocked",
                                                       "pipeline.unreviewed_merge", "pipeline.questions",
                                                       "pipeline.deploy_requested", "pipeline.replan",
@@ -3394,7 +3396,7 @@ class Daemon(LeadChat, HqDaemon):
                                                         "not approved"})
                 continue
             try:
-                self._pipeline_result(*self._wrap(self.pipeline.confirm, r["key"], "merge", actor))
+                self._pipeline_result(*self._wrap(self.pipeline.confirm, r["key"], "merge", actor), actor=actor)
             except ActionError as e:
                 errors.append({"key": r["key"], "error": e.message})
         return {"ok": True, "project": project, "coordinator": name,
@@ -3431,7 +3433,7 @@ class Daemon(LeadChat, HqDaemon):
         approved, errors = [], []
         for key in pending:
             try:
-                self._pipeline_result(*self._wrap(self.pipeline.confirm, key, "deploy", actor, "go-live"))
+                self._pipeline_result(*self._wrap(self.pipeline.confirm, key, "deploy", actor, "go-live"), actor=actor)
                 approved.append(key)
             except Exception as e:  # noqa: BLE001 — one ticket must not stop the others
                 errors.append({"key": key, "error": str(e)[:160]})

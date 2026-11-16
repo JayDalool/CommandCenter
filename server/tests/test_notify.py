@@ -28,10 +28,12 @@ class FakeSlack:
     def __init__(self):
         self.posts = []
         self.n = 0
+        self.scopes = None          # as SlackWeb before its first call: the token's scopes are not known yet
 
-    def post(self, channel, text, thread_ts=None):
+    def post(self, channel, text, thread_ts=None, as_=None, broadcast=False):
         self.n += 1
-        self.posts.append({"channel": channel, "text": text, "thread": thread_ts, "ts": f"{self.n}.0"})
+        self.posts.append({"channel": channel, "text": text, "thread": thread_ts, "ts": f"{self.n}.0", "as": as_,
+                           "broadcast": broadcast})
         return {"ok": True, "ts": f"{self.n}.0"}
 
     def channels(self):
@@ -69,6 +71,10 @@ class SlackWebRequests(unittest.TestCase):
             def read(self):
                 return json.dumps(self.body).encode()
 
+            @property
+            def headers(self):
+                return getattr(test, "headers", {})
+
         def opener(req, timeout=None):
             test.sent.append(req)
             return Resp(test.pages.pop(0) if "conversations.list" in req.full_url else {"ok": True, "ts": "1.0"})
@@ -84,6 +90,15 @@ class SlackWebRequests(unittest.TestCase):
         self.assertEqual(first, {"types": ["private_channel,public_channel"], "exclude_archived": ["true"],
                                  "limit": ["200"]})
         self.assertEqual(urllib.parse.parse_qs(self.sent[1].data.decode())["cursor"], ["page2"])
+
+    def test_the_tokens_scopes_are_read_and_a_post_can_carry_a_seats_name(self):
+        self.headers = {"x-oauth-scopes": "chat:write, groups:read,chat:write.customize"}
+        self.web.post("CCC", "plan recorded", thread_ts="9.0", as_=("Investigator", ":mag:"), broadcast=True)
+        self.assertEqual(self.web.scopes, {"chat:write", "groups:read", "chat:write.customize"})
+        self.assertEqual(json.loads(self.sent[0].data), {"channel": "CCC", "text": "plan recorded", "unfurl_links": False,
+                                                         "unfurl_media": False, "thread_ts": "9.0",
+                                                         "reply_broadcast": True, "username": "Investigator",
+                                                         "icon_emoji": ":mag:"})
 
     def test_a_post_is_still_json(self):
         self.web.post("CCC", "hello", thread_ts="9.0")
@@ -573,6 +588,93 @@ class LeadReplies(unittest.TestCase):
         run(n.on_event({"source": "chat", "kind": "chat.reply", "data": {"messageId": 8, "conversation": "samvision"}}))
         self.assertEqual((slack.posts[-1]["channel"], slack.posts[-1]["thread"]), ("DJAY", ts))
         self.assertIn("It touches the importer.", slack.posts[-1]["text"])
+
+
+class TeamThreads(ReplyBase):
+    """Each ticket has one thread in its project's channel; every seat posts its step there under its own name."""
+
+    def setUp(self):
+        super().setUp()
+
+        class Tasks:
+            def get(self, key):
+                return {"key": key, "title": "Comps table is empty"}
+        self.d.tasks = Tasks()
+
+    def step(self, key, kind, text, actor=None, project="samvision"):
+        data = {"kind": kind, **({"actor": actor} if actor else {})}
+        run(self.n.on_event({"source": "tasks", "kind": "task.pipeline", "project": project, "ref": key,
+                             "text": f"{key} {text}", "data": data}))
+
+    def channel_posts(self, cid="CSV"):
+        return [p for p in self.slack.posts if p["channel"] == cid]
+
+    def test_steps_share_the_tickets_thread_each_under_its_seat(self):
+        self.step("SV-40", "pipeline.plan", "plan recorded: three files, low risk", "agent:planner")
+        self.step("SV-40", "pipeline.plan_reviewed", "technical review: APPROVE", "agent:tech-reviewer")
+        root, plan, review = self.channel_posts()
+        self.assertIsNone(root["thread"])
+        self.assertTrue(root["text"].startswith("*SV-40* · Comps table is empty  <http://localhost:7777/#/tasks/SV-40|Open>"))
+        self.assertEqual([plan["thread"], review["thread"]], [root["ts"], root["ts"]])
+        # Until Slack grants chat:write.customize: the app's own name, the seat in bold first.
+        self.assertEqual(plan["text"], ":mag: *Investigator*: plan recorded: three files, low risk")
+        self.assertIsNone(plan["as"])
+        self.slack.scopes = {"chat:write", notify.CUSTOMIZE}
+        self.step("SV-40", "pipeline.started", "build started on SV-40-comps", "agent:coordinator")
+        self.step("SV-40", "pipeline.review", "code review: APPROVE at abc123", "agent:reviewer")
+        lead, code = self.channel_posts()[-2:]
+        self.assertEqual((lead["as"], lead["text"]), (("Lead", ":compass:"), "build started on SV-40-comps"))
+        self.assertEqual(code["as"], ("Code reviewer", ":eyes:"))
+        self.assertEqual(len([p for p in self.channel_posts() if p["thread"] is None]), 1)      # still one thread
+
+    def test_milestones_also_show_in_the_channel_and_small_records_stay_out(self):
+        self.step("SV-41", "pipeline.criteria", "criteria updated: 3 criteria", "agent:coordinator")
+        self.step("SV-41", "pipeline.evidence", "evidence: screenshot", "agent:user-reviewer")
+        self.assertEqual(self.channel_posts(), [])
+        self.step("SV-41", "pipeline.merged", "merged: PR #12")
+        root, merged = self.channel_posts()
+        self.assertEqual((merged["thread"], merged["broadcast"], merged["as"]), (root["ts"], True, None))
+        self.assertEqual(merged["text"], "merged: PR #12")                 # ccd's own step: the app's name
+
+    def test_agent_text_is_escaped_and_a_client_project_gets_nothing(self):
+        self.step("SV-42", "pipeline.blocked", "blocked: <!channel> <https://evil|Open>", "agent:implementer")
+        text = self.channel_posts()[-1]["text"]
+        self.assertNotIn("<!channel>", text)
+        self.assertNotIn("<https://evil", text)
+        before = len(self.slack.posts)
+        self.step("GM-3", "pipeline.plan", "plan recorded", "agent:planner", project="gauzemate")
+        self.assertEqual(len(self.slack.posts), before)
+
+    def test_a_reply_in_the_tickets_thread_goes_to_the_lead_with_its_key(self):
+        self.step("SV-43", "pipeline.gate_opened", "plan gate opened: risky")
+        root = self.channel_posts()[0]
+        r = self.reply("why risky?", root["ts"], channel="CSV")
+        self.assertEqual(r["did"], "lead_nudged")
+        self.assertEqual(self.d.delivered[-1][:4], ("samvision", "why risky?", "slack", "SV-43"))
+
+    def test_the_thread_survives_a_restart(self):
+        self.step("SV-44", "pipeline.plan", "plan recorded", "agent:planner")
+        root = self.channel_posts()[0]
+        again = notify.Notifier(self.d, {"notify": {"slack": {"jay_member_id": JAY}}}, slack=self.slack,
+                                clock=self.n.clock)
+        run(again.on_event({"source": "tasks", "kind": "task.pipeline", "project": "samvision", "ref": "SV-44",
+                            "text": "SV-44 technical review: APPROVE", "data": {"kind": "pipeline.plan_reviewed"}}))
+        self.assertEqual(self.channel_posts()[-1]["thread"], root["ts"])
+
+    def test_lead_replies_post_under_the_leads_name(self):
+        ts = self.send(need("SV-45", "gate", "merge"))
+        self.reply("why?", ts)
+
+        class Chat:
+            def get(self, mid):
+                return {"id": 9, "conversation": "samvision", "replyTo": 7, "text": "It touches the importer."}
+        self.d.chat = Chat()
+        run(self.n.on_event({"source": "chat", "kind": "chat.reply", "data": {"messageId": 9}}))
+        self.assertEqual(self.slack.posts[-1]["text"], ":compass: *SamVision lead*: It touches the importer.")
+        self.slack.scopes = {notify.CUSTOMIZE}
+        run(self.n.on_event({"source": "chat", "kind": "chat.reply", "data": {"messageId": 9}}))
+        self.assertEqual((self.slack.posts[-1]["as"], self.slack.posts[-1]["text"]),
+                         (("SamVision lead", ":compass:"), "It touches the importer."))
 
 
 class LeadRepliesWithoutReplyTo(unittest.TestCase):

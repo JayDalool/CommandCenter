@@ -494,6 +494,11 @@ class PipelineApi(Automation):
         kinds = [e["data"].get("kind") for e in self.get("/api/activity?limit=200").json()["events"]
                  if e["kind"] == "task.pipeline"]
         self.assertIn("pipeline.review_stale", kinds)             # automatic steps reach the event log
+        evs = [e for e in self.get("/api/activity?limit=200").json()["events"] if e["kind"] == "task.pipeline"]
+        # Who recorded a step goes with it (Slack posts it under that seat); ccd's own poll records none.
+        self.assertEqual({e["data"].get("actor") for e in evs if e["data"].get("kind") == "pipeline.review"},
+                         {"agent:reviewer"})
+        self.assertFalse(any(e["data"].get("actor") for e in evs if e["data"].get("kind") == "pipeline.review_stale"))
         head = "95" * 20
         self.assertEqual(self.step("review", {"verdict": "APPROVE", "head": head, "session": "review-1"}, "agent:reviewer").json()["status"],
                          "READY_TO_MERGE")

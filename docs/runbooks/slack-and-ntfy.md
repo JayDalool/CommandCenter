@@ -7,6 +7,10 @@ Jay switches them on.
 
 1. Create the Slack workspace, the five private channels (`cto`, `commandcenter`, `samvision`, `gyst`, `mfe`) and the
    app from the manifest in the HQ launch plan. Invite `@CommandCenter` to each channel.
+   For each seat to post under its own name and icon (Investigator, Technical reviewer, Developer, the leads),
+   add the bot scope `chat:write.customize` (OAuth & Permissions) and reinstall the app. Without it, the app posts
+   them under its own name with the seat in bold at the start. ccd reads the scopes from Slack's answers, so no
+   restart is needed.
 2. On jay-server, write the two tokens to `~/.config/command-center/slack.env` (mode 0600, the plan has the command).
    ccd refuses the file if anyone but its owner can read it.
 3. Add Jay's Slack member ID to `~/command-center/board/config.json`:
@@ -39,7 +43,7 @@ The same settings are `GET/PUT /api/notify` for the Settings screen.
 |---|---|
 | DM to Jay | each new Needs You item: gates, questions, merges, tasks, red main checks, a blocked agent |
 | ntfy | the same items, as a title and a link only |
-| `#<project>` | PR opened/closed, failing checks, merges, deploys; the technical summary each morning |
+| `#<project>` | one thread per ticket: each seat's step (intake, plan, technical review, build, user check, code review, gates, release) under that seat's name; merged, deployed and done also show in the channel. PR opened/closed and failing checks; the technical summary each morning |
 | `#cto` | host and ccd alerts; the owner's summary each morning |
 
 The first tick after start takes the current queue as its baseline instead of sending it; it is in the morning summary.
@@ -55,6 +59,7 @@ ccd reads only messages whose author is `jay_member_id`, never edits or bot mess
 - **Gates:** `approve` (or yes, ok, go, lgtm) closes a gate only if it is a blocker (`failure`) or a UI review (`ui`),
   and only while the scope is `answers_low_risk`. The default is `answers`, so nothing is approvable from Slack until Jay runs `notify_cli scope answers_low_risk`. This list is fixed in code (`notify.SLACK_GATES`) and checked again
   in `Daemon.slack_confirm`. Plans, merges and deploys are approved in CommandCenter.
+- **A ticket's thread:** the reply goes to the project's lead, tagged with the ticket.
 - **Anything else** goes to the project's lead through Messages (`Daemon.deliver_to_lead`), and the lead's reply comes
   back in the same thread. Outside a thread, a project channel goes to its lead; `#cto` and the DM go to the CTO.
 
