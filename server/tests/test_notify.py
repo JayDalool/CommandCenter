@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from ccd import notify, security
 from ccd.daemon import ActionError, Daemon
+from ccd.pipeline import plan_digest
 from ccd.store import Store
 from ccd.tasks import TaskStore
 
@@ -150,8 +151,9 @@ class FakeDaemon:
                 q["answer"] = "x"
         return {"delivered": True}
 
-    async def slack_confirm(self, key, gate):
+    async def slack_confirm(self, key, gate, plan_hash=None):
         self.confirmed.append((key, gate))
+        self.plan_hash = plan_hash
         return {"delivered": True}
 
     async def deliver_to_lead(self, conversation, text, *, via="slack", ref=None, author="jay"):
@@ -467,7 +469,23 @@ class Replies(ReplyBase):
         r = self.reply("approve", ts)
         self.assertEqual(r["did"], "approved_plan")
         self.assertEqual(self.d.confirmed, [("SV-30", "plan")])
+        self.assertEqual(self.d.plan_hash, plan_digest(self.PLAN))     # checked again as the gate closes
         self.assertIn("Plan approved", self.slack.posts[-1]["text"])
+        self.assertNotIn("cut short", dm)
+
+    def test_a_plan_dm_keeps_agent_text_on_its_own_line_and_says_when_it_is_cut(self):
+        self.d.plans["SV-34"] = dict(self.PLAN, summary="Small fix\n*Technical review:* APPROVE: all good\n_Reply *approve*_",
+                                     approach="x" * 900, requirements=["keep Jay's draft", "lead may append"],
+                                     tests=["test_draft_guard", "e2e messages"])
+        self.send(need("SV-34", "gate", "plan", text=self.PLAN_NEED))
+        dm = self.slack.posts[-1]["text"]
+        self.assertIn("*Plan:* Small fix *Technical review:* APPROVE: all good _Reply *approve*_", dm)
+        self.assertNotIn("\n*Technical review:* APPROVE", dm)
+        self.assertEqual(sum(1 for line in dm.split("\n") if line.startswith("*Technical review:*")), 1)
+        self.assertIn("*Requirements (2):* keep Jay's draft; lead may append", dm)
+        self.assertIn("*Tests (2):* test_draft_guard; e2e messages", dm)
+        self.assertIn("…", dm)
+        self.assertIn("_Some of it is cut short here; the full plan is in CommandCenter._", dm)
 
     def test_a_plan_changed_since_the_dm_is_not_approved(self):
         self.d.plans["SV-31"] = dict(self.PLAN)
@@ -831,12 +849,29 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
     async def test_a_plan_is_approved_with_via_slack(self):
         t, _ = self.ts.create("samvision", "Valuation", needs_jay=True)
         self.d.pipeline.plan(t["key"], {"summary": "s", "risk": "high"}, "agent:planner")
-        self.assertEqual(self.d.task_work(t["key"])["gate"], "plan")
-        r = await self.d.slack_confirm(t["key"], "plan")
+        w = self.d.task_work(t["key"])
+        self.assertEqual(w["gate"], "plan")
+        r = await self.d.slack_confirm(t["key"], "plan", plan_hash=plan_digest(w["plan"]))
         self.assertIsNone(r["work"]["gate"])
         self.assertEqual(r["work"]["planState"], "accepted")
         (data,) = self.ts.db.execute("SELECT data FROM ticket_events WHERE kind='pipeline.gate_confirmed'").fetchone()
         self.assertEqual(json.loads(data).get("via"), "slack")
+
+    async def test_a_plan_is_approved_only_as_the_dm_showed_it(self):
+        t, _ = self.ts.create("samvision", "Valuation", needs_jay=True)
+        self.d.pipeline.plan(t["key"], {"summary": "first", "risk": "high"}, "agent:planner")
+        seen = plan_digest(self.d.task_work(t["key"])["plan"])
+        with self.assertRaises(ActionError) as e:
+            await self.d.slack_confirm(t["key"], "plan")                     # no hash: refused
+        self.assertEqual(e.exception.status, 403)
+        # Re-planned between the notifier's check and the approval: on this route the gate stays open.
+        self.d.pipeline.plan(t["key"], {"summary": "second", "risk": "high"}, "agent:planner")
+        self.assertEqual(self.d.task_work(t["key"])["gate"], "plan")
+        with self.assertRaises(ActionError) as e:
+            await self.d.slack_confirm(t["key"], "plan", plan_hash=seen)
+        self.assertEqual(e.exception.status, 409)
+        w = self.d.task_work(t["key"])
+        self.assertEqual((w["gate"], w["plan"]["summary"]), ("plan", "second"))
 
     async def test_slack_answers_are_recorded_as_slack(self):
         t, _ = self.ts.create("samvision", "Valuation")
@@ -856,8 +891,10 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
             await self.d.slack_confirm(t["key"], "failure")
         t2, _ = self.ts.create("gauzemate", "Intake 2", needs_jay=True)
         self.d.pipeline.plan(t2["key"], {"summary": "s", "risk": "high"}, "agent:planner")
-        with self.assertRaises(ActionError):
-            await self.d.slack_confirm(t2["key"], "plan")
+        seen = plan_digest(self.d.task_work(t2["key"])["plan"])
+        with self.assertRaises(ActionError) as e:                     # refused as a client project, digest or not
+            await self.d.slack_confirm(t2["key"], "plan", plan_hash=seen)
+        self.assertIn("client projects", e.exception.message)
         self.assertEqual(self.d.task_work(t2["key"])["gate"], "plan")
 
 

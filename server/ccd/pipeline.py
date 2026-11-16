@@ -20,6 +20,7 @@ flags. Automatic moves come only from deterministic signals: an agent recording 
 stage result through this module, or ccd's GitHub poll (PR head, CI, merge).
 """
 import datetime
+import hashlib
 import json
 import re
 import time
@@ -205,6 +206,11 @@ def clean_plan(raw):
     if not plan["summary"]:
         raise TaskError(400, "a plan needs a summary")
     return plan
+
+
+def plan_digest(plan):
+    """A plan's identity for an approval made elsewhere (a Slack DM showed it): any change to it changes this."""
+    return hashlib.sha256(json.dumps(plan or {}, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def _merge_ok(confirmed, head):
@@ -1038,13 +1044,14 @@ class Pipeline:
         when = (w.get("merge") or {}).get("at") or (w.get("deploy") or {}).get("requestedAt")
         return self.releases.hold(t["project"], when, at)
 
-    def confirm(self, key, gate, actor, via=None, urgent=False):
+    def confirm(self, key, gate, actor, via=None, urgent=False, plan_digest_seen=None):
         """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock). `via` marks a
         live-deploy approval whose message only asks Claude to PREPARE: "go-live" (Go Live) gives approvedBy
         "jay:go-live", "gate" (the ticket's deploy gate) gives "jay:gate". Either way the event says the deploy was
         approved for a PREPARED deploy that Jay confirms in the pane. The record is still a full live-deploy approval
         and permits `deployed` (it checks only approvedAt; the pane confirmation is Jay's, and nothing here can
-        check it)."""
+        check it). `plan_digest_seen` (a plan approved from a Slack DM): the plan gate closes only if the plan is still
+        the one Jay saw, checked in this transaction."""
         if actor != "jay":
             raise TaskError(403, "only Jay closes an owner gate")
         if gate not in GATES:
@@ -1056,6 +1063,8 @@ class Pipeline:
         def fn(tid, t, w, at):
             if w["gate"] != gate:
                 raise TaskError(409, f"{t['key']} has no open {gate} gate")
+            if plan_digest_seen is not None and (gate != "plan" or plan_digest(w["plan"]) != plan_digest_seen):
+                raise TaskError(409, f"{t['key']}'s plan changed since Jay saw it; nothing was approved")
             if urgent:
                 # Risky as the flow reads it: sized risky, or made risky by its labels / flags / type.
                 if gate != "deploy" or flow_mod.effective_size(self._flow(tid)["size"], policy(t)) != "risky":
