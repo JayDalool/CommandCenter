@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+import urllib.parse
 from zoneinfo import ZoneInfo
 
 from ccd import notify, security
@@ -41,6 +42,55 @@ class FakeSlack:
 
     def socket_url(self):
         return "wss://example.invalid/socket"
+
+
+class SlackWebRequests(unittest.TestCase):
+    """What ccd sends to Slack's Web API. Slack ignores a JSON body on a read method: conversations.list sent as JSON
+    ran with its defaults and listed public channels only, so ccd never found its private project channels."""
+
+    def setUp(self):
+        self.sent = []
+        self.pages = [{"ok": True, "channels": [{"name": "commandcenter", "id": "CCC"}],
+                       "response_metadata": {"next_cursor": "page2"}},
+                      {"ok": True, "channels": [{"name": "cto", "id": "CCTO"}], "response_metadata": {}}]
+
+        test = self
+
+        class Resp:
+            def __init__(self, body):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps(self.body).encode()
+
+        def opener(req, timeout=None):
+            test.sent.append(req)
+            return Resp(test.pages.pop(0) if "conversations.list" in req.full_url else {"ok": True, "ts": "1.0"})
+        self.web = notify.SlackWeb("xoxb-test", opener=opener)
+
+    def test_the_channel_list_is_asked_for_as_a_form_with_private_channels(self):
+        self.assertEqual(self.web.channels(), {"commandcenter": "CCC", "cto": "CCTO"})
+        self.assertEqual(len(self.sent), 2)
+        for req in self.sent:
+            self.assertEqual(req.get_header("Content-type"), "application/x-www-form-urlencoded")
+            self.assertEqual(req.get_header("Authorization"), "Bearer xoxb-test")
+        first = urllib.parse.parse_qs(self.sent[0].data.decode())
+        self.assertEqual(first, {"types": ["private_channel,public_channel"], "exclude_archived": ["true"],
+                                 "limit": ["200"]})
+        self.assertEqual(urllib.parse.parse_qs(self.sent[1].data.decode())["cursor"], ["page2"])
+
+    def test_a_post_is_still_json(self):
+        self.web.post("CCC", "hello", thread_ts="9.0")
+        req = self.sent[0]
+        self.assertTrue(req.get_header("Content-type").startswith("application/json"))
+        self.assertEqual(json.loads(req.data), {"channel": "CCC", "text": "hello", "unfurl_links": False,
+                                                "unfurl_media": False, "thread_ts": "9.0"})
 
 
 class FakeDaemon:
@@ -397,6 +447,40 @@ class Replies(ReplyBase):
         self.reply("what shipped this week?", channel="DJAY")
         self.assertEqual(self.d.delivered[-1][0], "cto")
         self.assertEqual(self.slack.posts[-1]["text"], "Sent to the CTO.")
+
+    def test_a_channel_the_bot_joined_after_connecting_reaches_its_lead(self):
+        # The socket read the list before #commandcenter's invite: Slack lists a private channel only to members.
+        self.n._ids = {k: v for k, v in FakeSlack().channels().items() if k != "commandcenter"}
+        r = self.reply("what's next?", channel="CCC")
+        self.assertEqual(r["did"], "lead_nudged")
+        self.assertEqual(self.d.delivered[-1][:2], ("commandcenter", "what's next?"))
+        self.assertEqual(self.n._ids["commandcenter"], "CCC")
+
+    def test_an_unknown_channel_rereads_the_list_at_most_once_a_minute(self):
+        calls = []
+        real = self.slack.channels
+        self.slack.channels = lambda: calls.append(1) or real()
+        self.n._ids = real()
+        self.assertEqual(self.reply("hello", channel="CCC")["did"], "lead_nudged")   # a known channel: no re-read
+        self.assertEqual(calls, [])
+        self.assertEqual(self.reply("hello", channel="CRANDOM")["did"], "ignored")
+        self.assertEqual(self.reply("hello again", channel="CRANDOM")["did"], "ignored")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.reply("hello", channel="CJUSTJOINED")["did"], "ignored")    # its own minute
+        self.assertEqual(len(calls), 2)
+        clock = self.n.clock
+        self.n.clock = lambda: clock() + notify.IDS_REFRESH_S
+        self.assertEqual(self.reply("hello?", channel="CRANDOM")["did"], "ignored")
+        self.assertEqual(len(calls), 3)
+
+    def test_a_failed_reread_is_recorded_and_the_message_ignored(self):
+        def broken():
+            raise notify.SlackError("conversations.list: ratelimited")
+        self.slack.channels = broken
+        self.n._ids = {"cto": "CCTO"}
+        self.assertEqual(self.reply("what's next?", channel="CCC")["did"], "ignored")
+        self.assertEqual(self.d.delivered, [])
+        self.assertIn("slack channels", self.n.status["lastError"])
 
     def test_without_the_chat_store_a_reply_says_so(self):
         del FakeDaemon.deliver_to_lead

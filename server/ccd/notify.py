@@ -94,6 +94,7 @@ CONFIG_DEFAULTS = {
 HELD_MAX = 50
 THREADS_MAX = 1000
 SEEN_EVENTS_MAX = 500
+IDS_REFRESH_S = 60              # at most one re-read of the channel list a minute per unknown channel
 ALERT_KINDS = ("pr.opened", "pr.closed", "ci.main_changed", "pr.ci_changed", "task.pipeline")
 PIPELINE_ALERTS = {"pipeline.merged": "merged", "pipeline.auto_merged": "auto-merged", "pipeline.deployed": "deployed",
                    "pipeline.done": "done", "pipeline.auto_merge_failed": "auto-merge failed"}
@@ -184,17 +185,25 @@ def read_env(path):
 # ---------- clients ----------
 
 class SlackWeb:
-    """The few Web API calls ccd makes, over urllib. `call` is synchronous; the notifier runs it in a thread."""
+    """The few Web API calls ccd makes, over urllib. `call` is synchronous; the notifier runs it in a thread.
+
+    Slack reads a JSON body only on its write methods. A read method such as conversations.list ignores it and runs
+    with its defaults (public channels only), so reads send their arguments as a form (`form=True`)."""
 
     def __init__(self, bot_token, app_token=None, opener=None):
         self.bot = bot_token
         self.app = app_token
         self.open = opener or urllib.request.urlopen
 
-    def call(self, method, body=None, token=None, retries=2):
-        data = json.dumps(body or {}).encode()
+    def call(self, method, body=None, token=None, retries=2, form=False):
+        if form:
+            data = urllib.parse.urlencode({k: str(v).lower() if isinstance(v, bool) else v
+                                           for k, v in (body or {}).items()}).encode()
+            kind = "application/x-www-form-urlencoded"
+        else:
+            data, kind = json.dumps(body or {}).encode(), "application/json; charset=utf-8"
         req = urllib.request.Request(SLACK_API + method, data=data, method="POST", headers={
-            "Authorization": f"Bearer {token or self.bot}", "Content-Type": "application/json; charset=utf-8"})
+            "Authorization": f"Bearer {token or self.bot}", "Content-Type": kind})
         for attempt in range(retries + 1):
             try:
                 with self.open(req, timeout=15) as r:
@@ -223,7 +232,7 @@ class SlackWeb:
             body = {"types": "private_channel,public_channel", "exclude_archived": True, "limit": 200}
             if cursor:
                 body["cursor"] = cursor
-            r = self.call("conversations.list", body)
+            r = self.call("conversations.list", body, form=True)     # as JSON, Slack lists public channels only
             for c in r.get("channels") or []:
                 out[c["name"]] = c["id"]
             cursor = (r.get("response_metadata") or {}).get("next_cursor")
@@ -328,6 +337,7 @@ class Notifier:
         self._slack = slack            # a SlackWeb, or a fake in tests; built from slack.env when None
         self._ntfy = ntfy or ntfy_send
         self._ids = {}                 # channel name -> id
+        self._ids_at = {}              # unknown channel id -> when a message from it last re-read the list
         self._dm = None
         self.status = {"slack": "off", "socket": "off", "ntfy": "off", "lastError": None, "lastSentAt": None}
         saved, _ = self.store.get("notify:settings", {})
@@ -732,12 +742,35 @@ class Notifier:
                 if (item.get("kind") == "gate" and APPROVE_RE.match(text)):
                     return dict(await self.approve(ref, item.get("gate"), item), project=proj)
             return await self.to_lead(proj, text, ref)
-        if cid == self._dm or self._ids.get(self.conf["cto_channel"]) == cid:
-            return await self.to_lead("cto", text, None)
-        proj = self.project_of_channel(cid)
-        if proj:
-            return await self.to_lead(proj, text, None)
+        to = self._route(cid)
+        if to is None and cid not in self._ids.values() and await self._reread_channels(cid):
+            to = self._route(cid)
+        if to:
+            return await self.to_lead(to, text, None)
         return {"did": "ignored"}
+
+    def _route(self, cid):
+        """Whose a message outside an item's thread is: "cto" (the DM or #cto), a project key, or None."""
+        if cid == self._dm or self._ids.get(self.conf["cto_channel"]) == cid:
+            return "cto"
+        return self.project_of_channel(cid)
+
+    async def _reread_channels(self, cid):
+        """The channel list is read when the socket connects, and Slack lists a private channel only once the bot is
+        in it. A message from a channel the list lacks means the bot was invited since: read it again, at most once a
+        minute for that channel (Slack sends events only from channels the bot is in, so there are few). Returns
+        whether it was read."""
+        now = self.clock()
+        if now - self._ids_at.get(cid, float("-inf")) < IDS_REFRESH_S:
+            return False
+        self._ids_at = {k: v for k, v in self._ids_at.items() if now - v < IDS_REFRESH_S}
+        self._ids_at[cid] = now
+        try:
+            self._ids = await self._call(self.slack().channels)
+        except SlackError as e:
+            self._fail("slack channels", e)
+            return False
+        return True
 
     async def answer(self, key, text, qids):
         """Answers exactly the questions that message showed. If any of them was answered since, or there are
