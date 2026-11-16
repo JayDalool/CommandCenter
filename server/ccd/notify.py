@@ -59,6 +59,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from . import registry
+from .pipeline import plan_digest
 from .security import redact
 
 log = logging.getLogger("ccd.notify")
@@ -350,12 +351,14 @@ def pick_option(q, text):
 
 
 def _cut(text, n):
-    text = str(text or "").strip()
+    """Agent text on ONE line of the DM: line breaks collapsed, so it cannot pass a line of its own off as ccd's
+    (a "Technical review" or "Reply approve" line); cut at n characters, marked with "…"."""
+    text = " ".join(str(text or "").split())
     return text if len(text) <= n else text[:n - 1].rstrip() + "…"
 
 
-def _plan_hash(plan):
-    return _digest(json.dumps(plan or {}, sort_keys=True))
+def _items(values, n):
+    return _cut("; ".join(str(v) for v in values or []), n)
 
 
 def plan_lines(plan, review):
@@ -364,16 +367,22 @@ def plan_lines(plan, review):
     out = [f"*Plan:* {esc(_cut(plan.get('summary'), 500))}"]
     if plan.get("approach"):
         out.append(f"*Approach:* {esc(_cut(plan['approach'], 700))}")
+    if plan.get("requirements"):
+        out.append(f"*Requirements ({len(plan['requirements'])}):* " + esc(_items(plan["requirements"], 400)))
     if plan.get("affected"):
         out.append("*Touches:* " + esc(_cut(", ".join(str(a) for a in plan["affected"]), 300)))
     if plan.get("risk"):
         out.append(f"*Risk:* {esc(_cut(plan['risk'], 300))}")
+    if plan.get("tests"):
+        out.append(f"*Tests ({len(plan['tests'])}):* " + esc(_items(plan["tests"], 400)))
     if review:
-        out.append(f"*Technical review:* {esc(review.get('verdict'))}: {esc(_cut(review.get('note'), 300))}")
+        out.append(f"*Technical review:* {esc(_cut(review.get('verdict'), 20))}: {esc(_cut(review.get('note'), 300))}")
         if review.get("blast"):
             out.append(f"*Blast radius:* {esc(_cut(review['blast'], 300))}")
     else:
         out.append("*Technical review:* none on this route")
+    if any(line.endswith("…") for line in out):
+        out.append("_Some of it is cut short here; the full plan is in CommandCenter._")
     return out
 
 
@@ -623,7 +632,7 @@ class Notifier:
         if n.get("kind") == "gate" and n.get("gate") in PLAN_GATES and not self.client(n.get("project")):
             # The plan this DM shows, read once. An approve applies to this plan only (approve()).
             p = self._plan(n.get("ref"))
-            item["planHash"] = _plan_hash(p["plan"]) if p else None
+            item["planHash"] = plan_digest(p["plan"]) if p else None
         await self.post("dm", self.need_text(n, plan=p), item=item)
         await self.push(self.push_title(n), self.link(n))
 
@@ -976,12 +985,15 @@ class Notifier:
                                   for n in now)
         if same and gate in PLAN_GATES:
             p = self._plan(key)
-            same = p is not None and bool(item.get("planHash")) and _plan_hash(p["plan"]) == item["planHash"]
+            same = p is not None and bool(item.get("planHash")) and plan_digest(p["plan"]) == item["planHash"]
         if not same:
             return {"did": "approval_stale",
                     "say": "This has changed since this message, so nothing was approved." + (f" <{link}|Open it>" if link else "")}
         try:
-            r = await self.d.slack_confirm(key, gate)
+            # A plan: the daemon checks the hash again as it closes the gate, so a plan replaced after the check
+            # above is not approved either.
+            r = await (self.d.slack_confirm(key, gate, plan_hash=item.get("planHash")) if gate in PLAN_GATES
+                       else self.d.slack_confirm(key, gate))
         except Exception as e:  # noqa: BLE001
             return {"did": "approve_failed", "say": f"Could not approve: {esc(getattr(e, 'message', None) or e)}"}
         return {"did": f"approved_{gate}",

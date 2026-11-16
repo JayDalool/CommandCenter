@@ -1912,17 +1912,22 @@ class Daemon(LeadChat, HqDaemon):
         why = {"lead-offline": "the lead is not running", "lead-paused": "the project is paused"}.get(d, d or "not delivered")
         return False, f"saved in Messages for the {project} lead, but {why}; it reads them when it runs", "lead"
 
-    async def slack_confirm(self, key, gate):
+    async def slack_confirm(self, key, gate, plan_hash=None):
         """Jay approves a gate by replying in Slack (ccd/notify.py): a plan, or a Low-risk gate. Only the gates in
         notify.SLACK_GATES, never in a client project, and recorded with via "slack". Merges and deploys are refused
-        here as well as in the notifier, so no caller can widen it."""
+        here as well as in the notifier, so no caller can widen it. A plan needs `plan_hash`, the plan the DM showed
+        (pipeline.plan_digest); pipeline.confirm checks it in the same transaction that closes the gate."""
         from . import notify as notify_mod
         if gate not in notify_mod.SLACK_GATES:
             raise ActionError(403, f"a {gate} gate is approved in CommandCenter, not from Slack")
+        if gate in notify_mod.PLAN_GATES and not plan_hash:
+            raise ActionError(403, "a plan is approved from Slack only as the DM showed it")
         t = self._wrap(self._need_tasks().get, key)
         if self.notifier is not None and self.notifier.client(t["project"]):
             raise ActionError(403, "client projects are approved in CommandCenter")
-        self._pipeline_result(*self._wrap(self.pipeline.confirm, key, gate, "jay", "slack"), actor="jay")
+        self._pipeline_result(*self._wrap(self.pipeline.confirm, key, gate, "jay", "slack",
+                                          plan_digest_seen=plan_hash if gate in notify_mod.PLAN_GATES else None),
+                              actor="jay")
         work = self.task_work(key)
         text = self._nudge_text(work["key"], "confirm", {"gate": gate}, work)
         if not text:
