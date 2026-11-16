@@ -1501,10 +1501,14 @@ class Pipeline:
             raise TaskError(400, "the deploy plan has text Slack's secret filter would hide (a key, token, password or "
                                  "connection string, or a word like token or secret followed by a value): reword it so "
                                  "Jay can read all of it")
-        ch = unshown(summary)
+        ch = unshown(summary) or next((c for c in summary if c != " " and unicodedata.category(c) == "Zs"), None)
         if ch:
-            raise TaskError(400, f"the deploy plan has a character Slack would not show (U+{ord(ch):04X}): use plain "
-                                 "text, so Jay can read all of it")
+            raise TaskError(400, f"the deploy plan has a character Slack would not show plainly (U+{ord(ch):04X}): use "
+                                 "plain text, so Jay can read all of it")
+        if "```" in summary or re.search(r" {20,}", summary):
+            # The DM shows the plan in a code block (notify.send_deploy_plan); ``` would end it, and a long run of
+            # spaces pushes the rest of a line out of sight.
+            raise TaskError(400, "the deploy plan cannot contain ``` or 20 spaces in a row")
 
         def fn(tid, t, w, at):
             self._need(t, ("VERIFYING",), "a deploy plan")
