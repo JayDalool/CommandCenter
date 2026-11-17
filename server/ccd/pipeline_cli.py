@@ -35,6 +35,8 @@ The delivery flow (docs/flow/FLOW.md). Each line runs as the seat named in brack
     python -m ccd.pipeline_cli user-check  SV-056 pass|fail --head <sha> --session <fresh> --note "…" \
                                            --criterion c1=pass [--criterion c2=fail …]                        [user-reviewer]
     python -m ccd.pipeline_cli close       SV-056 --note "what was done, what to know next time"             [lead]
+    python -m ccd.pipeline_cli security-review SV-056 --session <yours> --note "findings and the recommended fix"
+                                           (a security ticket, before the lead decides; Jay sees it)  [security-reviewer]
 
 `criteria` replaces the whole list: repeat every criterion you keep (as its text; an unchanged text keeps its state).
 Intake needs a priority (URGENT, HIGH, MEDIUM or LOW) unless the ticket already has one; without --due the ticket is
@@ -65,10 +67,10 @@ import urllib.request
 from . import config
 
 ROLES = ("coordinator", "planner", "implementer", "reviewer", "verifier", "tech-reviewer", "user-reviewer",
-         "design-reviewer")
+         "design-reviewer", "security-reviewer")
 # The flow's steps run as their seat when no --role is given.
 DEFAULT_ROLE = {"intake": "coordinator", "criteria": "coordinator", "close": "coordinator",
-                "plan-review": "tech-reviewer", "user-check": "user-reviewer"}
+                "plan-review": "tech-reviewer", "user-check": "user-reviewer", "security-review": "security-reviewer"}
 
 
 def call(method, path, body=None, actor=None, port=None, token=None):
@@ -134,7 +136,7 @@ def build(argv):
     p.add_argument("op", choices=("work", "plan", "start", "review", "verify", "handoff", "block", "role", "finding",
                                   "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
                                   "tasks", "add", "intake", "criteria", "plan-review", "user-check", "close",
-                                  "deploy-plan", "reply"))
+                                  "deploy-plan", "reply", "security-review"))
     p.add_argument("key")
     p.add_argument("decision", nargs="?", help="plan-review: APPROVE or SEND_BACK; user-check: pass or fail")
     p.add_argument("--role", choices=ROLES)
@@ -220,6 +222,7 @@ def build(argv):
         "user-check": lambda: {"result": a.decision or a.result, "head": a.head, "note": a.note,
                                "criteria": a.criterion or [], **meta},
         "close": lambda: {"note": a.note},
+        "security-review": lambda: {"conclusion": a.note, **meta},
     }
     if a.op == "work":
         return "GET", f"/api/tasks/{key}/work", None, None

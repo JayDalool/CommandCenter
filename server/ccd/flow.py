@@ -121,6 +121,7 @@ NOTES = {
     "intake": "Sized and sent on", "plan_review": "Plan recorded for technical review", "plan_accepted": "Plan accepted",
     "plan_gate": "Plan waits for Jay", "approved": "Technical review approved the plan",
     "plan_sent_back": "Technical review sent the plan back", "jay_plan": "Jay approved the plan",
+    "lead_plan": "The lead approved the plan (team lead permissions)",
     "started": "Implementation started", "to_review": "Pull request in review", "user_pass": "User check passed",
     "user_fail": "User check failed", "user_stale": "New commits: the user check runs again",
     "changes": "Code review asked for changes", "ready": "Code review approved; ready to merge",
@@ -166,7 +167,9 @@ def handoffs(events, rt, created_at=None):
             add(at, "advanced", "build", actor, "plan_accepted")
         elif kind == "pipeline.plan_reviewed":
             if d.get("verdict") == "APPROVE":
-                if d.get("gate"):
+                if d.get("gate") and d.get("authority"):
+                    pass        # the lead approved it at once: pipeline.gate_lead_approved moves it to build
+                elif d.get("gate"):
                     out.append({"at": at, "stage": "techReview", "kind": "advanced", "from": "techReviewer",
                                 "to": "jay", "by": actor, "note": NOTES["plan_gate"]})
                     left["techReview"] = (actor, at)
@@ -179,6 +182,8 @@ def handoffs(events, rt, created_at=None):
                         "note": NOTES["plan_gate"]})
         elif kind == "pipeline.gate_confirmed" and d.get("gate") == "plan":
             add(at, "advanced", "build", actor, "jay_plan")
+        elif kind == "pipeline.gate_lead_approved" and d.get("gate") == "plan":
+            add(at, "advanced", "build", actor, "lead_plan")
         elif kind == "pipeline.gate_confirmed" and d.get("gate") == "failure":
             add(at, "resumed", cur, actor, "resumed")
         elif kind == "pipeline.started":
@@ -261,7 +266,10 @@ def view(t, w, f, events, pol, open_children=0, now=None):
     v = w.get("verification") or {}
     d = w.get("deploy") or {}
     waiting = None
-    if gate or w.get("openQuestions"):
+    if gate and not w.get("openQuestions") and str(w.get("gateReason") or "").startswith(
+            "waits for the security specialist's review"):     # lead_authority.SECURITY_GATE: not Jay's yet
+        waiting = "security"
+    elif gate or w.get("openQuestions"):
         waiting = "jay"
     elif t["status"] == "VERIFYING" and v.get("result") == "pass" and not (d.get("requestedAt") and d.get("result") != "pass"):
         waiting = "lead"    # verified: the lead writes the closing note (or children are still open)

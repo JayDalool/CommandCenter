@@ -139,7 +139,8 @@ SEATS = {"agent:coordinator": ("Lead", ":compass:"), "agent:planner": ("Investig
          "agent:tech-reviewer": ("Technical reviewer", ":triangular_ruler:"),
          "agent:implementer": ("Developer", ":hammer_and_wrench:"), "agent:user-reviewer": ("User reviewer", ":test_tube:"),
          "agent:design-reviewer": ("Design reviewer", ":art:"), "agent:reviewer": ("Code reviewer", ":eyes:"),
-         "agent:verifier": ("Verifier", ":white_check_mark:")}
+         "agent:verifier": ("Verifier", ":white_check_mark:"),
+         "agent:security-reviewer": ("Security specialist", ":shield:")}
 LEAD_ICON, CTO_ICON = ":compass:", ":office:"
 # The steps a ticket's thread shows: each seat's result, the gates, and what happened to it. Not the many small
 # records (criteria edits, evidence, findings one by one, writer checkpoints, stale marks).
@@ -149,7 +150,7 @@ TEAM_KINDS = frozenset({
     "pipeline.rework", "pipeline.blocked", "pipeline.questions", "pipeline.answered", "pipeline.gate_opened",
     "pipeline.gate_confirmed", "pipeline.ready_to_merge", "pipeline.unreviewed_merge", "pipeline.verified",
     "pipeline.released", "pipeline.deploy_requested", "pipeline.deploy_approved", "pipeline.closed_note",
-    "pipeline.deploy_prepared", "pipeline.deploy_confirmed",
+    "pipeline.deploy_prepared", "pipeline.deploy_confirmed", "pipeline.security_reviewed", "pipeline.gate_waiting",
     *PIPELINE_ALERTS})
 CUSTOMIZE = "chat:write.customize"     # the scope Slack needs before a bot may post under another name and icon
 TICKETS_MAX = 500

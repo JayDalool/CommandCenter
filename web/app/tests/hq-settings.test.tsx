@@ -44,12 +44,12 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); prefs.patch({ ui: "classic", theme: "dark" }); });
 
 describe("HQ Settings", () => {
-  it("lists the eleven sections in the prototype's order, each at its own address, General first", async () => {
+  it("lists the twelve sections in the prototype's order, each at its own address, General first", async () => {
     load();
     const page = await show("#/settings");
     const links = within(nav(page)).getAllByRole("link");
     expect(links.map((a) => a.querySelector("b")?.textContent)).toEqual(["General", "Appearance", "Notifications",
-      "Windows & monitors", "Security", "Connections", "Operating profiles", "Workers", "Audit and usage",
+      "Windows & monitors", "Security", "Connections", "Operating profiles", "Team lead permissions", "Workers", "Audit and usage",
       "Other destinations", "Help & shortcuts"]);
     expect(links.map((a) => a.getAttribute("href"))).toEqual(SECTIONS.map((s) => `#/settings?tab=${s.id}`));
     expect(page).toHaveClass("is-index");
@@ -85,7 +85,7 @@ describe("HQ Settings", () => {
 
   it("each HQ section id opens a Classic section, and Classic's own ids are unchanged", () => {
     expect(SECTIONS.map((s) => classicTab(s.id))).toEqual(["general", "general", "general", "general", "developer",
-      "connection", "policies", "workers", "audit", "diagnostics", "general"]);
+      "connection", "policies", "policies", "workers", "audit", "diagnostics", "general"]);
     for (const t of ["general", "desktop", "developer", "connection", "policies", "decisions", "workers", "audit", "usage",
       "import", "diagnostics"]) expect(classicTab(t)).toBe(t);
     expect(classicTab(null)).toBe("general");

@@ -357,7 +357,7 @@ export interface TicketFlow {
   stage?: FlowStage | null; route?: FlowStage[]; openChildren?: number;
   holder: { seat: FlowSeat; session: string | null; since: number } | null;
   next: { stage: FlowStage; seat: FlowSeat | "jay" } | null;
-  waitingOn: "jay" | "lead" | "reviewer" | null;
+  waitingOn: "jay" | "lead" | "reviewer" | "security" | null;
   rounds: number; idleSince: number; stale: boolean;
 }
 export interface Handoff {
@@ -753,6 +753,22 @@ export interface WorkModeProject {
 export interface WorkModeState {
   projects: Record<string, WorkModeProject>;
   limits: { idleS: number; gapS: number; restAfter: number; restS: number; dayMax: number };
+}
+/** Team lead permissions (GET /api/lead-authority, ccd/lead_authority.py). Each level includes the ones before it.
+ *  `default`: no level stored, so the registry's applies. `permissions`: what the level grants. `mergeSwitch`: the
+ *  kill switches that stop every merge ccd would make (config.json `auto_merge: false`, the stop file). */
+export type LeadLevel = "none" | "low_risk" | "merge" | "merge_deploy" | "all";
+export interface LeadAuthorityProject {
+  level: LeadLevel; default: boolean; since: number | null;
+  permissions: Record<"merge_low_risk" | "merge" | "deploy" | "plan" | "ui" | "release", boolean>;
+  lowRiskPaths: boolean; paused: boolean; client: boolean;
+}
+export interface LeadAuthorityState {
+  projects: Record<string, LeadAuthorityProject>;
+  levels: { key: LeadLevel; label: string }[];
+  mergeSwitch: { config: boolean; stopFile: boolean };
+  /** Labels that keep a ticket Jay's at every level; labels the security specialist reviews first (Jay 2026-11-17). */
+  alwaysJay: string[]; security: string[];
 }
 /** A project's logo as ccd lists it (GET /api/projects/logos). The bytes are fetched apart and shown from a blob:. */
 export interface ProjectLogo { mime: string; sha256: string; updatedAt: number }

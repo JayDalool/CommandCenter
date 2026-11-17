@@ -77,7 +77,8 @@
     GET   /api/tasks/{key}/work      the ticket's durable pipeline state (plan, stage, gate, roles, review head, …)
     POST  /api/tasks/{key}/work/{op} one pipeline step: plan start review verify handoff block role finding
                                      ask replan rework evidence writer deploy-request deploy-plan deployed stale reply,
-                                     and the flow's intake criteria plan-review user-check close;
+                                     and the flow's intake criteria plan-review user-check close, and
+                                     security-review (the security specialist, agent:security-reviewer);
                                      `confirm` (close an owner gate) needs Jay AND Developer Unlock
     GET   /api/flow                  the delivery flow per project: seats, tickets in flight, WIP limits
     GET   /api/release               live per project, the weekly release window (next start) and the merge cutoff
@@ -86,6 +87,9 @@
     GET   /api/work-mode             work mode per project: on/off, why nothing was sent, the tickets that move next
     PUT   /api/work-mode/projects/{project}  Jay AND Developer Unlock. {on: true|false}: ccd reminds the project's
                                      idle lead of tickets it can move without Jay (ccd/workmode.py)
+    GET   /api/lead-authority        team lead permissions per project: level, what it grants, the merge kill switches
+    PUT   /api/lead-authority/projects/{project}  Jay AND Developer Unlock. {level: none|low_risk|merge|merge_deploy|
+                                     all}: in force at once (ccd/lead_authority.py)
     POST  /api/tasks/check           Jay AND Developer Unlock. the task check: a fixed message asks the project's
                                      idle coordinator Claude to propose stale tasks and add missing ones
                                      ({copy: true}: send nothing, return the message to paste by hand)
@@ -617,6 +621,13 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     async def work_mode_set(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
         return daemon.work_set(request.path_params["project"], body, request.state.actor, developer=dev)
+
+    async def lead_authority_state(request, _):
+        return daemon.authority_state()
+
+    async def lead_authority_set(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.authority_set(request.path_params["project"], body, request.state.actor, developer=dev)
 
     async def task_work_op(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
@@ -1602,6 +1613,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/release/projects/{project}", guarded(release_live), methods=["PUT"]),
         Route("/api/work-mode", guarded(work_mode_state), methods=["GET"]),
         Route("/api/work-mode/projects/{project}", guarded(work_mode_set), methods=["PUT"]),
+        Route("/api/lead-authority", guarded(lead_authority_state), methods=["GET"]),
+        Route("/api/lead-authority/projects/{project}", guarded(lead_authority_set), methods=["PUT"]),
         Route("/api/tasks/{key}/work/{op}", guarded(task_work_op), methods=["POST"]),
         Route("/api/tasks/{key}/answers", guarded(task_answers), methods=["POST"]),
         Route("/api/tasks/{key}/record", guarded(task_record), methods=["GET"]),

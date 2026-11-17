@@ -43,8 +43,9 @@ The lead sets the size at intake. The technical reviewer may raise it. Only Jay 
 | standard | a feature or a bug across several files | all nine |
 | risky | security, sign-in, money, data migration, licensed or personal data, a redesign clients notice | all nine, plus Jay approves the plan after Technical review and approves the release |
 
-A ticket with a plan-gate label (`security`, `migration`, `destructive`, `architecture`, `product-decision`,
-`ambiguous`, `financial`, `legal`, `gate:plan`), a SECURITY or LEGAL type, or a needs-Jay or needs-legal flag is risky whatever
+A ticket with a plan-gate label (`security`, `auth`, `privacy`, `migration`, `destructive`, `architecture`,
+`product-decision`, `ambiguous`, `financial`, `legal`, `gate:plan`, `feature:major`, `spend`, `data-access`,
+`data-collect`, `data-sharing`, `data-storage`, `data-deletion`), a SECURITY or LEGAL type, or a needs-Jay or needs-legal flag is risky whatever
 was typed. The route decides which stages run; a skipped stage is refused by ccd, never chosen by an agent.
 
 ## What a ticket carries
@@ -104,13 +105,21 @@ through". Asking does not end your session; the answer comes back to it, or to t
 
 Each project is **Live** or **Not live**; only Jay changes it. Not live: no release window, no banner. Live: one release
 a week, Wednesday 10 p.m. America/Winnipeg; merged after noon on release day waits a week; a risky urgent fix needs
-Jay's approval to go outside the window. Who runs a deploy does not change: nothing deploys automatically, and a live deploy always waits for Jay. No app is
-live today.
+Jay's approval to go outside the window. Who runs a deploy does not change: nothing deploys automatically, and a live
+deploy waits for Jay unless his team lead permissions for the project are Merge and deploy or All (then the lead
+approves it, and the release window still applies). No app is live today.
+
+## Team lead permissions
+
+Jay sets per project how much its lead approves without him (Settings › Team lead permissions). At every level he
+keeps major new features, money and changes to personal data: the labels in [lead](seats/lead.md). Security goes to
+the [security specialist](seats/security-reviewer.md) first; then the lead decides and Jay is shown the conclusion.
 
 ## Never, in any seat
 
-- Merge or deploy to production without Jay's recorded approval (his merge, Merge ready or Go Live), run a
-  migration on production, or touch secrets.
+- Merge or deploy to production without Jay's recorded approval (his merge, Merge ready or Go Live, or the team lead
+  permission he set for the project), run a migration on production, or touch secrets.
+- Call, text, message or email a client. Agents may read client data; they never contact clients.
 - Approve, review or user-check work you planned, built or assigned.
 - Change your own or another agent's permissions, or create an agent. A lead may propose staffing; Jay decides.
 - Mark a stage done that you did not do, or skip one.
@@ -129,6 +138,7 @@ live today.
 | design-reviewer | `design-reviewer` (flow PR) | [design-reviewer](seats/design-reviewer.md) |
 | code-reviewer | `reviewer` | [code-reviewer](seats/code-reviewer.md) |
 | verifier | `verifier` | [verifier](seats/verifier.md) |
+| security specialist | `security-reviewer` | [security-reviewer](seats/security-reviewer.md) |
 
 First record yourself in your seat: `python -m ccd.pipeline_cli role KEY --role <role> --model <model>
 --session <your session>`. All commands run from `server/` on jay-server. Every write is

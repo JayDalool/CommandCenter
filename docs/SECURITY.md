@@ -103,10 +103,20 @@ audited before it runs. herdr methods outside an explicit allowlist
 (`herdr.ALLOWED_METHODS`) are refused before they reach the socket — ccd cannot
 close, split, start or move anything even by mistake.
 
-**One GitHub write, off by default (CC-025, ADR 0007).** ccd can run `gh pr merge` for a reviewed, low-risk
-Command Center PR. It needs all of: `auto_merge: true` in `config.json` (default `false`), registry merge policy
-`low-risk` (only `commandcenter`), and no file `~/command-center/state/auto-merge.stop` (the kill switch, checked
-immediately before every merge; `touch` it to stop at once, delete it to resume). `ccd/merge_policy.py` decides:
+**One GitHub write, set per project by Jay (CC-025, ADR 0007; team lead permissions, 2026-11-17).** ccd can run
+`gh pr merge` for a reviewed PR of a project whose team lead permissions allow it (`ccd/lead_authority.py`, Settings ›
+Team lead permissions, Jay + Developer Unlock; a project with no stored level takes the registry's: `low_risk` for
+`commandcenter`, `none` for the rest; a client's repository is always `none`). Two kill switches stop every merge for
+every project: `auto_merge: false` in `config.json` (default `null`: the levels decide), and the file
+`~/command-center/state/auto-merge.stop` (checked immediately before every merge; `touch` it to stop at once, delete
+it to resume; while it exists a ready PR opens a merge gate for Jay). At `merge` and above, any reviewed PR merges
+except one that touches a rail (`merge_policy.RAILS` and `PROJECT_RAILS`: CI, agent rules and settings, Command
+Center's own code and policy) or is renamed or copied, or whose ticket stays Jay's (`lead_authority.jay_reasons`:
+major features, spend, legal and personal-data changes at every level; a security ticket until the security
+specialist has recorded its `security-review`: only `agent:security-reviewer`, from a session that is not the
+ticket's lead, investigator or developer, and it covers the plan it saw).
+At `merge_deploy` and above a live deploy request is approved for the agent (it still deploys; ccd does not). At
+`low_risk`, `ccd/merge_policy.py` decides:
 only added or modified `server/tests/**/*.py`, `web/app/tests/**/*.ts(x)`, `docs/**/*.md` and `README.md` files, at most
 10 files and 300 lines, never `server/ccd/**`, `scripts/**`, `launcher/**`, `.github/**`, `web/app/src/**`,
 lockfiles, manifests, `plans/**`, `docs/SECURITY.md`, `docs/adr/**`, any dot-folder or dot-file at any depth (`.claude/`, `.mcp.json`, `.codex/`), `__pycache__`, or `AGENTS.md`, `AGENTS.override.md`, `AGENT.md`, `CLAUDE.md`, `CLAUDE.local.md`, `GEMINI.md`, `SKILL.md` anywhere.

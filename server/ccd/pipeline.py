@@ -28,6 +28,7 @@ import unicodedata
 import zoneinfo
 
 from . import flow as flow_mod
+from . import lead_authority as lead_mod
 from . import registry
 from .security import redact
 from .tasks import TaskError, _printable
@@ -40,13 +41,21 @@ STAGE_OF = {"INBOX": "PLAN", "PROPOSED": "PLAN", "RESEARCHING": "PLAN", "READY_T
 RESUME_STATUS = {"PLAN": "RESEARCHING", "BUILD": "IN_PROGRESS", "REVIEW": "IN_REVIEW", "MERGE": "IN_REVIEW",
                  "VERIFY": "VERIFYING"}
 PLAN_GATE_LABELS = {"security", "migration", "destructive", "architecture", "product-decision", "ambiguous",
-                    "financial", "legal", "gate:plan"}
+                    "financial", "legal", "gate:plan"} \
+    | lead_mod.ALWAYS_JAY_LABELS | lead_mod.SECURITY_LABELS   # Jay's rules (2026-11-17): his, or the specialist's, before work starts
 MERGE_POLICIES = ("owner", "low-risk")   # registry pipeline "merge"; "owner" is the default
-AUTO_MERGE_KINDS = ("pipeline.auto_merge_held", "pipeline.auto_merged", "pipeline.auto_merge_failed")
+# "lead": the project's team lead permissions (ccd/lead_authority.py) let ccd merge every reviewed PR. Only the
+# lead-authority store sets it; the registry never does.
+LEAD_MERGE = "lead"
+# The last of these on a ticket says whether ccd's merge already decided its reviewed head. "reopened" (head None)
+# undoes a hold that only waited for the security specialist's review (Pipeline.security_review).
+AUTO_MERGE_KINDS = ("pipeline.auto_merge_held", "pipeline.auto_merged", "pipeline.auto_merge_failed",
+                    "pipeline.auto_merge_reopened")
 GATES = ("plan", "merge", "ui", "deploy", "failure")
 OWNER_GATES = ("plan", "ui", "deploy", "failure", "merge")
 ROLE_NAMES = ("coordinator", "planner", "implementer", "reviewer", "verifier",
-              "tech-reviewer", "user-reviewer", "design-reviewer")       # the flow's seats (flow.ROLE_OF)
+              "tech-reviewer", "user-reviewer", "design-reviewer",       # the flow's seats (flow.ROLE_OF)
+              "security-reviewer")      # the security specialist (Jay 2026-11-17): reviews security tickets first
 LEADS = ("jay", "agent:coordinator")          # who runs intake, edits criteria and writes the closing note
 USER_REVIEWERS = ("agent:user-reviewer", "agent:design-reviewer")
 CRITERION_ID_RE = re.compile(r"^c[0-9]{1,3}$")
@@ -102,8 +111,9 @@ def stage_of(status):
     return STAGE_OF.get(status)
 
 
-def policy(ticket, project_key=None):
-    """Which owner gates this ticket needs. Derived from flags, labels, type and the project registry."""
+def policy(ticket, project_key=None, authority=None):
+    """Which owner gates this ticket needs. Derived from flags, labels, type and the project registry, and the
+    merge from the project's team lead permissions when `authority` (lead_authority.LeadAuthority) is given."""
     labels = set(ticket.get("labels") or [])
     # tasks.get() reports flags as needs_jay …; accept the label spelling (needs:jay) too.
     flags = {f.replace(":", "_").replace("-", "_") for f in ticket.get("flags") or []}
@@ -117,6 +127,9 @@ def policy(ticket, project_key=None):
     merge = registry.pipeline_of(project_key or ticket.get("project")).get("merge", "owner")
     if merge not in MERGE_POLICIES:     # the retired "auto", or a typo: Jay accepts
         merge = "owner"
+    if authority is not None:
+        level = authority.level(project_key or ticket.get("project"))
+        merge = LEAD_MERGE if lead_mod.grants(level, "merge") else "low-risk" if level == "low_risk" else "owner"
     return {
         "plan": "owner" if reasons else "auto",
         "planReasons": reasons,
@@ -166,14 +179,16 @@ def visible_stage(t, w=None):
     return "Planning"
 
 
-def needs_acceptance(t, w):
+def needs_acceptance(t, w, pol=None, authority=None):
     """Gate 3 — Jay accepts before a merge when the project says so ("owner"), the change is user-facing or UI,
     the ticket is flagged needs:jay, or its plan changed after it was approved (a re-plan). A "low-risk"
     project needs no acceptance up front: ccd's classifier decides at merge time and opens the merge gate
     itself (Pipeline.hold_merge) when the PR does not qualify."""
-    pol = policy(t)
+    pol = pol or policy(t)
     flags = {f.replace(":", "_").replace("-", "_") for f in t.get("flags") or []}
-    return pol["merge"] == "owner" or pol["ui"] or "needs_jay" in flags or "owner:accept" in (w.get("confirmed") or [])
+    # At "All" the lead accepts a UI change too (the user reviewer has checked it); a sensitive one stays Jay's.
+    ui = pol["ui"] and not (authority is not None and authority.may(t.get("project"), "ui", t, w.get("confirmed") or ()))
+    return pol["merge"] == "owner" or ui or "needs_jay" in flags or "owner:accept" in (w.get("confirmed") or [])
 
 
 # Letters and symbols that Slack (like most fonts) draws as nothing: Hangul fillers, the braille blank, Khmer vowels.
@@ -301,6 +316,14 @@ class Pipeline:
         self.auto_merge = False
         # The release window (ccd/release.py, set by the daemon): a live project's live deploys wait for it.
         self.releases = None
+        # Team lead permissions (ccd/lead_authority.py, set by the daemon). None: the registry alone, Jay approves.
+        self.authority = None
+        # The auto-merge stop file (set by the daemon): while it exists a ready PR opens a merge gate for Jay instead
+        # of sitting unmerged with nothing in his queue.
+        self.merge_stopped = lambda: False
+
+    def _policy(self, t):
+        return policy(t, authority=self.authority)
 
     # ---------- reading ----------
 
@@ -371,7 +394,7 @@ class Pipeline:
             w = self.work_row(tid)
         f = self._flow(tid)
         kids = self._children(tid)
-        return flow_mod.view(t, w, f, self._events(tid), policy(t), len(kids["open"]), now)
+        return flow_mod.view(t, w, f, self._events(tid), self._policy(t), len(kids["open"]), now)
 
     def work_row(self, tid):
         """The work row with open questions counted (what flow.view reads), or the empty one."""
@@ -423,7 +446,7 @@ class Pipeline:
                         "SELECT id, at, actor, stage, kind, ref, note FROM ticket_evidence WHERE ticket_id=? ORDER BY id",
                         (tid,)).fetchall()]
         out = dict(w, key=t["key"], status=t["status"], stage=stage, branch=t.get("branch"), prs=prs,
-                   policy=policy(t), stages=self._stages(t["status"], stage), findings=findings,
+                   policy=self._policy(t), stages=self._stages(t["status"], stage), findings=findings,
                    questions=questions, openQuestions=sum(1 for q in questions if q["answer"] is None),
                    evidence=evidence)
         out["visibleStage"] = visible_stage(t, out)
@@ -536,7 +559,8 @@ class Pipeline:
         rows = self.db.execute(
             "SELECT t.key, t.project, t.title, t.status, w.gate, w.gate_reason, w.updated_at FROM ticket_work w "
             "JOIN tickets t ON t.id=w.ticket_id WHERE w.gate IS NOT NULL AND t.archived=0 "
-            "AND t.status NOT IN ('DONE','DENIED','CANCELLED') ORDER BY w.updated_at").fetchall()
+            "AND t.status NOT IN ('DONE','DENIED','CANCELLED') AND COALESCE(w.gate_reason, '') NOT LIKE ? "
+            "ORDER BY w.updated_at", (lead_mod.SECURITY_GATE + "%",)).fetchall()
         what = {"plan": "Plan needs approval", "merge": "Ready to merge", "ui": "UI review",
                 "deploy": "Deploy approval", "failure": "Blocked"}
         out = [{"project": p, "ref": k, "text": f"{what[g]}: {reason or title}"[:300], "kind": "gate", "gate": g,
@@ -563,7 +587,8 @@ class Pipeline:
         is append-only, so the id only grows). Counts only: no keys, titles or reasons."""
         (n,) = self.db.execute(
             "SELECT COUNT(*) FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id WHERE w.gate IS NOT NULL "
-            "AND t.archived=0 AND t.status NOT IN ('DONE','DENIED','CANCELLED')").fetchone()
+            "AND t.archived=0 AND t.status NOT IN ('DONE','DENIED','CANCELLED') "
+            "AND COALESCE(w.gate_reason, '') NOT LIKE ?", (lead_mod.SECURITY_GATE + "%",)).fetchone()
         # no index on kind: SQLite reads ticket_events backwards from the newest id and stops at the first match
         r = self.db.execute("SELECT id FROM ticket_events WHERE kind IN ('pipeline.gate_opened','pipeline.blocked') "
                             "ORDER BY id DESC LIMIT 1").fetchone()
@@ -667,7 +692,7 @@ class Pipeline:
         """Keys of the project's tickets in investigate with an investigator in the seat."""
         return [t["key"] for t, _w, fl, _h in (flying if flying is not None else self.in_flight(project))
                 if t["key"] != exclude and fl["size"] is not None and fl["stage"] == "investigate"
-                and t["status"] == "RESEARCHING" and fl["waitingOn"] != "jay"
+                and t["status"] == "RESEARCHING" and fl["waitingOn"] not in ("jay", "security")
                 and fl["holder"] and fl["holder"]["seat"] == "investigator"]
 
     def _investigate_free(self, t):
@@ -685,7 +710,7 @@ class Pipeline:
         for t, _w, fl, _h in self.in_flight(project):
             if t["key"] == exclude or fl["size"] is None or fl["stage"] not in flow_mod.REVIEW_STAGES:
                 continue
-            if t["status"] == "BLOCKED" or fl["holder"] or fl["waitingOn"] == "jay":
+            if t["status"] == "BLOCKED" or fl["holder"] or fl["waitingOn"] in ("jay", "security"):
                 continue
             since = next((s["at"] for s in fl["stages"] if s["stage"] == fl["stage"]), None)
             if since is not None and now - since > flow_mod.UNSEATED_AFTER:
@@ -721,11 +746,29 @@ class Pipeline:
                 self.db.execute("INSERT INTO ticket_work(ticket_id, updated_at) VALUES (?,?)", (tid, at))
                 w = self._row(tid)
             fields, work, events = fn(tid, t, w, at)
-            changes = self.ts._apply(tid, fields, actor, at, trigger=events[0][1] if events else None) if fields else []
-            if work:
-                cols = ", ".join(f"{c}=?" for c in work)
-                vals = [v if v is None or isinstance(v, (str, int, float)) else json.dumps(v) for v in work.values()]
-                self.db.execute(f"UPDATE ticket_work SET {cols}, updated_at=? WHERE ticket_id=?", (*vals, at, tid))
+            changes = self._write(tid, fields, work, events, actor, at)
+            events = list(events)
+            # Team lead permissions: a plan, UI or deploy gate this step opened that Jay's setting hands to the lead
+            # is approved in the same transaction, so it never reaches Jay's queue or his Slack. A closed gate can
+            # open the next (a UI check, then the release), hence the short loop.
+            for _ in range(3):
+                opened = (work or {}).get("gate")
+                if not opened:
+                    break
+                step = self._lead_takes(tid, self.ts.get(key), self._row(tid), at, opened)
+                if step is None:
+                    # Only the security specialist's review stands between this gate and the lead: it is not
+                    # Jay's to answer (Jay 2026-11-17: "start it but keep me in the loop"). Say so on the gate
+                    # and announce it as info; security_review takes the gate once the review is in.
+                    level = self._security_wait(self.ts.get(key), self._row(tid), opened)
+                    if level:
+                        self._write(tid, {}, {"gate_reason": self._wait_reason(level)}, [], actor, at)
+                        events = self._retell_wait(events, opened, level)
+                    break
+                events = self._retell(events, opened, self.authority.level(t["project"]))
+                fields, work, more = step
+                changes = changes + self._write(tid, fields, work, more, actor, at)
+                events += more
             for kind, text, data in events:
                 self.ts._audit(tid, actor, kind, trigger=text, data=data, at=at)
             self.ts._touch(tid, at)
@@ -734,6 +777,137 @@ class Pipeline:
             self.ts._rollback()
             raise
         return self.ts.get(key), changes, events
+
+    def _write(self, tid, fields, work, events, actor, at):
+        changes = self.ts._apply(tid, fields, actor, at, trigger=events[0][1] if events else None) if fields else []
+        if work:
+            cols = ", ".join(f"{c}=?" for c in work)
+            vals = [v if v is None or isinstance(v, (str, int, float)) else json.dumps(v) for v in work.values()]
+            self.db.execute(f"UPDATE ticket_work SET {cols}, updated_at=? WHERE ticket_id=?", (*vals, at, tid))
+        return changes
+
+    # ---------- team lead permissions (ccd/lead_authority.py) ----------
+
+    LEAD_GATES = {"plan": "plan", "ui": "ui", "deploy": "deploy"}    # gate → the permission that takes it
+
+    def _lead_takes(self, tid, t, w, at, gate):
+        """The step that approves an open plan, UI or deploy gate on the lead's standing permission, or None when
+        it stays Jay's (level too low, or jay_reasons). Merge gates are never taken here: a lead-level merge never
+        opens one (_gate_due), and one the auto-merge classifier opened is a "no" the lead cannot overrule."""
+        if self.authority is None or gate not in self.LEAD_GATES or w["gate"] != gate:
+            return None
+        if not self.authority.may(t["project"], self._lead_need(t, w, gate), t, w["confirmed"]):
+            return None
+        return self._close_gate(tid, t, w, at, gate, by="lead:" + self.authority.level(t["project"]),
+                                lead=self.authority.level(t["project"]))
+
+    def _security_wait(self, t, w, gate):
+        """The project's level when the lead could take this open gate but for the missing security review, else
+        None."""
+        if self.authority is None or gate not in self.LEAD_GATES or w["gate"] != gate:
+            return None
+        level = self.authority.level(t["project"])
+        if not lead_mod.grants(level, self._lead_need(t, w, gate)):
+            return None
+        return level if lead_mod.jay_reasons(t, w["confirmed"]) == [lead_mod.SECURITY_WAIT] else None
+
+    @staticmethod
+    def _wait_reason(level):
+        return f"{lead_mod.SECURITY_GATE}; then the lead decides ({lead_mod.LABELS[level]})"
+
+    @staticmethod
+    def _retell_wait(events, gate, level):
+        """The step's own events when its gate waits only for the security review: no gate_opened for Jay (a
+        gate_waiting instead, announced as info), and nothing says Jay approves it."""
+        said = "it waits for the security specialist's review, then the lead decides"
+        out = []
+        for kind, text, data in events:
+            if kind == "pipeline.gate_opened" and (data or {}).get("gate") == gate:
+                continue
+            if kind == "pipeline.plan_reviewed" and gate == "plan" and (data or {}).get("gate"):
+                text, data = f"plan approved; {said}", dict(data, authority=level)
+            elif kind == "pipeline.deploy_requested" and gate == "deploy":
+                text, data = f"live deployment requested; {said}", dict(data or {}, authority=level)
+            out.append((kind, text, data))
+        return out + [("pipeline.gate_waiting", f"{gate} gate: {said}",
+                       {"gate": gate, "authority": level, "waitsFor": "security-reviewer"})]
+
+    def _regate(self, t, w):
+        """An open plan, UI or deploy gate the lead cannot take now, said again for whoever it waits for: the
+        security specialist (it leaves Jay's queue) or, once that is no longer so (the review is in, the level
+        went down, a label of Jay's was added), Jay (gate_opened, so he is asked). (work, events), or None when
+        its reason already says so."""
+        gate = w["gate"]
+        if gate not in self.LEAD_GATES or self.authority is None:
+            return None
+        waiting = str(w["gateReason"] or "").startswith(lead_mod.SECURITY_GATE)
+        level = self._security_wait(t, w, gate)
+        if level and not waiting:
+            return {"gate_reason": self._wait_reason(level)}, self._retell_wait([], gate, level)
+        if waiting and not level:
+            now = self.authority.level(t["project"])
+            why = "; ".join(r for r in lead_mod.jay_reasons(t, w["confirmed"]) if r != lead_mod.SECURITY_WAIT) \
+                or f"{lead_mod.LABELS[now]} does not cover it"
+            reason = f"Jay decides: {why}"[:300]
+            return {"gate_reason": reason}, [("pipeline.gate_opened", f"{gate} gate: {reason}"[:300], {"gate": gate})]
+        return None
+
+    def _lead_need(self, t, w, gate):
+        """The permission an open gate needs. A deploy gate with no request (and no needs:deploy flag) is a risky
+        ticket's release approval: that is "all", not "merge and deploy"."""
+        if gate == "deploy" and not (w.get("deploy") or {}).get("requestedAt") and not self._policy(t)["deploy"]:
+            return "release"
+        return self.LEAD_GATES[gate]
+
+    @staticmethod
+    def _retell(events, gate, level):
+        """The step's own events, told as the lead's approval: nothing says it waits for Jay, and every one carries
+        data.authority (the daemon then announces them as info, not as something for Jay)."""
+        out = []
+        for kind, text, data in events:
+            if kind == "pipeline.gate_opened" and (data or {}).get("gate") == gate:
+                continue
+            if kind == "pipeline.deploy_requested" and gate == "deploy":
+                text = "live deployment requested; the lead approves it" + (
+                    " (it waits for the release window)" if (data or {}).get("heldUntil") else "")
+                data = dict(data or {}, authority=level)
+            elif kind == "pipeline.plan_reviewed" and gate == "plan" and (data or {}).get("gate"):
+                text, data = "plan approved; the lead approves this risky plan", dict(data, authority=level)
+            out.append((kind, text, data))
+        return out
+
+    def hand_over(self, project, actor="system:lead-authority"):
+        """Jay raised the project's level: gates already waiting for him that the new level hands to the lead are
+        taken now ("grant it right away"), and a merge gate that only waited because Jay accepted every merge is
+        closed so ccd's merge picks the PR up. A merge gate the auto-merge classifier opened stays. Returns the
+        (ticket, changes, events) of each ticket changed."""
+        out = []
+        rows = self.db.execute(
+            "SELECT t.key FROM tickets t JOIN ticket_work w ON w.ticket_id=t.id WHERE t.project=? AND t.archived=0 "
+            "AND w.gate IN ('plan', 'ui', 'deploy', 'merge') ORDER BY t.id", (project,)).fetchall()
+        for (key,) in rows:
+            def fn(tid, t, w, at):
+                if w["gate"] == "merge":
+                    if str(w["gateReason"] or "").startswith(("auto-merge held", "auto-merge failed")) \
+                            or t["status"] != "READY_TO_MERGE" or self._gate_due(t, w, w["review"]["head"]):
+                        return {}, {}, []
+                    level = self.authority.level(t["project"])
+                    return {}, {"gate": None, "gate_reason": None}, [
+                        ("pipeline.gate_handed", f"merge gate handed to ccd's merge ({lead_mod.LABELS[level]})",
+                         {"gate": "merge", "authority": level})]
+                step = self._lead_takes(tid, t, w, at, w["gate"])
+                if step:
+                    return step
+                fix = self._regate(t, w)
+                return ({}, fix[0], fix[1]) if fix else ({}, {}, [])
+            t = self.ts.get(key)
+            w = self.work(key)
+            if w["gate"] == "merge" or (self.authority is not None and w["gate"] in self.LEAD_GATES and (
+                    self.authority.may(project, self._lead_need(t, w, w["gate"]), t, w["confirmed"]) or self._regate(t, w))):
+                res = self._tx(key, actor, fn)
+                if res[2]:
+                    out.append(res)
+        return out
 
     @staticmethod
     def _need(t, statuses, op):
@@ -751,7 +925,7 @@ class Pipeline:
 
         def fn(tid, t, w, at):
             self._need(t, ("INBOX", "PROPOSED", "RESEARCHING", "READY_TO_IMPLEMENT"), "a plan")
-            pol = policy(t)
+            pol = self._policy(t)
             f = self._flow(tid)
             first = not self.db.execute("SELECT 1 FROM ticket_events WHERE ticket_id=? AND kind='pipeline.plan' LIMIT 1",
                                         (tid,)).fetchone()
@@ -762,7 +936,8 @@ class Pipeline:
             # A new plan needs a new approval: Jay approved the plan he saw, not this one. And a ticket
             # whose plan ever needed Jay keeps needing him ("owner:plan" is sticky), whatever its labels say now.
             sticky = "owner:plan" in w["confirmed"] or w["gate"] == "plan"
-            confirmed = [g for g in w["confirmed"] if g != "plan"]
+            # A security review covered the plan it saw: a new plan is reviewed again.
+            confirmed = [g for g in w["confirmed"] if g not in ("plan", lead_mod.SECURITY_REVIEWED)]
             work = {"plan": plan, "roles": self._role(w, "planner", model, session, at), "confirmed": confirmed}
             events = [("pipeline.plan", "plan recorded", {"owner": pol["plan"] == "owner"})]
             # Only Jay closes an open plan gate: a policy that has since become "auto" never does.
@@ -786,10 +961,11 @@ class Pipeline:
         if t["status"] != "RESEARCHING":
             raise TaskError(409, f"{t['key']} is {t['status']}; run intake first")
         fl, _h = flow_mod.view(t, w, f, self._events(tid), pol)
-        if fl["stage"] == "investigate" and not fl["holder"] and fl["waitingOn"] != "jay":   # a seat is taken now
+        if fl["stage"] == "investigate" and not fl["holder"] and fl["waitingOn"] not in ("jay", "security"):   # a seat is taken now
             self._investigate_free(t)
         work = {"plan": plan, "roles": self._role(w, "planner", model, session, at),
-                "confirmed": [g for g in w["confirmed"] if g != "plan"], "plan_state": "proposed"}
+                "confirmed": [g for g in w["confirmed"] if g not in ("plan", lead_mod.SECURITY_REVIEWED)],
+                "plan_state": "proposed"}
         if w["gate"] == "plan":     # a risky plan waiting for Jay was replaced: it goes back through review
             work.update(gate=None, gate_reason=None)
         self._flow_set(tid, at, review_due=at, plan_review=None)
@@ -799,7 +975,7 @@ class Pipeline:
         def fn(tid, t, w, at):
             self._need(t, ("READY_TO_IMPLEMENT",), "start")
             f = self._flow(tid)
-            small = flow_mod.effective_size(f["size"], policy(t)) == "small" and f["size"] == "small"
+            small = flow_mod.effective_size(f["size"], self._policy(t)) == "small" and f["size"] == "small"
             if w["planState"] != "accepted" and not small:
                 raise TaskError(409, f"{t['key']} has no accepted plan")
             if not isinstance(branch, str) or not re.match(rf"^{re.escape(t['key'])}-{SLUG_RE}$", branch):
@@ -838,7 +1014,7 @@ class Pipeline:
                 if not session:
                     raise TaskError(400, "say which fresh reviewer session approves (--session)")
                 f = self._flow(tid)
-                if "userCheck" in flow_mod.route(f["size"], policy(t)):
+                if "userCheck" in flow_mod.route(f["size"], self._policy(t)):
                     uc = f["userCheck"] or {}
                     if uc.get("result") != "pass" or uc.get("head") != head:
                         raise TaskError(409, f"{t['key']} has not passed its user check at {head[:7]}; "
@@ -882,8 +1058,9 @@ class Pipeline:
     def _gate_due(self, t, w, head):
         """Jay must accept this merge and has not: the project is `owner`, or the ticket needs acceptance, or the
         project is `low-risk` while ccd's auto-merge is switched off; and no `merge:<head>` approval is recorded."""
-        low_risk_off = policy(t)["merge"] == "low-risk" and not self.auto_merge
-        return (needs_acceptance(t, w) or low_risk_off) and not _merge_ok(w["confirmed"], head)
+        pol = self._policy(t)
+        merge_off = pol["merge"] in ("low-risk", LEAD_MERGE) and (not self.auto_merge or self.merge_stopped())
+        return (needs_acceptance(t, w, pol, self.authority) or merge_off) and not _merge_ok(w["confirmed"], head)
 
     def _ready(self, t, w, pr):
         """IN_REVIEW → READY_TO_MERGE when the recorded approval covers the PR's current head and CI is green."""
@@ -986,18 +1163,22 @@ class Pipeline:
         def fn(tid, t, w, at):
             if t["status"] != "READY_TO_MERGE" or w["gate"] or w["review"]["head"] != head:
                 return {}, {}, []
+            if lead_mod.SECURITY_WAIT in reason and lead_mod.SECURITY_REVIEWED in w["confirmed"]:
+                # The review landed while ccd's merge read the PR: this "no" is stale. Nothing is recorded, so
+                # the next round classifies the head again with the review in.
+                return {}, {}, []
             return {}, {"gate": "merge", "gate_reason": f"{said}: {reason}"[:300]}, \
                 [(kind, f"{said} at {str(head)[:7]}: {reason}", {"head": head, "reason": reason}),
                  ("pipeline.gate_opened", "merge gate", {"gate": "merge"})]
         return self._tx(key, "system:auto-merge", fn)
 
-    def auto_merged(self, key, head, pr_ref, ci):
+    def auto_merged(self, key, head, pr_ref, ci, authority=None):
         """ccd merged the PR (gh succeeded). Records it; the ticket moves to VERIFYING when the GitHub poll sees the
         merge, through `merged()` as for any merge. `ci` is "none" or "green": the text never says green for none."""
         checks = "no CI checks" if ci == "none" else "CI green"
         return self._tx(key, "system:auto-merge", lambda tid, t, w, at: (
             {}, {}, [("pipeline.auto_merged", f"{pr_ref} merged by ccd at {str(head)[:7]} ({checks})",
-                      {"head": head, "pr": pr_ref, "ci": ci})]))
+                      dict({"head": head, "pr": pr_ref, "ci": ci}, **({"authority": authority} if authority else {})))]))
 
     def merged(self, key, pr_ref, sha=None):
         """A linked PR merged (the GitHub poll moved the ticket to VERIFYING): record it, close the merge gate."""
@@ -1037,7 +1218,7 @@ class Pipeline:
         return self._tx(key, actor, fn)
 
     def _after_verify(self, t, w):
-        pol = policy(t)
+        pol = self._policy(t)
         f = self._flow(t["id"])
         risky = f["size"] in flow_mod.SIZES and flow_mod.effective_size(f["size"], pol) == "risky"
         for g, on in (("ui", pol["ui"]), ("deploy", pol["deploy"] or risky)):
@@ -1079,9 +1260,6 @@ class Pipeline:
         if gate not in GATES:
             raise TaskError(400, f"gate must be one of {', '.join(GATES)}")
         by = f"{actor}:{via}" if via else actor
-        said = ("approved for a prepared deploy (Jay confirms in the pane)" if via in ("go-live", "gate")
-                else "approved for a prepared deploy (Jay confirms it from Slack)" if via == "slack"
-                else "Jay approved the live deployment")
 
         def fn(tid, t, w, at):
             if w["gate"] != gate:
@@ -1090,58 +1268,74 @@ class Pipeline:
                 raise TaskError(409, f"{t['key']}'s plan changed since Jay saw it; nothing was approved")
             if urgent:
                 # Risky as the flow reads it: sized risky, or made risky by its labels / flags / type.
-                if gate != "deploy" or flow_mod.effective_size(self._flow(tid)["size"], policy(t)) != "risky":
+                if gate != "deploy" or flow_mod.effective_size(self._flow(tid)["size"], self._policy(t)) != "risky":
                     raise TaskError(409, "only a risky ticket's live deploy can be approved as urgent")
-                if not (w["deploy"] or {}).get("requestedAt") and not policy(t)["deploy"]:
+                if not (w["deploy"] or {}).get("requestedAt") and not self._policy(t)["deploy"]:
                     raise TaskError(409, "no live deploy is waiting: approve the release, then request the deploy")
                 if (w["deploy"] or {}).get("requestedAt"):
                     w = dict(w, deploy=dict(w["deploy"], urgent=True, heldUntil=None))
-            add = {f"merge:{w['review']['head']}"} if gate == "merge" else {gate} - {"failure"}
-            confirmed = sorted(set(w["confirmed"]) | add)
-            work = {"confirmed": confirmed, "gate": None, "gate_reason": None}
-            events = [("pipeline.gate_confirmed", f"Jay confirmed the {gate} gate", {"gate": gate, "via": via or "ui"})]
-            if urgent:
-                events.append(("pipeline.deploy_urgent", "Jay approved it as urgent: no release window", {}))
-            if gate == "plan":
-                work["plan_state"] = "accepted"
-                if self._flow(tid)["reviewDue"] is not None:
-                    self._flow_set(tid, at, review_due=None)
-                return {"status": "READY_TO_IMPLEMENT"}, work, events
-            if gate == "failure":
-                stage = (w["blocked"] or {}).get("stage") or "PLAN"
-                if stage == "BUILD":
-                    self._lane_free(t, "resume this one later")
-                work.update(blocked=None, review_cycles=0 if stage == "REVIEW" else w["review"]["cycles"])
-                fs = (w["blocked"] or {}).get("flowStage")
-                if fs in ("techReview", "userCheck"):
-                    rounds = dict(self._flow(tid)["rounds"], **{fs: 0})
-                    self._flow_set(tid, at, rounds=rounds)
-                return {"status": RESUME_STATUS.get(stage, "RESEARCHING")}, work, events
-            if gate == "deploy" and not (w["deploy"] or {}).get("requestedAt") and not policy(t)["deploy"]:
-                # A risky ticket's release approval (the flow): Jay approves the release; nothing is deployed and
-                # no live deploy is requested by it. The ticket goes on as after any owner check.
-                events.append(("pipeline.release_approved", "Jay approved the release", {}))
-            elif gate == "deploy" and not (w["deploy"] or {}).get("requestedAt"):
-                # The deploy gate came from the ticket's needs:deploy flag, with no request yet: Jay's
-                # approval IS the request. Nothing is deployed by clicking — the agent deploys next, records
-                # it with `deployed --env live`, and only then does the ticket close.
-                work["deploy"] = {"env": "live", "what": t["title"], "verification": (w["verification"] or {}).get("evidence") or "",
-                                  "requestedAt": at, "requestedBy": "policy:needs_deploy", "approvedAt": at,
-                                  "approvedBy": by, "result": None, **({"urgent": True} if urgent else {})}
-                events.append(("pipeline.deploy_approved", said, {}))
-                return {}, work, events
-            if gate == "deploy" and (w["deploy"] or {}).get("requestedAt") and not (w["deploy"] or {}).get("result"):
-                # Jay approved a live deployment that has not happened yet: the agent deploys next and
-                # records it with `deployed`; the ticket closes only after that, verified live.
-                work["deploy"] = dict(w["deploy"], approvedAt=at, approvedBy=by)
-                events.append(("pipeline.deploy_approved", said, {}))
-                return {}, work, events
-            if gate in ("ui", "deploy") and t["status"] == "VERIFYING" and (w["verification"] or {}).get("result") == "pass":
-                status, more, ev = self._after_verify(t, dict(w, confirmed=confirmed))
-                work.update(more)
-                return status, work, events + ev
-            return {}, work, events
+            return self._close_gate(tid, t, w, at, gate, by, via=via, urgent=urgent)
         return self._tx(key, actor, fn)
+
+    def _close_gate(self, tid, t, w, at, gate, by, via=None, urgent=False, lead=None):
+        """Close an open owner gate: Jay's confirmation, or (`lead` = the level) the lead's standing permission."""
+        if lead:
+            said = (f"approved by the lead ({lead_mod.LABELS[lead]} in Jay's team lead permissions): deploy it, then "
+                    "record it with deployed")
+            approved = {"authority": lead}
+        else:
+            said = ("approved for a prepared deploy (Jay confirms in the pane)" if via in ("go-live", "gate")
+                    else "approved for a prepared deploy (Jay confirms it from Slack)" if via == "slack"
+                    else "Jay approved the live deployment")
+            approved = {}
+        add = {f"merge:{w['review']['head']}"} if gate == "merge" else {gate} - {"failure"}
+        confirmed = sorted(set(w["confirmed"]) | add)
+        work = {"confirmed": confirmed, "gate": None, "gate_reason": None}
+        events = [("pipeline.gate_lead_approved", f"the lead approved the {gate} gate ({lead_mod.LABELS[lead]})",
+                   {"gate": gate, "authority": lead})] if lead else \
+            [("pipeline.gate_confirmed", f"Jay confirmed the {gate} gate", {"gate": gate, "via": via or "ui"})]
+        if urgent:
+            events.append(("pipeline.deploy_urgent", "Jay approved it as urgent: no release window", {}))
+        if gate == "plan":
+            work["plan_state"] = "accepted"
+            if self._flow(tid)["reviewDue"] is not None:
+                self._flow_set(tid, at, review_due=None)
+            return {"status": "READY_TO_IMPLEMENT"}, work, events
+        if gate == "failure":
+            stage = (w["blocked"] or {}).get("stage") or "PLAN"
+            if stage == "BUILD":
+                self._lane_free(t, "resume this one later")
+            work.update(blocked=None, review_cycles=0 if stage == "REVIEW" else w["review"]["cycles"])
+            fs = (w["blocked"] or {}).get("flowStage")
+            if fs in ("techReview", "userCheck"):
+                rounds = dict(self._flow(tid)["rounds"], **{fs: 0})
+                self._flow_set(tid, at, rounds=rounds)
+            return {"status": RESUME_STATUS.get(stage, "RESEARCHING")}, work, events
+        if gate == "deploy" and not (w["deploy"] or {}).get("requestedAt") and not self._policy(t)["deploy"]:
+            # A risky ticket's release approval (the flow): Jay approves the release; nothing is deployed and
+            # no live deploy is requested by it. The ticket goes on as after any owner check.
+            events.append(("pipeline.release_approved", "the lead approved the release" if lead
+                           else "Jay approved the release", dict(approved)))
+        elif gate == "deploy" and not (w["deploy"] or {}).get("requestedAt"):
+            # The deploy gate came from the ticket's needs:deploy flag, with no request yet: Jay's
+            # approval IS the request. Nothing is deployed by clicking — the agent deploys next, records
+            # it with `deployed --env live`, and only then does the ticket close.
+            work["deploy"] = {"env": "live", "what": t["title"], "verification": (w["verification"] or {}).get("evidence") or "",
+                              "requestedAt": at, "requestedBy": "policy:needs_deploy", "approvedAt": at,
+                              "approvedBy": by, "result": None, **({"urgent": True} if urgent else {})}
+            events.append(("pipeline.deploy_approved", said, dict(approved)))
+            return {}, work, events
+        if gate == "deploy" and (w["deploy"] or {}).get("requestedAt") and not (w["deploy"] or {}).get("result"):
+            # Jay approved a live deployment that has not happened yet: the agent deploys next and
+            # records it with `deployed`; the ticket closes only after that, verified live.
+            work["deploy"] = dict(w["deploy"], approvedAt=at, approvedBy=by)
+            events.append(("pipeline.deploy_approved", said, dict(approved)))
+            return {}, work, events
+        if gate in ("ui", "deploy") and t["status"] == "VERIFYING" and (w["verification"] or {}).get("result") == "pass":
+            status, more, ev = self._after_verify(t, dict(w, confirmed=confirmed))
+            work.update(more)
+            return status, work, events + ev
+        return {}, work, events
 
     def handoff(self, key, body, actor):
         if not isinstance(body, dict):
@@ -1181,7 +1375,7 @@ class Pipeline:
         def fn(tid, t, w, at):
             f = self._flow(tid)
             if role == "planner" and t["status"] == "RESEARCHING" and f["size"] in flow_mod.SIZES:
-                fl, _h = flow_mod.view(t, w, f, self._events(tid), policy(t))
+                fl, _h = flow_mod.view(t, w, f, self._events(tid), self._policy(t))
                 if fl["stage"] == "investigate" and not fl["holder"] and not w["gate"]:
                     self._investigate_free(t)
             return {}, {"roles": self._role(w, role, model, session, at)}, \
@@ -1349,7 +1543,9 @@ class Pipeline:
 
         def fn(tid, t, w, at):
             self._open(t, "a re-plan")
-            confirmed = sorted(set(_no_merge(w["confirmed"])) - {"plan", "ui", "deploy"} | {"owner:accept"})
+            # A security review covered the old plan: the new one is reviewed again.
+            confirmed = sorted(set(_no_merge(w["confirmed"])) - {"plan", "ui", "deploy", lead_mod.SECURITY_REVIEWED}
+                               | {"owner:accept"})
             work = {"plan_state": "proposed", "review_verdict": None, "confirmed": confirmed, "blocked": None,
                     "gate": None, "gate_reason": None, "verification": None, "deploy": None}
             status = {"status": "RESEARCHING"} if t["status"] != "RESEARCHING" else {}
@@ -1631,7 +1827,7 @@ class Pipeline:
             self._need(t, ("INBOX", "PROPOSED"), "intake")
             if not (t.get("description") or "").strip():
                 raise TaskError(409, f"{t['key']} has no description; write what is asked and why first")
-            pol = policy(t)
+            pol = self._policy(t)
             eff = "risky" if pol["plan"] == "owner" else size
             prio = priority or (t["priority"] if t["priority"] in PRIORITY_SET else None)
             if prio is None:
@@ -1667,7 +1863,7 @@ class Pipeline:
         def fn(tid, t, w, at):
             self._open(t, "editing the criteria")
             f = self._flow(tid)
-            pol = policy(t)
+            pol = self._policy(t)
             early = t["status"] in ("INBOX", "PROPOSED") or (t["status"] == "RESEARCHING" and not f["reviewDue"]
                                                               and w["gate"] != "plan")
             if scope and actor != "jay" and not early:
@@ -1712,6 +1908,60 @@ class Pipeline:
                                  data)]
         return self._tx(key, actor, fn)
 
+    def security_review(self, key, conclusion, actor, model=None, session=None):
+        """The security specialist's review (Jay 2026-11-17): it investigates a security ticket across every field and
+        records its conclusion and recommended fix for the lead. It approves nothing itself. Once it is recorded the
+        lead may take the ticket's plan, merge and deploy as its level allows (lead_authority.jay_reasons), and Jay is
+        shown the conclusion: the event is announced to him, and work does not wait for him. A gate already waiting
+        only for this review is taken now; a merge ccd held only for it is looked at again. It covers the plan it
+        saw: a new plan (plan, replan) clears it."""
+        if actor != "agent:security-reviewer":
+            raise TaskError(403, "a security review is the security specialist's (--role security-reviewer)")
+        conclusion = _text(conclusion, 4000, "conclusion")
+        if not conclusion:
+            raise TaskError(400, "say what the review found and the fix it recommends (--note)")
+        if not session:
+            raise TaskError(400, "say which security specialist session reviewed it (--session)")
+        _meta(session, "session")
+
+        def fn(tid, t, w, at):
+            self._open(t, "a security review")
+            # Independent of the work it reviews, as the technical review is of the plan (D-024 clause 15).
+            mine = [r for r in ("coordinator", "planner", "implementer") if (w["roles"].get(r) or {}).get("session") == session]
+            if mine:
+                raise TaskError(403, f"session {session} is this ticket's {mine[0]}: the security review needs "
+                                     "another session")
+            if not w["plan"] and t["status"] in ("INBOX", "PROPOSED", "RESEARCHING"):
+                raise TaskError(409, f"{t['key']} has no plan yet: record the review once the plan is in "
+                                     "(a new plan clears it)")
+            confirmed = sorted(set(w["confirmed"]) | {lead_mod.SECURITY_REVIEWED})
+            work = {"confirmed": confirmed, "roles": self._role(w, "security-reviewer", model, session, at)}
+            self.db.execute("INSERT INTO ticket_evidence(ticket_id, at, actor, stage, kind, ref, note) VALUES (?,?,?,?,?,?,?)",
+                            (tid, at, actor, stage_of(t["status"]) or "PLAN", "note", "security review", conclusion))
+            events = [("pipeline.security_reviewed", f"security review for the lead (Jay sees it): {conclusion[:240]}",
+                       {"chars": len(conclusion)})]
+            reviewed = dict(w, confirmed=confirmed)
+            if w["gate"] in self.LEAD_GATES:
+                step = self._lead_takes(tid, t, reviewed, at, w["gate"])
+                if step:
+                    status, more, ev = step
+                    return status, dict(work, **more), events + ev
+                fix = self._regate(t, reviewed)     # still not the lead's: Jay is asked now
+                if fix:
+                    work.update(fix[0])
+                    events += fix[1]
+            elif w["gate"] == "merge" and str(w["gateReason"] or "").startswith("auto-merge held: "):
+                parts = str(w["gateReason"])[len("auto-merge held: "):].split("; ")
+                rest = [p for p in parts if p != lead_mod.SECURITY_WAIT]
+                if not rest:
+                    work.update(gate=None, gate_reason=None)
+                    events.append(("pipeline.auto_merge_reopened", "the security review is in: ccd's merge looks again",
+                                   {"head": None}))
+                elif len(rest) < len(parts):     # held for other reasons too: those stay Jay's
+                    work["gate_reason"] = ("auto-merge held: " + "; ".join(rest))[:300]
+            return {}, work, events
+        return self._tx(key, actor, fn)
+
     def plan_review(self, key, verdict, actor, note, blast=None, tests=None, size=None, model=None, session=None):
         """The technical reviewer reads the investigator's plan: APPROVE sends it to build (a risky ticket opens the
         plan gate for Jay first); SEND_BACK returns it to investigation. Never the planner's own session."""
@@ -1733,7 +1983,7 @@ class Pipeline:
         def fn(tid, t, w, at):
             self._need(t, ("RESEARCHING",), "a plan review")
             f = self._flow(tid)
-            pol = policy(t)
+            pol = self._policy(t)
             if "techReview" not in flow_mod.route(f["size"], pol) or f["size"] not in flow_mod.SIZES:
                 raise TaskError(409, f"{t['key']}'s route has no technical review")
             if not f["reviewDue"] or w["gate"] == "plan":
@@ -1832,7 +2082,7 @@ class Pipeline:
         def fn(tid, t, w, at):
             self._need(t, ("IN_REVIEW",), "a user check")
             f = self._flow(tid)
-            if "userCheck" not in flow_mod.route(f["size"], policy(t)):
+            if "userCheck" not in flow_mod.route(f["size"], self._policy(t)):
                 raise TaskError(409, f"{t['key']}'s route has no user check")
             if not pr or not pr.get("head"):
                 raise TaskError(409, f"{t['key']} has no open PR ccd can see; one PR per user check")

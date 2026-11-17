@@ -44,6 +44,7 @@ from .leadchat import LeadChat
 TICKET_PATH_RE = re.compile(r"/api/tasks/([A-Za-z][A-Za-z0-9-]{0,20}-\d{1,6})(?:/|$)")
 from . import nightshift as nightshift_mod
 from . import workmode as workmode_mod
+from . import lead_authority as lead_mod
 from . import uitests as uitests_mod
 from . import records as records_mod
 from . import tasks as tasks_mod
@@ -330,13 +331,22 @@ class Daemon(LeadChat, HqDaemon):
             self.pipeline.releases = self.releases
         # Work mode: per project, Jay's switch for reminding an idle lead of tickets it can move (ccd/workmode.py).
         self.work = workmode_mod.WorkMode(cfg.get("work_mode_path") or STATE_DIR / "work-mode.json")
-        # Auto-merge (CC-025): the config switch is read once, here. `gh_cli(args) -> (code, stdout, stderr)` is the
-        # only way ccd writes to GitHub; tests give it a fake. The stop file is checked before every merge.
-        self.auto_merge_on = cfg.get("auto_merge") is True
+        # Team lead permissions: per project, how much the lead approves without Jay (ccd/lead_authority.py).
+        self.authority = lead_mod.LeadAuthority(cfg.get("lead_authority_path") or STATE_DIR / "lead-authority.json")
+        if self.pipeline is not None:
+            self.pipeline.authority = self.authority
+        # Auto-merge (CC-025): the levels above decide which projects ccd merges for (Jay 2026-11-17: choosing a
+        # level grants it at once). config.json `auto_merge: false` is a kill switch for all of them, read once,
+        # here. `gh_cli(args) -> (code, stdout, stderr)` is the only way ccd writes to GitHub; tests give it a fake.
+        # The stop file is checked before every merge.
+        # Anything but null or true (false, "false", 0, a typo) reads as the kill switch: the stricter reading.
+        self.auto_merge_on = cfg.get("auto_merge") is None or cfg.get("auto_merge") is True
         if self.pipeline is not None:
             self.pipeline.auto_merge = self.auto_merge_on
         self.gh_cli = gh_cli or sources._run
         self.auto_merge_stop = AUTO_MERGE_STOP
+        if self.pipeline is not None:
+            self.pipeline.merge_stopped = self._auto_merge_stopped
         self._am_busy = False
         self._am_next = {}    # ticket key → time.monotonic() before which it is not looked at again
         # ticket key → (review stamp, time.monotonic() when it first had to wait): the 30-minute pending clock.
@@ -1164,6 +1174,57 @@ class Daemon(LeadChat, HqDaemon):
                 self.work.note(key, "reminder failed")
                 log.warning(json.dumps({"msg": "work mode reminder failed", "project": key, "error": str(e)[:160]}))
 
+    # ---------- team lead permissions (lead_authority.py) ----------
+
+    def _authority_of(self, project):
+        return {"level": self.authority.level(project)}
+
+    def authority_state(self):
+        """GET /api/lead-authority: per project, the level, what it grants, and whether ccd can merge at all."""
+        out = {}
+        for proj in self._projects():
+            key = proj["key"]
+            row = self.authority.public(key)
+            row["lowRiskPaths"] = bool(merge_policy.ALLOW.get(key))
+            row["paused"] = bool(registry.paused(key))
+            row["client"] = registry.class_of(key) != "own"
+            out[key] = row
+        return {"projects": out, "levels": [{"key": k, "label": lead_mod.LABELS[k]} for k in lead_mod.LEVELS],
+                "mergeSwitch": {"config": self.auto_merge_on, "stopFile": self._auto_merge_stopped()},
+                "alwaysJay": sorted(lead_mod.ALWAYS_JAY_LABELS), "security": sorted(lead_mod.SECURITY_LABELS)}
+
+    def authority_set(self, project, body, actor="jay", developer=False):
+        """PUT /api/lead-authority/projects/{project} {level}: Jay with Developer Unlock. The level
+        is in force at once; gates already waiting for Jay that it hands to the lead are taken now (hand_over)."""
+        if actor != "jay" or not developer:
+            raise ActionError(403, "Developer Unlock required: team lead permissions are Jay's to set")
+        if not isinstance(body, dict):
+            raise ActionError(400, "body must be an object")
+        if self._project(project) is None or project not in registry.PROJECTS:
+            raise ActionError(404, f"unknown project {project}")
+        level = body.get("level")
+        if level == "low_risk" and not merge_policy.ALLOW.get(project):
+            raise ActionError(400, f"{registry.name_of(project)} has no low-risk paths: choose None or Merge all")
+        if level not in (None, "none") and registry.class_of(project) != "own":
+            # D-024 clause 16: no merge or deploy by Command Center in a client's or employer's repository.
+            raise ActionError(409, f"{registry.name_of(project)} is a client's repository: its lead gets no merge "
+                                   "or deploy permission")
+        before = self.authority.level(project)
+        try:
+            self.authority.set(project, level)
+        except lead_mod.AuthorityError as e:
+            raise ActionError(e.status, e.message)
+        now = self.authority.level(project)
+        # "security": it changes who may merge and deploy, and belongs in the audit trail with merge.policy.
+        self._event("security", "lead.authority",
+                    f"{project} team lead permissions: {lead_mod.LABELS[before]} -> {lead_mod.LABELS[now]}",
+                    project=project, data={"kind": "lead_authority_set", "from": before, "to": now})
+        self._log_merge_policy()
+        if self.pipeline is not None:
+            for res in self.pipeline.hand_over(project):
+                self._pipeline_result(*res)
+        return self.authority_state()
+
     def work_state(self, now=None):
         """GET /api/work-mode: per project, on or off, why nothing was sent, and the tickets that can move next."""
         now = _now() if now is None else now
@@ -1598,7 +1659,8 @@ class Daemon(LeadChat, HqDaemon):
 
     PIPELINE_OPS = ("plan", "start", "review", "verify", "confirm", "handoff", "block", "role", "finding",
                     "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
-                    "intake", "criteria", "plan-review", "user-check", "close", "deploy-plan", "reply")
+                    "intake", "criteria", "plan-review", "user-check", "close", "deploy-plan", "reply",
+                    "security-review")
 
     def task_work(self, key):
         self._need_tasks()
@@ -1688,6 +1750,8 @@ class Daemon(LeadChat, HqDaemon):
         elif op == "criteria":
             r = self._wrap(pl.define, key, actor, body.get("criteria"), body.get("requirements"), body.get("size"),
                            developer=developer, priority=body.get("priority"), due=body.get("due"))
+        elif op == "security-review":
+            r = self._wrap(pl.security_review, key, body.get("conclusion"), actor, **meta)
         elif op == "plan-review":
             r = self._wrap(pl.plan_review, key, body.get("verdict"), actor, body.get("note"), body.get("blast"),
                            body.get("tests"), body.get("size"), **meta)
@@ -2219,7 +2283,7 @@ class Daemon(LeadChat, HqDaemon):
         for kind, text, _data in events:
             self._event("tasks", "task.pipeline", f"{ticket['key']} {text}"[:300], project=ticket["project"],
                         ref=ticket["key"], data={"kind": kind, **({"actor": actor} if actor else {})},
-                        severity="action" if kind in ("pipeline.gate_opened", "pipeline.blocked",
+                        severity="action" if kind == "pipeline.security_reviewed" or not (_data or {}).get("authority") and kind in ("pipeline.gate_opened", "pipeline.blocked",
                                                       "pipeline.unreviewed_merge", "pipeline.questions",
                                                       "pipeline.deploy_requested", "pipeline.replan",
                                                       "pipeline.auto_merge_held", "pipeline.auto_merged",
@@ -2931,9 +2995,14 @@ class Daemon(LeadChat, HqDaemon):
                          "statusCheckRollup")
 
     def _auto_merge_projects(self):
-        """Registry projects whose merge policy is low-risk AND that have an allowlist: the only ones ccd merges for."""
-        return [k for k in registry.PROJECTS
-                if pipeline_mod.policy({"project": k}, k)["merge"] == "low-risk" and merge_policy.ALLOW.get(k)]
+        """Registry projects ccd merges for: team lead permissions at "Merge all" or higher, or "Merge low-risk" with
+        an allowlist (lead_authority.py; a project with no stored level takes the registry's)."""
+        out = []
+        for k in registry.PROJECTS:
+            merge = pipeline_mod.policy({"project": k}, k, self.authority)["merge"]
+            if merge == pipeline_mod.LEAD_MERGE or (merge == "low-risk" and merge_policy.ALLOW.get(k)):
+                out.append(k)
+        return out
 
     def _log_merge_policy(self):
         """Startup: whether ccd may merge anything, as a security event (the audit trail of the first GitHub write)."""
@@ -2953,8 +3022,8 @@ class Daemon(LeadChat, HqDaemon):
     def _merge_policy_text(self):
         projects = ", ".join(self._auto_merge_projects()) or "none"
         stopped = " (stop file present)" if self._auto_merge_stopped() else ""
-        return (f"auto-merge {'ON' if self.auto_merge_on else 'OFF'} (config auto_merge); "
-                f"low-risk projects in the registry: {projects}{stopped}")
+        return (f"auto-merge {'ON' if self.auto_merge_on else 'OFF (config auto_merge false)'}; "
+                f"projects whose lead may merge: {projects}{stopped}")
 
     def _auto_merge_stopped(self):
         """The kill switch: the stop file exists. Anything but "does not exist" counts as stopped."""
@@ -3029,7 +3098,8 @@ class Daemon(LeadChat, HqDaemon):
             self._am_next[key] = time.monotonic() + 60
             return
         self._shadow_pr[key] = pr    # shadow mode only: the engine reads the changed files of the reviewed head from it
-        d = merge_policy.classify(project, t, w, pr, pr_ref, open_prs, pipeline_mod.policy(t, project)["merge"])
+        d = merge_policy.classify(project, t, w, pr, pr_ref, open_prs,
+                                  pipeline_mod.policy(t, project, self.authority)["merge"], self._authority_of(project))
         if d.wait:
             stamp = self._review_stamp(w)
             since = self._am_waiting.setdefault(key, (stamp, time.monotonic()))
@@ -3053,7 +3123,13 @@ class Daemon(LeadChat, HqDaemon):
         if t2["status"] != "READY_TO_MERGE" or w2["gate"] or w2["review"]["head"] != head \
                 or w2["review"]["verdict"] != "APPROVE":
             return
-        late = merge_policy.ticket_reasons(t2, w2)
+        # The level may have changed while gh ran: decide again under the one in force now.
+        merge_now = pipeline_mod.policy(t2, project, self.authority)["merge"]
+        late = (merge_policy.lead_ticket_reasons(t2, w2, self._authority_of(project))
+                if merge_now == pipeline_mod.LEAD_MERGE else merge_policy.ticket_reasons(t2, w2)) \
+            if merge_now in ("low-risk", pipeline_mod.LEAD_MERGE) else ["the lead's permissions no longer include this merge"]
+        if merge_now == "low-risk" and not late:
+            late = merge_policy.file_reasons(project, pr.get("files"), pr.get("additions"), pr.get("deletions"))
         if late:
             self._auto_merge_hold(t2, head, "; ".join(late[:3]))
             return
@@ -3069,7 +3145,7 @@ class Daemon(LeadChat, HqDaemon):
             return
         self._event("security", "merge.auto", f"ccd merged {pr_ref} for {key} at {head[:7]} ({'no CI checks' if d.ci == 'none' else 'CI green'})",
                     project=project, ref=key, data={"number": int(number), "ci": d.ci})
-        self._pipeline_result(*self.pipeline.auto_merged(key, head, pr_ref, d.ci))
+        self._pipeline_result(*self.pipeline.auto_merged(key, head, pr_ref, d.ci, self.authority.level(project)))
 
     @staticmethod
     def _review_stamp(w):

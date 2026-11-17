@@ -1,4 +1,4 @@
-// Settings (roadmap P1.3), laid out as in the approved prototype: eleven sections in a list on the left, grouped rows on
+// Settings (roadmap P1.3), laid out as in the approved prototype: twelve sections in a list on the left, grouped rows on
 // the right. On a phone the list comes first, then one section with a link back. Every row is a real preference, a
 // fact about something real, or one of Classic's settings panels shown as it is (Desktop app, Task migration preview,
 // Policies, Decisions, Workers, Audit, Usage). The prototype's Demo controls have no place in production, where nothing
@@ -35,7 +35,8 @@ import { canPickScreen, focusView, forgetPlaces, isPopView, listScreens, popOut,
 import { usePageNav } from "./route";
 import { Pill, cx, plural } from "./ui";
 import { ApiError } from "../../api/client";
-import type { DevDevice, NotifySettings, NotifyState, WorkModeProject, WorkModeState } from "../../api/types";
+import type { DevDevice, LeadAuthorityProject, LeadAuthorityState, LeadLevel, NotifySettings, NotifyState, WorkModeProject,
+  WorkModeState } from "../../api/types";
 
 // ---------- building blocks ----------
 
@@ -634,6 +635,99 @@ function Profiles() {
   return <><ReleaseDay /><WorkModeSwitches /><Classic id="policies"><Policies /></Classic><Classic id="decisions"><DecisionRecords /></Classic></>;
 }
 
+/** What a level lets the lead do, in Jay's words. */
+const LEVEL_TEXT: Record<LeadLevel, string> = {
+  none: "You approve every merge and every live deploy.",
+  low_risk: "Reviewed tests and docs changes are merged without you. You approve the rest and every deploy.",
+  merge: "Every reviewed pull request with passing checks is merged without you. You approve live deploys.",
+  merge_deploy: "Merges and live deploys go ahead without you.",
+  all: "The lead approves plans, UI checks, merges and deploys. You only get its questions about features.",
+};
+const SHORT: Record<LeadLevel, string> = { none: "None", low_risk: "Low-risk", merge: "Merge", merge_deploy: "Merge + deploy", all: "All" };
+
+export function leadHint(p: LeadAuthorityProject): string {
+  if (p.client) return "A client's repository: Command Center never merges or deploys there.";
+  const bits = [LEVEL_TEXT[p.level]];
+  if (p.permissions.merge) bits.push("Major features, money and personal-data changes still come to you; security work goes to the security specialist first.");
+  if (p.permissions.deploy) bits.push("A live project still releases on its release day.");
+  if (p.paused) bits.push("The project is paused, so nothing moves until you resume it.");
+  return bits.join(" ");
+}
+
+/** Jay's rules (2026-11-17, the "Team lead rules" doc): what reaches him at every level, in his words. ccd decides
+ *  them by ticket label (lead_authority.ALWAYS_JAY_LABELS, SECURITY_LABELS); the foot lists the labels it sends. */
+const ALWAYS_YOURS: [string, string][] = [
+  ["Major new features", "Come to you: anything a user would notice as new, such as a screen, a flow, a kind of record or a paid feature."],
+  ["Money", "Comes to you: a new subscription, your card for something new, or more tokens after running out."],
+  ["Personal data", "Comes to you: who can see it, a new field that collects something personal, sending it to an outside "
+    + "service, storing it somewhere new, deleting or rewriting it. How long it is kept is the lead's."],
+  ["Legal and product questions", "Come to you: terms, privacy policy and contracts, and the lead's questions about features."],
+];
+
+/** Team lead permissions (ccd/lead_authority.py, GET and PUT /api/lead-authority): per project, how much its lead
+ *  approves without Jay. A choice is in force at once, and gates already waiting for him that it covers are handed
+ *  over. Changing it is Jay's and needs Developer Unlock; ccd checks both. An older ccd has no such route, and then the
+ *  section says so. */
+function LeadPermissions() {
+  const active = useDevActive();
+  const configured = useSelector(app.store, (d) => d.state?.projectsConfig);
+  const tracked = useSelector(app.store, (d) => d.taskProjects);
+  const [st, setSt] = useState<{ state: "loading" | "ok" | "none" | "error"; data?: LeadAuthorityState; error?: string }>({ state: "loading" });
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    app.api.leadAuthority().then((data) => { if (live) setSt({ state: "ok", data }); })
+      .catch((e: unknown) => {
+        if (live) setSt((s) => s.data ? s : e instanceof ApiError && e.status === 404 ? { state: "none" }
+          : { state: "error", error: e instanceof Error ? e.message : String(e) });
+      });
+    return () => { live = false; };
+  }, []);
+  if (st.state === "none") return <Group id="lead-permissions"><Row label="This Command Center is older and has no team lead permissions yet." /></Group>;
+  if (!st.data) {
+    return <Group id="lead-permissions" title="What each lead may do without you">
+      <Row label={st.state === "error" ? `Could not read the team lead permissions: ${st.error}` : "Reading the team lead permissions…"} /></Group>;
+  }
+  /** Locked: the Unlock dialog opens and the same change goes out once Jay has unlocked, without a second press. */
+  const save = (key: string, change: { level: LeadLevel }) => {
+    if (!devOr(() => save(key, change))) return;
+    setBusy(true); setNote(null);
+    app.api.setLeadAuthority(key, change).then((data) => setSt({ state: "ok", data }))
+      .catch((e: unknown) => setNote(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false));
+  };
+  const name = (key: string) => configured?.find((p) => p.key === key)?.name ?? tracked.find((p) => p.key === key)?.name ?? key;
+  const { mergeSwitch: sw, levels } = st.data;
+  const projects = Object.entries(st.data.projects);
+  return <>
+    {(!sw.config || sw.stopFile) && <p className="hq-note t-bad" role="alert">{!sw.config
+      ? "Merging is switched off for every project in ccd's config (auto_merge: false), whatever is chosen here."
+      : "The auto-merge stop file is present, so Command Center merges nothing until it is removed."}</p>}
+    <Group id="lead-permissions" title="What each lead may do without you" foot={<>Each level includes the ones before it, and
+      a change is in force at once: anything already waiting for you that the new level covers is handed to the lead. What
+      still comes to you whatever the level is listed below. Merges always need a fresh review of the exact commit and
+      passing checks, and changes to agent rules, CI or Command Center's own code always come to you.
+      {!active && <> Changing it needs Developer Unlock. <button type="button" className="hq-link" onClick={unlockDialogOpen}>Unlock…</button></>}</>}>
+      {projects.map(([key, p]) => <Row key={key} label={<span className="hq-with-logo"><ProjectLogo project={key} />{name(key)}</span>}
+        hint={leadHint(p)}>
+        <div className="hq-seg" role="group" aria-label={`Team lead permissions for ${name(key)}`}>{levels.map(({ key: v, label }) =>
+          <button key={v} type="button" aria-pressed={p.level === v} title={label}
+            disabled={busy || (p.client && v !== "none") || (v === "low_risk" && !p.lowRiskPaths)}
+            onClick={() => { if (v !== p.level) save(key, { level: v }); }}>{SHORT[v]}</button>)}</div></Row>)}
+    </Group>
+    <Group id="lead-rules" title="Your rules, at every level" foot={<>A ticket comes to you when the lead
+      labels it {st.data.alwaysJay.join(", ")}, or flags it needs-Jay or legal. Security is a SECURITY ticket or one
+      labelled {st.data.security.join(", ")}. Everything else, such as bug fixes, money in the app's own code and how long
+      data is kept, is the lead's.</>}>
+      {ALWAYS_YOURS.map(([label, hint]) => <Row key={label} label={label} hint={hint} />)}
+      <Row label="Security" hint={"The security specialist reviews it first, then the lead decides with the backend, frontend "
+        + "and hosting leads, within the project's level. You are shown the conclusion. Below All, its plan still comes to you."} />
+    </Group>
+    {note && <p className="hq-note t-bad" role="alert">{note}</p>}
+  </>;
+}
+
 function Workers() {
   return <Classic id="workers"><WorkerNodes /></Classic>;
 }
@@ -702,6 +796,7 @@ export const SECTIONS: Section[] = [
   { id: "security", label: "Security", icon: "lock", sub: "Developer Unlock", Body: Security },
   { id: "connections", label: "Connections", icon: "plug", sub: "ccd, the desktop app, Slack and billing", Body: Connections },
   { id: "profiles", label: "Operating profiles", icon: "shield", sub: "Each project's rules, and your decisions", Body: Profiles },
+  { id: "leads", label: "Team lead permissions", icon: "rocket", sub: "What each lead may merge and deploy without you", Body: LeadPermissions },
   { id: "workers", label: "Workers", icon: "server", sub: "Machines that can run agent work", Body: Workers },
   { id: "audit", label: "Audit and usage", icon: "list", sub: "Who changed what, and what the models used", Body: AuditUsage },
   { id: "more", label: "Other destinations", icon: "more", sub: "Screens outside the sidebar", Body: More },

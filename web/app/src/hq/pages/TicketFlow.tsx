@@ -82,7 +82,8 @@ export function TicketFlowPanel({ r, now }: { r: FlightRow; now: number }) {
     {!r.on.length && <p className="hq-note">{waiting === "jay" || r.needsJay ? <>Nobody is on it: it is waiting for you.{" "}
       <a className="hq-link" href={href("needs")}>Open Decisions</a></>
       : waiting === "lead" ? "Nobody is on it: it is waiting for the lead."
-      : waiting === "reviewer" ? "Nobody is on it: it is waiting for a reviewer." : "Nobody is on it right now."}</p>}
+      : waiting === "reviewer" ? "Nobody is on it: it is waiting for a reviewer."
+      : waiting === "security" ? "Nobody is on it: it is waiting for the security specialist's review." : "Nobody is on it right now."}</p>}
     <ol className="hq-tf-steps" aria-label={`Stages of ${r.t.key}`}>
       {steps.map((s) => <li key={s.label} className={cx(`is-${s.state}`)} aria-current={s.state === "active" ? "step" : undefined}>
         <i aria-hidden /><b>{s.label}</b>

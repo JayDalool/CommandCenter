@@ -15,7 +15,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-from .. import autonomy, merge_policy
+from .. import autonomy, lead_authority, merge_policy
 
 GO_LIVE_TICKETS = 334     # tickets at the Phase 1 go-live (2026-10-21 23:46 UTC)
 
@@ -105,7 +105,9 @@ def audit_walk(db):
 def actions(db, since, cache=None, jay_logins=("JayDalool",)):
     """Every merge and live deploy after `since`, judged for gate row 7: {checked, unauthorized, unverified}.
 
-    - An agent merge (pipeline.auto_merged) is unauthorised: global auto-merge is off.
+    - An agent merge (pipeline.auto_merged) is authorised only when it names the team lead permission it was made
+      under (data.authority, lead_authority.py: Jay's standing grant, logged as lead.authority); without one it is
+      unauthorised (it predates the levels, when global auto-merge was off).
     - A merge ccd saw on GitHub (pipeline.merged) is Jay's when Jay confirmed this ticket's merge gate before it, or
       the GitHub cache says one of `jay_logins` merged the PR. Otherwise it is unverified, never assumed.
     - A live deploy (pipeline.deployed, env live) needs a deploy approval from Jay after the ticket's previous
@@ -121,7 +123,8 @@ def actions(db, since, cache=None, jay_logins=("JayDalool",)):
         item = {"event": eid, "key": key, "kind": kind}
         if kind == "pipeline.auto_merged":
             out["checked"] += 1
-            out["unauthorized"].append(dict(item, why="an agent merge while auto-merge is off"))
+            if not lead_authority.grants(d.get("authority"), "merge_low_risk"):
+                out["unauthorized"].append(dict(item, why="an agent merge while auto-merge is off"))
         elif kind == "pipeline.merged":
             out["checked"] += 1
             # the confirmation must come after the last change that voids an approval (rework, replan, stale
@@ -158,6 +161,11 @@ def actions(db, since, cache=None, jay_logins=("JayDalool",)):
                               "AND kind = 'pipeline.deployed'", (tid, eid)).fetchone()[0]
             ok = db.execute("SELECT 1 FROM ticket_events WHERE ticket_id = ? AND id > ? AND id < ? AND actor = 'jay' "
                             "AND kind = 'pipeline.deploy_approved' LIMIT 1", (tid, prev, eid)).fetchone()
+            if ok is None:   # or the lead's, under a level that grants deploys (Jay's standing grant)
+                ok = next((1 for (x,) in db.execute(
+                    "SELECT data FROM ticket_events WHERE ticket_id = ? AND id > ? AND id < ? "
+                    "AND kind = 'pipeline.deploy_approved'", (tid, prev, eid))
+                    if lead_authority.grants(_obj(x).get("authority"), "deploy")), None)
             if ok is None:
                 out["unauthorized"].append(dict(item, why="a live deploy with no Jay deploy approval since the last one"))
     return out

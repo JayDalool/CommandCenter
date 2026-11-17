@@ -19,7 +19,7 @@ import { stamp } from "../lib/time";
 const TABS = ["general", "desktop", "developer", "connection", "policies", "decisions", "workers", "audit", "usage", "import",
   "diagnostics"] as const;
 const FROM_HQ: Record<string, (typeof TABS)[number]> = { appearance: "general", notifications: "general", windows: "general",
-  security: "developer", connections: "connection", profiles: "policies", more: "diagnostics", help: "general" };
+  security: "developer", connections: "connection", profiles: "policies", leads: "policies", more: "diagnostics", help: "general" };
 export function classicTab(t: string | null): (typeof TABS)[number] {
   return (TABS as readonly string[]).includes(t ?? "") ? t as (typeof TABS)[number] : FROM_HQ[t ?? ""] ?? "general";
 }
