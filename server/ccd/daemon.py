@@ -1177,7 +1177,7 @@ class Daemon(LeadChat, HqDaemon):
     # ---------- team lead permissions (lead_authority.py) ----------
 
     def _authority_of(self, project):
-        return {"level": self.authority.level(project), "keepSensitive": self.authority.keeps_sensitive(project)}
+        return {"level": self.authority.level(project)}
 
     def authority_state(self):
         """GET /api/lead-authority: per project, the level, what it grants, and whether ccd can merge at all."""
@@ -1191,10 +1191,10 @@ class Daemon(LeadChat, HqDaemon):
             out[key] = row
         return {"projects": out, "levels": [{"key": k, "label": lead_mod.LABELS[k]} for k in lead_mod.LEVELS],
                 "mergeSwitch": {"config": self.auto_merge_on, "stopFile": self._auto_merge_stopped()},
-                "alwaysJay": sorted(lead_mod.ALWAYS_JAY_LABELS), "sensitive": sorted(lead_mod.SENSITIVE_LABELS)}
+                "alwaysJay": sorted(lead_mod.ALWAYS_JAY_LABELS), "security": sorted(lead_mod.SECURITY_LABELS)}
 
     def authority_set(self, project, body, actor="jay", developer=False):
-        """PUT /api/lead-authority/projects/{project} {level, keepSensitive?}: Jay with Developer Unlock. The level
+        """PUT /api/lead-authority/projects/{project} {level}: Jay with Developer Unlock. The level
         is in force at once; gates already waiting for Jay that it hands to the lead are taken now (hand_over)."""
         if actor != "jay" or not developer:
             raise ActionError(403, "Developer Unlock required: team lead permissions are Jay's to set")
@@ -1211,16 +1211,14 @@ class Daemon(LeadChat, HqDaemon):
                                    "or deploy permission")
         before = self.authority.level(project)
         try:
-            self.authority.set(project, level if level is not None else before, body.get("keepSensitive"))
+            self.authority.set(project, level)
         except lead_mod.AuthorityError as e:
             raise ActionError(e.status, e.message)
         now = self.authority.level(project)
         # "security": it changes who may merge and deploy, and belongs in the audit trail with merge.policy.
         self._event("security", "lead.authority",
-                    f"{project} team lead permissions: {lead_mod.LABELS[before]} -> {lead_mod.LABELS[now]}"
-                    f"{'' if self.authority.keeps_sensitive(project) else ' (sensitive work too)'}",
-                    project=project, data={"kind": "lead_authority_set", "from": before, "to": now,
-                                           "keepSensitive": self.authority.keeps_sensitive(project)})
+                    f"{project} team lead permissions: {lead_mod.LABELS[before]} -> {lead_mod.LABELS[now]}",
+                    project=project, data={"kind": "lead_authority_set", "from": before, "to": now})
         self._log_merge_policy()
         if self.pipeline is not None:
             for res in self.pipeline.hand_over(project):
@@ -1661,7 +1659,8 @@ class Daemon(LeadChat, HqDaemon):
 
     PIPELINE_OPS = ("plan", "start", "review", "verify", "confirm", "handoff", "block", "role", "finding",
                     "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
-                    "intake", "criteria", "plan-review", "user-check", "close", "deploy-plan", "reply")
+                    "intake", "criteria", "plan-review", "user-check", "close", "deploy-plan", "reply",
+                    "security-review")
 
     def task_work(self, key):
         self._need_tasks()
@@ -1751,6 +1750,8 @@ class Daemon(LeadChat, HqDaemon):
         elif op == "criteria":
             r = self._wrap(pl.define, key, actor, body.get("criteria"), body.get("requirements"), body.get("size"),
                            developer=developer, priority=body.get("priority"), due=body.get("due"))
+        elif op == "security-review":
+            r = self._wrap(pl.security_review, key, body.get("conclusion"), actor, **meta)
         elif op == "plan-review":
             r = self._wrap(pl.plan_review, key, body.get("verdict"), actor, body.get("note"), body.get("blast"),
                            body.get("tests"), body.get("size"), **meta)
@@ -2282,7 +2283,7 @@ class Daemon(LeadChat, HqDaemon):
         for kind, text, _data in events:
             self._event("tasks", "task.pipeline", f"{ticket['key']} {text}"[:300], project=ticket["project"],
                         ref=ticket["key"], data={"kind": kind, **({"actor": actor} if actor else {})},
-                        severity="action" if not (_data or {}).get("authority") and kind in ("pipeline.gate_opened", "pipeline.blocked",
+                        severity="action" if kind == "pipeline.security_reviewed" or not (_data or {}).get("authority") and kind in ("pipeline.gate_opened", "pipeline.blocked",
                                                       "pipeline.unreviewed_merge", "pipeline.questions",
                                                       "pipeline.deploy_requested", "pipeline.replan",
                                                       "pipeline.auto_merge_held", "pipeline.auto_merged",

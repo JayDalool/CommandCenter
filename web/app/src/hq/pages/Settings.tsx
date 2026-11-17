@@ -648,12 +648,21 @@ const SHORT: Record<LeadLevel, string> = { none: "None", low_risk: "Low-risk", m
 export function leadHint(p: LeadAuthorityProject): string {
   if (p.client) return "A client's repository: Command Center never merges or deploys there.";
   const bits = [LEVEL_TEXT[p.level]];
-  if (p.permissions.merge) bits.push(p.keepSensitive ? "Security, money, migrations and personal-data work still come to you."
-    : "That includes security, money, migrations and personal-data work.");
+  if (p.permissions.merge) bits.push("Major features, money and personal-data changes still come to you; security work goes to the security specialist first.");
   if (p.permissions.deploy) bits.push("A live project still releases on its release day.");
   if (p.paused) bits.push("The project is paused, so nothing moves until you resume it.");
   return bits.join(" ");
 }
+
+/** Jay's rules (2026-11-17, the "Team lead rules" doc): what reaches him at every level, in his words. ccd decides
+ *  them by ticket label (lead_authority.ALWAYS_JAY_LABELS, SECURITY_LABELS); the foot lists the labels it sends. */
+const ALWAYS_YOURS: [string, string][] = [
+  ["Major new features", "Anything a user would notice as new: a screen, a flow, a kind of record, a paid feature."],
+  ["Money", "A new subscription, your card for something new, or more tokens after running out."],
+  ["Personal data", "Who can see it, a new field that collects something personal, sending it to an outside service, "
+    + "storing it somewhere new, deleting or rewriting it. How long it is kept is the lead's."],
+  ["Legal and product questions", "Terms, privacy policy and contracts, and the lead's questions about features."],
+];
 
 /** Team lead permissions (ccd/lead_authority.py, GET and PUT /api/lead-authority): per project, how much its lead
  *  approves without Jay. A choice is in force at once, and gates already waiting for him that it covers are handed
@@ -681,7 +690,7 @@ function LeadPermissions() {
       <Row label={st.state === "error" ? `Could not read the team lead permissions: ${st.error}` : "Reading the team lead permissions…"} /></Group>;
   }
   /** Locked: the Unlock dialog opens and the same change goes out once Jay has unlocked, without a second press. */
-  const save = (key: string, change: { level?: LeadLevel; keepSensitive?: boolean }) => {
+  const save = (key: string, change: { level: LeadLevel }) => {
     if (!devOr(() => save(key, change))) return;
     setBusy(true); setNote(null);
     app.api.setLeadAuthority(key, change).then((data) => setSt({ state: "ok", data }))
@@ -696,10 +705,9 @@ function LeadPermissions() {
       ? "Merging is switched off for every project in ccd's config (auto_merge: false), whatever is chosen here."
       : "The auto-merge stop file is present, so Command Center merges nothing until it is removed."}</p>}
     <Group id="lead-permissions" title="What each lead may do without you" foot={<>Each level includes the ones before it, and
-      a change is in force at once: anything already waiting for you that the new level covers is handed to the lead. Whatever
-      the level, these still come to you: tickets flagged needs-Jay or legal, the labels {st.data.alwaysJay.join(", ")}, a
-      merge you asked to accept yourself, and changes to agent rules, CI or Command Center's own code. Merges always need a
-      fresh review of the exact commit and passing checks.
+      a change is in force at once: anything already waiting for you that the new level covers is handed to the lead. What
+      still comes to you whatever the level is listed below. Merges always need a fresh review of the exact commit and
+      passing checks, and changes to agent rules, CI or Command Center's own code always come to you.
       {!active && <> Changing it needs Developer Unlock. <button type="button" className="hq-link" onClick={unlockDialogOpen}>Unlock…</button></>}</>}>
       {projects.map(([key, p]) => <Row key={key} label={<span className="hq-with-logo"><ProjectLogo project={key} />{name(key)}</span>}
         hint={leadHint(p)}>
@@ -708,15 +716,13 @@ function LeadPermissions() {
             disabled={busy || (p.client && v !== "none") || (v === "low_risk" && !p.lowRiskPaths)}
             onClick={() => { if (v !== p.level) save(key, { level: v }); }}>{SHORT[v]}</button>)}</div></Row>)}
     </Group>
-    <Group id="lead-sensitive" title="Sensitive work" foot={<>Sensitive work is a SECURITY ticket or one labelled
-      {" "}{st.data.sensitive.join(", ")}: changes that are hard to undo when they go wrong. It only matters from Merge up.</>}>
-      {projects.filter(([, p]) => p.permissions.merge).map(([key, p]) => <Row key={key}
-        label={<span className="hq-with-logo"><ProjectLogo project={key} />{name(key)}</span>}
-        hint={p.keepSensitive ? "Comes to you." : "The lead decides it too."}>
-        <Seg label={`Sensitive work for ${name(key)}`} value={p.keepSensitive ? "jay" : "lead"} disabled={busy}
-          options={[["jay", "Ask me"], ["lead", "Lead decides"]]}
-          onChange={(v) => { if ((v === "jay") !== p.keepSensitive) save(key, { keepSensitive: v === "jay" }); }} /></Row>)}
-      {!projects.some(([, p]) => p.permissions.merge) && <Row label="No lead may merge yet, so nothing sensitive reaches one." />}
+    <Group id="lead-rules" title="What still comes to you, at every level" foot={<>A ticket comes to you when the lead
+      labels it {st.data.alwaysJay.join(", ")}, or flags it needs-Jay or legal. Security is a SECURITY ticket or one
+      labelled {st.data.security.join(", ")}. Everything else, such as bug fixes, money in the app's own code and how long
+      data is kept, is the lead's.</>}>
+      {ALWAYS_YOURS.map(([label, hint]) => <Row key={label} label={label} hint={hint} />)}
+      <Row label="Security" hint={"The security specialist reviews it first, then the lead decides with the backend, frontend "
+        + "and hosting leads. You are shown the conclusion; the work does not wait for you."} />
     </Group>
     {note && <p className="hq-note t-bad" role="alert">{note}</p>}
   </>;

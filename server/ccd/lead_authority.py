@@ -11,10 +11,25 @@ Developer Unlock). Each level includes the ones before it:
   all            and the plan, UI and risky-release approvals the flow would send to Jay. He only hears about feature and product
                  questions (the lead asks him with `pipeline_cli ask`) and anything below.
 
-Whatever the level, these still reach Jay: a ticket flagged needs-Jay or needs-legal, a LEGAL ticket, the labels
-`product-decision`, `ambiguous`, `legal` and `gate:plan`, a merge Jay asked to accept himself (owner:accept), an
-auto-merge the classifier held, and any PR touching the rails (agent rules, CI, policy/; Command Center's own code,
-D-007). With "keep sensitive work" on (the default) so do SECURITY tickets and the labels in SENSITIVE_LABELS.
+Jay's rules (2026-11-17, the "Team lead rules" doc). Whatever the level, these still reach Jay: a ticket flagged
+needs-Jay or needs-legal, a LEGAL ticket, a merge he asked to accept himself (owner:accept), an auto-merge the
+classifier held, any PR touching the rails (agent rules, CI, policy/; Command Center's own code, D-007), and the
+labels in ALWAYS_JAY_LABELS:
+
+  product-decision, ambiguous, gate:plan   product and feature questions
+  feature:major                            a new feature a user would notice: a screen, flow, kind of record, paid feature
+  spend                                    a new subscription, his card for something new, more tokens after running out
+  legal                                    terms, privacy policy, contracts
+  data-access                              personal data: a change to who can see it
+  data-collect                             a new field that collects something personal
+  data-sharing                             personal data sent to an outside service
+  data-storage                             personal data stored in a new place
+  data-deletion, destructive               real people's data deleted or rewritten
+
+Security (a SECURITY ticket, or SECURITY_LABELS) does not wait for Jay: it waits for the security specialist's review
+(`pipeline_cli security-review`, recorded as `security:reviewed`). After it the lead decides as for any ticket, and
+Jay is shown the conclusion (pipeline.security_reviewed). Everything else is the lead's: bug fixes, money in the
+app's own code, how long data is kept, migrations that add rather than delete.
 
 Choosing a level takes effect at once: nothing else has to be switched on. The kill switches still win: config.json
 `auto_merge: false` and the stop file (<CCD_STATE_DIR>/auto-merge.stop) stop every merge ccd would make.
@@ -34,10 +49,14 @@ LABELS = {"none": "None", "low_risk": "Merge low-risk", "merge": "Merge all", "m
 # What each permission needs, as the lowest level that grants it.
 NEEDS = {"merge_low_risk": "low_risk", "merge": "merge", "deploy": "merge_deploy", "plan": "all", "ui": "all",
          "release": "all"}    # release: a risky ticket's release approval, asked before any deploy request
-# Jay's, whatever the level: the questions only he can answer.
-ALWAYS_JAY_LABELS = frozenset({"product-decision", "ambiguous", "legal", "gate:plan"})
-# Jay's while "keep sensitive work" is on: hard to undo when wrong (a leak, lost data, money).
-SENSITIVE_LABELS = frozenset({"security", "migration", "destructive", "financial", "personal-data", "privacy", "auth"})
+# Jay's, whatever the level (his rules, 2026-11-17; the module docstring says what each label means).
+ALWAYS_JAY_LABELS = frozenset({"product-decision", "ambiguous", "gate:plan", "feature:major", "spend", "legal",
+                               "data-access", "data-collect", "data-sharing", "data-storage", "data-deletion",
+                               "destructive"})
+# The security specialist reviews these first; then the lead decides and Jay is shown the conclusion.
+SECURITY_LABELS = frozenset({"security", "auth", "privacy"})
+SECURITY_REVIEWED = "security:reviewed"     # in ticket_work.confirmed once the security specialist has recorded one
+SECURITY_WAIT = "it waits for the security specialist's review"     # the one reason that is not Jay's
 KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 
@@ -61,8 +80,13 @@ def _flags(ticket):
     return {f.replace(":", "_").replace("-", "_") for f in ticket.get("flags") or ()}
 
 
-def jay_reasons(ticket, keep_sensitive=True, confirmed=()):
-    """Why this ticket's approvals stay Jay's whatever the lead's level. [] when the lead may take them."""
+def needs_security_review(ticket):
+    return ticket.get("type") == "SECURITY" or bool(set(ticket.get("labels") or ()) & SECURITY_LABELS)
+
+
+def jay_reasons(ticket, confirmed=()):
+    """Why the lead may not take this ticket's approvals now, whatever its level. [] when it may. Every reason is
+    Jay's except the security one, which the security specialist's review clears."""
     out = []
     flags = _flags(ticket)
     labels = set(ticket.get("labels") or ())
@@ -77,12 +101,8 @@ def jay_reasons(ticket, keep_sensitive=True, confirmed=()):
         out.append("the ticket has labels only Jay decides: " + ", ".join(hit))
     if "owner:accept" in (confirmed or ()):
         out.append("Jay asked to accept this ticket himself")
-    if keep_sensitive:
-        if ticket.get("type") == "SECURITY":
-            out.append("the ticket type is SECURITY")
-        hit = sorted(labels & SENSITIVE_LABELS)
-        if hit:
-            out.append("the ticket has sensitive labels: " + ", ".join(hit))
+    if needs_security_review(ticket) and SECURITY_REVIEWED not in (confirmed or ()):
+        out.append(SECURITY_WAIT)
     return out
 
 
@@ -94,14 +114,13 @@ def default_level(project):
 class LeadAuthority:
     def __init__(self, path):
         self.path = str(path)
-        self.levels = {}    # project → {"level", "keepSensitive", "at", "by"}
+        self.levels = {}    # project → {"level", "at", "by"}
         try:
             with open(self.path, encoding="utf-8") as f:
                 raw = json.load(f)
             for k, v in (raw.get("projects") or {}).items():
                 if isinstance(k, str) and KEY_RE.match(k) and isinstance(v, dict) and v.get("level") in LEVELS:
-                    self.levels[k] = {"level": v["level"], "keepSensitive": v.get("keepSensitive") is not False,
-                                      "at": v.get("at"), "by": v.get("by")}
+                    self.levels[k] = {"level": v["level"], "at": v.get("at"), "by": v.get("by")}
         except (OSError, ValueError, AttributeError):
             pass    # unreadable: every project falls back to the registry's level, the stricter reading
 
@@ -112,26 +131,18 @@ class LeadAuthority:
         row = self.levels.get(project)
         return row["level"] if row else default_level(project)
 
-    def keeps_sensitive(self, project):
-        row = self.levels.get(project)
-        return True if row is None else row["keepSensitive"]
-
     def may(self, project, what, ticket=None, confirmed=()):
         """True when the project's lead may take `what` (a key of NEEDS) for this ticket without Jay."""
         if not grants(self.level(project), what):
             return False
-        return not (ticket is not None and jay_reasons(ticket, self.keeps_sensitive(project), confirmed))
+        return not (ticket is not None and jay_reasons(ticket, confirmed))
 
-    def set(self, project, level, keep_sensitive=None, by="jay", now=None):
+    def set(self, project, level, by="jay", now=None):
         if not isinstance(project, str) or not KEY_RE.match(project):
             raise AuthorityError(400, "unknown project")
         if level not in LEVELS:
             raise AuthorityError(400, f"level must be one of {', '.join(LEVELS)}")
-        if keep_sensitive is not None and not isinstance(keep_sensitive, bool):
-            raise AuthorityError(400, "keepSensitive must be true or false")
-        keep = self.keeps_sensitive(project) if keep_sensitive is None else keep_sensitive
-        self.levels[project] = {"level": level, "keepSensitive": keep, "at": time.time() if now is None else now,
-                                "by": by}
+        self.levels[project] = {"level": level, "at": time.time() if now is None else now, "by": by}
         self._save()
 
     def _save(self):
@@ -155,5 +166,5 @@ class LeadAuthority:
     def public(self, project):
         row = self.levels.get(project) or {}
         level = self.level(project)
-        return {"level": level, "keepSensitive": self.keeps_sensitive(project), "default": not row,
+        return {"level": level, "default": not row,
                 "since": row.get("at"), "permissions": {k: grants(level, k) for k in NEEDS}}

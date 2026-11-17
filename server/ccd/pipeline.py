@@ -46,11 +46,15 @@ MERGE_POLICIES = ("owner", "low-risk")   # registry pipeline "merge"; "owner" is
 # "lead": the project's team lead permissions (ccd/lead_authority.py) let ccd merge every reviewed PR. Only the
 # lead-authority store sets it; the registry never does.
 LEAD_MERGE = "lead"
-AUTO_MERGE_KINDS = ("pipeline.auto_merge_held", "pipeline.auto_merged", "pipeline.auto_merge_failed")
+# The last of these on a ticket says whether ccd's merge already decided its reviewed head. "reopened" (head None)
+# undoes a hold that only waited for the security specialist's review (Pipeline.security_review).
+AUTO_MERGE_KINDS = ("pipeline.auto_merge_held", "pipeline.auto_merged", "pipeline.auto_merge_failed",
+                    "pipeline.auto_merge_reopened")
 GATES = ("plan", "merge", "ui", "deploy", "failure")
 OWNER_GATES = ("plan", "ui", "deploy", "failure", "merge")
 ROLE_NAMES = ("coordinator", "planner", "implementer", "reviewer", "verifier",
-              "tech-reviewer", "user-reviewer", "design-reviewer")       # the flow's seats (flow.ROLE_OF)
+              "tech-reviewer", "user-reviewer", "design-reviewer",       # the flow's seats (flow.ROLE_OF)
+              "security-reviewer")      # the security specialist (Jay 2026-11-17): reviews security tickets first
 LEADS = ("jay", "agent:coordinator")          # who runs intake, edits criteria and writes the closing note
 USER_REVIEWERS = ("agent:user-reviewer", "agent:design-reviewer")
 CRITERION_ID_RE = re.compile(r"^c[0-9]{1,3}$")
@@ -750,6 +754,17 @@ class Pipeline:
                     break
                 step = self._lead_takes(tid, self.ts.get(key), self._row(tid), at, opened)
                 if step is None:
+                    # Only the security specialist's review stands between this gate and the lead: it is not
+                    # Jay's to answer (Jay 2026-11-17: "start it but keep me in the loop"). Say so on the gate
+                    # and announce it as info; security_review takes the gate once the review is in.
+                    level = self._security_wait(self.ts.get(key), self._row(tid), opened)
+                    if level:
+                        reason = ("waits for the security specialist's review; then the lead decides "
+                                  f"({lead_mod.LABELS[level]})")
+                        self._write(tid, {}, {"gate_reason": reason}, [], actor, at)
+                        events = [(k, x, dict(d or {}, authority=level, waitsFor="security-reviewer"))
+                                  if k == "pipeline.gate_opened" and (d or {}).get("gate") == opened else (k, x, d)
+                                  for k, x, d in events]
                     break
                 events = self._retell(events, opened, self.authority.level(t["project"]))
                 fields, work, more = step
@@ -786,6 +801,16 @@ class Pipeline:
             return None
         return self._close_gate(tid, t, w, at, gate, by="lead:" + self.authority.level(t["project"]),
                                 lead=self.authority.level(t["project"]))
+
+    def _security_wait(self, t, w, gate):
+        """The project's level when the lead could take this open gate but for the missing security review, else
+        None."""
+        if self.authority is None or gate not in self.LEAD_GATES or w["gate"] != gate:
+            return None
+        level = self.authority.level(t["project"])
+        if not lead_mod.grants(level, self._lead_need(t, w, gate)):
+            return None
+        return level if lead_mod.jay_reasons(t, w["confirmed"]) == [lead_mod.SECURITY_WAIT] else None
 
     def _lead_need(self, t, w, gate):
         """The permission an open gate needs. A deploy gate with no request (and no needs:deploy flag) is a risky
@@ -1468,7 +1493,9 @@ class Pipeline:
 
         def fn(tid, t, w, at):
             self._open(t, "a re-plan")
-            confirmed = sorted(set(_no_merge(w["confirmed"])) - {"plan", "ui", "deploy"} | {"owner:accept"})
+            # A security review covered the old plan: the new one is reviewed again.
+            confirmed = sorted(set(_no_merge(w["confirmed"])) - {"plan", "ui", "deploy", lead_mod.SECURITY_REVIEWED}
+                               | {"owner:accept"})
             work = {"plan_state": "proposed", "review_verdict": None, "confirmed": confirmed, "blocked": None,
                     "gate": None, "gate_reason": None, "verification": None, "deploy": None}
             status = {"status": "RESEARCHING"} if t["status"] != "RESEARCHING" else {}
@@ -1829,6 +1856,42 @@ class Pipeline:
             # A priority or due date alone is no scope change, and the activity line says what it was.
             return fields, {}, [("pipeline.criteria", ("criteria updated: " if scope else "updated: ") + ", ".join(said),
                                  data)]
+        return self._tx(key, actor, fn)
+
+    def security_review(self, key, conclusion, actor, model=None, session=None):
+        """The security specialist's review (Jay 2026-11-17): it investigates a security ticket across every field and
+        records its conclusion and recommended fix for the lead. It approves nothing itself. Once it is recorded the
+        lead may take the ticket's plan, merge and deploy as its level allows (lead_authority.jay_reasons), and Jay is
+        shown the conclusion: the event is announced to him, and work does not wait for him. A gate already waiting
+        only for this review is taken now; a merge ccd held only for it is looked at again."""
+        if actor != "agent:security-reviewer":
+            raise TaskError(403, "a security review is the security specialist's (--role security-reviewer)")
+        conclusion = _text(conclusion, 4000, "conclusion")
+        if not conclusion:
+            raise TaskError(400, "say what the review found and the fix it recommends (--note)")
+        if not session:
+            raise TaskError(400, "say which security specialist session reviewed it (--session)")
+        _meta(session, "session")
+
+        def fn(tid, t, w, at):
+            self._open(t, "a security review")
+            confirmed = sorted(set(w["confirmed"]) | {lead_mod.SECURITY_REVIEWED})
+            work = {"confirmed": confirmed, "roles": self._role(w, "security-reviewer", model, session, at)}
+            self.db.execute("INSERT INTO ticket_evidence(ticket_id, at, actor, stage, kind, ref, note) VALUES (?,?,?,?,?,?,?)",
+                            (tid, at, actor, stage_of(t["status"]) or "PLAN", "note", "security review", conclusion))
+            events = [("pipeline.security_reviewed", f"security review for the lead (Jay sees it): {conclusion[:240]}",
+                       {"chars": len(conclusion)})]
+            reason = str(w["gateReason"] or "")
+            if w["gate"] in self.LEAD_GATES:
+                step = self._lead_takes(tid, t, dict(w, confirmed=confirmed), at, w["gate"])
+                if step:
+                    status, more, ev = step
+                    return status, dict(work, **more), events + ev
+            elif w["gate"] == "merge" and reason.startswith("auto-merge held") and "security specialist" in reason:
+                work.update(gate=None, gate_reason=None)
+                events.append(("pipeline.auto_merge_reopened", "the security review is in: ccd's merge looks again",
+                               {"head": None}))
+            return {}, work, events
         return self._tx(key, actor, fn)
 
     def plan_review(self, key, verdict, actor, note, blast=None, tests=None, size=None, model=None, session=None):

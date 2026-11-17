@@ -759,7 +759,7 @@ export interface WorkModeState {
  *  kill switches that stop every merge ccd would make (config.json `auto_merge: false`, the stop file). */
 export type LeadLevel = "none" | "low_risk" | "merge" | "merge_deploy" | "all";
 export interface LeadAuthorityProject {
-  level: LeadLevel; keepSensitive: boolean; default: boolean; since: number | null;
+  level: LeadLevel; default: boolean; since: number | null;
   permissions: Record<"merge_low_risk" | "merge" | "deploy" | "plan" | "ui" | "release", boolean>;
   lowRiskPaths: boolean; paused: boolean; client: boolean;
 }
@@ -767,7 +767,8 @@ export interface LeadAuthorityState {
   projects: Record<string, LeadAuthorityProject>;
   levels: { key: LeadLevel; label: string }[];
   mergeSwitch: { config: boolean; stopFile: boolean };
-  alwaysJay: string[]; sensitive: string[];
+  /** Labels that keep a ticket Jay's at every level; labels the security specialist reviews first (Jay 2026-11-17). */
+  alwaysJay: string[]; security: string[];
 }
 /** A project's logo as ccd lists it (GET /api/projects/logos). The bytes are fetched apart and shown from a blob:. */
 export interface ProjectLogo { mime: string; sha256: string; updatedAt: number }

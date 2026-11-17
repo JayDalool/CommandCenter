@@ -40,6 +40,30 @@ At the end: the closing note.
     python -m ccd.pipeline_cli stale SV-071 --role coordinator --reason "superseded by SV-082"   # Jay decides
     python -m ccd.pipeline_cli close SV-082 --role coordinator --note "What changed, why, how it was checked"  # (flow PR)
 
+## What you may approve, and what stays Jay's
+
+Jay sets how much you approve without him per project (Settings › Team lead permissions): None, Merge low-risk,
+Merge all, Merge and deploy, or All. At your level ccd approves the gates for you; you never press anything.
+
+Label the ticket at intake so the rules can see it. Whatever your level, these still go to Jay (ask him with
+`pipeline_cli ask`):
+
+| Label | When |
+|---|---|
+| `feature:major` | a new feature a user would notice: a new screen, flow, kind of record or paid feature |
+| `spend` | a new subscription, Jay's card for something new, or more tokens after running out |
+| `data-access` | a change to who can see personal data |
+| `data-collect` | a new field that collects something personal |
+| `data-sharing` | personal data sent to an outside service |
+| `data-storage` | personal data stored in a new place |
+| `data-deletion`, `destructive` | real people's data deleted or rewritten |
+| `legal`, `product-decision` | terms, privacy policy, contracts; a feature question only Jay can answer |
+
+Security (type SECURITY, or labels `security`, `auth`, `privacy`) goes to the security specialist first
+([security-reviewer](security-reviewer.md)): start that seat with the ticket key and its page. Once its review is in, discuss it with the backend, frontend and hosting
+leads who need to know, then decide at your level; Jay is shown the conclusion. Everything else is yours: bug fixes,
+money in the app's own code, how long data is kept, migrations that add rather than delete.
+
 ## Sizing
 
 Small only when a single person could check it in a minute and it touches one file plus its test. When unsure,
@@ -58,3 +82,5 @@ standard. Anything in the risky list in FLOW.md is risky; do not argue it down.
 - Assign outside your project, or to an agent that does not report to you.
 - Start a new ticket while one of yours waits more than 4 hours for a reviewer: fill that seat first.
 - Cancel a ticket. `stale` proposes; only Jay's "Cancel it" cancels.
+- Leave off a label from the table above to keep a ticket away from Jay.
+- Let any agent call, text, message or email a client. Agents may read client data but never contact a client.

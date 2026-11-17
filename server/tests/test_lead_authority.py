@@ -30,7 +30,6 @@ class Levels(unittest.TestCase):
         self.assertEqual(a.level("commandcenter"), "low_risk")
         for k in ("gyst", "samvision", "mfe", "gauzemate"):
             self.assertEqual(a.level(k), "none", k)
-        self.assertTrue(a.keeps_sensitive("gyst"))
         self.assertTrue(a.public("gyst")["default"])
 
     def test_each_level_includes_the_ones_before_it(self):
@@ -44,17 +43,15 @@ class Levels(unittest.TestCase):
 
     def test_set_survives_a_restart_and_the_file_is_private(self):
         a = store()
-        a.set("gyst", "all", keep_sensitive=False)
+        a.set("gyst", "all")
         self.assertEqual(stat.S_IMODE(os.stat(a.path).st_mode), 0o600)
         b = la.LeadAuthority(a.path)
-        self.assertEqual((b.level("gyst"), b.keeps_sensitive("gyst")), ("all", False))
-        b.set("gyst", "merge")                       # keepSensitive kept when not given
-        self.assertFalse(la.LeadAuthority(a.path).keeps_sensitive("gyst"))
+        self.assertEqual(b.level("gyst"), "all")
+        b.set("gyst", "merge")
+        self.assertEqual(la.LeadAuthority(a.path).level("gyst"), "merge")
         for bad in (("gyst", "everything"), ("../x", "all")):
             with self.assertRaises(la.AuthorityError):
                 b.set(*bad)
-        with self.assertRaises(la.AuthorityError):
-            b.set("gyst", "all", keep_sensitive="yes")
 
     def test_a_broken_file_reads_as_the_registry_defaults(self):
         a = store()
@@ -62,20 +59,26 @@ class Levels(unittest.TestCase):
         self.assertEqual(la.LeadAuthority(a.path).level("gyst"), "none")
 
     def test_what_stays_with_jay(self):
+        """Jay's rules (2026-11-17): major features, money, legal and the five kinds of personal-data change stay
+        his at every level; security waits for the specialist, then it is the lead's; the rest is the lead's."""
         a = store()
         a.set("gyst", "all")
         base = {"project": "gyst", "type": "FEATURE", "flags": [], "labels": []}
         self.assertTrue(a.may("gyst", "deploy", base))
         for t in ({"flags": ["needs_jay"]}, {"flags": ["needs:legal"]}, {"type": "LEGAL"}, {"labels": ["product-decision"]},
-                  {"labels": ["ambiguous"]}, {"type": "SECURITY"}, {"labels": ["migration"]}, {"labels": ["personal-data"]},
-                  {"labels": ["financial"]}):
+                  {"labels": ["ambiguous"]}, {"labels": ["feature:major"]}, {"labels": ["spend"]}, {"labels": ["legal"]},
+                  {"labels": ["data-access"]}, {"labels": ["data-collect"]}, {"labels": ["data-sharing"]},
+                  {"labels": ["data-storage"]}, {"labels": ["data-deletion"]}, {"labels": ["destructive"]}):
             self.assertFalse(a.may("gyst", "deploy", dict(base, **t)), t)
+            self.assertFalse(a.may("gyst", "deploy", dict(base, **t), confirmed=[la.SECURITY_REVIEWED]), t)
         self.assertFalse(a.may("gyst", "plan", base, confirmed=["owner:accept"]))
-        a.set("gyst", "all", keep_sensitive=False)
-        for t in ({"type": "SECURITY"}, {"labels": ["migration"]}, {"labels": ["personal-data"]}):
-            self.assertTrue(a.may("gyst", "deploy", dict(base, **t)), t)
-        for t in ({"flags": ["needs_jay"]}, {"labels": ["product-decision"]}, {"type": "LEGAL"}):
+        for t in ({"type": "SECURITY"}, {"labels": ["security"]}, {"labels": ["auth"]}, {"labels": ["privacy"]}):
+            self.assertEqual(la.jay_reasons(dict(base, **t)), [la.SECURITY_WAIT], t)
             self.assertFalse(a.may("gyst", "deploy", dict(base, **t)), t)
+            self.assertTrue(a.may("gyst", "deploy", dict(base, **t), confirmed=[la.SECURITY_REVIEWED]), t)
+        # Money in the app's own code, data retention, additive migrations: the lead's.
+        for t in ({"labels": ["migration"]}, {"labels": ["financial"]}, {"labels": ["retention"]}):
+            self.assertTrue(a.may("gyst", "deploy", dict(base, **t)), t)
         a.set("gyst", "merge")
         self.assertFalse(a.may("gyst", "deploy", base))
         self.assertTrue(a.may("gyst", "merge", base))
@@ -84,11 +87,12 @@ class Levels(unittest.TestCase):
 class LeadClassifier(unittest.TestCase):
     APP = [f("src/app/page.tsx"), f("lib/money.ts", "DELETED"), f("package.json")]
 
-    def decide(self, files=None, t=None, w=None, level="merge", keep=True, project="gyst"):
+    def decide(self, files=None, t=None, w=None, level="merge", project="gyst", confirmed=()):
         ref = f"{registry.github_of(project)}#7"
-        return mp.classify(project, t or ticket(project=project), w or work(review={"verdict": "APPROVE", "head": HEAD,
-                                                                                    "pr": ref, "cycles": 0}),
-                           view(files or self.APP), ref, [ref], "lead", {"level": level, "keepSensitive": keep})
+        return mp.classify(project, t or ticket(project=project),
+                           w or work(review={"verdict": "APPROVE", "head": HEAD, "pr": ref, "cycles": 0},
+                                     confirmed=list(confirmed)),
+                           view(files or self.APP), ref, [ref], "lead", {"level": level})
 
     def test_any_reviewed_change_outside_the_rails_merges(self):
         d = self.decide()
@@ -104,12 +108,15 @@ class LeadClassifier(unittest.TestCase):
             self.assertFalse(self.decide([f(path)], project="commandcenter").ok, path)
         self.assertTrue(self.decide([f("server/ccd/api.py")]).ok)        # another project's own folder of that name
 
-    def test_jays_questions_and_sensitive_work_stay_his(self):
-        for t in ({"flags": ["needs_jay"]}, {"labels": ["product-decision"]}, {"type": "LEGAL"}):
-            self.assertFalse(self.decide(t=ticket(project="gyst", **t), keep=False).ok, t)
+    def test_jays_questions_stay_his_and_security_waits_for_its_review(self):
+        for t in ({"flags": ["needs_jay"]}, {"labels": ["product-decision"]}, {"type": "LEGAL"},
+                  {"labels": ["data-sharing"]}, {"labels": ["spend"]}):
+            self.assertFalse(self.decide(t=ticket(project="gyst", **t), confirmed=[la.SECURITY_REVIEWED]).ok, t)
         sec = ticket(project="gyst", labels=["security"])
-        self.assertFalse(self.decide(t=sec).ok)
-        self.assertTrue(self.decide(t=sec, keep=False).ok)
+        d = self.decide(t=sec)
+        self.assertFalse(d.ok)
+        self.assertTrue(any("security specialist" in r for r in d.reasons), d.reasons)
+        self.assertTrue(self.decide(t=sec, confirmed=[la.SECURITY_REVIEWED]).ok)
 
     def test_ui_work_is_the_leads_only_at_all(self):
         ui = ticket(project="gyst", labels=["ui"])
@@ -194,16 +201,20 @@ class LeadPipeline(LeadBase):
         pl.deployed(k, "live", "pass", "health check green", "agent:verifier")
         self.assertEqual(pl.work(k)["deploy"]["result"], "pass")
 
-    async def test_merge_only_and_sensitive_deploys_still_wait_for_jay(self):
+    async def test_merge_only_and_jays_deploys_still_wait_for_jay(self):
         pl = self.daemon.pipeline
         self.daemon.authority.set("gyst", "merge")
         k = self.deploy_ready()
         pl.deploy_request(k, "live", "the new page", "smoke test", "agent:verifier")
         self.assertEqual(pl.work(k)["gate"], "deploy")
         self.daemon.authority.set("gyst", "all")
-        k2 = self.deploy_ready(labels=["migration"])
-        pl.deploy_request(k2, "live", "a migration", "drill", "agent:verifier")
+        k2 = self.deploy_ready(labels=["data-deletion"])
+        pl.deploy_request(k2, "live", "drop old rows", "drill", "agent:verifier")
         self.assertEqual(pl.work(k2)["gate"], "deploy")
+        self.assertNotIn("security specialist", pl.work(k2)["gateReason"] or "")
+        k3 = self.deploy_ready(labels=["migration"])       # an additive migration is the lead's (Jay 2026-11-17)
+        pl.deploy_request(k3, "live", "a new column", "drill", "agent:verifier")
+        self.assertIsNone(pl.work(k3)["gate"])
 
     async def test_all_lets_the_lead_approve_a_risky_plan(self):
         pl = self.daemon.pipeline
@@ -216,7 +227,7 @@ class LeadPipeline(LeadBase):
         self.assertNotIn("pipeline.gate_opened", self.kinds(t["key"]))
         t2, _ = self.tickets.create("gyst", "Rotate keys", labels=["security"])
         pl.plan(t2["key"], PLAN, "agent:planner")
-        self.assertEqual(pl.work(t2["key"])["gate"], "plan")
+        self.assertEqual(pl.work(t2["key"])["gate"], "plan")        # until the security specialist's review
 
     async def test_raising_the_level_hands_over_what_was_waiting(self):
         pl = self.daemon.pipeline
@@ -301,11 +312,14 @@ class LeadAuthorityApi(ApiBase):
         self.assertIn("mergeSwitch", st)
         self.assertEqual(self.put("gyst", {"level": "all"}).status_code, 403)
         dev = self.dev()
-        r = self.put("gyst", {"level": "all", "keepSensitive": True}, dev)
+        r = self.put("gyst", {"level": "all"}, dev)
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["projects"]["gyst"]["level"], "all")
         self.assertTrue(r.json()["projects"]["gyst"]["permissions"]["deploy"])
         self.assertEqual(self.put("gauzemate", {"level": "merge"}, dev).status_code, 409)
+        self.assertEqual(st["alwaysJay"], sorted(la.ALWAYS_JAY_LABELS))
+        self.assertEqual(st["security"], sorted(la.SECURITY_LABELS))
+        self.assertNotIn("keepSensitive", r.json()["projects"]["gyst"])
 
 
 class ReviewFixes(LeadBase):
@@ -316,7 +330,7 @@ class ReviewFixes(LeadBase):
             d = mp.classify("gyst", ticket(project="gyst"), work(review={"verdict": "APPROVE", "head": HEAD,
                                                                           "pr": "JayDalool/gyst-lifeops#7", "cycles": 0}),
                             view([f("old/ci.yml", change)]), "JayDalool/gyst-lifeops#7", ["JayDalool/gyst-lifeops#7"],
-                            "lead", {"level": "all", "keepSensitive": False})
+                            "lead", {"level": "all"})
             self.assertFalse(d.ok, change)
         self.assertEqual(mp.lead_file_reasons("gyst", [f("src/gone.ts", "DELETED")]), [])
         self.assertTrue(mp.lead_file_reasons("gyst", [f(".github/workflows/ci.yml", "DELETED")]))
@@ -347,6 +361,109 @@ class ReviewFixes(LeadBase):
 
     async def test_a_client_repository_is_none_whatever_is_stored(self):
         a = self.daemon.authority
-        a.levels["gauzemate"] = {"level": "all", "keepSensitive": False, "at": 0, "by": "jay"}
+        a.levels["gauzemate"] = {"level": "all", "at": 0, "by": "jay"}
         self.assertEqual(a.level("gauzemate"), "none")
         self.assertNotIn("gauzemate", self.daemon._auto_merge_projects())
+
+
+class SecurityReview(LeadBase):
+    """The security specialist (Jay 2026-11-17): a security ticket waits for its review, not for Jay; then the lead
+    decides at its level, and Jay is shown the conclusion."""
+    NOTE = "Checked auth, sessions, secrets, deps and hosting. Fix: rotate the token and pin the version."
+
+    def plan_security(self, labels=("security",)):
+        t, _ = self.tickets.create("gyst", "Rotate keys", labels=list(labels))
+        self.daemon.pipeline.plan(t["key"], PLAN, "agent:planner")
+        return t["key"]
+
+    async def test_only_the_security_specialist_records_one_and_says_what_it_found(self):
+        from ccd.tasks import TaskError
+        pl = self.daemon.pipeline
+        k = self.plan_security()
+        for actor in ("agent:coordinator", "agent:reviewer", "jay"):
+            with self.assertRaises(TaskError) as e:
+                pl.security_review(k, self.NOTE, actor, session="sec-1")
+            self.assertEqual(e.exception.status, 403, actor)
+        for note, session in (("", "sec-1"), ("   ", "sec-1"), (self.NOTE, None)):
+            with self.assertRaises(TaskError) as e:
+                pl.security_review(k, note, "agent:security-reviewer", session=session)
+            self.assertEqual(e.exception.status, 400)
+
+    async def test_at_all_the_plan_waits_for_the_review_and_not_for_jay(self):
+        pl = self.daemon.pipeline
+        self.daemon.authority.set("gyst", "all")
+        k = self.plan_security()
+        w = pl.work(k)
+        self.assertEqual(w["gate"], "plan")
+        self.assertIn("security specialist", w["gateReason"])
+        opened = [e for e in self.tickets.get(k)["timeline"] if e["kind"] == "pipeline.gate_opened"]
+        self.assertEqual(opened[-1]["data"]["authority"], "all")        # announced as info: not Jay's to answer
+        _t, _c, events = pl.security_review(k, self.NOTE, "agent:security-reviewer", session="sec-1")
+        w = pl.work(k)
+        self.assertEqual((w["gate"], w["planState"]), (None, "accepted"))
+        self.assertIn(la.SECURITY_REVIEWED, w["confirmed"])
+        self.assertEqual([e[0] for e in events][:2], ["pipeline.security_reviewed", "pipeline.gate_lead_approved"])
+        self.assertEqual(w["roles"]["security-reviewer"]["session"], "sec-1")
+        notes = pl.work(k)["evidence"]
+        self.assertTrue(any(n["ref"] == "security review" and n["note"] == self.NOTE for n in notes), notes)
+
+    async def test_jays_labels_still_wait_for_jay_after_the_review(self):
+        pl = self.daemon.pipeline
+        self.daemon.authority.set("gyst", "all")
+        k = self.plan_security(("security", "data-sharing"))
+        self.assertNotIn("security specialist", pl.work(k)["gateReason"] or "")
+        opened = [e for e in self.tickets.get(k)["timeline"] if e["kind"] == "pipeline.gate_opened"]
+        self.assertNotIn("authority", opened[-1]["data"])
+        pl.security_review(k, self.NOTE, "agent:security-reviewer", session="sec-1")
+        self.assertEqual(pl.work(k)["gate"], "plan")
+
+    async def test_below_all_the_plan_is_still_jays(self):
+        pl = self.daemon.pipeline
+        self.daemon.authority.set("gyst", "merge_deploy")
+        k = self.plan_security()
+        self.assertNotIn("security specialist", pl.work(k)["gateReason"] or "")
+        pl.security_review(k, self.NOTE, "agent:security-reviewer", session="sec-1")
+        self.assertEqual(pl.work(k)["gate"], "plan")
+
+    async def test_a_merge_held_for_the_review_merges_once_it_is_in(self):
+        pl = self.daemon.pipeline
+        self.daemon.authority.set("gyst", "merge")
+        self.gh.pr = view([f("src/app/page.tsx")])
+        k = self.ready(project="gyst", labels=["security"])
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertIn("security specialist", pl.work(k)["gateReason"])
+        self.daemon.task_work_op(k, "security-review", {"conclusion": self.NOTE, "session": "sec-1"},
+                                 actor="agent:security-reviewer")
+        self.assertIsNone(pl.work(k)["gate"])
+        self.assertIn("pipeline.auto_merge_reopened", self.kinds(k))
+        await self.daemon._auto_merge()
+        self.assertEqual(len(self.gh.of("merge")), 1)
+        said = [e for e in self.store.since(0) if (e.get("data") or {}).get("kind") == "pipeline.security_reviewed"]
+        self.assertEqual([e["severity"] for e in said], ["action"])         # Jay is shown the conclusion
+
+    async def test_a_hold_for_another_reason_stays(self):
+        pl = self.daemon.pipeline
+        self.daemon.authority.set("gyst", "merge")
+        self.gh.pr = view([f(".github/workflows/ci.yml")])
+        k = self.ready(project="gyst")
+        await self.daemon._auto_merge()
+        pl.security_review(k, self.NOTE, "agent:security-reviewer", session="sec-1")
+        self.assertEqual(pl.work(k)["gate"], "merge")
+        self.assertNotIn("pipeline.auto_merge_reopened", self.kinds(k))
+
+    async def test_a_replan_needs_a_new_review(self):
+        pl = self.daemon.pipeline
+        self.daemon.authority.set("gyst", "all")
+        k = self.plan_security()
+        pl.security_review(k, self.NOTE, "agent:security-reviewer", session="sec-1")
+        pl.replan(k, "the threat model changed", "agent:coordinator")
+        self.assertNotIn(la.SECURITY_REVIEWED, pl.work(k)["confirmed"])
+
+    def test_the_seat_is_known_to_the_cli_and_slack(self):
+        from ccd import notify, pipeline, pipeline_cli
+        self.assertIn("security-reviewer", pipeline_cli.ROLES)
+        self.assertEqual(pipeline_cli.DEFAULT_ROLE["security-review"], "security-reviewer")
+        self.assertIn("security-reviewer", pipeline.ROLE_NAMES)
+        self.assertIn("agent:security-reviewer", notify.SEATS)
+        self.assertIn("pipeline.security_reviewed", notify.TEAM_KINDS)

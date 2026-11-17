@@ -404,7 +404,7 @@ export class Api {
   // ---------- Team lead permissions: how much each project's lead approves without Jay (ccd/lead_authority.py) ----------
   leadAuthority() { return this.req<LeadAuthorityState>("GET", "/api/lead-authority"); }
   /** Jay with Developer Unlock. In force at once; ccd answers with the whole state, as GET does. */
-  setLeadAuthority(project: string, change: { level?: LeadLevel; keepSensitive?: boolean }) {
+  setLeadAuthority(project: string, change: { level: LeadLevel }) {
     return this.req<LeadAuthorityState>("PUT", `/api/lead-authority/projects/${encodeURIComponent(project)}`, change);
   }
 

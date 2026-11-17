@@ -77,7 +77,8 @@
     GET   /api/tasks/{key}/work      the ticket's durable pipeline state (plan, stage, gate, roles, review head, …)
     POST  /api/tasks/{key}/work/{op} one pipeline step: plan start review verify handoff block role finding
                                      ask replan rework evidence writer deploy-request deploy-plan deployed stale reply,
-                                     and the flow's intake criteria plan-review user-check close;
+                                     and the flow's intake criteria plan-review user-check close, and
+                                     security-review (the security specialist, agent:security-reviewer);
                                      `confirm` (close an owner gate) needs Jay AND Developer Unlock
     GET   /api/flow                  the delivery flow per project: seats, tickets in flight, WIP limits
     GET   /api/release               live per project, the weekly release window (next start) and the merge cutoff
@@ -88,7 +89,7 @@
                                      idle lead of tickets it can move without Jay (ccd/workmode.py)
     GET   /api/lead-authority        team lead permissions per project: level, what it grants, the merge kill switches
     PUT   /api/lead-authority/projects/{project}  Jay AND Developer Unlock. {level: none|low_risk|merge|merge_deploy|
-                                     all, keepSensitive?: bool}: in force at once (ccd/lead_authority.py)
+                                     all}: in force at once (ccd/lead_authority.py)
     POST  /api/tasks/check           Jay AND Developer Unlock. the task check: a fixed message asks the project's
                                      idle coordinator Claude to propose stale tasks and add missing ones
                                      ({copy: true}: send nothing, return the message to paste by hand)

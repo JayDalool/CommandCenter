@@ -164,8 +164,7 @@ def lead_ticket_reasons(ticket, work, authority):
     """Why the ticket's merge stays Jay's on a lead's permission (rule 3 for policy "lead")."""
     authority = authority or {}
     level = authority.get("level")
-    out = lead_authority.jay_reasons(ticket, authority.get("keepSensitive") is not False,
-                                     (work or {}).get("confirmed") or ())
+    out = lead_authority.jay_reasons(ticket, (work or {}).get("confirmed") or ())
     if not lead_authority.grants(level, "ui"):
         if ticket.get("type") == "DESIGN":
             out.append("the ticket type is DESIGN")
@@ -265,7 +264,7 @@ def classify(project, ticket, work, pr, pr_ref, open_prs, policy="low-risk", aut
     pr_ref    "owner/repo#N" of the PR in `pr`
     open_prs  the refs of the ticket's open linked PRs (it must have exactly one, this one)
     policy    "low-risk", or "lead" (team lead permissions at "Merge all" or higher)
-    authority with policy "lead": {"level", "keepSensitive"} from lead_authority
+    authority with policy "lead": {"level"} from lead_authority
     """
     reasons = []
     wait = []
