@@ -167,6 +167,10 @@ class FakeDaemon:
         self.deploys.append((key, plan_hash))
         return {"delivered": True}
 
+    async def slack_ask_back(self, key, text):
+        self.asked_back = getattr(self, "asked_back", []) + [(key, text)]
+        return getattr(self, "ask_back_result", {"delivered": True, "reason": None})
+
     async def deliver_to_lead(self, conversation, text, *, via="slack", ref=None, author="jay"):
         self.delivered.append((conversation, text, via, ref, author))
         return {"ok": True, "message": {"id": 7}, "delivery": "nudged"}
@@ -430,14 +434,67 @@ class Replies(ReplyBase):
         self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 31, "answer": "XLSX"},
                                                              {"id": 32, "answer": "only the pilot group"}])
 
+    def test_several_options_by_number_or_letter(self):
+        q = {"id": 51, "text": "Which exports? (pick one or more)", "kind": "choice", "options": ["CSV", "XLSX", "PDF"],
+             "answer": None}
+        ts = self.send(need("SV-51", "questions", None), [q])
+        self.assertEqual(self.reply("1, 3", ts)["did"], "answered")
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 51, "answer": "CSV; PDF"}])
+        q2 = [dict(q, id=52, answer=None), {"id": 53, "text": "Who?", "kind": "text", "answer": None}]
+        ts = self.send(need("SV-52", "questions", None), q2)
+        self.assertEqual(self.reply("1. a and d\n2. admins", ts)["did"], "answer_invalid")
+        self.assertIn("Question 1 has options a–c", self.slack.posts[-1]["text"])
+        self.assertEqual(self.reply("1. a and b\n2. admins", ts)["did"], "answered")
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 52, "answer": "CSV; XLSX"},
+                                                             {"id": 53, "answer": "admins"}])
+
+    def test_a_reply_ending_with_a_question_mark_asks_the_agent_and_answers_nothing(self):
+        q = {"id": 61, "text": "Export format?", "kind": "choice", "options": ["CSV", "XLSX"], "answer": None}
+        ts = self.send(need("SV-61", "questions", None), [q])
+        self.assertIn("A reply that ends with ? goes to the agent", self.slack.posts[-1]["text"])
+        r = self.reply("What does XLSX change for the importer?", ts)
+        self.assertEqual(r["did"], "asked_back")
+        self.assertEqual(self.d.asked_back, [("SV-61", "What does XLSX change for the importer?")])
+        self.assertEqual(self.d.answered, [])
+        self.assertIn("Its answer comes back in this thread", self.slack.posts[-1]["text"])
+        # The agent answers (pipeline_cli reply): in that same thread, quoted as its words.
+        self.assertTrue(run(self.n.agent_reply("SV-61", "samvision", "XLSX needs the openpyxl reader.\n<!channel>")))
+        post = self.slack.posts[-1]
+        self.assertEqual((post["channel"], post["thread"]), ("DJAY", ts))
+        self.assertIn("The agent answers:\n> XLSX needs the openpyxl reader.\n> &lt;!channel&gt;", post["text"])
+        self.assertEqual(self.reply("2", ts)["did"], "answered")                      # the questions still take answers
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 61, "answer": "XLSX"}])
+
+    def test_a_question_back_with_no_task_session_goes_to_the_lead(self):
+        ts = self.send(need("SV-62", "questions", None), [{"id": 62, "text": "A or B?", "kind": "text", "answer": None}])
+        self.d.ask_back_result = {"delivered": False, "noSession": True}
+        self.assertEqual(self.reply("why not both?", ts)["did"], "lead_nudged")
+        self.assertEqual(self.d.delivered[-1][0], "samvision")
+        self.d.ask_back_result = {"delivered": False, "reason": "the agent is working"}
+        r = self.reply("why not both?", ts)
+        self.assertEqual(r["did"], "ask_back_undelivered")
+        self.assertIn("the agent is working", self.slack.posts[-1]["text"])
+        self.assertEqual(self.d.answered, [])
+
+    def test_an_agent_reply_for_a_client_project_or_with_no_thread(self):
+        self.assertFalse(run(self.n.agent_reply("GZ-1", "gauzemate", "details")))
+        self.assertTrue(run(self.n.agent_reply("SV-63", "samvision", "No thread yet")))
+        post = self.slack.posts[-1]
+        self.assertEqual((post["channel"], post["thread"]), ("DJAY", None))
+
     def test_a_number_out_of_range_or_on_a_text_question_is_kept_as_written(self):
         ts = self.send(need("SV-7", "questions", None), [{"id": 41, "text": "How many?", "kind": "text", "answer": None}])
         self.reply("3", ts)
         self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 41, "answer": "3"}])
         ts = self.send(need("SV-8", "questions", None), [{"id": 42, "text": "Pick", "kind": "choice",
                                                           "options": ["x", "y"], "answer": None}])
-        self.reply("5", ts)
-        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 42, "answer": "5"}])
+        for wrong in ("5", "1, 9"):                            # a pick of an option it does not have is refused
+            self.assertEqual(self.reply(wrong, ts)["did"], "answer_invalid", wrong)
+            self.assertIn("This question has options 1–2. Reply with those, or start with Other:",
+                          self.slack.posts[-1]["text"])
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 41, "answer": "3"}])
+        self.reply("Other: 5", ts)
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 42, "answer": "Other: 5"}])
         ts = self.send(need("SV-9", "questions", None), [{"id": 43, "text": "Replicas?", "kind": "choice",
                                                           "options": ["2", "4", "8"], "answer": None}])
         self.reply("2", ts)                                    # the option "2", not the second option

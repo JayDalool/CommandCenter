@@ -153,6 +153,11 @@ SLACK_DEPLOY_TEMPLATE = (
     "Then stop and wait. Jay confirms by replying deploy in Slack, and ccd tells you here; nothing else is a "
     "confirmation, and `deployed --result pass` is refused until it arrives."
 )
+ASK_BACK_TEMPLATE = (
+    "Jay replied from Slack to your open questions on {key} with a question of his own (his words are below). Answer "
+    "him with:\npython -m ccd.pipeline_cli reply {key} --role coordinator --text \"<your answer>\"\n"
+    "That goes to his Slack thread. Then stop and wait: his answers to your questions still come here.\n\nJay: {text}"
+)
 SLACK_DEPLOY_GO_TEMPLATE = (
     "Jay confirmed the live deploy of {key} from Slack, on the plan you recorded with deploy-plan. Deploy it now by "
     "that plan and the runbook, verify it live, and roll back by the runbook right away if a check fails. Then record "
@@ -1593,7 +1598,7 @@ class Daemon(LeadChat, HqDaemon):
 
     PIPELINE_OPS = ("plan", "start", "review", "verify", "confirm", "handoff", "block", "role", "finding",
                     "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
-                    "intake", "criteria", "plan-review", "user-check", "close", "deploy-plan")
+                    "intake", "criteria", "plan-review", "user-check", "close", "deploy-plan", "reply")
 
     def task_work(self, key):
         self._need_tasks()
@@ -1696,6 +1701,8 @@ class Daemon(LeadChat, HqDaemon):
             r = self._wrap(pl.close, key, body.get("note"), actor)
         elif op == "deploy-plan":
             r = self._wrap(pl.deploy_plan, key, body.get("summary"), actor)
+        elif op == "reply":
+            r = self._wrap(pl.reply, key, body.get("text"), actor)
         elif op == "deploy-request":
             self._broker_ticket("deploy.request", key, body.get("env"))
             r = self._wrap(pl.deploy_request, key, body.get("env"), body.get("what"), body.get("verification"), actor)
@@ -1731,6 +1738,16 @@ class Daemon(LeadChat, HqDaemon):
 
     async def task_work_op_async(self, key, op, body, actor="jay", developer=False):
         work = self.task_work_op(key, op, body, actor, developer)
+        if op == "reply":
+            # The agent's answer to Jay's question from Slack goes back to the thread he asked in.
+            posted = False
+            if self.notifier is not None:
+                try:
+                    posted = await self.notifier.agent_reply(work["key"], self.tasks.get(work["key"])["project"],
+                                                             body.get("text"))
+                except Exception:  # noqa: BLE001 — the reply is recorded; Slack being down must not lose it
+                    log.exception("notify: agent reply")
+            return dict(work, posted=posted)
         # Jay's steps reach Claude only with Developer Unlock (typing into Claude is a developer action). The one
         # agent-initiated delivery is a writer handover WITH a checkpoint: one fixed sentence (no free text), to
         # the task session only.
@@ -1972,6 +1989,96 @@ class Daemon(LeadChat, HqDaemon):
             return {"work": work, "delivered": True}
         delivered, reason = await self._nudge_task(work["key"], text)
         return {"work": work, "delivered": delivered, "reason": reason}
+
+    async def slack_ask_back(self, key, text):
+        """Jay's question back, from Slack, about a ticket's open questions: his words typed into the ticket's task
+        session (like his answers), which answers with `pipeline_cli reply` into his thread. Never a client project
+        (its details stay in CommandCenter). Returns {delivered, reason}, and noSession when herdr says no task
+        session is running (the notifier then sends it to the project's lead)."""
+        t = self._wrap(self._need_tasks().get, key)
+        if self.notifier is None or self.notifier.client(t["project"]):
+            raise ActionError(403, "client projects are answered in CommandCenter")
+        if not isinstance(text, str) or not ANSWER_RE.match(" ".join(text.split())):
+            raise ActionError(400, "a question is 1–2000 printable characters")
+        # Only when herdr answers: with herdr down every session looks absent (as in task_answers).
+        if self.herdr_state.get("ok") and self.task_session(t["key"])["state"] == "none":
+            return {"delivered": False, "noSession": True, "reason": f"no task Claude session is running for {t['key']}"}
+        delivered, reason = await self._nudge_task(t["key"], ASK_BACK_TEMPLATE.format(key=t["key"], text=text.strip()))
+        if delivered:
+            self._event("tasks", "task.pipeline", f"{t['key']} Jay asked the task session a question from Slack",
+                        project=t["project"], ref=t["key"], data={"kind": "pipeline.jay_asked", "count": len(text)})
+        return {"delivered": delivered, "reason": reason}
+
+    HOOK_SESSION_RE = re.compile(r"^[\w:.-]{4,80}$")
+
+    def ask_from_session(self, body):
+        """POST /api/hooks/ask (scripts/cc-ask-hook): Claude's own question tool, from the session herdr knows by
+        `sessionId`. A ticket's task session asks through the ticket (Slack and CommandCenter); a project's lead or
+        the CTO through its Messages conversation (ccd/ask_hook.py). {routed: None} otherwise, and Claude shows its
+        own prompt. Only herdr's own record of the session counts, never what the caller says it is."""
+        from . import ask_hook
+        body = body if isinstance(body, dict) else {}
+        sid = str(body.get("sessionId") or "")
+        questions = ask_hook.questions_of(body.get("questions"))
+        if not self.HOOK_SESSION_RE.match(sid) or not questions or not self.herdr_state.get("ok"):
+            return {"routed": None}
+        hits = [c for c in map(coordid.normalize, self.panes or [])
+                if c["live"] and c["agent"] == "claude" and c["sessionId"] == sid]
+        if len(hits) != 1:
+            return {"routed": None}
+        pane = hits[0]
+        conv = self._lead_conversation(pane["paneId"])
+        if conv:
+            return {"routed": "lead", "conversation": conv, "text": ask_hook.lead_text(questions)}
+        key = self._task_key_of(pane)
+        if not key:
+            return {"routed": None}
+        try:
+            # The pipeline step an agent's `pipeline_cli ask` takes, with its checks (a paused project refuses it).
+            self.task_work_op(key, "ask", {"questions": questions}, "agent:coordinator")
+        except ActionError as e:
+            return {"routed": None, "error": e.message}
+        return {"routed": "ticket", "key": key,
+                "say": (f"Not shown here: CommandCenter sent these questions to Jay as {key}'s questions, in Slack and on "
+                        f"the ticket. End your turn now and wait. His answers will be typed into this session; do not "
+                        f"ask them again or decide them yourself.")}
+
+    async def ask_from_session_async(self, body):
+        """ask_from_session, then a lead's questions sent as its Messages reply (which reaches Slack)."""
+        r = self.ask_from_session(body)
+        if r.get("routed") != "lead":
+            return r
+        conv = r["conversation"]
+        try:
+            await self.chat_send(conv, {"text": r["text"]}, self.lead_actor(conv))
+        except ActionError as e:
+            return {"routed": None, "error": e.message}
+        return {"routed": "lead", "conversation": conv,
+                "say": (f"Not shown here: CommandCenter sent these questions to Jay in Messages ({conv}), which reaches "
+                        f"his Slack. End your turn now. His reply comes as the usual Messages nudge: read it with "
+                        f"cc-inbox {conv} and answer with cc-reply.")}
+
+    def _lead_conversation(self, pane_id):
+        """The Messages conversation whose lead runs in this pane, or None (Messages off, herdr unsure, not a lead)."""
+        if getattr(self, "chat", None) is None or not pane_id:
+            return None
+        for conv in self.chat_ids():
+            lead = self.chat_lead(conv)
+            if lead["state"] == "ready" and lead["paneId"] == pane_id:
+                return conv
+        return None
+
+    def _task_key_of(self, pane):
+        """The open ticket whose task session is this pane (coordid.task_session: herdr's name or label), or None."""
+        if self.tasks is None:
+            return None
+        for name in {pane["name"], pane["label"]} - {""}:
+            key = name.upper()
+            if tasks_mod.KEY_RE.match(key) and self.tasks.exists(key):
+                r = self.task_session(key)
+                if r["state"] == "ready" and r["paneId"] == pane["paneId"]:
+                    return key
+        return None
 
     async def slack_merge(self, key, head):
         """Jay's "merge" reply to a Ready-to-merge DM: exactly what the Merge button does for that one ticket, at the

@@ -1475,6 +1475,18 @@ class Pipeline:
                               ("pipeline.gate_opened", "deploy gate", {"gate": "deploy"})]
         return self._tx(key, actor, fn)
 
+    def reply(self, key, text, actor):
+        """The task session answers a question Jay asked back from Slack about its open questions (notify.ask_back).
+        Recorded on the ticket; ccd posts it in his Slack thread (Daemon.task_work_op_async). Changes nothing else."""
+        text = _text(text, 2000, "text")
+        if not text:
+            raise TaskError(400, "say what to tell Jay (--text)")
+
+        def fn(tid, t, w, at):
+            self._open(t, "a reply")
+            return {}, {}, [("pipeline.replied", f"answered Jay: {text[:200]}", {"count": len(text)})]
+        return self._tx(key, actor, fn)
+
     def deploy_plan(self, key, summary, actor):
         """A live deploy Jay approved from Slack was PREPARED: the agent records its plan (steps, migrations, checks,
         rollback) and ccd sends it to Jay's Slack DM. Nothing deploys until he confirms it there (deploy_go)."""

@@ -18,6 +18,7 @@
     python -m ccd.pipeline_cli writer   SV-056 --role coordinator --owner claude [--checkpoint-file cp.json]
     python -m ccd.pipeline_cli deploy-request SV-056 --role coordinator --env live --what "…" --verification "…"
     python -m ccd.pipeline_cli deploy-plan SV-056 --role coordinator --summary "…"   (a deploy Jay approved from Slack)
+    python -m ccd.pipeline_cli reply    SV-056 --role coordinator --text "…"   (answer Jay's question from Slack)
     python -m ccd.pipeline_cli deployed SV-056 --role coordinator --env live --result pass --evidence "…"
     python -m ccd.pipeline_cli stale    SV-056 --role coordinator --reason "superseded by SV-071 (plans/x.md)"
     python -m ccd.pipeline_cli tasks    samvision                  the project's open tasks (the task check)
@@ -133,7 +134,7 @@ def build(argv):
     p.add_argument("op", choices=("work", "plan", "start", "review", "verify", "handoff", "block", "role", "finding",
                                   "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
                                   "tasks", "add", "intake", "criteria", "plan-review", "user-check", "close",
-                                  "deploy-plan"))
+                                  "deploy-plan", "reply"))
     p.add_argument("key")
     p.add_argument("decision", nargs="?", help="plan-review: APPROVE or SEND_BACK; user-check: pass or fail")
     p.add_argument("--role", choices=ROLES)
@@ -147,7 +148,7 @@ def build(argv):
     p.add_argument("--findings-file")
     p.add_argument("--result", choices=("pass", "fail"))
     p.add_argument("--evidence")
-    for f in ("done", "decisions", "next", "blockers", "reason", "summary", "category"):
+    for f in ("done", "decisions", "next", "blockers", "reason", "summary", "category", "text"):
         p.add_argument(f"--{f}")
     p.add_argument("--question", action="append")
     p.add_argument("--questions-file")
@@ -206,6 +207,7 @@ def build(argv):
         "deploy-request": lambda: {"env": a.env, "what": a.what, "verification": a.verification},
         "deployed": lambda: {"env": a.env, "result": a.result, "evidence": a.evidence},
         "deploy-plan": lambda: {"summary": a.summary},
+        "reply": lambda: {"text": a.text},
         "stale": lambda: {"reason": a.reason},
         "intake": lambda: {"size": a.size, "criteria": a.criterion or [], "requirements": a.requirement or [],
                            **({"parent": a.parent} if a.parent else {}),

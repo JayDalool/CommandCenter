@@ -54,8 +54,18 @@ when quiet hours end. GauzeMate (a client project) carries only IDs and a risk l
 
 ccd reads only messages whose author is `jay_member_id`, never edits or bot messages. In an item's thread:
 
-- **Questions:** the reply is the answer (several questions: numbered lines `1. …`, `2. …`). It goes to the task's
-  session, exactly like the Answer button.
+- **Questions:** the reply is the answer (several questions: numbered lines `1. …`, `2. …`). An option's number or
+  letter picks it, and several (`1, 3`, `a and c`) pick several. It goes to the task's session, exactly like the
+  Answer button. A reply that ends with `?` is Jay's question back, not an answer: it is typed into the task session
+  (`Daemon.slack_ask_back`), which answers with `pipeline_cli reply KEY --text …` into the same thread; the questions
+  stay open. With no task session running it goes to the project's lead.
+- **Claude's own question prompt** (AskUserQuestion) never waits in a pane for Jay (Jay, 2026-11-16).
+  `scripts/cc-ask-hook`, a PreToolUse hook that go-live sets in `~/.claude/settings.json`, hands the questions to ccd
+  (`POST /api/hooks/ask`). A ticket's task session's questions become the ticket's questions (this DM, and choice
+  buttons on the ticket); a project lead's or the CTO's go to its Messages conversation, so they reach Slack as its
+  replies do. The agent is told to end its turn and wait, and the answers are typed back into it. Any other Claude
+  session, or ccd not answering, keeps Claude's own prompt. Sessions started before go-live pick the hook up when
+  they restart.
 - **Plans:** a plan waiting for Jay (a risky ticket's, after the technical review) comes as a DM with its summary,
   approach, what it touches, its risk and the technical review. `approve` (or yes, ok, go, lgtm) in that DM's thread
   approves that plan and implementation starts, whatever the scope is (Jay, 2026-11-16). It approves only the plan the
