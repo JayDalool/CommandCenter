@@ -71,23 +71,36 @@ _SGR_EXTENDED = {"38", "48", "58"}     # colour introducers: their sub-parameter
 
 
 def _sgr_faint(params, faint):
-    """Faint state after one SGR sequence. Any doubt errs toward NOT faint (typed text then counts as a draft)."""
+    """Faint state after one SGR sequence. FAILS CLOSED (CC-053 review P1): anything incomplete, non-numeric or not
+    a recognised colour form raises ValueError, so the whole screen reads as unparseable (None, nothing sent). Never
+    return the old faint state past a parameter we could not place: after an unfinished 38;2;10 the typed words that
+    follow would otherwise still count as faint, and a draft would read as empty."""
     items = params.split(";")
     i = 0
     while i < len(items):
         item = items[i]
         head = item.split(":")[0]
+        if head != "" and not head.isdigit():
+            raise ValueError("bad SGR parameter")
         if head in _SGR_EXTENDED:
-            if ":" in item:
-                i += 1                          # colon form carries its own sub-parameters in this one item
+            if ":" in item:                     # colon form: 38:5:n, 38:2:r:g:b or 38:2:cs:r:g:b, every part a number
+                parts = item.split(":")[1:]
+                want = {"5": (2,), "2": (4, 5)}.get(parts[0] if parts else "")
+                # the colour-space slot (second part of the 5-part form) may be empty; every colour value must be a number
+                values = parts[2:] if len(parts) == 5 else parts[1:]
+                if want is None or len(parts) not in want or not all(x.isdigit() for x in values) \
+                        or not (parts[1] == "" or parts[1].isdigit()):
+                    raise ValueError("bad colon colour")
+                i += 1
                 continue
             nxt = items[i + 1] if i + 1 < len(items) else ""
-            if nxt == "5":
-                i += 3                          # 38;5;n
-            elif nxt == "2":
-                i += 5                          # 38;2;r;g;b: that 2 is not "faint"
-            else:
-                return False                    # unknown colour form: cannot tell where it ends
+            need = {"5": 1, "2": 3}.get(nxt)    # numbers that must follow the 5 or the 2: n, or r;g;b
+            if need is None:
+                raise ValueError("unknown colour form")
+            vals = items[i + 2:i + 2 + need]
+            if len(vals) != need or not all(v.isdigit() for v in vals):
+                raise ValueError("incomplete colour")
+            i += 2 + need                       # that 2 inside 38;2;... is not "faint"
             continue
         if head in ("", "0", "22"):
             faint = False
@@ -98,8 +111,9 @@ def _sgr_faint(params, faint):
 
 
 def _screen_line(line):
-    """(text with colour codes removed, the same text minus every character drawn faint). Raises ValueError on a
-    truncated or unterminated escape. One pass, no backtracking. CC-053: Claude Code draws its suggested prompt
+    """(text with colour codes removed, the same text minus every character drawn faint). Raises ValueError on any
+    escape that is truncated, unterminated, malformed or not one we know (CC-053 review P1: fail closed, the caller
+    then reads None and sends nothing). One pass, no backtracking. CC-053: Claude Code draws its suggested prompt
     in SGR 2 (faint), which a colour-stripped read cannot tell from text Jay typed."""
     plain, bright = [], []
     faint = False
@@ -115,15 +129,15 @@ def _screen_line(line):
         if i + 1 >= n:
             raise ValueError("truncated escape")
         kind = line[i + 1]
-        if kind == "[":                         # CSI: parameters, then one final byte 0x40-0x7e
+        if kind == "[":                         # CSI: parameter bytes 0x30-0x3f, then one final byte 0x40-0x7e
             j = i + 2
-            while j < n and not "@" <= line[j] <= "~":
+            while j < n and "0" <= line[j] <= "?":
                 j += 1
-            if j >= n:
-                raise ValueError("truncated CSI")
-            params = line[i + 2:j]
-            if line[j] == "m" and re.fullmatch(r"[0-9;:]*", params):
-                faint = _sgr_faint(params, faint)
+            if j >= n or not "@" <= line[j] <= "~":
+                raise ValueError("truncated or malformed CSI")
+            if line[j] != "m":
+                raise ValueError("unrecognised CSI")   # only colours are expected; any other control is uncertainty
+            faint = _sgr_faint(line[i + 2:j], faint)
             i = j + 1
         elif kind == "]":                       # OSC: up to BEL or ESC \
             j = i + 2
@@ -133,7 +147,7 @@ def _screen_line(line):
                 raise ValueError("unterminated OSC")
             i = j + 1 if line[j] == "\x07" else j + 2
         else:
-            i += 2                              # two-character escape
+            raise ValueError("unrecognised escape")
     return "".join(plain), "".join(bright)
 
 

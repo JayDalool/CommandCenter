@@ -283,6 +283,28 @@ class InputLineColour(unittest.TestCase):
             self.assertIsNot(input_is_empty(self.screen(bad)), True, repr(bad))
         self.assertIsNone(input_is_empty("\x1b[2m"))
 
+    def test_malformed_colour_after_faint_never_reads_empty(self):
+        # CC-053 review P1: start in the faint state, then an unfinished or unknown sequence, then typed words
+        # before the lower border. Faint must not survive past something we could not parse.
+        E = self.ESC
+        hint = E + "[2mhint"
+        for bad in (E + "[38;2;10m", E + "[38;2;10;20m", E + "[38;5m", E + "[38m", E + "[48;2m", E + "[58;2;1;2m",
+                    E + "[38;2;a;b;cm", E + "[38;5;xm", E + "[38;9;1m", E + "[38:2m", E + "[38:5m", E + "[38:2::1:2m",
+                    E + "[38:9:1m", E + "[2;zm", E + "[?25m", E + "[5Z", E + "[2K", E + "[10;20H", E + "[2", E + "[\x00m",
+                    E + "(B", E + "7"):
+            line = "❯ " + hint + bad + "typed words"
+            self.assertIsNot(input_is_empty(self.screen(line)), True, repr(bad))
+        # the reviewer's exact case
+        self.assertIsNot(input_is_empty(self.screen("❯ " + hint + E + "[38;2;10mtyped words")), True)
+        self.assertIsNone(input_is_empty(self.screen("❯ " + hint + E + "[38;2;10mtyped words")))
+
+    def test_well_formed_colours_inside_a_suggestion_still_read_empty(self):
+        E = self.ESC
+        for ok in ("[38;2;10;20;30m", "[38;5;240m", "[38:2::10:20:30m", "[38:5:240m", "[4:3m"):
+            line = "❯ " + E + "[2m" + E + ok + "grey hint" + E + "[0m"
+            self.assertTrue(input_is_empty(self.screen(line)), ok)
+
+
     def test_osc_sequences_are_dropped_without_hiding_typed_text(self):
         E = self.ESC
         self.assertFalse(input_is_empty(self.screen("❯ " + E + "]8;;http://x" + E + "\\link" + E + "]8;;" + E + "\\")))
