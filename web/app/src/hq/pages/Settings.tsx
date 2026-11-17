@@ -275,7 +275,16 @@ function SlackAndPhone() {
     }).catch((e: unknown) => setNote({ tone: "bad", text: e instanceof Error ? e.message : String(e) }))
       .finally(() => setBusy(false));
   };
-  const clients = st.d.clientProjects.map((k) => names.find((p) => p.key === k)?.name ?? k);
+  const nameOf = (k: string) => names.find((p) => p.key === k)?.name ?? k;
+  const clients = st.d.clientProjects.map(nameOf);
+  // Files a lead sends in Messages (Jay, 2026-11-17): uploaded to Slack for the projects switched on here, listed by
+  // name and size everywhere else. ccd never offers SamVision, the CTO or a client project, and checks again.
+  const files = st.d.slackFiles;
+  const filesOn = (v.slackFiles ?? []).filter((k) => files?.choices.includes(k));
+  const filesHint = (filesOn.length ? `A lead's files upload to Slack for ${filesOn.map(nameOf).join(", ")}. Other projects show`
+    : "Slack shows") + " each file's name and size, and the file stays here. SamVision, the CTO and client projects are never uploaded."
+    + (filesOn.length && files?.scope === false ? " Slack has not granted the app files:write yet: add it and reinstall the app." : "");
+  const toggleFiles = (k: string) => void save({ slackFiles: filesOn.includes(k) ? filesOn.filter((x) => x !== k) : [...filesOn, k] });
   const plans = st.d.slackPlans === true;
   const clientRule = clients.length ? ` ${clients.join(" and ")} ${clients.length > 1 ? "are client projects" : "is a client project"}: replies there are passed on as text and never answer or approve.` : "";
   const slackWhy = !c.slackTokens ? (c.slackTokensError ?? "Tokens not set up on jay-server (slack.env)")
@@ -295,6 +304,9 @@ function SlackAndPhone() {
         : `Answers${plans ? " and plans" : ""}, plus ${gateWords(st.d.slackGates)}. Never ${plans ? "a" : "a plan,"} merge or deploy.`) + clientRule}>
       <Seg label="Your Slack replies" value={v.replyScope} options={[["answers", "Answers only"], ["answers_low_risk", "Answers and low-risk"], ["all", "Everything"]]}
         disabled={busy} onChange={(x) => x === v.replyScope || void save({ replyScope: x })} /></Row>
+    {files && files.choices.length > 0 && <Row label="Files in Slack" hint={filesHint}>
+      <div className="hq-seg" role="group" aria-label="Files in Slack">{files.choices.map((k) =>
+        <button key={k} type="button" aria-pressed={filesOn.includes(k)} disabled={busy} onClick={() => toggleFiles(k)}>{nameOf(k)}</button>)}</div></Row>}
     <Row label="Quiet hours" hint={`${v.timezone}${st.d.quietNow ? " · quiet now" : ""}${st.d.held ? ` · ${plural(st.d.held, "alert")} held` : ""}`}>
       <TimeBox label="Quiet hours start" value={v.quietStart} onSave={(t) => save({ quietStart: t })} />
       <span aria-hidden>to</span>

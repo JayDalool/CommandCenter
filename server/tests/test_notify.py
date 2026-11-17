@@ -28,6 +28,8 @@ def at(hh, mm=0, day=12):
 class FakeSlack:
     def __init__(self):
         self.posts = []
+        self.uploads = []
+        self.upload_error = None
         self.n = 0
         self.scopes = None          # as SlackWeb before its first call: the token's scopes are not known yet
 
@@ -36,6 +38,12 @@ class FakeSlack:
         self.posts.append({"channel": channel, "text": text, "thread": thread_ts, "ts": f"{self.n}.0", "as": as_,
                            "broadcast": broadcast})
         return {"ok": True, "ts": f"{self.n}.0"}
+
+    def upload(self, channel, thread_ts, name, data):
+        if self.upload_error:
+            raise notify.SlackError(self.upload_error)
+        self.uploads.append({"channel": channel, "thread": thread_ts, "name": name, "data": data})
+        return {"ok": True}
 
     def channels(self):
         return {"cto": "CCTO", "commandcenter": "CCC", "samvision": "CSV", "gyst": "CGY", "mfe": "CMF"}
@@ -100,6 +108,43 @@ class SlackWebRequests(unittest.TestCase):
                                                          "unfurl_media": False, "thread_ts": "9.0",
                                                          "reply_broadcast": True, "username": "Investigator",
                                                          "icon_emoji": ":mag:"})
+
+    def test_a_file_goes_by_slacks_external_upload_and_its_bytes_never_carry_the_token(self):
+        answers = {"files.getUploadURLExternal": {"ok": True, "upload_url": "https://files.slack.com/upload/v1/ABC",
+                                                  "file_id": "F123"},
+                   "files.completeUploadExternal": {"ok": True, "files": [{"id": "F123"}]}}
+        sent = self.sent
+
+        class Resp:
+            def __init__(self, body):
+                self.body, self.headers = body, {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps(self.body).encode()
+
+        def opener(req, timeout=None):
+            sent.append(req)
+            return Resp(answers.get(req.full_url.rsplit("/", 1)[-1], {"ok": True}))
+        self.web.open = opener
+        self.web.upload("CCC", "9.0", "report.md", b"# Report\n")
+        ask, put, done = self.sent
+        self.assertEqual(urllib.parse.parse_qs(ask.data.decode()), {"filename": ["report.md"], "length": ["9"]})
+        self.assertEqual((put.full_url, put.data, put.get_header("Authorization")),
+                         ("https://files.slack.com/upload/v1/ABC", b"# Report\n", None))
+        self.assertEqual(urllib.parse.parse_qs(done.data.decode()), {
+            "files": ['[{"id": "F123", "title": "report.md"}]'], "channel_id": ["CCC"], "thread_ts": ["9.0"]})
+        self.assertEqual(done.get_header("Authorization"), "Bearer xoxb-test")
+        self.sent.clear()
+        answers["files.getUploadURLExternal"]["upload_url"] = "https://files.example.com/upload"
+        with self.assertRaises(notify.SlackError):
+            self.web.upload("CCC", "9.0", "report.md", b"# Report\n")
+        self.assertEqual(len(self.sent), 1)                     # the bytes went nowhere
 
     def test_a_post_is_still_json(self):
         self.web.post("CCC", "hello", thread_ts="9.0")
@@ -996,6 +1041,117 @@ class TeamThreads(ReplyBase):
         run(self.n.on_event({"source": "chat", "kind": "chat.reply", "data": {"messageId": 9}}))
         self.assertEqual((self.slack.posts[-1]["as"], self.slack.posts[-1]["text"]),
                          (("SamVision lead", ":compass:"), "It touches the importer."))
+
+
+class LeadFiles(unittest.TestCase):
+    """Files a lead sends in Messages (Jay, 2026-11-17: "Upload, chosen projects only"): uploaded for the projects
+    Jay switched on, listed by name and size everywhere else, never uploaded for SamVision, the CTO or a client."""
+
+    def setUp(self):
+        from ccd import chat as chat_mod
+        base = tempfile.mkdtemp()
+        self.chat = chat_mod.Chat(os.path.join(base, "chat.db"), os.path.join(base, "files"), 1 << 20)
+        self.addCleanup(self.chat.close)
+        self.n, self.d, self.slack, _ = make(settings={"slack": True})
+        self.d.chat = self.chat
+
+    def lead_sends(self, conv, text, files=(("notes.md", b"# Notes\nThe importer is slow.\n"),)):
+        async def chunks(data):
+            yield data
+        ids = [asyncio.run(self.chat.upload(conv, "lead", f"agent:lead-{conv}", name, chunks(data)))["id"]
+               for name, data in files]
+        msg = self.chat.add(conv, "lead", f"agent:lead-{conv}", text, via="cli", file_ids=ids)
+        run(self.n.on_event({"source": "chat", "kind": "chat.reply", "data": {"messageId": msg["id"]}}))
+        return msg
+
+    def test_files_are_listed_by_name_and_size_until_jay_switches_the_project_on(self):
+        self.lead_sends("commandcenter", "Here is the report.")
+        post = self.slack.posts[-1]
+        self.assertEqual(post["channel"], "CCC")
+        self.assertEqual(post["text"].split("\n"), [
+            ":compass: *Command Center lead*: Here is the report.", ":paperclip: notes.md · 30 bytes",
+            "_In CommandCenter → Messages. To get Command Center's files here, switch it on in Settings → Slack and "
+            "phone._"])
+        self.assertEqual(self.slack.uploads, [])
+
+    def test_a_switched_on_project_gets_each_file_in_the_thread_of_the_leads_words(self):
+        self.n.update_settings({"slackFiles": ["commandcenter", "gyst"]})
+        self.lead_sends("commandcenter", "Two files.", files=(("a.md", b"alpha"), ("b.txt", b"bravo")))
+        post = self.slack.posts[-1]
+        self.assertEqual(post["text"], ":compass: *Command Center lead*: Two files.")
+        self.assertEqual([(u["channel"], u["thread"], u["name"], u["data"]) for u in self.slack.uploads],
+                         [("CCC", post["ts"], "a.md", b"alpha"), ("CCC", post["ts"], "b.txt", b"bravo")])
+        self.assertEqual([(t, kw["data"]["conversation"], kw["data"]["size"]) for k, t, kw in self.d.events
+                          if k == "notify.file_uploaded"],
+                         [("commandcenter: uploaded a.md to Slack", "commandcenter", 5),
+                          ("commandcenter: uploaded b.txt to Slack", "commandcenter", 5)])
+        self.lead_sends("gyst", "")                                       # a file and no words
+        self.assertEqual(self.slack.posts[-1]["text"], ":compass: *GYST / LifeOps lead*: sent 1 file.")
+        self.assertEqual(self.slack.uploads[-1]["thread"], self.slack.posts[-1]["ts"])
+
+    def test_an_answer_in_a_slack_thread_brings_its_files_into_that_thread(self):
+        self.n.update_settings({"slackFiles": ["commandcenter"]})
+        jay = self.chat.add("commandcenter", "jay", "jay", "can you send the log?", via="slack")
+        self.n.threads[f"msg:{jay['id']}"] = {"type": "origin", "channel": "DJAY", "ts": "42.0",
+                                              "conversation": "commandcenter", "at": self.n.clock()}
+        self.lead_sends("commandcenter", "Attached.")
+        self.assertEqual((self.slack.posts[-1]["channel"], self.slack.posts[-1]["thread"]), ("DJAY", "42.0"))
+        self.assertEqual((self.slack.uploads[-1]["channel"], self.slack.uploads[-1]["thread"]), ("DJAY", "42.0"))
+
+    def test_samvision_the_cto_and_client_projects_never_upload(self):
+        for bad in (["samvision"], ["cto"], ["gauzemate"], ["nope"], "commandcenter", [1]):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                self.n.update_settings({"slackFiles": bad})
+        self.assertNotIn("samvision", self.n.public()["slackFiles"]["choices"])
+        self.n.settings["slackFiles"] = ["samvision", "cto", "commandcenter"]     # however it got there
+        self.lead_sends("samvision", "The comps export.")
+        self.assertEqual(self.slack.posts[-1]["text"].split("\n")[1:], [
+            ":paperclip: notes.md · 30 bytes",
+            "_In CommandCenter → Messages. SamVision files are never uploaded to Slack._"])
+        self.lead_sends("cto", "Cross-project notes.")
+        self.assertIn("The CTO's files are never uploaded to Slack.", self.slack.posts[-1]["text"])
+        self.assertEqual(self.slack.uploads, [])
+
+    def test_a_client_projects_files_are_not_even_named(self):
+        n, d, slack, _ = make(settings={"slack": True}, conf={"channels": {"gauzemate": "gauzemate"}})
+        d.chat = self.chat
+        n.settings["slackFiles"] = ["gauzemate"]
+        self.n, self.slack = n, slack
+        self.lead_sends("gauzemate", "Intake form.", files=(("patient-intake.md", b"secret"),))
+        self.assertEqual(slack.posts[-1]["text"], ":compass: *GauzeMate lead*: replied. Client project: read it in "
+                                                   "CommandCenter.")
+        self.assertNotIn("patient-intake", json.dumps(slack.posts))
+        self.assertEqual(slack.uploads, [])
+
+    def test_a_file_that_does_not_upload_is_listed_with_the_reason(self):
+        self.n.update_settings({"slackFiles": ["commandcenter"]})
+        self.slack.upload_error = "files.getUploadURLExternal: missing_scope"
+        self.lead_sends("commandcenter", "The log.")
+        words, listed = self.slack.posts[-2:]
+        self.assertEqual(listed["thread"], words["ts"])
+        self.assertEqual(listed["text"].split("\n"), [
+            ":paperclip: notes.md · 30 bytes",
+            "_In CommandCenter → Messages: Slack has not granted the bot files:write yet "
+            "(docs/runbooks/slack-and-ntfy.md)._"])
+        self.assertIn("slack file", self.n.status["lastError"])
+        self.assertNotIn("notify.file_uploaded", [k for k, _, _ in self.d.events])
+
+    def test_the_bot_tokens_files_scope_shows_in_settings(self):
+        self.assertIsNone(self.n.public()["slackFiles"]["scope"])
+        self.slack.scopes = {"chat:write"}
+        self.assertFalse(self.n.public()["slackFiles"]["scope"])
+        self.slack.scopes = {"chat:write", notify.FILES_SCOPE}
+        self.assertTrue(self.n.public()["slackFiles"]["scope"])
+        self.assertEqual(self.n.public()["slackFiles"]["choices"], ["commandcenter", "gyst", "mfe"])
+
+    def test_the_choice_survives_a_restart(self):
+        self.n.update_settings({"slackFiles": ["mfe", "commandcenter", "mfe"]})
+        again = notify.Notifier(self.d, {"notify": {}}, slack=FakeSlack())
+        self.assertEqual(again.settings["slackFiles"], ["commandcenter", "mfe"])
+
+    def test_sizes_read_as_people_say_them(self):
+        self.assertEqual([notify.size_text(n) for n in (0, 820, 14 * 1024, int(3.2 * 1024 * 1024), None)],
+                         ["0 bytes", "820 bytes", "14 KB", "3.2 MB", "0 bytes"])
 
 
 class LeadRepliesWithoutReplyTo(unittest.TestCase):
