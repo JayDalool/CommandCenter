@@ -301,8 +301,10 @@ docs/runbooks/slack-and-ntfy.md.
 **Files to Slack (Jay, 2026-11-17).** A lead's Messages files are uploaded to Slack only for projects Jay switches on
 (`slackFiles`, Developer Unlock); everywhere else Slack gets each file's name and size. SamVision (licensed WRREB data),
 the CTO (cross-project) and client projects are never uploaded: `notify.NO_SLACK_FILES` and `client_projects`, fixed
-in code, refused when the setting is saved and checked again on every send. The upload sends the file's bytes to the
-signed URL Slack returns (only an https `*.slack.com` host, no token) and needs the bot scope `files:write`.
+in code, refused when the setting is saved and checked again on every send. SamVision and the CTO show a count of files,
+never their names. Only a file the lead itself sent in that conversation is read, and a text file that `redact()`
+would change is not uploaded. The upload sends the file's bytes to the signed URL Slack returns (only an https
+`*.slack.com` host, no token) and needs the bot scope `files:write`.
 
 **Worktree removal (CC-024).** ccd deletes a directory on its own in exactly one
 case: a DONE ticket's recorded worktree, at the end of ccd's git poll, and only when

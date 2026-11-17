@@ -109,10 +109,13 @@ Slack as above; its files (Jay, 2026-11-17, "Upload, chosen projects only"):
 
 - **Projects switched on** in Settings → Slack and phone → Files in Slack (off for every project by default; Developer
   Unlock, like the other settings): each file is uploaded into the same thread as the lead's words, as the app.
-  A file that fails to upload (no `files:write`, Slack down) is listed by name and size instead, with the reason.
+  A file that fails to upload (no `files:write`, Slack down) is listed by name and size instead, with the reason. So
+  is a text or Markdown file that the secret filter (`security.redact`, the one every Slack post goes through) would
+  change.
 - **Every other project:** each file's name and size, and that it is in CommandCenter → Messages.
-- **Never uploaded, whatever the setting says:** SamVision (its licensed WRREB data never leaves the server), the CTO
-  (it works across projects, SamVision's among them) and client projects (GauzeMate: not even the file names).
+- **Never uploaded, whatever the setting says:** SamVision (its licensed WRREB data never leaves the server) and the CTO
+  (it works across projects, SamVision's among them) get a count of files only, since a file name can carry an
+  address or an MLS number. Client projects (GauzeMate) get "replied" only.
   This is fixed in code (`notify.NO_SLACK_FILES`, `client_projects`); the Settings screen does not offer them and
   ccd refuses them, and checks again on every send.
 

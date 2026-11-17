@@ -25,7 +25,8 @@ Files a lead sends with a message in Messages (cc-reply --file) go with its word
 projects only"): uploaded into the same Slack thread for the projects Jay switches on (`slackFiles`, Settings, off
 for all by default), as each file's name and size everywhere else. Never uploaded: SamVision (its licensed WRREB
 data never leaves the server), the CTO (it works across projects, SamVision's among them) and client projects
-(NO_SLACK_FILES, fixed in code). An upload needs the bot scope files:write; without it the file is listed instead.
+(NO_SLACK_FILES, fixed in code); those get a count of files only, not their names. A text file that redact() would
+change stays here too. An upload needs the bot scope files:write; without it the file is listed instead.
 
 Quiet hours (22:00 to 07:00 America/Winnipeg by default, changeable in Settings) hold the DM and ntfy; held items
 are sent when quiet hours end. Channel posts still go out: Slack's own default only notifies a phone for direct
@@ -99,6 +100,7 @@ POST_LIMIT = 3900   # characters of one Slack post ccd sends; longer text is cut
 # Projects whose Messages files are never uploaded to Slack, whatever slackFiles says (client projects too).
 NO_SLACK_FILES = frozenset({"samvision", "cto"})
 FILES_SCOPE = "files:write"     # the scope Slack needs before the bot may upload a file
+SECRET_FILE = "this file looks like it holds a password, token or key"
 UPLOAD_MAX = 50 * 1024 * 1024   # bytes of one uploaded file; Messages takes 20 MB by default (chat_file_max_mb)
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -1408,15 +1410,19 @@ class Notifier:
             await self.upload_files(cid, thread, files, conv)
 
     def file_list(self, files, conv, failed=None):
-        """Files that stay in CommandCenter, for Slack: one line each (name and size) and why they are not here."""
+        """Files that stay in CommandCenter, for Slack: one line each (name and size) and why they are not here.
+        SamVision's and the CTO's get a count only: a file name can carry an address or an MLS number."""
+        if conv in NO_SLACK_FILES:
+            whose = "The CTO's" if conv == "cto" else self.name(conv)
+            return (f"_:paperclip: {plural(len(files), 'file')} in CommandCenter → Messages. {whose} files and their "
+                    "names never go to Slack._")
         lines = [f":paperclip: {esc(cut(str(f.get('name') or 'file'), 80))} · {size_text(f.get('size'))}" for f in files]
         if failed:
             why = ("Slack has not granted the bot files:write yet (docs/runbooks/slack-and-ntfy.md)"
-                   if "missing_scope" in failed or "not_allowed_token_type" in failed else "the upload to Slack failed")
+                   if "missing_scope" in failed or "not_allowed_token_type" in failed
+                   else "it looks like it holds a password, token or key" if SECRET_FILE in failed
+                   else "the upload to Slack failed")
             lines.append(f"_In CommandCenter → Messages: {why}._")
-        elif conv in NO_SLACK_FILES:
-            lines.append("_In CommandCenter → Messages. " + ("The CTO's" if conv == "cto" else f"{self.name(conv)}")
-                         + " files are never uploaded to Slack._")
         else:
             lines.append(f"_In CommandCenter → Messages. To get {self.name(conv)}'s files here, switch it on in "
                          "Settings → Slack and phone._")
@@ -1449,6 +1455,10 @@ class Notifier:
             data = fh.read(UPLOAD_MAX + 1)
         if len(data) > UPLOAD_MAX:
             raise SlackError("file too large to upload")
+        # Words to Slack go through redact(); a text file is checked the same way and stays here if it would change.
+        # (Messages already refused one that matched onboarding.SECRET_RE when the lead sent it.)
+        if str(row.get("mime") or "").startswith("text/") and redact(data.decode("utf-8", "replace"))[1]:
+            raise SlackError(SECRET_FILE)
         return data
 
     # ----- loops -----

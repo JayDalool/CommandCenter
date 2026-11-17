@@ -1104,13 +1104,36 @@ class LeadFiles(unittest.TestCase):
                 self.n.update_settings({"slackFiles": bad})
         self.assertNotIn("samvision", self.n.public()["slackFiles"]["choices"])
         self.n.settings["slackFiles"] = ["samvision", "cto", "commandcenter"]     # however it got there
-        self.lead_sends("samvision", "The comps export.")
+        self.lead_sends("samvision", "The comps export.", files=(("12 Main St comps.md", b"comps"), ("b.md", b"b")))
         self.assertEqual(self.slack.posts[-1]["text"].split("\n")[1:], [
-            ":paperclip: notes.md · 30 bytes",
-            "_In CommandCenter → Messages. SamVision files are never uploaded to Slack._"])
+            "_:paperclip: 2 files in CommandCenter → Messages. SamVision files and their names never go to Slack._"])
+        self.assertNotIn("Main St", json.dumps(self.slack.posts))            # a name can carry an address
         self.lead_sends("cto", "Cross-project notes.")
-        self.assertIn("The CTO's files are never uploaded to Slack.", self.slack.posts[-1]["text"])
+        self.assertIn("1 file in CommandCenter → Messages. The CTO's files and their names never go to Slack.",
+                      self.slack.posts[-1]["text"])
         self.assertEqual(self.slack.uploads, [])
+
+    def test_only_a_file_this_lead_sent_in_this_conversation_is_read_for_upload(self):
+        async def chunks(data):
+            yield data
+        theirs = asyncio.run(self.chat.upload("samvision", "lead", "agent:lead-samvision", "comps.md", chunks(b"comps")))
+        self.chat.add("samvision", "lead", "agent:lead-samvision", "comps", via="cli", file_ids=[theirs["id"]])
+        jays = asyncio.run(self.chat.upload("commandcenter", "jay", "jay", "mine.md", chunks(b"mine")))
+        self.chat.add("commandcenter", "jay", "jay", "mine", file_ids=[jays["id"]])
+        unsent = asyncio.run(self.chat.upload("commandcenter", "lead", "agent:lead-commandcenter", "draft.md",
+                                              chunks(b"draft")))
+        for fid in (theirs["id"], jays["id"], unsent["id"]):
+            with self.assertRaises(notify.SlackError):
+                self.n._lead_file(fid, "commandcenter")
+
+    def test_a_text_file_the_secret_filter_would_change_stays_here(self):
+        self.n.update_settings({"slackFiles": ["commandcenter"]})
+        jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLXZhbHVl"
+        self.lead_sends("commandcenter", "The env.", files=(("env.md", f"TOKEN {jwt}\n".encode()), ("ok.md", b"fine")))
+        self.assertEqual([u["name"] for u in self.slack.uploads], ["ok.md"])
+        self.assertIn("_In CommandCenter → Messages: it looks like it holds a password, token or key._",
+                      self.slack.posts[-1]["text"])
+        self.assertNotIn(jwt, json.dumps(self.slack.posts))
 
     def test_a_client_projects_files_are_not_even_named(self):
         n, d, slack, _ = make(settings={"slack": True}, conf={"channels": {"gauzemate": "gauzemate"}})
