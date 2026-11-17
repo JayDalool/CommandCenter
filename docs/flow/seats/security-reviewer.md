@@ -21,7 +21,9 @@ cannot take its plan, merge or deploy; at the lead's level `All` the plan gate s
 ## You must write into the ticket
 
 One `security-review` with your conclusion (at most 4000 characters): what you checked, what you found, the risk in
-plain words, and the fix you recommend. It is kept as evidence on the ticket and announced to Jay.
+plain words, and the fix you recommend. It is kept as evidence on the ticket and announced to Jay. Record it once the
+plan is in: it covers that plan, and a new plan clears it. ccd refuses it from a session that is the ticket's lead,
+investigator or developer.
 
 ## Commands
 
@@ -30,7 +32,7 @@ plain words, and the fix you recommend. It is kept as evidence on the ticket and
     python -m ccd.pipeline_cli security-review GYST-041 --session <yours> \
         --note "Checked auth, sessions, secrets, deps and hosting. Found: … Recommend: …"
 
-A re-plan clears your review: review the new plan again.
+A new plan or a re-plan clears your review: review the new plan again.
 
 ## Never
 

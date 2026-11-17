@@ -657,11 +657,11 @@ export function leadHint(p: LeadAuthorityProject): string {
 /** Jay's rules (2026-11-17, the "Team lead rules" doc): what reaches him at every level, in his words. ccd decides
  *  them by ticket label (lead_authority.ALWAYS_JAY_LABELS, SECURITY_LABELS); the foot lists the labels it sends. */
 const ALWAYS_YOURS: [string, string][] = [
-  ["Major new features", "Anything a user would notice as new: a screen, a flow, a kind of record, a paid feature."],
-  ["Money", "A new subscription, your card for something new, or more tokens after running out."],
-  ["Personal data", "Who can see it, a new field that collects something personal, sending it to an outside service, "
-    + "storing it somewhere new, deleting or rewriting it. How long it is kept is the lead's."],
-  ["Legal and product questions", "Terms, privacy policy and contracts, and the lead's questions about features."],
+  ["Major new features", "Come to you: anything a user would notice as new, such as a screen, a flow, a kind of record or a paid feature."],
+  ["Money", "Comes to you: a new subscription, your card for something new, or more tokens after running out."],
+  ["Personal data", "Comes to you: who can see it, a new field that collects something personal, sending it to an outside "
+    + "service, storing it somewhere new, deleting or rewriting it. How long it is kept is the lead's."],
+  ["Legal and product questions", "Come to you: terms, privacy policy and contracts, and the lead's questions about features."],
 ];
 
 /** Team lead permissions (ccd/lead_authority.py, GET and PUT /api/lead-authority): per project, how much its lead
@@ -716,13 +716,13 @@ function LeadPermissions() {
             disabled={busy || (p.client && v !== "none") || (v === "low_risk" && !p.lowRiskPaths)}
             onClick={() => { if (v !== p.level) save(key, { level: v }); }}>{SHORT[v]}</button>)}</div></Row>)}
     </Group>
-    <Group id="lead-rules" title="What still comes to you, at every level" foot={<>A ticket comes to you when the lead
+    <Group id="lead-rules" title="Your rules, at every level" foot={<>A ticket comes to you when the lead
       labels it {st.data.alwaysJay.join(", ")}, or flags it needs-Jay or legal. Security is a SECURITY ticket or one
       labelled {st.data.security.join(", ")}. Everything else, such as bug fixes, money in the app's own code and how long
       data is kept, is the lead's.</>}>
       {ALWAYS_YOURS.map(([label, hint]) => <Row key={label} label={label} hint={hint} />)}
       <Row label="Security" hint={"The security specialist reviews it first, then the lead decides with the backend, frontend "
-        + "and hosting leads. You are shown the conclusion; the work does not wait for you."} />
+        + "and hosting leads, within the project's level. You are shown the conclusion. Below All, its plan still comes to you."} />
     </Group>
     {note && <p className="hq-note t-bad" role="alert">{note}</p>}
   </>;

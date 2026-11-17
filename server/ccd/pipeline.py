@@ -41,7 +41,8 @@ STAGE_OF = {"INBOX": "PLAN", "PROPOSED": "PLAN", "RESEARCHING": "PLAN", "READY_T
 RESUME_STATUS = {"PLAN": "RESEARCHING", "BUILD": "IN_PROGRESS", "REVIEW": "IN_REVIEW", "MERGE": "IN_REVIEW",
                  "VERIFY": "VERIFYING"}
 PLAN_GATE_LABELS = {"security", "migration", "destructive", "architecture", "product-decision", "ambiguous",
-                    "financial", "legal", "gate:plan"}
+                    "financial", "legal", "gate:plan"} \
+    | lead_mod.ALWAYS_JAY_LABELS | lead_mod.SECURITY_LABELS   # Jay's rules (2026-11-17): his, or the specialist's, before work starts
 MERGE_POLICIES = ("owner", "low-risk")   # registry pipeline "merge"; "owner" is the default
 # "lead": the project's team lead permissions (ccd/lead_authority.py) let ccd merge every reviewed PR. Only the
 # lead-authority store sets it; the registry never does.
@@ -558,7 +559,8 @@ class Pipeline:
         rows = self.db.execute(
             "SELECT t.key, t.project, t.title, t.status, w.gate, w.gate_reason, w.updated_at FROM ticket_work w "
             "JOIN tickets t ON t.id=w.ticket_id WHERE w.gate IS NOT NULL AND t.archived=0 "
-            "AND t.status NOT IN ('DONE','DENIED','CANCELLED') ORDER BY w.updated_at").fetchall()
+            "AND t.status NOT IN ('DONE','DENIED','CANCELLED') AND COALESCE(w.gate_reason, '') NOT LIKE ? "
+            "ORDER BY w.updated_at", (lead_mod.SECURITY_GATE + "%",)).fetchall()
         what = {"plan": "Plan needs approval", "merge": "Ready to merge", "ui": "UI review",
                 "deploy": "Deploy approval", "failure": "Blocked"}
         out = [{"project": p, "ref": k, "text": f"{what[g]}: {reason or title}"[:300], "kind": "gate", "gate": g,
@@ -585,7 +587,8 @@ class Pipeline:
         is append-only, so the id only grows). Counts only: no keys, titles or reasons."""
         (n,) = self.db.execute(
             "SELECT COUNT(*) FROM ticket_work w JOIN tickets t ON t.id=w.ticket_id WHERE w.gate IS NOT NULL "
-            "AND t.archived=0 AND t.status NOT IN ('DONE','DENIED','CANCELLED')").fetchone()
+            "AND t.archived=0 AND t.status NOT IN ('DONE','DENIED','CANCELLED') "
+            "AND COALESCE(w.gate_reason, '') NOT LIKE ?", (lead_mod.SECURITY_GATE + "%",)).fetchone()
         # no index on kind: SQLite reads ticket_events backwards from the newest id and stops at the first match
         r = self.db.execute("SELECT id FROM ticket_events WHERE kind IN ('pipeline.gate_opened','pipeline.blocked') "
                             "ORDER BY id DESC LIMIT 1").fetchone()
@@ -689,7 +692,7 @@ class Pipeline:
         """Keys of the project's tickets in investigate with an investigator in the seat."""
         return [t["key"] for t, _w, fl, _h in (flying if flying is not None else self.in_flight(project))
                 if t["key"] != exclude and fl["size"] is not None and fl["stage"] == "investigate"
-                and t["status"] == "RESEARCHING" and fl["waitingOn"] != "jay"
+                and t["status"] == "RESEARCHING" and fl["waitingOn"] not in ("jay", "security")
                 and fl["holder"] and fl["holder"]["seat"] == "investigator"]
 
     def _investigate_free(self, t):
@@ -707,7 +710,7 @@ class Pipeline:
         for t, _w, fl, _h in self.in_flight(project):
             if t["key"] == exclude or fl["size"] is None or fl["stage"] not in flow_mod.REVIEW_STAGES:
                 continue
-            if t["status"] == "BLOCKED" or fl["holder"] or fl["waitingOn"] == "jay":
+            if t["status"] == "BLOCKED" or fl["holder"] or fl["waitingOn"] in ("jay", "security"):
                 continue
             since = next((s["at"] for s in fl["stages"] if s["stage"] == fl["stage"]), None)
             if since is not None and now - since > flow_mod.UNSEATED_AFTER:
@@ -759,12 +762,8 @@ class Pipeline:
                     # and announce it as info; security_review takes the gate once the review is in.
                     level = self._security_wait(self.ts.get(key), self._row(tid), opened)
                     if level:
-                        reason = ("waits for the security specialist's review; then the lead decides "
-                                  f"({lead_mod.LABELS[level]})")
-                        self._write(tid, {}, {"gate_reason": reason}, [], actor, at)
-                        events = [(k, x, dict(d or {}, authority=level, waitsFor="security-reviewer"))
-                                  if k == "pipeline.gate_opened" and (d or {}).get("gate") == opened else (k, x, d)
-                                  for k, x, d in events]
+                        self._write(tid, {}, {"gate_reason": self._wait_reason(level)}, [], actor, at)
+                        events = self._retell_wait(events, opened, level)
                     break
                 events = self._retell(events, opened, self.authority.level(t["project"]))
                 fields, work, more = step
@@ -812,6 +811,47 @@ class Pipeline:
             return None
         return level if lead_mod.jay_reasons(t, w["confirmed"]) == [lead_mod.SECURITY_WAIT] else None
 
+    @staticmethod
+    def _wait_reason(level):
+        return f"{lead_mod.SECURITY_GATE}; then the lead decides ({lead_mod.LABELS[level]})"
+
+    @staticmethod
+    def _retell_wait(events, gate, level):
+        """The step's own events when its gate waits only for the security review: no gate_opened for Jay (a
+        gate_waiting instead, announced as info), and nothing says Jay approves it."""
+        said = "it waits for the security specialist's review, then the lead decides"
+        out = []
+        for kind, text, data in events:
+            if kind == "pipeline.gate_opened" and (data or {}).get("gate") == gate:
+                continue
+            if kind == "pipeline.plan_reviewed" and gate == "plan" and (data or {}).get("gate"):
+                text, data = f"plan approved; {said}", dict(data, authority=level)
+            elif kind == "pipeline.deploy_requested" and gate == "deploy":
+                text, data = f"live deployment requested; {said}", dict(data or {}, authority=level)
+            out.append((kind, text, data))
+        return out + [("pipeline.gate_waiting", f"{gate} gate: {said}",
+                       {"gate": gate, "authority": level, "waitsFor": "security-reviewer"})]
+
+    def _regate(self, t, w):
+        """An open plan, UI or deploy gate the lead cannot take now, said again for whoever it waits for: the
+        security specialist (it leaves Jay's queue) or, once that is no longer so (the review is in, the level
+        went down, a label of Jay's was added), Jay (gate_opened, so he is asked). (work, events), or None when
+        its reason already says so."""
+        gate = w["gate"]
+        if gate not in self.LEAD_GATES or self.authority is None:
+            return None
+        waiting = str(w["gateReason"] or "").startswith(lead_mod.SECURITY_GATE)
+        level = self._security_wait(t, w, gate)
+        if level and not waiting:
+            return {"gate_reason": self._wait_reason(level)}, self._retell_wait([], gate, level)
+        if waiting and not level:
+            now = self.authority.level(t["project"])
+            why = "; ".join(r for r in lead_mod.jay_reasons(t, w["confirmed"]) if r != lead_mod.SECURITY_WAIT) \
+                or f"{lead_mod.LABELS[now]} does not cover it"
+            reason = f"Jay decides: {why}"[:300]
+            return {"gate_reason": reason}, [("pipeline.gate_opened", f"{gate} gate: {reason}"[:300], {"gate": gate})]
+        return None
+
     def _lead_need(self, t, w, gate):
         """The permission an open gate needs. A deploy gate with no request (and no needs:deploy flag) is a risky
         ticket's release approval: that is "all", not "merge and deploy"."""
@@ -855,11 +895,15 @@ class Pipeline:
                     return {}, {"gate": None, "gate_reason": None}, [
                         ("pipeline.gate_handed", f"merge gate handed to ccd's merge ({lead_mod.LABELS[level]})",
                          {"gate": "merge", "authority": level})]
-                return self._lead_takes(tid, t, w, at, w["gate"]) or ({}, {}, [])
+                step = self._lead_takes(tid, t, w, at, w["gate"])
+                if step:
+                    return step
+                fix = self._regate(t, w)
+                return ({}, fix[0], fix[1]) if fix else ({}, {}, [])
             t = self.ts.get(key)
             w = self.work(key)
-            if w["gate"] == "merge" or (self.authority is not None and w["gate"] in self.LEAD_GATES
-                                        and self.authority.may(project, self._lead_need(t, w, w["gate"]), t, w["confirmed"])):
+            if w["gate"] == "merge" or (self.authority is not None and w["gate"] in self.LEAD_GATES and (
+                    self.authority.may(project, self._lead_need(t, w, w["gate"]), t, w["confirmed"]) or self._regate(t, w))):
                 res = self._tx(key, actor, fn)
                 if res[2]:
                     out.append(res)
@@ -892,7 +936,8 @@ class Pipeline:
             # A new plan needs a new approval: Jay approved the plan he saw, not this one. And a ticket
             # whose plan ever needed Jay keeps needing him ("owner:plan" is sticky), whatever its labels say now.
             sticky = "owner:plan" in w["confirmed"] or w["gate"] == "plan"
-            confirmed = [g for g in w["confirmed"] if g != "plan"]
+            # A security review covered the plan it saw: a new plan is reviewed again.
+            confirmed = [g for g in w["confirmed"] if g not in ("plan", lead_mod.SECURITY_REVIEWED)]
             work = {"plan": plan, "roles": self._role(w, "planner", model, session, at), "confirmed": confirmed}
             events = [("pipeline.plan", "plan recorded", {"owner": pol["plan"] == "owner"})]
             # Only Jay closes an open plan gate: a policy that has since become "auto" never does.
@@ -916,10 +961,11 @@ class Pipeline:
         if t["status"] != "RESEARCHING":
             raise TaskError(409, f"{t['key']} is {t['status']}; run intake first")
         fl, _h = flow_mod.view(t, w, f, self._events(tid), pol)
-        if fl["stage"] == "investigate" and not fl["holder"] and fl["waitingOn"] != "jay":   # a seat is taken now
+        if fl["stage"] == "investigate" and not fl["holder"] and fl["waitingOn"] not in ("jay", "security"):   # a seat is taken now
             self._investigate_free(t)
         work = {"plan": plan, "roles": self._role(w, "planner", model, session, at),
-                "confirmed": [g for g in w["confirmed"] if g != "plan"], "plan_state": "proposed"}
+                "confirmed": [g for g in w["confirmed"] if g not in ("plan", lead_mod.SECURITY_REVIEWED)],
+                "plan_state": "proposed"}
         if w["gate"] == "plan":     # a risky plan waiting for Jay was replaced: it goes back through review
             work.update(gate=None, gate_reason=None)
         self._flow_set(tid, at, review_due=at, plan_review=None)
@@ -1116,6 +1162,10 @@ class Pipeline:
 
         def fn(tid, t, w, at):
             if t["status"] != "READY_TO_MERGE" or w["gate"] or w["review"]["head"] != head:
+                return {}, {}, []
+            if lead_mod.SECURITY_WAIT in reason and lead_mod.SECURITY_REVIEWED in w["confirmed"]:
+                # The review landed while ccd's merge read the PR: this "no" is stale. Nothing is recorded, so
+                # the next round classifies the head again with the review in.
                 return {}, {}, []
             return {}, {"gate": "merge", "gate_reason": f"{said}: {reason}"[:300]}, \
                 [(kind, f"{said} at {str(head)[:7]}: {reason}", {"head": head, "reason": reason}),
@@ -1863,7 +1913,8 @@ class Pipeline:
         records its conclusion and recommended fix for the lead. It approves nothing itself. Once it is recorded the
         lead may take the ticket's plan, merge and deploy as its level allows (lead_authority.jay_reasons), and Jay is
         shown the conclusion: the event is announced to him, and work does not wait for him. A gate already waiting
-        only for this review is taken now; a merge ccd held only for it is looked at again."""
+        only for this review is taken now; a merge ccd held only for it is looked at again. It covers the plan it
+        saw: a new plan (plan, replan) clears it."""
         if actor != "agent:security-reviewer":
             raise TaskError(403, "a security review is the security specialist's (--role security-reviewer)")
         conclusion = _text(conclusion, 4000, "conclusion")
@@ -1875,22 +1926,39 @@ class Pipeline:
 
         def fn(tid, t, w, at):
             self._open(t, "a security review")
+            # Independent of the work it reviews, as the technical review is of the plan (D-024 clause 15).
+            mine = [r for r in ("coordinator", "planner", "implementer") if (w["roles"].get(r) or {}).get("session") == session]
+            if mine:
+                raise TaskError(403, f"session {session} is this ticket's {mine[0]}: the security review needs "
+                                     "another session")
+            if not w["plan"] and t["status"] in ("INBOX", "PROPOSED", "RESEARCHING"):
+                raise TaskError(409, f"{t['key']} has no plan yet: record the review once the plan is in "
+                                     "(a new plan clears it)")
             confirmed = sorted(set(w["confirmed"]) | {lead_mod.SECURITY_REVIEWED})
             work = {"confirmed": confirmed, "roles": self._role(w, "security-reviewer", model, session, at)}
             self.db.execute("INSERT INTO ticket_evidence(ticket_id, at, actor, stage, kind, ref, note) VALUES (?,?,?,?,?,?,?)",
                             (tid, at, actor, stage_of(t["status"]) or "PLAN", "note", "security review", conclusion))
             events = [("pipeline.security_reviewed", f"security review for the lead (Jay sees it): {conclusion[:240]}",
                        {"chars": len(conclusion)})]
-            reason = str(w["gateReason"] or "")
+            reviewed = dict(w, confirmed=confirmed)
             if w["gate"] in self.LEAD_GATES:
-                step = self._lead_takes(tid, t, dict(w, confirmed=confirmed), at, w["gate"])
+                step = self._lead_takes(tid, t, reviewed, at, w["gate"])
                 if step:
                     status, more, ev = step
                     return status, dict(work, **more), events + ev
-            elif w["gate"] == "merge" and reason.startswith("auto-merge held") and "security specialist" in reason:
-                work.update(gate=None, gate_reason=None)
-                events.append(("pipeline.auto_merge_reopened", "the security review is in: ccd's merge looks again",
-                               {"head": None}))
+                fix = self._regate(t, reviewed)     # still not the lead's: Jay is asked now
+                if fix:
+                    work.update(fix[0])
+                    events += fix[1]
+            elif w["gate"] == "merge" and str(w["gateReason"] or "").startswith("auto-merge held: "):
+                parts = str(w["gateReason"])[len("auto-merge held: "):].split("; ")
+                rest = [p for p in parts if p != lead_mod.SECURITY_WAIT]
+                if not rest:
+                    work.update(gate=None, gate_reason=None)
+                    events.append(("pipeline.auto_merge_reopened", "the security review is in: ccd's merge looks again",
+                                   {"head": None}))
+                elif len(rest) < len(parts):     # held for other reasons too: those stay Jay's
+                    work["gate_reason"] = ("auto-merge held: " + "; ".join(rest))[:300]
             return {}, work, events
         return self._tx(key, actor, fn)
 

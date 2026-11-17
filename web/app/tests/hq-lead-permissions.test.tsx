@@ -96,6 +96,7 @@ describe("Settings › Team lead permissions", () => {
     expect(row(main, "Money", rules)).toHaveTextContent("more tokens after running out");
     expect(row(main, "Personal data", rules)).toHaveTextContent("How long it is kept is the lead's.");
     expect(row(main, "Security", rules)).toHaveTextContent("You are shown the conclusion");
+    expect(row(main, "Security", rules)).toHaveTextContent("Below All, its plan still comes to you.");
     expect(rules).toHaveTextContent("feature:major");
     expect(rules).toHaveTextContent("labelled auth, privacy, security");
     expect(within(rules).queryAllByRole("button")).toHaveLength(0);

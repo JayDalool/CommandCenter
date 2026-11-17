@@ -266,7 +266,10 @@ def view(t, w, f, events, pol, open_children=0, now=None):
     v = w.get("verification") or {}
     d = w.get("deploy") or {}
     waiting = None
-    if gate or w.get("openQuestions"):
+    if gate and not w.get("openQuestions") and str(w.get("gateReason") or "").startswith(
+            "waits for the security specialist's review"):     # lead_authority.SECURITY_GATE: not Jay's yet
+        waiting = "security"
+    elif gate or w.get("openQuestions"):
         waiting = "jay"
     elif t["status"] == "VERIFYING" and v.get("result") == "pass" and not (d.get("requestedAt") and d.get("result") != "pass"):
         waiting = "lead"    # verified: the lead writes the closing note (or children are still open)

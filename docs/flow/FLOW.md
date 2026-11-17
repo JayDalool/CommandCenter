@@ -43,8 +43,9 @@ The lead sets the size at intake. The technical reviewer may raise it. Only Jay 
 | standard | a feature or a bug across several files | all nine |
 | risky | security, sign-in, money, data migration, licensed or personal data, a redesign clients notice | all nine, plus Jay approves the plan after Technical review and approves the release |
 
-A ticket with a plan-gate label (`security`, `migration`, `destructive`, `architecture`, `product-decision`,
-`ambiguous`, `financial`, `legal`, `gate:plan`), a SECURITY or LEGAL type, or a needs-Jay or needs-legal flag is risky whatever
+A ticket with a plan-gate label (`security`, `auth`, `privacy`, `migration`, `destructive`, `architecture`,
+`product-decision`, `ambiguous`, `financial`, `legal`, `gate:plan`, `feature:major`, `spend`, `data-access`,
+`data-collect`, `data-sharing`, `data-storage`, `data-deletion`), a SECURITY or LEGAL type, or a needs-Jay or needs-legal flag is risky whatever
 was typed. The route decides which stages run; a skipped stage is refused by ccd, never chosen by an agent.
 
 ## What a ticket carries

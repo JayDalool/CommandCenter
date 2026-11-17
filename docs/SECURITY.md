@@ -113,7 +113,8 @@ it to resume; while it exists a ready PR opens a merge gate for Jay). At `merge`
 except one that touches a rail (`merge_policy.RAILS` and `PROJECT_RAILS`: CI, agent rules and settings, Command
 Center's own code and policy) or is renamed or copied, or whose ticket stays Jay's (`lead_authority.jay_reasons`:
 major features, spend, legal and personal-data changes at every level; a security ticket until the security
-specialist has recorded its `security-review`, which only `agent:security-reviewer` can).
+specialist has recorded its `security-review`: only `agent:security-reviewer`, from a session that is not the
+ticket's lead, investigator or developer, and it covers the plan it saw).
 At `merge_deploy` and above a live deploy request is approved for the agent (it still deploys; ccd does not). At
 `low_risk`, `ccd/merge_policy.py` decides:
 only added or modified `server/tests/**/*.py`, `web/app/tests/**/*.ts(x)`, `docs/**/*.md` and `README.md` files, at most

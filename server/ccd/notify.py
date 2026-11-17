@@ -150,7 +150,7 @@ TEAM_KINDS = frozenset({
     "pipeline.rework", "pipeline.blocked", "pipeline.questions", "pipeline.answered", "pipeline.gate_opened",
     "pipeline.gate_confirmed", "pipeline.ready_to_merge", "pipeline.unreviewed_merge", "pipeline.verified",
     "pipeline.released", "pipeline.deploy_requested", "pipeline.deploy_approved", "pipeline.closed_note",
-    "pipeline.deploy_prepared", "pipeline.deploy_confirmed", "pipeline.security_reviewed",
+    "pipeline.deploy_prepared", "pipeline.deploy_confirmed", "pipeline.security_reviewed", "pipeline.gate_waiting",
     *PIPELINE_ALERTS})
 CUSTOMIZE = "chat:write.customize"     # the scope Slack needs before a bot may post under another name and icon
 TICKETS_MAX = 500

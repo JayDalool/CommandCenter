@@ -357,7 +357,7 @@ export interface TicketFlow {
   stage?: FlowStage | null; route?: FlowStage[]; openChildren?: number;
   holder: { seat: FlowSeat; session: string | null; since: number } | null;
   next: { stage: FlowStage; seat: FlowSeat | "jay" } | null;
-  waitingOn: "jay" | "lead" | "reviewer" | null;
+  waitingOn: "jay" | "lead" | "reviewer" | "security" | null;
   rounds: number; idleSince: number; stale: boolean;
 }
 export interface Handoff {

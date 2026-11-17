@@ -379,6 +379,10 @@ class SecurityReview(LeadBase):
     async def test_only_the_security_specialist_records_one_and_says_what_it_found(self):
         from ccd.tasks import TaskError
         pl = self.daemon.pipeline
+        t, _ = self.tickets.create("gyst", "Rotate keys", labels=["security"])
+        with self.assertRaises(TaskError) as e:      # it reviews the plan: none yet
+            pl.security_review(t["key"], self.NOTE, "agent:security-reviewer", session="sec-1")
+        self.assertEqual(e.exception.status, 409)
         k = self.plan_security()
         for actor in ("agent:coordinator", "agent:reviewer", "jay"):
             with self.assertRaises(TaskError) as e:
@@ -392,12 +396,23 @@ class SecurityReview(LeadBase):
     async def test_at_all_the_plan_waits_for_the_review_and_not_for_jay(self):
         pl = self.daemon.pipeline
         self.daemon.authority.set("gyst", "all")
-        k = self.plan_security()
+        t, _ = self.tickets.create("gyst", "Rotate keys", labels=["security"])
+        k = t["key"]
+        self.daemon.task_work_op(k, "plan", {"plan": PLAN}, actor="agent:planner")
         w = pl.work(k)
         self.assertEqual(w["gate"], "plan")
-        self.assertIn("security specialist", w["gateReason"])
-        opened = [e for e in self.tickets.get(k)["timeline"] if e["kind"] == "pipeline.gate_opened"]
-        self.assertEqual(opened[-1]["data"]["authority"], "all")        # announced as info: not Jay's to answer
+        self.assertTrue(w["gateReason"].startswith(la.SECURITY_GATE), w["gateReason"])
+        # Not Jay's to answer: no gate_opened (a gate_waiting, info), not in his queue, the launcher's count or
+        # jay_first, and the ticket says whom it waits for.
+        self.assertNotIn("pipeline.gate_opened", self.kinds(k))
+        self.assertEqual(self.kinds(k).count("pipeline.gate_waiting"), 1)
+        self.assertNotIn(k, [n["ref"] for n in pl.needs()])
+        self.assertEqual(pl.gate_counts(), {"open": 0, "last": 0})
+        self.assertEqual(pl.held(k), [])
+        self.assertEqual(pl.flow_of(k, self.tickets.get(k), pl.work_row(self.tickets.get(k)["id"]))[0]["waitingOn"],
+                         "security")
+        said = [e for e in self.store.since(0) if (e.get("data") or {}).get("kind") == "pipeline.gate_waiting"]
+        self.assertEqual([e["severity"] for e in said], ["info"])
         _t, _c, events = pl.security_review(k, self.NOTE, "agent:security-reviewer", session="sec-1")
         w = pl.work(k)
         self.assertEqual((w["gate"], w["planState"]), (None, "accepted"))
@@ -467,3 +482,96 @@ class SecurityReview(LeadBase):
         self.assertIn("security-reviewer", pipeline.ROLE_NAMES)
         self.assertIn("agent:security-reviewer", notify.SEATS)
         self.assertIn("pipeline.security_reviewed", notify.TEAM_KINDS)
+
+
+class SecurityReviewFixes(LeadBase):
+    """The independent review of the security specialist seat: stale reviews, independence, the merge race, labels
+    that skipped the plan gate, gates that stopped saying whom they wait for."""
+    NOTE = SecurityReview.NOTE
+    plan_security = SecurityReview.plan_security
+
+    async def test_a_new_plan_needs_a_new_review(self):
+        pl = self.daemon.pipeline
+        self.daemon.authority.set("gyst", "all")
+        k = self.plan_security()
+        pl.security_review(k, self.NOTE, "agent:security-reviewer", session="sec-1")
+        self.assertEqual(self.tickets.get(k)["status"], "READY_TO_IMPLEMENT")
+        pl.plan(k, dict(PLAN, summary="A different plan"), "agent:planner")
+        w = pl.work(k)
+        self.assertNotIn(la.SECURITY_REVIEWED, w["confirmed"])
+        self.assertEqual(w["gate"], "plan")
+        self.assertTrue(w["gateReason"].startswith(la.SECURITY_GATE))
+
+    async def test_the_tickets_own_lead_planner_or_developer_cannot_review_it(self):
+        from ccd.tasks import TaskError
+        pl = self.daemon.pipeline
+        self.daemon.authority.set("gyst", "all")
+        t, _ = self.tickets.create("gyst", "Rotate keys", labels=["security"])
+        pl.plan(t["key"], PLAN, "agent:planner", session="plan-1")
+        pl.role(t["key"], "coordinator", "agent:coordinator", session="lead-1")
+        for session in ("plan-1", "lead-1"):
+            with self.assertRaises(TaskError) as e:
+                pl.security_review(t["key"], self.NOTE, "agent:security-reviewer", session=session)
+            self.assertEqual(e.exception.status, 403, session)
+        self.assertEqual(pl.work(t["key"])["gate"], "plan")
+
+    async def test_a_review_that_lands_while_ccd_reads_the_pr_does_not_hold_the_merge(self):
+        pl = self.daemon.pipeline
+        self.daemon.authority.set("gyst", "merge")
+        k = self.ready(project="gyst", labels=["security"])
+        pl.security_review(k, self.NOTE, "agent:security-reviewer", session="sec-1")
+        head = pl.work(k)["review"]["head"]
+        _t, _c, events = pl.hold_merge(k, head, la.SECURITY_WAIT)       # classified before the review landed
+        self.assertEqual(events, [])
+        self.assertIsNone(pl.work(k)["gate"])
+        self.gh.pr = view([f("src/app/page.tsx")])
+        await self.daemon._auto_merge()
+        self.assertEqual(len(self.gh.of("merge")), 1)
+
+    async def test_security_and_jays_labels_never_skip_the_plan_gate(self):
+        pl = self.daemon.pipeline
+        self.daemon.authority.set("gyst", "all")
+        for labels in (["auth"], ["privacy"]):
+            k = self.plan_security(labels)
+            self.assertTrue(pl.work(k)["gateReason"].startswith(la.SECURITY_GATE), labels)
+        for labels in (["feature:major"], ["spend"], ["data-collect"]):
+            t, _ = self.tickets.create("gyst", "Something new", labels=labels)
+            pl.plan(t["key"], PLAN, "agent:planner")
+            w = pl.work(t["key"])
+            self.assertEqual(w["gate"], "plan", labels)
+            self.assertIn(t["key"], [n["ref"] for n in pl.needs()])
+        low = mp.ticket_reasons(ticket(labels=["feature:major"]), work())
+        self.assertTrue(low)
+
+    async def test_a_hold_for_the_review_and_something_else_stays_jays(self):
+        pl = self.daemon.pipeline
+        self.daemon.authority.set("gyst", "merge")
+        self.gh.pr = view([f("src/app/page.tsx"), f(".github/workflows/ci.yml")])
+        k = self.ready(project="gyst", labels=["security"])
+        await self.daemon._auto_merge()
+        self.assertIn(la.SECURITY_WAIT, pl.work(k)["gateReason"])
+        pl.security_review(k, self.NOTE, "agent:security-reviewer", session="sec-1")
+        w = pl.work(k)
+        self.assertEqual(w["gate"], "merge")
+        self.assertNotIn(la.SECURITY_WAIT, w["gateReason"])
+        self.assertIn("protected path", w["gateReason"])
+        self.assertNotIn("pipeline.auto_merge_reopened", self.kinds(k))
+
+    async def test_when_the_lead_can_no_longer_take_it_jay_is_asked(self):
+        pl = self.daemon.pipeline
+        self.daemon.authority.set("gyst", "all")
+        k = self.plan_security()
+        self.daemon.authority_set("gyst", {"level": "merge"}, "jay", developer=True)     # level lowered meanwhile
+        w = pl.work(k)
+        self.assertTrue(w["gateReason"].startswith("Jay decides"), w["gateReason"])
+        self.assertIn("pipeline.gate_opened", self.kinds(k))
+        self.assertIn(k, [n["ref"] for n in pl.needs()])
+        k2 = self.plan_security()           # below All: Jay's from the start; raising the level hands it over
+        self.assertIn(k2, [n["ref"] for n in pl.needs()])
+        self.daemon.authority_set("gyst", {"level": "all"}, "jay", developer=True)
+        self.assertTrue(pl.work(k2)["gateReason"].startswith(la.SECURITY_GATE))
+        self.assertNotIn(k2, [n["ref"] for n in pl.needs()])
+        self.daemon.authority.set("gyst", "merge")          # the review lands after a quiet change: Jay is asked then
+        pl.security_review(k2, self.NOTE, "agent:security-reviewer", session="sec-1")
+        self.assertEqual(pl.work(k2)["gate"], "plan")
+        self.assertIn(k2, [n["ref"] for n in pl.needs()])

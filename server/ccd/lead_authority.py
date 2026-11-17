@@ -57,6 +57,9 @@ ALWAYS_JAY_LABELS = frozenset({"product-decision", "ambiguous", "gate:plan", "fe
 SECURITY_LABELS = frozenset({"security", "auth", "privacy"})
 SECURITY_REVIEWED = "security:reviewed"     # in ticket_work.confirmed once the security specialist has recorded one
 SECURITY_WAIT = "it waits for the security specialist's review"     # the one reason that is not Jay's
+# How an open gate that waits only for that review starts its reason: it is not Jay's to answer, so the Needs Jay
+# queue, the launcher's count and jay_first leave it out (Pipeline.needs, gate_counts).
+SECURITY_GATE = "waits for the security specialist's review"
 KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 
