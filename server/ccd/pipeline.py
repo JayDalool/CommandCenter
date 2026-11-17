@@ -313,6 +313,9 @@ class Pipeline:
         self.releases = None
         # Team lead permissions (ccd/lead_authority.py, set by the daemon). None: the registry alone, Jay approves.
         self.authority = None
+        # The auto-merge stop file (set by the daemon): while it exists a ready PR opens a merge gate for Jay instead
+        # of sitting unmerged with nothing in his queue.
+        self.merge_stopped = lambda: False
 
     def _policy(self, t):
         return policy(t, authority=self.authority)
@@ -748,7 +751,7 @@ class Pipeline:
                 step = self._lead_takes(tid, self.ts.get(key), self._row(tid), at, opened)
                 if step is None:
                     break
-                events = [e for e in events if not (e[0] == "pipeline.gate_opened" and (e[2] or {}).get("gate") == opened)]
+                events = self._retell(events, opened, self.authority.level(t["project"]))
                 fields, work, more = step
                 changes = changes + self._write(tid, fields, work, more, actor, at)
                 events += more
@@ -779,10 +782,34 @@ class Pipeline:
         opens one (_gate_due), and one the auto-merge classifier opened is a "no" the lead cannot overrule."""
         if self.authority is None or gate not in self.LEAD_GATES or w["gate"] != gate:
             return None
-        if not self.authority.may(t["project"], self.LEAD_GATES[gate], t, w["confirmed"]):
+        if not self.authority.may(t["project"], self._lead_need(t, w, gate), t, w["confirmed"]):
             return None
         return self._close_gate(tid, t, w, at, gate, by="lead:" + self.authority.level(t["project"]),
                                 lead=self.authority.level(t["project"]))
+
+    def _lead_need(self, t, w, gate):
+        """The permission an open gate needs. A deploy gate with no request (and no needs:deploy flag) is a risky
+        ticket's release approval: that is "all", not "merge and deploy"."""
+        if gate == "deploy" and not (w.get("deploy") or {}).get("requestedAt") and not self._policy(t)["deploy"]:
+            return "release"
+        return self.LEAD_GATES[gate]
+
+    @staticmethod
+    def _retell(events, gate, level):
+        """The step's own events, told as the lead's approval: nothing says it waits for Jay, and every one carries
+        data.authority (the daemon then announces them as info, not as something for Jay)."""
+        out = []
+        for kind, text, data in events:
+            if kind == "pipeline.gate_opened" and (data or {}).get("gate") == gate:
+                continue
+            if kind == "pipeline.deploy_requested" and gate == "deploy":
+                text = "live deployment requested; the lead approves it" + (
+                    " (it waits for the release window)" if (data or {}).get("heldUntil") else "")
+                data = dict(data or {}, authority=level)
+            elif kind == "pipeline.plan_reviewed" and gate == "plan" and (data or {}).get("gate"):
+                text, data = "plan approved; the lead approves this risky plan", dict(data, authority=level)
+            out.append((kind, text, data))
+        return out
 
     def hand_over(self, project, actor="system:lead-authority"):
         """Jay raised the project's level: gates already waiting for him that the new level hands to the lead are
@@ -807,7 +834,7 @@ class Pipeline:
             t = self.ts.get(key)
             w = self.work(key)
             if w["gate"] == "merge" or (self.authority is not None and w["gate"] in self.LEAD_GATES
-                                        and self.authority.may(project, self.LEAD_GATES[w["gate"]], t, w["confirmed"])):
+                                        and self.authority.may(project, self._lead_need(t, w, w["gate"]), t, w["confirmed"])):
                 res = self._tx(key, actor, fn)
                 if res[2]:
                     out.append(res)
@@ -961,7 +988,7 @@ class Pipeline:
         """Jay must accept this merge and has not: the project is `owner`, or the ticket needs acceptance, or the
         project is `low-risk` while ccd's auto-merge is switched off; and no `merge:<head>` approval is recorded."""
         pol = self._policy(t)
-        merge_off = pol["merge"] in ("low-risk", LEAD_MERGE) and not self.auto_merge
+        merge_off = pol["merge"] in ("low-risk", LEAD_MERGE) and (not self.auto_merge or self.merge_stopped())
         return (needs_acceptance(t, w, pol, self.authority) or merge_off) and not _merge_ok(w["confirmed"], head)
 
     def _ready(self, t, w, pr):

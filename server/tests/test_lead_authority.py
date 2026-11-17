@@ -36,7 +36,7 @@ class Levels(unittest.TestCase):
     def test_each_level_includes_the_ones_before_it(self):
         want = {"none": set(), "low_risk": {"merge_low_risk"}, "merge": {"merge_low_risk", "merge"},
                 "merge_deploy": {"merge_low_risk", "merge", "deploy"},
-                "all": {"merge_low_risk", "merge", "deploy", "plan", "ui"}}
+                "all": {"merge_low_risk", "merge", "deploy", "plan", "ui", "release"}}
         for level, grants in want.items():
             self.assertEqual({k for k in la.NEEDS if la.grants(level, k)}, grants, level)
         self.assertFalse(la.grants(None, "merge_low_risk"))
@@ -131,14 +131,22 @@ class LeadClassifier(unittest.TestCase):
         self.assertEqual(sorted(mp.PROJECT_RAILS["commandcenter"]), sorted(non_rail))
 
 
-class LeadPipeline(Base):
-    """A project's level in the pipeline and ccd's merge: no Jay gate where the lead may take it."""
-
+class LeadBase(Base):
     def make(self, **over):
         d = super().make(**over)
         d.authority = store()
         d.pipeline.authority = d.authority
         return d
+
+    def deploy_ready(self, project="gyst", **fields):
+        t, _ = self.tickets.create(project, "Ship it", **fields)
+        k = t["key"]
+        self.tickets.update(k, {"status": "VERIFYING"}, "system:automation", trigger="merged")
+        return k
+
+
+class LeadPipeline(LeadBase):
+    """A project's level in the pipeline and ccd's merge: no Jay gate where the lead may take it."""
 
     async def test_none_keeps_every_merge_with_jay(self):
         k = self.ready(project="gyst")
@@ -172,12 +180,6 @@ class LeadPipeline(Base):
         self.assertEqual(self.daemon.pipeline.work(k)["gate"], "merge")
         await self.daemon._auto_merge()
         self.assertEqual(self.gh.calls, [])
-
-    def deploy_ready(self, project="gyst", **fields):
-        t, _ = self.tickets.create(project, "Ship it", **fields)
-        k = t["key"]
-        self.tickets.update(k, {"status": "VERIFYING"}, "system:automation", trigger="merged")
-        return k
 
     async def test_merge_and_deploy_approves_a_live_deploy_on_the_spot(self):
         pl = self.daemon.pipeline
@@ -304,3 +306,47 @@ class LeadAuthorityApi(ApiBase):
         self.assertEqual(r.json()["projects"]["gyst"]["level"], "all")
         self.assertTrue(r.json()["projects"]["gyst"]["permissions"]["deploy"])
         self.assertEqual(self.put("gauzemate", {"level": "merge"}, dev).status_code, 409)
+
+
+class ReviewFixes(LeadBase):
+    """The independent review of PR #132: renames, Slack wording, release approvals, the stop file, client repos."""
+
+    def test_a_rename_never_merges_on_a_lead_permission(self):
+        for change in ("RENAMED", "COPIED", None):
+            d = mp.classify("gyst", ticket(project="gyst"), work(review={"verdict": "APPROVE", "head": HEAD,
+                                                                          "pr": "JayDalool/gyst-lifeops#7", "cycles": 0}),
+                            view([f("old/ci.yml", change)]), "JayDalool/gyst-lifeops#7", ["JayDalool/gyst-lifeops#7"],
+                            "lead", {"level": "all", "keepSensitive": False})
+            self.assertFalse(d.ok, change)
+        self.assertEqual(mp.lead_file_reasons("gyst", [f("src/gone.ts", "DELETED")]), [])
+        self.assertTrue(mp.lead_file_reasons("gyst", [f(".github/workflows/ci.yml", "DELETED")]))
+
+    async def test_a_lead_approved_deploy_never_says_it_waits_for_jay(self):
+        self.daemon.authority.set("gyst", "merge_deploy")
+        k = self.deploy_ready()
+        _t, _c, events = self.daemon.pipeline.deploy_request(k, "live", "page", "smoke", "agent:verifier")
+        req = [e for e in events if e[0] == "pipeline.deploy_requested"][0]
+        self.assertNotIn("Jay", req[1])
+        self.assertEqual(req[2]["authority"], "merge_deploy")
+
+    async def test_a_risky_release_approval_needs_all(self):
+        pl = self.daemon.pipeline
+        k = self.deploy_ready()
+        t = self.tickets.get(k)
+        w = pl.work(k)
+        self.assertEqual(pl._lead_need(t, dict(w, deploy=None), "deploy"), "release")
+        self.assertEqual(pl._lead_need(t, dict(w, deploy={"requestedAt": 1}), "deploy"), "deploy")
+        self.assertFalse(la.grants("merge_deploy", "release"))
+        self.assertTrue(la.grants("all", "release"))
+
+    async def test_the_stop_file_sends_ready_prs_to_jay(self):
+        self.daemon.authority.set("gyst", "merge")
+        open(self.daemon.auto_merge_stop, "w").close()
+        k = self.ready(project="gyst")
+        self.assertEqual(self.daemon.pipeline.work(k)["gate"], "merge")
+
+    async def test_a_client_repository_is_none_whatever_is_stored(self):
+        a = self.daemon.authority
+        a.levels["gauzemate"] = {"level": "all", "keepSensitive": False, "at": 0, "by": "jay"}
+        self.assertEqual(a.level("gauzemate"), "none")
+        self.assertNotIn("gauzemate", self.daemon._auto_merge_projects())

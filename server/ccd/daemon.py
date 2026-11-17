@@ -345,6 +345,8 @@ class Daemon(LeadChat, HqDaemon):
             self.pipeline.auto_merge = self.auto_merge_on
         self.gh_cli = gh_cli or sources._run
         self.auto_merge_stop = AUTO_MERGE_STOP
+        if self.pipeline is not None:
+            self.pipeline.merge_stopped = self._auto_merge_stopped
         self._am_busy = False
         self._am_next = {}    # ticket key → time.monotonic() before which it is not looked at again
         # ticket key → (review stamp, time.monotonic() when it first had to wait): the 30-minute pending clock.
@@ -2280,7 +2282,7 @@ class Daemon(LeadChat, HqDaemon):
         for kind, text, _data in events:
             self._event("tasks", "task.pipeline", f"{ticket['key']} {text}"[:300], project=ticket["project"],
                         ref=ticket["key"], data={"kind": kind, **({"actor": actor} if actor else {})},
-                        severity="action" if kind in ("pipeline.gate_opened", "pipeline.blocked",
+                        severity="action" if not (_data or {}).get("authority") and kind in ("pipeline.gate_opened", "pipeline.blocked",
                                                       "pipeline.unreviewed_merge", "pipeline.questions",
                                                       "pipeline.deploy_requested", "pipeline.replan",
                                                       "pipeline.auto_merge_held", "pipeline.auto_merged",

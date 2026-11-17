@@ -8,7 +8,7 @@ Developer Unlock). Each level includes the ones before it:
                  has low-risk paths can take it.
   merge          ccd merges every reviewed PR whose approval covers its head, with CI not failing.
   merge_deploy   and a live deploy the agent asks for is approved on the spot (the release window still applies).
-  all            and the plan and UI approvals the flow would send to Jay. He only hears about feature and product
+  all            and the plan, UI and risky-release approvals the flow would send to Jay. He only hears about feature and product
                  questions (the lead asks him with `pipeline_cli ask`) and anything below.
 
 Whatever the level, these still reach Jay: a ticket flagged needs-Jay or needs-legal, a LEGAL ticket, the labels
@@ -32,7 +32,8 @@ LEVELS = ("none", "low_risk", "merge", "merge_deploy", "all")
 LABELS = {"none": "None", "low_risk": "Merge low-risk", "merge": "Merge all", "merge_deploy": "Merge and deploy",
           "all": "All"}
 # What each permission needs, as the lowest level that grants it.
-NEEDS = {"merge_low_risk": "low_risk", "merge": "merge", "deploy": "merge_deploy", "plan": "all", "ui": "all"}
+NEEDS = {"merge_low_risk": "low_risk", "merge": "merge", "deploy": "merge_deploy", "plan": "all", "ui": "all",
+         "release": "all"}    # release: a risky ticket's release approval, asked before any deploy request
 # Jay's, whatever the level: the questions only he can answer.
 ALWAYS_JAY_LABELS = frozenset({"product-decision", "ambiguous", "legal", "gate:plan"})
 # Jay's while "keep sensitive work" is on: hard to undo when wrong (a leak, lost data, money).
@@ -105,6 +106,9 @@ class LeadAuthority:
             pass    # unreadable: every project falls back to the registry's level, the stricter reading
 
     def level(self, project):
+        from . import registry
+        if registry.class_of(project) != "own":
+            return "none"   # D-024 clause 16: no merge or deploy in a client's or employer's repository, whatever is stored
         row = self.levels.get(project)
         return row["level"] if row else default_level(project)
 

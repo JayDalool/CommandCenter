@@ -17,7 +17,7 @@ const ORDER: LeadLevel[] = ["none", "low_risk", "merge", "merge_deploy", "all"];
 function proj(level: LeadLevel, over: Partial<LeadAuthorityProject> = {}): LeadAuthorityProject {
   const n = ORDER.indexOf(level);
   return { level, keepSensitive: true, default: true, since: null, lowRiskPaths: false, paused: false, client: false,
-    permissions: { merge_low_risk: n >= 1, merge: n >= 2, deploy: n >= 3, plan: n >= 4, ui: n >= 4 }, ...over };
+    permissions: { merge_low_risk: n >= 1, merge: n >= 2, deploy: n >= 3, plan: n >= 4, ui: n >= 4, release: n >= 4 }, ...over };
 }
 function la(projects: Partial<Record<string, LeadAuthorityProject>> = {}, over: Partial<LeadAuthorityState> = {}): LeadAuthorityState {
   const base: Record<string, LeadAuthorityProject> = {

@@ -760,7 +760,7 @@ export interface WorkModeState {
 export type LeadLevel = "none" | "low_risk" | "merge" | "merge_deploy" | "all";
 export interface LeadAuthorityProject {
   level: LeadLevel; keepSensitive: boolean; default: boolean; since: number | null;
-  permissions: Record<"merge_low_risk" | "merge" | "deploy" | "plan" | "ui", boolean>;
+  permissions: Record<"merge_low_risk" | "merge" | "deploy" | "plan" | "ui" | "release", boolean>;
   lowRiskPaths: boolean; paused: boolean; client: boolean;
 }
 export interface LeadAuthorityState {

@@ -58,6 +58,7 @@ RAILS = (".github/**", "**/.claude/**", "**/.codex/**", "**/.mcp.json", "AGENTS.
 PROJECT_RAILS = {
     "commandcenter": ("server/ccd/**", "scripts/**", "launcher/**", "policy/**", "web/app/src/**"),
 }
+LEAD_CHANGES = ("ADDED", "MODIFIED", "DELETED")
 LEAD_MAX_FILES = 99     # `gh pr view --json files` lists at most 100: a PR at the limit may have more Jay never saw
 MAX_FILES = 10
 MAX_LINES = 300
@@ -148,6 +149,11 @@ def lead_file_reasons(project, files):
         path = f.get("path") if isinstance(f, dict) else None
         if not safe_path(path):
             reasons.append("a changed file has an unusable path")
+        elif f.get("changeType") not in LEAD_CHANGES:
+            # gh lists a rename by its new name only: renaming .github/workflows/ci.yml away would pass the rail
+            # check and remove CI. Only added, modified and deleted files, whose one path is the whole change.
+            reasons.append(f"{path} is {str(f.get('changeType') or 'of unknown change type').lower()} "
+                           "(only added, modified or deleted files)")
         elif rail(project, path):
             reasons.append(f"{path} is a protected path only Jay merges")
     seen = set()

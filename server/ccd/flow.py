@@ -167,7 +167,9 @@ def handoffs(events, rt, created_at=None):
             add(at, "advanced", "build", actor, "plan_accepted")
         elif kind == "pipeline.plan_reviewed":
             if d.get("verdict") == "APPROVE":
-                if d.get("gate"):
+                if d.get("gate") and d.get("authority"):
+                    pass        # the lead approved it at once: pipeline.gate_lead_approved moves it to build
+                elif d.get("gate"):
                     out.append({"at": at, "stage": "techReview", "kind": "advanced", "from": "techReviewer",
                                 "to": "jay", "by": actor, "note": NOTES["plan_gate"]})
                     left["techReview"] = (actor, at)
