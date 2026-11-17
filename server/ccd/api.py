@@ -41,7 +41,7 @@
                                      model, day and ticket, plus month-to-date against profile budgets. ?days=
     GET   /api/notify                Slack and ntfy: settings, status, what is configured (never a token or the ntfy URL)
     PUT   /api/notify                JAY + DEVELOPER UNLOCK. change those settings: slack, ntfy (on/off), quiet hours,
-                                     summary time, time zone, replyScope ("answers" | "answers_low_risk")
+                                     summary time, time zone, replyScope ("answers" | "answers_low_risk" | "all")
     POST  /api/notify/test           JAY + DEVELOPER UNLOCK. one test DM and one test push, now
     POST  /api/notify/summary        JAY + DEVELOPER UNLOCK. post the owner's and technical summaries now
     GET   /api/actors                per-agent actor tokens (fingerprints only; a token is shown once, on issue)
@@ -71,8 +71,8 @@
     GET   /api/pty                   live terminal sessions (names, cwd, clients)
     GET   /api/tasks/{key}/work      the ticket's durable pipeline state (plan, stage, gate, roles, review head, …)
     POST  /api/tasks/{key}/work/{op} one pipeline step: plan start review verify handoff block role finding
-                                     ask replan rework evidence writer deploy-request deployed stale, and the
-                                     flow's intake criteria plan-review user-check close;
+                                     ask replan rework evidence writer deploy-request deploy-plan deployed stale,
+                                     and the flow's intake criteria plan-review user-check close;
                                      `confirm` (close an owner gate) needs Jay AND Developer Unlock
     GET   /api/flow                  the delivery flow per project: seats, tickets in flight, WIP limits
     GET   /api/release               live per project, the weekly release window (next start) and the merge cutoff

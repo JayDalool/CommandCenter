@@ -34,7 +34,7 @@ cd /srv/server/repos/CommandCenter/server
 .venv/bin/python -m ccd.notify_cli status
 ```
 
-Other settings: `quiet 22:00 07:00`, `scope answers|answers_low_risk`, `summary` (post the summaries now), `off …`.
+Other settings: `quiet 22:00 07:00`, `scope answers|answers_low_risk|all`, `summary` (post the summaries now), `off …`.
 The same settings are `GET/PUT /api/notify` for the Settings screen.
 
 ## What goes where
@@ -59,19 +59,39 @@ ccd reads only messages whose author is `jay_member_id`, never edits or bot mess
 - **Plans:** a plan waiting for Jay (a risky ticket's, after the technical review) comes as a DM with its summary,
   approach, what it touches, its risk and the technical review. `approve` (or yes, ok, go, lgtm) in that DM's thread
   approves that plan and implementation starts, whatever the scope is (Jay, 2026-11-16). It approves only the plan the
-  DM showed: if the plan or the gate changed since, nothing is approved. The PR still needs its review, Jay's merge
-  and his deploy approval in CommandCenter.
-- **Other gates:** `approve` closes a gate only if it is a blocker (`failure`) or a UI review (`ui`), and only while the
-  scope is `answers_low_risk`. The default is `answers`, so neither is approvable from Slack until Jay runs
-  `notify_cli scope answers_low_risk`. Both lists are fixed in code (`notify.PLAN_GATES`, `notify.LOW_RISK_GATES`) and
-  checked again in `Daemon.slack_confirm`. Merges and deploys are approved in CommandCenter, never from Slack.
+  DM showed: if the plan or the gate changed since, nothing is approved. A plan that would show as [redacted]
+  anywhere, or has characters Slack would not show in any of its fields (shown in the DM or not), is approved in
+  CommandCenter only. The DM counts the plan's questions and findings, which it does not show. The PR still needs its
+  review and Jay's merge.
+- **Blockers and UI reviews:** `approve` clears a blocker (`failure`) or accepts a UI review (`ui`) with the scope
+  `answers_low_risk` or `all`.
+- **Merges** (scope `all`): the "Ready to merge" DM shows the PR, its head and the review. Only `merge` (or "merge
+  it", "merge now") merges that one PR at that head, exactly as the Merge button does (`Daemon.slack_merge` →
+  `act_merge`): the lead merges it, and nothing is merged if the head, the review, CI or another gate moved. `ok`,
+  `yes` or 👍 merges nothing (ccd says so); other text goes to the lead.
+- **Deploys** (scope `all`), two replies (Jay, 2026-11-16: "only deploy if asked to"): `approve` (or `deploy`) on the
+  "Deploy approval" DM asks the agent to PREPARE (`daemon.SLACK_DEPLOY_TEMPLATE`). It records its plan with
+  `pipeline_cli deploy-plan` (at most 40 lines, nothing the secret filter would show as [redacted], no invisible
+  characters, no triple backticks), which comes to the DM as a new message with the whole plan in a code block (no Slack
+  formatting applies there) and its line count. Only `deploy` (or "deploy it", "go live", "ship it") there tells it to
+  deploy by that plan (`Daemon.slack_deploy`, bound to the plan's digest); `ok`, `yes` or 👍 deploys nothing, and other
+  text goes to the lead. A plan that cannot be shown whole in one Slack post gets no go from Slack: reply in its
+  thread to ask the agent for a shorter one. A deploy approved from Slack is confirmed only from Slack; if the scope
+  was lowered since, set it back to `all` and reply `deploy` again. On a live project the go waits for the release
+  window like any live deploy: the plan DM says until when, and a `deploy` reply before then is refused (reply again
+  once it opens). Until the go `deployed --result pass` is refused for that ticket. A deploy approved in CommandCenter
+  is unchanged: Jay confirms it in the agent's pane.
+- The scope is `answers` by default; Jay changes it in Settings → Slack and phone, or `notify_cli scope …`, both
+  with Developer Unlock. The gate lists are fixed in code (`notify.PLAN_GATES`, `LOW_RISK_GATES`, `SHIP_GATES`) and
+  checked again in the daemon, which also checks the scope for merges and deploys. Client projects never approve.
 - **A ticket's thread:** the reply goes to the project's lead, tagged with the ticket. It never answers a
   question or approves a gate: answer a question in the DM it came in (its own thread there).
 - **Anything else** goes to the project's lead through Messages (`Daemon.deliver_to_lead`), and the lead's reply comes
   back in the same thread. Outside a thread, a project channel goes to its lead; `#cto` and the DM go to the CTO.
 
 Set `team_id` (Slack: workspace settings, or the `T…` id in any Slack URL) and turn on two-factor sign-in for
-Jay's Slack account: that account can answer agents' questions, approve plans and instruct leads. A reply answers only the questions
+Jay's Slack account: that account can answer agents' questions, approve plans and instruct leads, and with the
+scope `all` merge reviewed PRs and deploy. A reply answers only the questions
 its message showed, and approves only the gate it showed; if either changed since, nothing is recorded. Leads treat a
 `via: "slack"` message as unable to approve gated actions.
 
