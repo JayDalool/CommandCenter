@@ -11,6 +11,9 @@ Jay switches them on.
    add the bot scope `chat:write.customize` (OAuth & Permissions) and reinstall the app. Without it, the app posts
    them under its own name with the seat in bold at the start. ccd reads the scopes from Slack's answers, so no
    restart is needed.
+   For leads' files to upload (Settings → Slack and phone → Files in Slack, below), add the bot scope
+   `files:write` the same way and reinstall the app. Without it, a switched-on project's files are listed by name and
+   size with a note that Slack has not granted `files:write`.
 2. On jay-server, write the two tokens to `~/.config/command-center/slack.env` (mode 0600, the plan has the command).
    ccd refuses the file if anyone but its owner can read it.
 3. Add Jay's Slack member ID to `~/command-center/board/config.json`:
@@ -98,6 +101,26 @@ ccd reads only messages whose author is `jay_member_id`, never edits or bot mess
   question or approves a gate: answer a question in the DM it came in (its own thread there).
 - **Anything else** goes to the project's lead through Messages (`Daemon.deliver_to_lead`), and the lead's reply comes
   back in the same thread. Outside a thread, a project channel goes to its lead; `#cto` and the DM go to the CTO.
+
+## Files
+
+A lead's message in Messages can carry files (`cc-reply --file`: images, PDF, Markdown or text). Its words reach
+Slack as above; its files (Jay, 2026-11-17, "Upload, chosen projects only"):
+
+- **Projects switched on** in Settings → Slack and phone → Files in Slack (off for every project by default; Developer
+  Unlock, like the other settings): each file is uploaded into the same thread as the lead's words, as the app.
+  A file that fails to upload (no `files:write`, Slack down) is listed by name and size instead, with the reason. So
+  is a text or Markdown file that the secret filter (`security.redact`, the one every Slack post goes through) would
+  change.
+- **Every other project:** each file's name and size, and that it is in CommandCenter → Messages.
+- **Never uploaded, whatever the setting says:** SamVision (its licensed WRREB data never leaves the server) and the CTO
+  (it works across projects, SamVision's among them) get a count of files only, since a file name can carry an
+  address or an MLS number. Client projects (GauzeMate) get "replied" only.
+  This is fixed in code (`notify.NO_SLACK_FILES`, `client_projects`); the Settings screen does not offer them and
+  ccd refuses them, and checks again on every send.
+
+Slack keeps uploaded files under its own plan's rules (on the free plan, messages and files older than 90 days are
+hidden). A file is at most 20 MB in Messages; ccd uploads at most 50 MB.
 
 Set `team_id` (Slack: workspace settings, or the `T…` id in any Slack URL) and turn on two-factor sign-in for
 Jay's Slack account: that account can answer agents' questions, approve plans and instruct leads, and with the

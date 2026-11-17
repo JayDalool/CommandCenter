@@ -182,6 +182,35 @@ describe("HQ Settings", () => {
     } finally { act(() => setDevSession(null)); }
   });
 
+  it("Files in Slack: one switch per project ccd offers, never SamVision, and a missing Slack permission is said", async () => {
+    load();
+    developer.set({ active: true, expiresAt: null, error: null });
+    const withFiles: NotifyState = { ...NOTIFY, settings: { ...NOTIFY.settings, slackFiles: ["gyst"] },
+      slackFiles: { choices: ["commandcenter", "gyst"], never: ["cto", "samvision"], scope: false } };
+    vi.spyOn(app.api, "notify").mockResolvedValue(withFiles);
+    const put = vi.spyOn(app.api, "setNotify").mockResolvedValue(withFiles);
+    try {
+      const page = await show("#/settings?tab=notifications");
+      const group = within(within(page).getByRole("group", { name: "Files in Slack" }));
+      expect(group.getAllByRole("button").map((b) => [b.textContent, b.getAttribute("aria-pressed")]))
+        .toEqual([[expect.stringMatching(/command ?center/i), "false"], [expect.stringMatching(/gyst/i), "true"]]);
+      expect(within(page).getByText(/Slack has not granted the app files:write yet/)).toBeInTheDocument();
+      expect(within(page).getByText(/SamVision, the CTO and client projects are never uploaded/)).toBeInTheDocument();
+      await act(async () => { fireEvent.click(group.getAllByRole("button")[0]); });
+      expect(put).toHaveBeenLastCalledWith({ slackFiles: ["gyst", "commandcenter"] });
+      await act(async () => { fireEvent.click(group.getAllByRole("button")[1]); });
+      expect(put).toHaveBeenLastCalledWith({ slackFiles: [] });
+    } finally { developer.set({ active: false, expiresAt: null, error: null }); }
+  });
+
+  it("Files in Slack is not shown by a ccd that does not offer it", async () => {
+    load();
+    vi.spyOn(app.api, "notify").mockResolvedValue(NOTIFY);
+    const page = await show("#/settings?tab=notifications");
+    expect(within(page).getByRole("group", { name: "Your Slack replies" })).toBeInTheDocument();
+    expect(within(page).queryByRole("group", { name: "Files in Slack" })).toBeNull();
+  });
+
   it("Slack and phone save one change at a time once unlocked", async () => {
     load();
     developer.set({ active: true, expiresAt: null, error: null });

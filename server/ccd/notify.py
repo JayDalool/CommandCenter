@@ -21,6 +21,13 @@ What is sent where:
 Client projects (`client_projects`, GauzeMate today) carry only IDs and a risk summary: no titles, no reasons, no
 question text, no technical summary. Their replies go to the lead as text and never answer or approve anything.
 
+Files a lead sends with a message in Messages (cc-reply --file) go with its words (Jay, 2026-11-17, "Upload, chosen
+projects only"): uploaded into the same Slack thread for the projects Jay switches on (`slackFiles`, Settings, off
+for all by default), as each file's name and size everywhere else. Never uploaded: SamVision (its licensed WRREB
+data never leaves the server), the CTO (it works across projects, SamVision's among them) and client projects
+(NO_SLACK_FILES, fixed in code); those get a count of files only, not their names. A text file that redact() would
+change stays here too. An upload needs the bot scope files:write; without it the file is listed instead.
+
 Quiet hours (22:00 to 07:00 America/Winnipeg by default, changeable in Settings) hold the DM and ntfy; held items
 are sent when quiet hours end. Channel posts still go out: Slack's own default only notifies a phone for direct
 messages and mentions.
@@ -90,6 +97,11 @@ APPROVE_RE = re.compile(r"^\s*(approve|approved|yes|y|ok|okay|go|go ahead|lgtm|:
 MERGE_RE = re.compile(r"^\s*(merge|merge it|merge now)\s*[.!]*\s*$", re.I)
 DEPLOY_RE = re.compile(r"^\s*(deploy|deploy it|deploy now|go live|ship it)\s*[.!]*\s*$", re.I)
 POST_LIMIT = 3900   # characters of one Slack post ccd sends; longer text is cut
+# Projects whose Messages files are never uploaded to Slack, whatever slackFiles says (client projects too).
+NO_SLACK_FILES = frozenset({"samvision", "cto"})
+FILES_SCOPE = "files:write"     # the scope Slack needs before the bot may upload a file
+SECRET_FILE = "this file looks like it holds a password, token or key"
+UPLOAD_MAX = 50 * 1024 * 1024   # bytes of one uploaded file; Messages takes 20 MB by default (chat_file_max_mb)
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 SETTINGS_DEFAULTS = {
@@ -103,6 +115,8 @@ SETTINGS_DEFAULTS = {
     # "answers_low_risk" also clears a blocker or accepts a UI review. "all" also merges and deploys (SHIP_GATES).
     # Changed only in CommandCenter with Developer Unlock; never the default beyond "answers".
     "replyScope": "answers",
+    # Projects whose leads' Messages files are uploaded to Slack (Jay, 2026-11-17). Never NO_SLACK_FILES or a client.
+    "slackFiles": [],
 }
 CONFIG_DEFAULTS = {
     "jay_member_id": "",            # Jay's Slack member ID: the only author whose messages are read
@@ -171,6 +185,14 @@ def clean_settings(raw, base=None):
                 raise ValueError("unknown time zone") from None
         elif k == "replyScope" and v not in REPLY_SCOPES:
             raise ValueError(f"replyScope must be one of {', '.join(REPLY_SCOPES)}")
+        elif k == "slackFiles":
+            if not isinstance(v, list) or len(v) > 20 or not all(isinstance(x, str) and x for x in v):
+                raise ValueError("slackFiles must be a list of project keys")
+            never = sorted(set(v) & NO_SLACK_FILES)
+            if never:
+                raise ValueError(f"files from {', '.join(registry.name_of(x) if x != 'cto' else 'the CTO' for x in never)}"
+                                 " are never uploaded to Slack")
+            v = sorted(set(v))
         out[k] = v
     return out
 
@@ -282,6 +304,27 @@ class SlackWeb:
             body["username"], body["icon_emoji"] = as_
         return self.call("chat.postMessage", body)
 
+    def upload(self, channel, thread_ts, name, data):
+        """Upload one file into a thread (needs files:write): Slack's external upload, the only one it still
+        offers. Ask for an upload URL, send the bytes there (no token: the URL is signed), then share the file."""
+        r = self.call("files.getUploadURLExternal", {"filename": name, "length": len(data)}, form=True)
+        url, fid = r.get("upload_url") or "", r.get("file_id")
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme != "https" or not (parts.hostname or "").endswith(".slack.com") or not fid:
+            raise SlackError("files.getUploadURLExternal: no Slack upload URL")
+        req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/octet-stream"})
+        try:
+            with self.open(req, timeout=120) as resp:
+                resp.read()
+        except urllib.error.HTTPError as e:
+            raise SlackError(f"file upload: HTTP {e.code}") from None
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise SlackError(f"file upload: {type(e).__name__}") from None
+        body = {"files": json.dumps([{"id": fid, "title": name}]), "channel_id": channel}
+        if thread_ts:
+            body["thread_ts"] = thread_ts
+        return self.call("files.completeUploadExternal", body, form=True)
+
     def channels(self):
         out, cursor = {}, None
         while True:
@@ -313,6 +356,24 @@ def ntfy_send(url, title, link=None, priority="default", opener=None):
 
 
 # ---------- formatting ----------
+
+def plural(n, word):
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def cut(text, n):
+    return text if len(text) <= n else text[:n - 1] + "…"
+
+
+def size_text(n):
+    """A file size as people read it: 820 bytes, 14 KB, 3.2 MB."""
+    n = n if isinstance(n, int) and n >= 0 else 0
+    if n < 1024:
+        return f"{n} bytes"
+    if n < 1024 * 1024:
+        return f"{round(n / 1024)} KB"
+    return f"{n / (1024 * 1024):.1f} MB"
+
 
 def esc(text):
     """Untrusted text (agent-set reasons, question text, lead replies, PR titles) as plain Slack text: no
@@ -507,11 +568,19 @@ class Notifier:
                                "ntfy": bool(self.ntfy_url)},
                 "channels": {"cto": self.conf["cto_channel"], **self.conf["channels"]},
                 "clientProjects": list(self.conf["client_projects"]), "slackGates": sorted(LOW_RISK_GATES),
+                "slackFiles": {"choices": self.file_choices(), "never": sorted(NO_SLACK_FILES),
+                               "scope": self.files_scope()},
                 "slackPlans": bool(PLAN_GATES),
                 "quietNow": in_quiet(self.settings, self.clock()), "held": len(self.held)}
 
     def update_settings(self, body):
-        self.settings = clean_settings(body, self.settings)
+        settings = clean_settings(body, self.settings)
+        if isinstance(body, dict) and "slackFiles" in body:
+            other = [k for k in settings["slackFiles"] if k not in self.file_choices()]
+            if other:
+                raise ValueError(f"files from {', '.join(other)} cannot be uploaded to Slack: only "
+                                 f"{', '.join(self.file_choices()) or 'no project'}")
+        self.settings = settings
         self.store.put("notify:settings", self.settings)
         self.d._event("notify", "notify.settings", "notification settings changed",
                       data={"kind": "notify.settings"})
@@ -521,6 +590,20 @@ class Notifier:
 
     def client(self, project):
         return project in self.conf["client_projects"]
+
+    def file_choices(self):
+        """The projects whose Messages files Jay may have uploaded to Slack: those with a channel, never
+        NO_SLACK_FILES or a client project."""
+        return [k for k in self.conf["channels"] if k not in NO_SLACK_FILES and not self.client(k)]
+
+    def files_upload(self, conv):
+        """Whether a lead's files in this conversation are uploaded to Slack now. Checked again on every send."""
+        return conv in self.settings["slackFiles"] and conv in self.file_choices()
+
+    def files_scope(self):
+        """Whether the bot token has files:write: True or False from Slack's last answer, None before one."""
+        scopes = getattr(self._slack, "scopes", None)
+        return None if scopes is None else FILES_SCOPE in scopes
 
     def name(self, project):
         return registry.name_of(project) if registry.project(project) else (project or "CommandCenter")
@@ -1020,13 +1103,16 @@ class Notifier:
         return result
 
     async def _reply(self, cid, ts, text, who=None):
+        """Post in a thread. True when Slack took it."""
         if not self.settings["slack"]:
-            return
+            return False
         try:
             as_, prefix = self._as(who)
             await self._call(self.slack().post, cid, redact(prefix + text)[0][:POST_LIMIT], ts, as_)
         except SlackError as e:
             self._fail("slack reply", e)
+            return False
+        return True
 
     async def handle_reply(self, cid, item, text):
         if not text:
@@ -1301,19 +1387,79 @@ class Notifier:
                       and (v.get("at") or 0) > self.clock() - 86400]
             origin = max(recent, key=lambda v: v.get("at") or 0) if recent else None
         who = "CTO" if conv == "cto" else f"{self.name(conv)} lead"
+        files = [f for f in msg.get("files") or [] if isinstance(f, dict) and f.get("id")]
+        upload = bool(files) and self.files_upload(conv)
         if self.client(conv):
             body = "replied. Client project: read it in CommandCenter."
+        elif upload:
+            body = esc(str(msg.get('text') or '')[:3000]) or f"sent {plural(len(files), 'file')}."
         else:
-            body = esc(str(msg.get('text') or '')[:3000])
+            body = esc(str(msg.get('text') or '')[:2800 if files else 3000])
+            if files:
+                body = f"{body}\n{self.file_list(files, conv)}" if body else self.file_list(files, conv)
         as_ = (who, CTO_ICON if conv == "cto" else LEAD_ICON)
         if origin:
-            await self._reply(origin["channel"], origin["ts"], body, as_)
-        elif conv == "cto":
-            await self.post(self.conf["cto_channel"], body, who=as_)
-        elif self.conf["channels"].get(conv) and not self.client(conv):
-            await self.post(self.conf["channels"][conv], body, who=as_)
+            cid, thread = origin["channel"], origin["ts"]
+            posted = await self._reply(cid, thread, body, as_)
         else:
-            await self.post("dm", body, who=as_)
+            where = self.conf["cto_channel"] if conv == "cto" else self.conf["channels"][conv] \
+                if self.conf["channels"].get(conv) and not self.client(conv) else "dm"
+            thread = posted = await self.post(where, body, who=as_)
+            cid = (await (self.dm_id() if where == "dm" else self.channel_id(where))) if posted else None
+        if upload and posted:
+            await self.upload_files(cid, thread, files, conv)
+
+    def file_list(self, files, conv, failed=None):
+        """Files that stay in CommandCenter, for Slack: one line each (name and size) and why they are not here.
+        SamVision's and the CTO's get a count only: a file name can carry an address or an MLS number."""
+        if conv in NO_SLACK_FILES:
+            whose = "The CTO's" if conv == "cto" else self.name(conv)
+            return (f"_:paperclip: {plural(len(files), 'file')} in CommandCenter → Messages. {whose} files and their "
+                    "names never go to Slack._")
+        lines = [f":paperclip: {esc(cut(str(f.get('name') or 'file'), 80))} · {size_text(f.get('size'))}" for f in files]
+        if failed:
+            why = ("Slack has not granted the bot files:write yet (docs/runbooks/slack-and-ntfy.md)"
+                   if "missing_scope" in failed or "not_allowed_token_type" in failed
+                   else "it looks like it holds a password, token or key" if SECRET_FILE in failed
+                   else "the upload to Slack failed")
+            lines.append(f"_In CommandCenter → Messages: {why}._")
+        else:
+            lines.append(f"_In CommandCenter → Messages. To get {self.name(conv)}'s files here, switch it on in "
+                         "Settings → Slack and phone._")
+        return "\n".join(lines)
+
+    async def upload_files(self, cid, thread, files, conv):
+        """Upload a lead's files into the thread its words went to. A file that does not upload is listed instead."""
+        failed, reason = [], None
+        for f in files:
+            try:
+                data = await self._call(self._lead_file, f["id"], conv)
+                await self._call(self.slack().upload, cid, thread, str(f.get("name") or "file"), data)
+            except Exception as e:  # noqa: BLE001 — a file that cannot go is listed; the words already went
+                self._fail("slack file", e)
+                failed.append(f)
+                reason = reason or str(e)
+                continue
+            # What left the server, on the record: which conversation's file, its name, size and digest.
+            self.d._event("notify", "notify.file_uploaded", f"{conv}: uploaded {cut(str(f.get('name')), 120)} to Slack",
+                          data={"conversation": conv, "fileId": f["id"], "size": len(data), "sha256": f.get("sha256")})
+        if failed:
+            await self._reply(cid, thread, self.file_list(failed, conv, failed=reason))
+
+    def _lead_file(self, fid, conv):
+        """The bytes of a file the lead of `conv` sent in Messages, at most UPLOAD_MAX."""
+        fd, row = self.d.chat.open(fid)
+        with os.fdopen(fd, "rb") as fh:
+            if row.get("conversation") != conv or row.get("side") != "lead" or row.get("messageId") is None:
+                raise SlackError("not a file this lead sent")
+            data = fh.read(UPLOAD_MAX + 1)
+        if len(data) > UPLOAD_MAX:
+            raise SlackError("file too large to upload")
+        # Words to Slack go through redact(); a text file is checked the same way and stays here if it would change.
+        # (Messages already refused one that matched onboarding.SECRET_RE when the lead sent it.)
+        if str(row.get("mime") or "").startswith("text/") and redact(data.decode("utf-8", "replace"))[1]:
+            raise SlackError(SECRET_FILE)
+        return data
 
     # ----- loops -----
 

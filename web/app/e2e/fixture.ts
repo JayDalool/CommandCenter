@@ -54,11 +54,11 @@ function answer(path: string): unknown {
     // Slack replies limited to answers (ccd's default until Jay chooses).
     case "/api/notify":
       return { settings: { slack: false, ntfy: false, quietStart: "22:00", quietEnd: "07:00", summaryAt: "07:00",
-        timezone: "America/Winnipeg", replyScope: "answers" },
+        timezone: "America/Winnipeg", replyScope: "answers", slackFiles: [] },
         status: { slack: "off", socket: "off", ntfy: "off", lastError: null, lastSentAt: null },
         configured: { slackTokens: false, slackTokensError: null, jayMemberId: false, ntfy: false },
         channels: { cto: "cto" }, clientProjects: ["gauzemate"], slackGates: ["failure", "ui"], quietNow: false, held: 0,
-        slackPlans: true };
+        slackPlans: true, slackFiles: { choices: ["commandcenter", "gyst", "mfe"], never: ["cto", "samvision"], scope: null } };
     case "/api/ui-tests": return { projects: {} };
     case "/api/jay/merge": return { projects: {} };
     case "/api/desktop/launcher": return { available: false };
