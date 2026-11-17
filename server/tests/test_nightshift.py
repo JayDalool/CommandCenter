@@ -1,5 +1,6 @@
 """The night-shift supervisor (ccd/nightshift.py): reminders from facts only, and when a shift ends."""
 import os
+import re
 import tempfile
 from datetime import datetime
 import unittest
@@ -226,6 +227,66 @@ class InputLine(unittest.TestCase):
 
     def test_text_under_the_prompt_without_a_border_is_not_trusted(self):
         self.assertFalse(input_is_empty("> \n? for shortcuts"))
+
+
+class InputLineColour(unittest.TestCase):
+    """CC-053: Claude Code draws its grey suggested prompt faint (SGR 2); a read with colour codes tells it from typing."""
+    ESC = "\x1b"
+    RULE = ESC + "[38;2;136;136;136m" + "─" * 30 + ESC + "[0m"
+    FOOT = "  ? for shortcuts"
+
+    def screen(self, prompt):
+        return f"done.\n{self.RULE}\n{prompt}\n{self.RULE}\n{self.FOOT}"
+
+    def sugg(self, text="run the tests again"):
+        # the live structure: glyph, NBSP, reset, then the suggestion in faint
+        return "❯ " + self.ESC + "[0m" + self.ESC + "[2m" + text + self.ESC + "[0m"
+
+    def test_a_faint_suggestion_is_empty_but_the_same_screen_without_colours_is_a_draft(self):
+        self.assertTrue(input_is_empty(self.screen(self.sugg())))
+        plain = re.sub(r"\x1b\[[0-9;:]*m", "", self.screen(self.sugg()))
+        self.assertFalse(input_is_empty(plain))                    # no colour codes: fail safe, as before
+
+    def test_an_empty_ansi_prompt_is_empty(self):
+        self.assertTrue(input_is_empty(self.screen("❯ ")))
+        self.assertTrue(input_is_empty(self.screen("❯ " + self.ESC + "[7m \x1b[0m")))   # block cursor on a blank
+
+    def test_typed_text_is_a_draft_with_or_without_a_cursor_cell(self):
+        E = self.ESC
+        self.assertFalse(input_is_empty(self.screen("❯ fix the bug")))
+        self.assertFalse(input_is_empty(self.screen("❯ fix the bu" + E + "[7mg" + E + "[0m")))
+        self.assertFalse(input_is_empty(self.screen("❯ " + E + "[7mf" + E + "[0m" + E + "[2mix it" + E + "[0m")))
+
+    def test_typed_text_followed_by_a_faint_completion_is_a_draft(self):
+        E = self.ESC
+        self.assertFalse(input_is_empty(self.screen("❯ fix " + E + "[2mthe bug" + E + "[0m")))
+
+    def test_faint_then_cleared_then_text_is_a_draft(self):
+        E = self.ESC
+        self.assertFalse(input_is_empty(self.screen("❯ " + E + "[2mhint" + E + "[22mtyped")))
+        self.assertFalse(input_is_empty(self.screen("❯ " + E + "[2mhint" + E + "[mtyped")))
+
+    def test_colour_parameters_are_never_read_as_faint(self):
+        E = self.ESC
+        for sgr in ("38;2;10;20;30", "38;5;2", "48;2;10;20;30", "38:2::10:20:30", "38;7", "38;2;10"):
+            line = "❯ " + E + "[" + sgr + "mtyped words" + E + "[0m"
+            self.assertFalse(input_is_empty(self.screen(line)), sgr)
+
+    def test_a_placeholder_for_a_paste_or_image_is_a_draft_whatever_its_colour(self):
+        E = self.ESC
+        for ph in ("[Pasted text #1 +20 lines]", "[Image #1]", "[...Truncated text #1 +5 lines...]"):
+            self.assertFalse(input_is_empty(self.screen("❯ " + E + "[2m" + ph + E + "[0m")), ph)
+            self.assertFalse(input_is_empty(self.screen("❯ " + ph)), ph)
+
+    def test_truncated_or_garbage_escapes_are_never_empty(self):
+        for bad in ("❯ \x1b", "❯ \x1b[2", "❯ \x1b]0;title", "❯ \x1b[2;;;zq"):
+            self.assertIsNot(input_is_empty(self.screen(bad)), True, repr(bad))
+        self.assertIsNone(input_is_empty("\x1b[2m"))
+
+    def test_osc_sequences_are_dropped_without_hiding_typed_text(self):
+        E = self.ESC
+        self.assertFalse(input_is_empty(self.screen("❯ " + E + "]8;;http://x" + E + "\\link" + E + "]8;;" + E + "\\")))
+        self.assertTrue(input_is_empty(self.screen("❯ " + E + "]0;t\x07")))
 
 
 if __name__ == "__main__":

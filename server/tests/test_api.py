@@ -278,6 +278,20 @@ class Reads(ApiBase):
         self.assertEqual(self.get("/api/agents/samvision/tail").json()["agentId"], "wE:p2", "canonical name works")
         self.assertEqual(self.get("/api/agents/wE:p1/tail").status_code, 404, "a shell pane is not an agent")
 
+    def test_the_agent_read_api_and_board_tails_stay_colour_stripped(self):
+        # CC-053: only the three auto-send checks read with colour codes (ansi=True); every other read is unchanged
+        self.get("/api/agents/wE:p2/tail")
+        reads = [p for m, p in self.fake.calls if m == "agent.read"]
+        self.assertTrue(reads)
+        self.assertTrue(all(p.get("strip_ansi") is True and "format" not in p for p in reads), reads)
+        self.fake.calls.clear()
+        self.client.portal.call(lambda: self.daemon.herdr.read_tail("wE:p2", 8))          # the board's blocked-tail call
+        self.client.portal.call(lambda: self.daemon.herdr.read_tail("wE:p2", 8, ansi=True))
+        plain, coloured = [p for m, p in self.fake.calls if m == "agent.read"]
+        self.assertEqual((plain.get("strip_ansi"), plain.get("format")), (True, None))
+        self.assertEqual((coloured.get("format"), coloured.get("strip_ansi")), ("ansi", None))
+
+
     def test_tails_are_never_persisted(self):
         self.fake.tails["wE:p2"] = "UNIQUE-TAIL-MARKER-7731"
         self.get("/api/agents/wE:p2/tail")

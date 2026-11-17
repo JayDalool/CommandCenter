@@ -1047,7 +1047,7 @@ class Daemon(LeadChat, HqDaemon):
                         # and presses Enter, so a half-typed draft of Jay's would be submitted. Read the pane's
                         # text (never stored or logged) and send only when the input line is plainly empty;
                         # a draft, or a screen we cannot parse, means skip (best effort, not counted).
-                        screen = await self.herdr.read_tail(agent["pane_id"], 40)
+                        screen = await self.herdr.read_tail(agent["pane_id"], 40, ansi=True)
                         if nightshift_mod.input_is_empty(screen["text"]) is not True:
                             self.night.skipped(key, "input line not empty or not recognised")
                             continue
@@ -1123,7 +1123,7 @@ class Daemon(LeadChat, HqDaemon):
                 if agent["status"] not in ("idle", "done"):       # busy or blocked now: nothing sent, nothing counted
                     continue
                 # As the night shift does: send only when the input line is plainly empty, never over a draft.
-                screen = await self.herdr.read_tail(agent["pane_id"], 40)
+                screen = await self.herdr.read_tail(agent["pane_id"], 40, ansi=True)
                 if nightshift_mod.input_is_empty(screen["text"]) is not True:
                     self.work.note(key, "input line not empty or not recognised")
                     continue

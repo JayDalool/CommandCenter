@@ -222,6 +222,26 @@ class WorkModeApi(ApiBase):
         self.assertIn({"kind": "work_mode_set", "on": True}, data)        # the store keeps "on" (EVENT_DATA_KEYS)
         self.assertFalse(self.put("samvision", False, dev).json()["projects"]["samvision"]["on"])
 
+    def test_a_grey_suggestion_counts_as_empty_and_typed_text_does_not(self):
+        # CC-053: same colour-coded check as Messages and the night shift; the plain read is a decoy
+        self.tickets.create("samvision", "feature", number=56, status="INBOX")
+        self.put("samvision", True, self.dev())
+        rule = "\x1b[38;2;136;136;136m" + "─" * 30 + "\x1b[0m"
+
+        def screen(body):
+            return f"assistant text\n{rule}\n❯ {body}\n{rule}\n  ? for shortcuts"
+        self.fake.tails["wE:p2"] = "assistant text\n❯ run the tests again\n  ? for shortcuts"
+        self.idle_long_ago()
+        self.fake.tails_ansi["wE:p2"] = screen("half a thought")
+        self.tick()
+        self.assertEqual(self.prompts(), [])                                     # typed: nothing sent
+        self.idle_long_ago()
+        self.fake.tails_ansi["wE:p2"] = screen("\x1b[0m\x1b[2mrun the tests again\x1b[0m")
+        self.tick()
+        self.assertEqual([p["target"] for p in self.prompts()], ["wE:p2"])       # a suggestion: sent
+        self.assertEqual(self.get("/api/work-mode").json()["projects"]["samvision"]["remindersToday"], 1)
+
+
     def test_an_idle_lead_is_reminded_of_the_next_tickets_and_never_over_a_draft(self):
         self.tickets.create("samvision", "feature", number=56, status="INBOX")
         self.tickets.create("samvision", "other", number=57, status="INBOX", priority="HIGH")
