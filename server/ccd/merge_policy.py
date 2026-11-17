@@ -19,11 +19,17 @@ Low-risk means ALL of:
   6. CI has nothing failing or pending. No checks at all is allowed (the PRs this allows are tests and docs;
      there is no PR workflow yet, CC-033) but it is reported as "no CI checks", never as "green".
 
-The daemon (ccd/daemon.py `_auto_merge`) does the rest: the two switches, the stop file, the merge itself.
+A project whose team lead permissions are "Merge all" or higher (ccd/lead_authority.py, policy "lead") is classified
+by `classify(..., policy="lead")`: rules 4 to 6 as above, rule 3 as lead_authority.jay_reasons (plus UI and DESIGN
+work below "All"), and instead of rules 1 and 2 only the rails: no PR that touches agent rules, CI or the project's
+protected paths (RAILS, PROJECT_RAILS) is merged on a lead's permission.
+
+The daemon (ccd/daemon.py `_auto_merge`) does the rest: the switches, the stop file, the merge itself.
 """
 import re
 from collections import namedtuple
 
+from . import lead_authority
 from . import pipeline
 
 # project key → glob patterns a changed file must match. No entry, no auto-merge.
@@ -43,6 +49,16 @@ DENY = (
     "requirements*.txt", "pyproject.toml", "setup.py", "setup.cfg", "Pipfile", "go.mod", "go.sum",
     "Cargo.toml", "tsconfig*.json", "vite.config.*",
 )
+# Never merged on a lead's permission, at any level (D-007: no agent changes its own or another agent's rules, and CI
+# changes need Jay). A pattern without "/" matches the file name anywhere, case-insensitively.
+RAILS = (".github/**", "**/.claude/**", "**/.codex/**", "**/.mcp.json", "AGENTS.md", "AGENTS.override.md", "AGENT.md",
+         "CLAUDE.md", "CLAUDE.local.md", "GEMINI.md", "SKILL.md")
+# A project's own protected paths (its profile's target self_protection, policy/projects/<key>.toml; a test keeps
+# them equal). Command Center's are its rails and its own code: Jay approves every change there (AGENTS.md).
+PROJECT_RAILS = {
+    "commandcenter": ("server/ccd/**", "scripts/**", "launcher/**", "policy/**", "web/app/src/**"),
+}
+LEAD_MAX_FILES = 99     # `gh pr view --json files` lists at most 100: a PR at the limit may have more Jay never saw
 MAX_FILES = 10
 MAX_LINES = 300
 GOOD_CHANGES = ("ADDED", "MODIFIED")
@@ -90,6 +106,8 @@ def _compile(patterns, anywhere, flags=0):
 
 
 _DENY = _compile(DENY, True, re.IGNORECASE)
+_RAILS = _compile(RAILS, True, re.IGNORECASE)
+_PROJECT_RAILS = {k: _compile(v, False, re.IGNORECASE) for k, v in PROJECT_RAILS.items()}
 _ALLOW = {k: _compile(v, False) for k, v in ALLOW.items()}
 
 
@@ -113,6 +131,42 @@ def denied(path):
 
 def allowed(project, path):
     return any(p.match(path) for p in _ALLOW.get(project, ()))
+
+
+def rail(project, path):
+    return any(p.match(path) for p in _RAILS) or any(p.match(path) for p in _PROJECT_RAILS.get(project, ()))
+
+
+def lead_file_reasons(project, files):
+    """Why a lead may not merge this change set: it touches a rail, or the file list cannot be trusted. []: it may."""
+    if not isinstance(files, list) or not files:
+        return ["the PR lists no changed files"]
+    if len(files) > LEAD_MAX_FILES:
+        return [f"{len(files)} files changed: GitHub may not have listed them all"]
+    reasons = []
+    for f in files:
+        path = f.get("path") if isinstance(f, dict) else None
+        if not safe_path(path):
+            reasons.append("a changed file has an unusable path")
+        elif rail(project, path):
+            reasons.append(f"{path} is a protected path only Jay merges")
+    seen = set()
+    return [r for r in reasons if not (r in seen or seen.add(r))][:6]
+
+
+def lead_ticket_reasons(ticket, work, authority):
+    """Why the ticket's merge stays Jay's on a lead's permission (rule 3 for policy "lead")."""
+    authority = authority or {}
+    level = authority.get("level")
+    out = lead_authority.jay_reasons(ticket, authority.get("keepSensitive") is not False,
+                                     (work or {}).get("confirmed") or ())
+    if not lead_authority.grants(level, "ui"):
+        if ticket.get("type") == "DESIGN":
+            out.append("the ticket type is DESIGN")
+        flags = {f.replace(":", "_").replace("-", "_") for f in ticket.get("flags") or []}
+        if "needs_ui_review" in flags or "ui" in (ticket.get("labels") or []):
+            out.append("the ticket needs a UI acceptance")
+    return out
 
 
 def _count(v):
@@ -194,7 +248,7 @@ def ticket_reasons(ticket, work):
     return out
 
 
-def classify(project, ticket, work, pr, pr_ref, open_prs, policy="low-risk"):
+def classify(project, ticket, work, pr, pr_ref, open_prs, policy="low-risk", authority=None):
     """Decide one READY_TO_MERGE ticket.
 
     project   the registry key (picks the allowlist)
@@ -204,11 +258,16 @@ def classify(project, ticket, work, pr, pr_ref, open_prs, policy="low-risk"):
               additions,deletions,statusCheckRollup`
     pr_ref    "owner/repo#N" of the PR in `pr`
     open_prs  the refs of the ticket's open linked PRs (it must have exactly one, this one)
+    policy    "low-risk", or "lead" (team lead permissions at "Merge all" or higher)
+    authority with policy "lead": {"level", "keepSensitive"} from lead_authority
     """
     reasons = []
     wait = []
-    if policy != "low-risk":
+    lead = policy == pipeline.LEAD_MERGE
+    if policy != "low-risk" and not lead:
         return Decision(False, ["the project's merge policy is not low-risk"], False, "unknown")
+    if lead and not lead_authority.grants((authority or {}).get("level"), "merge"):
+        return Decision(False, ["the lead's permissions do not include merging"], False, "unknown")
     pr = pr if isinstance(pr, dict) else {}
     work = work or {}
     rv = work.get("review") or {}
@@ -217,7 +276,7 @@ def classify(project, ticket, work, pr, pr_ref, open_prs, policy="low-risk"):
         reasons.append(f"the ticket is {ticket.get('status')}, not READY_TO_MERGE")
     if work.get("gate"):
         reasons.append(f"a {work['gate']} gate is open")
-    reasons += ticket_reasons(ticket, work)
+    reasons += lead_ticket_reasons(ticket, work, authority) if lead else ticket_reasons(ticket, work)
 
     head = pr.get("headRefOid")
     if rv.get("verdict") != "APPROVE":
@@ -255,7 +314,8 @@ def classify(project, ticket, work, pr, pr_ref, open_prs, policy="low-risk"):
     elif ci == "pending":
         wait.append("CI is still running")
 
-    reasons += file_reasons(project, pr.get("files"), pr.get("additions"), pr.get("deletions"))
+    reasons += lead_file_reasons(project, pr.get("files")) if lead else \
+        file_reasons(project, pr.get("files"), pr.get("additions"), pr.get("deletions"))
     if reasons:
         return Decision(False, reasons, False, ci)
     return Decision(not wait, wait, bool(wait), ci)

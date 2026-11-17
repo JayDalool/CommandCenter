@@ -121,6 +121,7 @@ NOTES = {
     "intake": "Sized and sent on", "plan_review": "Plan recorded for technical review", "plan_accepted": "Plan accepted",
     "plan_gate": "Plan waits for Jay", "approved": "Technical review approved the plan",
     "plan_sent_back": "Technical review sent the plan back", "jay_plan": "Jay approved the plan",
+    "lead_plan": "The lead approved the plan (team lead permissions)",
     "started": "Implementation started", "to_review": "Pull request in review", "user_pass": "User check passed",
     "user_fail": "User check failed", "user_stale": "New commits: the user check runs again",
     "changes": "Code review asked for changes", "ready": "Code review approved; ready to merge",
@@ -179,6 +180,8 @@ def handoffs(events, rt, created_at=None):
                         "note": NOTES["plan_gate"]})
         elif kind == "pipeline.gate_confirmed" and d.get("gate") == "plan":
             add(at, "advanced", "build", actor, "jay_plan")
+        elif kind == "pipeline.gate_lead_approved" and d.get("gate") == "plan":
+            add(at, "advanced", "build", actor, "lead_plan")
         elif kind == "pipeline.gate_confirmed" and d.get("gate") == "failure":
             add(at, "resumed", cur, actor, "resumed")
         elif kind == "pipeline.started":

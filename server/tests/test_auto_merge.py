@@ -177,11 +177,14 @@ class Skips(Base):
         self.daemon.pipeline.auto_merge = True   # the ticket is ready ungated; only the config switch is under test
         await self.assertQuiet(k, d)
 
-    async def test_config_must_be_exactly_true(self):
-        for v in (None, "true", 1, "yes"):
+    async def test_config_is_a_kill_switch_unless_null_or_exactly_true(self):
+        # Jay 2026-11-17: the team lead permissions decide; config.json auto_merge only switches every merge off.
+        for v in (False, "true", "false", 0, 1, "yes"):
             d = self.make(auto_merge=v)
             self.assertFalse(d.auto_merge_on, v)
-        self.assertIs(DEFAULTS["auto_merge"], False)
+        for v in (None, True):
+            self.assertTrue(self.make(auto_merge=v).auto_merge_on, v)
+        self.assertIs(DEFAULTS["auto_merge"], None)
 
     async def test_the_stop_file(self):
         k = self.ready()
@@ -413,9 +416,9 @@ class Startup(Base):
         off._log_merge_policy()
         self.assertIn("stop file present", self.events("merge.policy")[-1]["text"])
 
-    async def test_the_default_config_is_off_and_the_stop_file_lives_in_the_state_folder(self):
+    async def test_the_default_config_defers_to_the_levels_and_the_stop_file_lives_in_the_state_folder(self):
         from ccd import config
-        self.assertIs(config.DEFAULTS["auto_merge"], False)
+        self.assertIs(config.DEFAULTS["auto_merge"], None)
         self.assertEqual(config.AUTO_MERGE_STOP.name, "auto-merge.stop")
         self.assertEqual(config.AUTO_MERGE_STOP.parent, config.STATE_DIR)
 

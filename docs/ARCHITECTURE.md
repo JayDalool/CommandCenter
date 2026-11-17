@@ -388,7 +388,8 @@ scripts/go-live.sh deploys origin/main only (CC-030); another branch needs `--br
 
 ```text
 Daemon.rederive ─▶ _ticket_automation (GitHub poll → ticket status, as before)
-                └▶ await _auto_merge()      only if config auto_merge is true and no ~/command-center/state/auto-merge.stop
+                └▶ await _auto_merge()      for projects whose team lead permissions allow it (lead_authority.py), unless
+                                            config auto_merge is false or ~/command-center/state/auto-merge.stop exists
       for each registry project with merge "low-risk" and an allowlist (commandcenter):
         Pipeline.merge_candidates: READY_TO_MERGE, no gate, APPROVE recorded, nothing recorded for that head yet
           ─▶ gh pr view N --repo R --json …            (worker thread: the event loop never waits on gh)
@@ -401,8 +402,10 @@ Daemon.rederive ─▶ _ticket_automation (GitHub poll → ticket status, as bef
 
 Pieces: `ccd/merge_policy.py` (allowlist, denylist, `classify`), `Pipeline.merge_candidates / hold_merge /
 auto_merged`, `Daemon._auto_merge` and `gh_cli` (the injectable `gh` runner), registry `merge` values `owner` |
-`low-risk`, `config.AUTO_MERGE_STOP`. While `auto_merge` is off a low-risk project behaves like `owner`
-(`Pipeline.auto_merge`): the ready PR opens a merge gate. ccd never deploys; verify and deploy are unchanged.
+`low-risk`, `ccd/lead_authority.py` (team lead permissions: the level per project picks `owner`, `low-risk` or
+`lead`), `config.AUTO_MERGE_STOP`. While `auto_merge` is false every project behaves like `owner`
+(`Pipeline.auto_merge`): the ready PR opens a merge gate. ccd never deploys; at `merge_deploy` and up it records the
+lead's approval of a live deploy request (`Pipeline._lead_takes`), and the agent deploys as before.
 
 ### Desktop notice for new Needs Jay gates (CC-023)
 

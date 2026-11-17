@@ -1,4 +1,4 @@
-import type { ReleaseState, WorkModeState } from "./types";
+import type { LeadAuthorityState, LeadLevel, ReleaseState, WorkModeState } from "./types";
 import { getToken } from "./auth";
 import { askReenter, devExpired, devSession } from "./developer";
 import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
@@ -400,6 +400,13 @@ export class Api {
   workMode() { return this.req<WorkModeState>("GET", "/api/work-mode"); }
   /** Jay with Developer Unlock. ccd answers with the whole state, as GET does. */
   setWorkMode(project: string, on: boolean) { return this.req<WorkModeState>("PUT", `/api/work-mode/projects/${encodeURIComponent(project)}`, { on }); }
+
+  // ---------- Team lead permissions: how much each project's lead approves without Jay (ccd/lead_authority.py) ----------
+  leadAuthority() { return this.req<LeadAuthorityState>("GET", "/api/lead-authority"); }
+  /** Jay with Developer Unlock. In force at once; ccd answers with the whole state, as GET does. */
+  setLeadAuthority(project: string, change: { level?: LeadLevel; keepSensitive?: boolean }) {
+    return this.req<LeadAuthorityState>("PUT", `/api/lead-authority/projects/${encodeURIComponent(project)}`, change);
+  }
 
   /** GET a file with the token header and hand it to the browser as a download. */
   async download(path: string, fallbackName: string) {

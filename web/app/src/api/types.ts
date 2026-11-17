@@ -754,6 +754,21 @@ export interface WorkModeState {
   projects: Record<string, WorkModeProject>;
   limits: { idleS: number; gapS: number; restAfter: number; restS: number; dayMax: number };
 }
+/** Team lead permissions (GET /api/lead-authority, ccd/lead_authority.py). Each level includes the ones before it.
+ *  `default`: no level stored, so the registry's applies. `permissions`: what the level grants. `mergeSwitch`: the
+ *  kill switches that stop every merge ccd would make (config.json `auto_merge: false`, the stop file). */
+export type LeadLevel = "none" | "low_risk" | "merge" | "merge_deploy" | "all";
+export interface LeadAuthorityProject {
+  level: LeadLevel; keepSensitive: boolean; default: boolean; since: number | null;
+  permissions: Record<"merge_low_risk" | "merge" | "deploy" | "plan" | "ui", boolean>;
+  lowRiskPaths: boolean; paused: boolean; client: boolean;
+}
+export interface LeadAuthorityState {
+  projects: Record<string, LeadAuthorityProject>;
+  levels: { key: LeadLevel; label: string }[];
+  mergeSwitch: { config: boolean; stopFile: boolean };
+  alwaysJay: string[]; sensitive: string[];
+}
 /** A project's logo as ccd lists it (GET /api/projects/logos). The bytes are fetched apart and shown from a blob:. */
 export interface ProjectLogo { mime: string; sha256: string; updatedAt: number }
 /** A device holding a Developer session (GET /api/developer/devices), in epoch seconds. ccd never sends the session
