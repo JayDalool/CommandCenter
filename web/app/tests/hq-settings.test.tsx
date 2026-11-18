@@ -203,6 +203,15 @@ describe("HQ Settings", () => {
     } finally { developer.set({ active: false, expiresAt: null, error: null }); }
   });
 
+  it("Slack shows whether Jay's replies can arrive, apart from whether posts go out", async () => {
+    load();
+    const st = (socket: string): NotifyState => ({ ...NOTIFY, configured: { ...NOTIFY.configured, jayMemberId: true },
+      status: { ...NOTIFY.status, slack: "ok", socket } });
+    vi.spyOn(app.api, "notify").mockResolvedValue(st("reconnecting"));
+    const page = await show("#/settings?tab=notifications");
+    expect(within(page).getByText("Connection: ok · Your replies: reconnecting (see Last error below)")).toBeInTheDocument();
+  });
+
   it("Files in Slack is not shown by a ccd that does not offer it", async () => {
     load();
     vi.spyOn(app.api, "notify").mockResolvedValue(NOTIFY);

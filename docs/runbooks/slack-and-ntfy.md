@@ -37,6 +37,12 @@ cd /srv/server/repos/CommandCenter/server
 .venv/bin/python -m ccd.notify_cli status
 ```
 
+Reply in the test DM's thread: ccd answers there that the reply arrived, and passes it to no one. If nothing comes
+back, posting works but replies do not reach ccd. Check, in order: Settings → Slack shows "Your replies: connected"
+(`notify_cli status`, `socket`); the Slack app subscribes to the bot events `message.im` (and `message.groups` for
+the private channels) and App Home → Messages Tab lets you send messages to the app; `jay_member_id` is your own
+member ID (ccd drops everyone else's messages without a word), and `team_id`, if set, is this workspace.
+
 Other settings: `quiet 22:00 07:00`, `scope answers|answers_low_risk|all`, `summary` (post the summaries now), `off …`.
 The same settings are `GET/PUT /api/notify` for the Settings screen.
 

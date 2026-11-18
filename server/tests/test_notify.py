@@ -291,6 +291,17 @@ class Settings(unittest.TestCase):
         r = run(n.send_test())
         self.assertEqual((r["slack"], r["ntfy"]), (True, False))
 
+    def test_a_reply_to_the_test_says_it_arrived_and_goes_to_no_one(self):
+        n, d, slack, _ = make(settings={"slack": True})
+        run(n.send_test())
+        ts = slack.posts[-1]["ts"]
+        r = run(n.on_slack({"event": {"type": "message", "user": JAY, "text": "hello", "channel": "DJAY", "ts": "60.0",
+                                      "thread_ts": ts}}))
+        self.assertEqual(r["did"], "test_reply")
+        self.assertEqual((slack.posts[-1]["thread"], slack.posts[-1]["text"]),
+                         (ts, "Got it: your Slack replies reach CommandCenter. This reply went to no one else."))
+        self.assertEqual(d.delivered, [])                                   # not to the CTO
+
     def test_a_failed_push_is_reported_as_failed(self):
         n, _, _, _ = make(settings={"ntfy": True})
 
