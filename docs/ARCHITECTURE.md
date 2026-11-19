@@ -69,16 +69,18 @@ pane. If herdr or claude moves, that line moves with it.
 ## Time and time zones
 
 ccd stores and sends epoch seconds. Local time appears in three kinds of place (every call is in `server/ccd`;
-`grep -n "localtime\|fromtimestamp\|ZoneInfo" server/ccd/*.py` finds them all):
+`grep -rn "localtime\|fromtimestamp\|ZoneInfo\|astimezone" server/ccd --include=*.py` finds them all, subfolders included):
 
 - **Host-local, through the C library** (`America/Winnipeg` on jay-server via `/etc/localtime`): the night-shift
   morning cutoff (`nightshift.cutoff_after`, line 92), the "brief written today" check (`model.py:336`), task-record
   stamps (`records._ts`, line 29), `chat_cli._when` (line 116) and the GitHub "as of" stamp (`daemon.py:897`).
 - **Named zone through `zoneinfo`, which does schedule things**: release windows, default Wednesday 22:00
   (`release.py:18,33,45,159`); ticket due dates, end of day 23:59 (`pipeline.py:65,88,94`); work-mode day and overdue
-  (`workmode.py:40,69,100`); notify quiet hours and daily jobs, zone from settings (`notify.py:207-228`).
+  (`workmode.py:40,69,100`); notify quiet hours, daily jobs and the Jay-facing time stamp `notify.local_time` (`%a %Y-%m-%d %H:%M %Z`), zone
+  from settings (`notify.py:207-228`); `notify.py:183` only validates that a configured `timezone` names a real zone.
   Release windows in `policy/` (`Thu 01:00 America/Winnipeg`) are the older labels; the live window is `release.py`.
-- **UTC by design**: budgets and metering (`budgets.py:43`, `meter.py:299`).
+- **UTC by design**: budgets and metering (`budgets.py:43`, `meter.py:299`) and the readiness report's ISO stamps
+  (`validation/readiness.py:46`).
 
 The browser UI pins `America/Winnipeg` for release windows, due dates and the work-mode hint
 (`web/app/src/hq/release.tsx`, `pages/Engineering.tsx`, `pages/Settings.tsx`); other screens use the viewer's zone.
