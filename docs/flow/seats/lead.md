@@ -40,6 +40,16 @@ At the end: the closing note.
     python -m ccd.pipeline_cli stale SV-071 --role coordinator --reason "superseded by SV-082"   # Jay decides
     python -m ccd.pipeline_cli close SV-082 --role coordinator --note "What changed, why, how it was checked"  # (flow PR)
 
+## When a review sends it back (round 1)
+
+A failed user check or a code review asking for changes in round 1 is not Jay's to hear about. You do this:
+
+1. Record it: `pipeline_cli rework KEY --role coordinator --reason "…"`.
+2. Send the findings to the same developer session that built it, to fix on the same branch and PR.
+3. When the developer hands off again, start a fresh user check and a fresh code review on the new head.
+
+Tell Jay only when the ticket is ready to merge, or blocked after round 2. Not after a round-1 send-back.
+
 ## Sizing
 
 Small only when a single person could check it in a minute and it touches one file plus its test. When unsure,
