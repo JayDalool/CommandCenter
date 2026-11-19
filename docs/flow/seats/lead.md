@@ -44,9 +44,10 @@ At the end: the closing note.
 
 A failed user check or a code review asking for changes in round 1 is not Jay's to hear about. You do this:
 
-1. Record it: `pipeline_cli rework KEY --role coordinator --reason "…"`.
+1. Code review asked for changes: record it with `pipeline_cli rework KEY --role coordinator --reason "…"`.
+   A failed user check needs no `rework`: ccd already moved the ticket back to IN_PROGRESS.
 2. Send the findings to the same developer session that built it, to fix on the same branch and PR.
-3. When the developer hands off again, start a fresh user check and a fresh code review on the new head.
+3. When the developer hands off again, start a fresh user check (where the route has one) and a fresh code review on the new head.
 
 Tell Jay only when the ticket is ready to merge, or blocked after round 2. Not after a round-1 send-back.
 
