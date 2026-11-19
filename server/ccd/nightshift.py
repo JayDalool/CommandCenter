@@ -64,20 +64,122 @@ BOX_CHARS = set("─━│┃╭╮╯╰┌┐└┘ \t")
 PROMPT_RE = re.compile(r"^\s*(?:[│┃]\s*)?(?:>|❯)(?:\s+(.*?))?\s*(?:[│┃])?\s*$")
 
 
+# Claude Code's stand-ins for a paste or an image in the input box. Their styling was never captured, so a prompt
+# holding one is always a draft, faint or not (CC-053).
+PLACEHOLDER_RE = re.compile(r"\[(?:Pasted text|Image|\.\.\.Truncated text) #\d")
+_SGR_EXTENDED = {"38", "48", "58"}     # colour introducers: their sub-parameters are not attributes
+
+
+def _sgr_faint(params, faint):
+    """Faint state after one SGR sequence. FAILS CLOSED (CC-053 review P1): anything incomplete, non-numeric or not
+    a recognised colour form raises ValueError, so the whole screen reads as unparseable (None, nothing sent). Never
+    return the old faint state past a parameter we could not place: after an unfinished 38;2;10 the typed words that
+    follow would otherwise still count as faint, and a draft would read as empty."""
+    items = params.split(";")
+    i = 0
+    while i < len(items):
+        item = items[i]
+        head = item.split(":")[0]
+        if head != "" and not head.isdigit():
+            raise ValueError("bad SGR parameter")
+        if head in _SGR_EXTENDED:
+            if ":" in item:                     # colon form: 38:5:n, 38:2:r:g:b or 38:2:cs:r:g:b, every part a number
+                parts = item.split(":")[1:]
+                want = {"5": (2,), "2": (4, 5)}.get(parts[0] if parts else "")
+                # the colour-space slot (second part of the 5-part form) may be empty; every colour value must be a number
+                values = parts[2:] if len(parts) == 5 else parts[1:]
+                if want is None or len(parts) not in want or not all(x.isdigit() for x in values) \
+                        or not (parts[1] == "" or parts[1].isdigit()):
+                    raise ValueError("bad colon colour")
+                i += 1
+                continue
+            nxt = items[i + 1] if i + 1 < len(items) else ""
+            need = {"5": 1, "2": 3}.get(nxt)    # numbers that must follow the 5 or the 2: n, or r;g;b
+            if need is None:
+                raise ValueError("unknown colour form")
+            vals = items[i + 2:i + 2 + need]
+            if len(vals) != need or not all(v.isdigit() for v in vals):
+                raise ValueError("incomplete colour")
+            i += 2 + need                       # that 2 inside 38;2;... is not "faint"
+            continue
+        if head in ("", "0", "22"):
+            faint = False
+        elif head == "2" and ":" not in item:
+            faint = True
+        i += 1
+    return faint
+
+
+def _screen_line(line):
+    """(text with colour codes removed, the same text minus every character drawn faint). Raises ValueError on any
+    escape that is truncated, unterminated, malformed or not one we know (CC-053 review P1: fail closed, the caller
+    then reads None and sends nothing). One pass, no backtracking. CC-053: Claude Code draws its suggested prompt
+    in SGR 2 (faint), which a colour-stripped read cannot tell from text Jay typed."""
+    plain, bright = [], []
+    faint = False
+    i, n = 0, len(line)
+    while i < n:
+        ch = line[i]
+        if ch != "\x1b":
+            plain.append(ch)
+            if not faint:
+                bright.append(ch)
+            i += 1
+            continue
+        if i + 1 >= n:
+            raise ValueError("truncated escape")
+        kind = line[i + 1]
+        if kind == "[":                         # CSI: parameter bytes 0x30-0x3f, then one final byte 0x40-0x7e
+            j = i + 2
+            while j < n and "0" <= line[j] <= "?":
+                j += 1
+            if j >= n or not "@" <= line[j] <= "~":
+                raise ValueError("truncated or malformed CSI")
+            if line[j] != "m":
+                raise ValueError("unrecognised CSI")   # only colours are expected; any other control is uncertainty
+            faint = _sgr_faint(line[i + 2:j], faint)
+            i = j + 1
+        elif kind == "]":                       # OSC: up to BEL or ESC \
+            j = i + 2
+            while j < n and line[j] != "\x07" and not (line[j] == "\x1b" and line[j + 1:j + 2] == "\\"):
+                j += 1
+            if j >= n:
+                raise ValueError("unterminated OSC")
+            i = j + 1 if line[j] == "\x07" else j + 2
+        else:
+            raise ValueError("unrecognised escape")
+    return "".join(plain), "".join(bright)
+
+
 def input_is_empty(text):
     """Is Claude Code's input line empty? From the pane's text only, so best effort. True only when the LAST prompt
     line (`>` or `❯`, optionally inside a box) is empty or shows the dim `Try "…"` placeholder and nothing but box
     borders or blanks follow it before the next border. False when it holds text (or a further line of a draft).
-    None when no prompt line can be parsed: the caller treats None like False and sends nothing."""
-    lines = str(text or "").splitlines()[-60:]
-    at = next((i for i in range(len(lines) - 1, -1, -1) if PROMPT_RE.match(lines[i])), None)
+    None when no prompt line can be parsed: the caller treats None like False and sends nothing.
+
+    Given a read WITH colour codes (herdr format=ansi), text drawn faint, Claude Code's grey suggested prompt, counts
+    as empty (CC-053); anything not faint is a draft. Without codes the text behaves exactly as before."""
+    try:
+        screen = [_screen_line(ln) for ln in str(text or "").splitlines()[-60:]]
+    except ValueError:
+        return None                             # garbled escapes: send nothing
+    plain = [p for p, _ in screen]
+    bright = [b for _, b in screen]
+    at = next((i for i in range(len(plain) - 1, -1, -1) if PROMPT_RE.match(plain[i])), None)
     if at is None:
         return None
-    typed = (PROMPT_RE.match(lines[at]).group(1) or "").strip()
+    m = PROMPT_RE.match(bright[at])
+    if m is None:
+        return False                            # dropping faint text broke the line's shape: not one we know
+    typed = (m.group(1) or "").strip()
     if typed and not typed.startswith('Try "'):
         return False
-    for ln in lines[at + 1:]:
-        rest = ln.strip().strip("│┃").strip()
+    if PLACEHOLDER_RE.search(plain[at]):
+        return False                            # a paste or image stand-in is a draft whatever its colour
+    for k in range(at + 1, len(bright)):
+        if PLACEHOLDER_RE.search(plain[k]):
+            return False
+        rest = bright[k].strip().strip("│┃").strip()
         if not rest:
             continue
         if all(c in BOX_CHARS for c in rest):

@@ -978,6 +978,27 @@ class ControlRoomApi(PipelineApi):
         self.client.portal.call(self.daemon.night_tick)
         self.assertEqual((len(self.prompts()), ns.get("samvision")["nudges"]), (sent0 + 1, 1))
 
+    def test_a_grey_suggestion_counts_as_empty_and_typed_text_does_not(self):
+        # CC-053 c4: same colour-coded check as Messages; the plain read is a decoy that looks like a draft
+        ns = self.night()
+        self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "samvision"}), headers=dict(JSON, **self.dev()))
+        sent0 = len(self.prompts())
+        s = ns.state["samvision"]
+        rule = "\x1b[38;2;136;136;136m" + "─" * 30 + "\x1b[0m"
+
+        def screen(body):
+            return f"assistant text\n{rule}\n❯ {body}\n{rule}\n  ? for shortcuts"
+        self.fake.tails["wE:p2"] = "assistant text\n❯ run the tests again\n  ? for shortcuts"
+        s["idleSince"] = s["startedAt"] - 3600
+        self.fake.tails_ansi["wE:p2"] = screen("half a sentence Jay is typing")
+        self.client.portal.call(self.daemon.night_tick)
+        self.assertEqual((len(self.prompts()), ns.get("samvision")["nudges"]), (sent0, 0))      # a draft: skipped, uncounted
+        s["idleSince"] = s["startedAt"] - 3600
+        self.fake.tails_ansi["wE:p2"] = screen("\x1b[0m\x1b[2mrun the tests again\x1b[0m")
+        self.client.portal.call(self.daemon.night_tick)
+        self.assertEqual((len(self.prompts()), ns.get("samvision")["nudges"]), (sent0 + 1, 1))  # a suggestion: sent, counted
+
+
     def test_the_morning_cutoff_ends_the_shift_even_with_herdr_down_and_types_nothing(self):
         ns = self.night()
         self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "samvision"}), headers=dict(JSON, **self.dev()))

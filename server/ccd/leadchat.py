@@ -304,7 +304,7 @@ class LeadChat:
         if agent["status"] not in ("idle", "done"):
             return "queued"
         try:
-            screen = await self.herdr.read_tail(agent["pane_id"], 40)
+            screen = await self.herdr.read_tail(agent["pane_id"], 40, ansi=True)
         except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError):
             return "queued"
         if nightshift_mod.input_is_empty(screen["text"]) is not True:

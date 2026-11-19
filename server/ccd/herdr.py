@@ -113,9 +113,13 @@ class Herdr:
             raise
         return reader, writer
 
-    async def read_tail(self, target, lines):
-        result = await self.call("agent.read", {"target": target, "source": "recent",
-                                                "lines": int(lines), "strip_ansi": True})
+    async def read_tail(self, target, lines, ansi=False):
+        # ansi=True keeps colour codes (format=ansi). Only the three auto-send checks ask for it: Claude Code's grey
+        # suggested prompt is only distinguishable from typed text by its faint attribute (CC-053). Everything
+        # else, board tails and the agent read API, stays colour-stripped.
+        params = {"target": target, "source": "recent", "lines": int(lines)}
+        params.update({"format": "ansi"} if ansi else {"strip_ansi": True})
+        result = await self.call("agent.read", params)
         read = result.get("read") or {}
         return {"text": read.get("text") or "", "pane_id": read.get("pane_id") or target,
                 "truncated": bool(read.get("truncated"))}
