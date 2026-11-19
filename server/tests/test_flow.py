@@ -531,6 +531,10 @@ class Cli(unittest.TestCase):
                                                    "no repro", "--test", "unit"])
         self.assertEqual((path, actor, body["verdict"], body["tests"]),
                          ("/api/tasks/SV-1/work/plan-review", "agent:tech-reviewer", "SEND_BACK", ["unit"]))
+        base = ["plan-review", "SV-1", "APPROVE", "--session", "tr", "--note", "ok"]
+        self.assertIsNone(pipeline_cli.build(base)[2]["blast"])                       # CC-055: none, one, several
+        self.assertEqual(pipeline_cli.build(base + ["--blast", "one view"])[2]["blast"], "one view")
+        self.assertEqual(pipeline_cli.build(base + ["--blast", "api", "--blast", "cli"])[2]["blast"], "api; cli")
         m, path, body, actor = pipeline_cli.build(["user-check", "SV-1", "pass", "--head", HEAD, "--session", "u",
                                                    "--note", "ok", "--criterion", "c1=pass"])
         self.assertEqual((actor, body["result"], body["criteria"]), ("agent:user-reviewer", "pass", ["c1=pass"]))
