@@ -288,7 +288,9 @@ function SlackAndPhone() {
   const plans = st.d.slackPlans === true;
   const clientRule = clients.length ? ` ${clients.join(" and ")} ${clients.length > 1 ? "are client projects" : "is a client project"}: replies there are passed on as text and never answer or approve.` : "";
   const slackWhy = !c.slackTokens ? (c.slackTokensError ?? "Tokens not set up on jay-server (slack.env)")
-    : !c.jayMemberId ? "Your Slack member ID is not in config.json" : `Connection: ${status.slack}`;
+    : !c.jayMemberId ? "Your Slack member ID is not in config.json"
+    // Posting and hearing Jay's replies are separate: replies arrive over Socket Mode, which can be down while posts work.
+    : `Connection: ${status.slack} · Your replies: ${status.socket === "connected" ? "connected" : status.socket === "reconnecting" ? "reconnecting (see Last error below)" : "off"}`;
   return <Group id="slack" title="Slack and phone" foot={active ? undefined
     : <>Changing these needs Developer Unlock. <button type="button" className="hq-link" onClick={unlockDialogOpen}>Unlock…</button></>}>
     <Row label="Slack" hint={slackWhy}>
