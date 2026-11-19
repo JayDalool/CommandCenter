@@ -68,15 +68,27 @@ pane. If herdr or claude moves, that line moves with it.
 
 ## Time and time zones
 
-ccd stores and sends epoch seconds. Budgets and metering use UTC days and months (`budgets.period_bounds`,
-`meter.py`). Three paths use the host's local time (`America/Winnipeg` on jay-server) through the C library:
-the night-shift morning cutoff (`nightshift.cutoff_after`, default 07:00), the "brief written today" check
-(`model.py`) and task-record time stamps (`records._ts`). The browser UI shows times in the viewer's own zone.
-Release windows in `policy/` (`Thu 01:00 America/Winnipeg`) are labels; nothing schedules from them.
+ccd stores and sends epoch seconds. Local time appears in three kinds of place (every call is in `server/ccd`;
+`grep -n "localtime\|fromtimestamp\|ZoneInfo" server/ccd/*.py` finds them all):
 
-Manitoba keeps UTC−05 all year from 2026-11-01 (IANA tzdata 2026e). The host needs tzdata ≥ 2026e and ccd must be
-started after that install. `server/tests/test_timezone_manitoba.py` fails on a machine with older tz data, and
-`scripts/check-tz.sh` checks the C library, Python and Node on any box (audit: `docs/MANITOBA-TIMEZONE-AUDIT-2026.md`).
+- **Host-local, through the C library** (`America/Winnipeg` on jay-server via `/etc/localtime`): the night-shift
+  morning cutoff (`nightshift.cutoff_after`, line 92), the "brief written today" check (`model.py:336`), task-record
+  stamps (`records._ts`, line 29), `chat_cli._when` (line 116) and the GitHub "as of" stamp (`daemon.py:897`).
+- **Named zone through `zoneinfo`, which does schedule things**: release windows, default Wednesday 22:00
+  (`release.py:18,33,45,159`); ticket due dates, end of day 23:59 (`pipeline.py:65,88,94`); work-mode day and overdue
+  (`workmode.py:40,69,100`); notify quiet hours and daily jobs, zone from settings (`notify.py:207-228`).
+  Release windows in `policy/` (`Thu 01:00 America/Winnipeg`) are the older labels; the live window is `release.py`.
+- **UTC by design**: budgets and metering (`budgets.py:43`, `meter.py:299`).
+
+The browser UI pins `America/Winnipeg` for release windows, due dates and the work-mode hint
+(`web/app/src/hq/release.tsx`, `pages/Engineering.tsx`, `pages/Settings.tsx`); other screens use the viewer's zone.
+
+Manitoba keeps UTC-05 all year from 2026-11-01 (IANA tzdata 2026e). Every host-local path needs tzdata 2026e or
+later and ccd started after that install. The zoneinfo paths read the system tz files (or a pip `tzdata`), so they
+need the same. `server/tests/test_timezone_manitoba.py` pins absolute UTC instants for both kinds and fails with a
+"predates 2026e" message on stale data; it runs on hosted CI (`ubuntu-24.04`), so a stale runner image turns a PR
+red. `scripts/check-tz.sh` prints the tzdata version for the C library, Python and Node and changes nothing.
+Audit and re-check: `docs/MANITOBA-TIMEZONE-AUDIT-2026.md`.
 
 
 ## P4B: the browser UI

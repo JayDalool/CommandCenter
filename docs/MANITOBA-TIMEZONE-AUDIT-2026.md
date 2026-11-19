@@ -166,3 +166,23 @@ back −06.
 | MyFamilyExpenses | read only | **FAIL — unresolved production issue** if `APP_TIME_ZONE=America/Winnipeg` (image tz 2026c) |
 | FMS | read only | PASS — no Winnipeg code; stale tz data has no effect today |
 | GauzeMate | read only | PASS — phone app, uses the device zone |
+
+## K. Re-check 2026-11-19 (CC-054)
+
+As of 2026-11-19, on `main` f28d9ba plus the CC-054 branch. Read-only: throwaway `--network none` containers from
+the running images, no exec into live containers, no environment read. Offset is Winnipeg on 2027-01-15 18:00 UTC.
+
+| App | Image ID | tzdata | Offset | Status | Ticket |
+|---|---|---|---|---|---|
+| gyst-lifeops | `ea6460a1d23b` (built 2026-11-18) | 2026e | -0500 | fixed by rebuild | GYST-153 (gyst-lifeops#194, in progress) |
+| samvision-web | `73c54fc2ebb5` (built 2026-11-11) | 2026f, Python too | -0500 | fixed by rebuild | SV-086 (waiting on Jay's UI check) |
+| myfamilyexpenses-app-1 | `b8634d237729` (the audited image) | 2026c; Node 22.23.3 ICU 2026c | -0600 | **still affected** | MFE-013 (pin Node 22.23.5, set live `APP_TIME_ZONE`) |
+| fms-api / fms-web | unchanged since the audit | 2025b; Node ICU 2025c | -0600 | not affected: no Winnipeg code, runs UTC | none (not a registered project) |
+| zaylolabs-inquiry / zaylolabs-web | current | -0500 / no tz data | n/a | not affected | none (not a registered project) |
+
+CommandCenter itself: `ccd.service` started 2026-11-17 21:49 after the 2026e install; host tzdata
+`2026e-0ubuntu0.26.04.1`; C library and Python PASS, host Node 22.22.2 (ICU 2025c) still FAIL, NodeSource candidate
+is now 22.23.5. CI now runs on hosted `ubuntu-24.04` (since bb77345), so the laptop-WSL steps in section H are
+obsolete. The CC-054 test covers the zoneinfo paths that main added after the audit (release windows, due dates, work
+mode, quiet hours); see `docs/ARCHITECTURE.md`, "Time and time zones".
+Before merge, re-run the read-only image check on the PR head; the verifier repeats it after merge.

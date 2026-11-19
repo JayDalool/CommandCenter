@@ -1,9 +1,10 @@
 """Manitoba's permanent UTC−05 (IANA tzdata 2026e): ccd's local-time paths give the right instants on a Winnipeg host.
 
-ccd stores epoch seconds and works in UTC everywhere except three host-local paths: the night-shift morning cutoff
-(nightshift.cutoff_after), the "brief written today" check (model.py) and the time stamps in task records
-(records._ts). They read the host's time zone through the C library, so these tests set TZ=America/Winnipeg and
-check the table from the Manitoba change. A failure here on a correct ccd means the machine's tz database predates
+ccd stores epoch seconds. Some paths read the host's zone through the C library (nightshift.cutoff_after, the
+"brief written today" check in model.py, records._ts), so these tests set TZ=America/Winnipeg. Others name
+America/Winnipeg through zoneinfo (release windows, pipeline due dates, work mode, notify quiet hours); those are
+pinned to absolute UTC instants below, because the existing tests for them build and compare in the same zone and
+would pass on stale tz data (CC-054). A failure here on a correct ccd means the machine's tz database predates
 2026e: it would read Winnipeg as UTC−06 from 2026-11-01 07:00 UTC and put every local time an hour early.
 """
 import os
@@ -12,7 +13,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from ccd import budgets, records
+from ccd import budgets, pipeline, records, release, workmode
+from ccd.notify import in_quiet
 from ccd.nightshift import cutoff_after
 
 STALE = "this machine's tz database predates IANA 2026e (Manitoba's permanent UTC−05)"
@@ -22,18 +24,21 @@ def utc(*a):
     return datetime(*a, tzinfo=timezone.utc).timestamp()
 
 
+def _restore_tz(old):
+    if old is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = old
+    time.tzset()
+
+
 @unittest.skipUnless(hasattr(time, "tzset"), "needs time.tzset (POSIX)")
 class WinnipegHost(unittest.TestCase):
     def setUp(self):
-        self._tz = os.environ.get("TZ")
+        # addCleanup, not tearDown: the restore must run even when setUp or an assertion fails, or a stale-tz
+        # failure here would leave TZ=America/Winnipeg set for every later test in the process (CC-054).
+        self.addCleanup(_restore_tz, os.environ.get("TZ"))
         os.environ["TZ"] = "America/Winnipeg"
-        time.tzset()
-
-    def tearDown(self):
-        if self._tz is None:
-            os.environ.pop("TZ", None)
-        else:
-            os.environ["TZ"] = self._tz
         time.tzset()
 
     def test_offsets_before_and_after_the_change(self):
@@ -77,6 +82,44 @@ class WinnipegHost(unittest.TestCase):
         at = utc(2026, 11, 2, 5, 30)
         self.assertEqual(budgets.period_bounds(at, "day"), (utc(2026, 11, 2), utc(2026, 11, 3)))
         self.assertEqual(budgets.period_bounds(at, "month"), (utc(2026, 11, 1), utc(2026, 12, 1)))
+
+    def test_zoneinfo_release_window_is_wednesday_22_00_at_minus_05(self):
+        window = {"weekday": 3, "time": "22:00", "tz": "America/Winnipeg"}      # weekday 3 = Wednesday
+        # Wed 4 Nov 2026 22:00 Winnipeg = Thu 5 Nov 03:00 UTC; stale data gives 04:00 UTC.
+        self.assertEqual(release.window_start(window, datetime(2026, 11, 4).date()), utc(2026, 11, 5, 3), STALE)
+
+    def test_zoneinfo_due_dates_end_at_23_59_at_minus_05(self):
+        # small = 2 days: due 12 Nov 23:59 Winnipeg = 13 Nov 04:59 UTC.
+        self.assertEqual(pipeline.due_by_size("small", utc(2026, 11, 10, 12)), utc(2026, 11, 13, 4, 59), STALE)
+        self.assertEqual(pipeline.clean_due("2026-11-12", utc(2026, 11, 10, 12)), utc(2026, 11, 13, 4, 59), STALE)
+
+    def test_zoneinfo_work_mode_day_rolls_at_05_00_utc(self):
+        self.assertEqual(workmode._day(utc(2026, 11, 2, 4, 59)), "2026-11-01", STALE)
+        self.assertEqual(workmode._day(utc(2026, 11, 2, 5, 0)), "2026-11-02", STALE)
+
+    def test_zoneinfo_quiet_hours_are_22_00_to_07_00_at_minus_05(self):
+        s = {"timezone": "America/Winnipeg", "quietStart": "22:00", "quietEnd": "07:00"}
+        self.assertTrue(in_quiet(s, utc(2026, 11, 2, 3, 0)), STALE)         # 22:00 -05
+        self.assertFalse(in_quiet(s, utc(2026, 11, 2, 2, 59)), STALE)       # 21:59 -05
+        self.assertTrue(in_quiet(s, utc(2026, 11, 2, 11, 59)), STALE)       # 06:59 -05
+        self.assertFalse(in_quiet(s, utc(2026, 11, 2, 12, 0)), STALE)       # 07:00 -05
+
+
+@unittest.skipUnless(hasattr(time, "tzset"), "needs time.tzset (POSIX)")
+class RestoresTheZone(unittest.TestCase):
+    def test_a_failing_winnipeg_test_still_restores_the_host_zone(self):
+        class Inner(WinnipegHost):
+            def test_fails(self):
+                self.fail("on purpose")
+        self.addCleanup(_restore_tz, os.environ.get("TZ"))
+        os.environ["TZ"] = "Asia/Kolkata"       # +05:30 all year: distinct from Winnipeg
+        time.tzset()
+        before = time.localtime(utc(2026, 7, 15)).tm_gmtoff
+        result = unittest.TestResult()
+        Inner("test_fails")(result)
+        self.assertEqual(len(result.failures), 1)
+        self.assertEqual(time.localtime(utc(2026, 7, 15)).tm_gmtoff, before)
+        self.assertEqual(before, 19800)
 
 
 if __name__ == "__main__":
