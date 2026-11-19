@@ -44,8 +44,11 @@ class CheckTzScript(unittest.TestCase):
             self.assertRegex(out, r"(?m)^(PASS|FAIL)\s+Node v\S+ ICU tz \S+:")
 
     # CC-054: the Python line must name the tz data ZoneInfo reads for America/Winnipeg, not the first tzdata.zi found.
-    def python_line(self, tzpath="", pypath=""):
-        env = {**os.environ, "PYTHONTZPATH": tzpath, "CHECK_TZ_PYPATH": pypath}
+    def python_line(self, tzpath=None, pypath=""):
+        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONTZPATH", "TZDIR")}
+        env["CHECK_TZ_PYPATH"] = pypath
+        if tzpath is not None:
+            env["PYTHONTZPATH"] = tzpath
         r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, timeout=60, env=env)
         line = next((l for l in r.stdout.splitlines() if l.startswith("tzdata (Python python3)")), "")
         self.assertTrue(line, r.stdout)
@@ -91,7 +94,41 @@ class CheckTzScript(unittest.TestCase):
             full = self.make_dir(t, "full", "2099d")
             line = self.python_line(str(full), str(Path(t) / "site"))
             self.assertIn("2099d", line)
-            self.assertNotIn("pip", line)
+            self.assertNotIn("pip tzdata package", line)   # not "pip": a random temp dir name can contain it
+
+    def test_the_pip_fallback_writes_no_bytecode(self):
+        # CC-054 review round 2: importing a writable pip tzdata used to leave __pycache__ files in its tree.
+        with tempfile.TemporaryDirectory() as t:
+            empty = self.make_dir(t, "empty", "2001a", zone=False)
+            pkg = Path(t) / "site" / "tzdata"
+            (pkg / "zoneinfo" / "America").mkdir(parents=True)
+            (pkg / "__init__.py").write_text('IANA_VERSION = "2099c"\n')
+            (pkg / "zoneinfo" / "__init__.py").write_text("")
+            (pkg / "zoneinfo" / "America" / "__init__.py").write_text("")
+            shutil.copy(WINNIPEG, pkg / "zoneinfo" / "America" / "Winnipeg")
+            before = _tree(t)
+            self.assertIn("pip tzdata package: 2099c", self.python_line(str(empty), str(Path(t) / "site")))
+            self.assertEqual(_tree(t), before)
+            self.assertFalse(list(Path(t).rglob("__pycache__")))
+
+    def test_relative_pythontzpath_entries_are_ignored_like_zoneinfo_does(self):
+        with tempfile.TemporaryDirectory() as t:
+            good = self.make_dir(t, "good", "2099f")
+            line = self.python_line(f"relative/dir{os.pathsep}{good}")
+            self.assertIn(f"{good}: # version 2099f", line)
+
+    def test_c_library_line_follows_tzdir(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = self.make_dir(t, "zi", "2099g")
+            env = {**os.environ, "TZDIR": str(d)}
+            r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, timeout=60, env=env)
+            self.assertIn(f"tzdata (C library): TZDIR={d} overrides the system package, # version 2099g", r.stdout)
+            self.assertIn("PASS  C library (date): -0500", r.stdout)     # the Winnipeg file there is read, not the host's
+
+    def test_c_library_line_without_tzdir_names_the_system_package(self):
+        env = {k: v for k, v in os.environ.items() if k != "TZDIR"}
+        r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, timeout=60, env=env)
+        self.assertRegex(r.stdout, r"(?m)^tzdata \(C library\): package \S+, ")
 
     def test_python_line_says_when_nothing_has_the_zone(self):
         with tempfile.TemporaryDirectory() as t:
