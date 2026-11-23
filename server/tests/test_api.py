@@ -115,14 +115,20 @@ def _live_data_hook(event, args):
     if not _WATCH["on"]:
         return
     if event in _PATH_EVENTS and args and isinstance(args[0], (str, bytes, os.PathLike)):
-        target = args[0]
-    elif event == "subprocess.Popen" and len(args) > 2 and args[2]:
-        target = args[2]  # cwd: a git call in a live repo is a read too
+        targets = [args[0]]
+    elif event == "subprocess.Popen" and len(args) > 2:
+        # ccd runs git as `git -C <root> ...` (gitops.py, sources.py), so the cwd alone misses a live-repo read
+        # (CC-062 review). Check the cwd and every argument, including the value of --git-dir=<path> style flags.
+        targets = [args[2]] if args[2] else []
+        for a in (args[1] if isinstance(args[1], (list, tuple)) else [args[1]]):
+            if isinstance(a, (str, bytes, os.PathLike)):
+                a = os.fsdecode(a)
+                targets += [a, a.split("=", 1)[1]] if "=" in a else [a]
     else:
         return
-    if _is_live(target):
-        _WATCH["hits"].append((event, os.fsdecode(target)))
-
+    for target in targets:
+        if _is_live(target):
+            _WATCH["hits"].append((event, os.fsdecode(target)))
 
 sys.addaudithook(_live_data_hook)  # audit hooks cannot be removed; _WATCH["on"] scopes it to one test
 
@@ -588,6 +594,18 @@ class NoLiveDataTripwire(unittest.TestCase):
         self.assertTrue(self.attempt(open, os.path.join(PROJECTS[1]["path"], "docs", "jay", "UI_TESTS.md")))
         self.assertTrue(self.attempt(os.listdir, PROJECTS[0]["path"]))
         self.assertTrue(self.attempt(os.scandir, os.path.expanduser("~/command-center")))
+
+    def test_git_against_a_live_repo_is_caught_by_argument(self):
+        import subprocess
+        live = PROJECTS[1]["path"]
+        for argv in (["git", "-C", live, "status"], ["git", f"--git-dir={live}/.git", "log"],
+                     ["git", "--work-tree", live, "diff"], ["ls", live]):
+            self.assertTrue(self.attempt(lambda _p, a=argv: subprocess.run(a, capture_output=True), live), argv)
+
+    def test_git_in_a_temp_root_is_not_flagged(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self.tripwire(lambda: subprocess.run(["git", "-C", d, "status"], capture_output=True)), [])
 
     def test_a_temp_root_is_not_flagged(self):
         with tempfile.TemporaryDirectory() as d:
