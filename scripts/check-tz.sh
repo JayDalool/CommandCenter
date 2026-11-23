@@ -10,6 +10,20 @@ check() {  # name, offset found
   if [ "$2" = "-0500" ]; then echo "PASS  $1: $2"; else echo "FAIL  $1: ${2:-not readable} (expected -0500)"; fail=1; fi
 }
 
+# CC-054 review round 3: environment variables can make Python and Node write files (PYTHONPYCACHEPREFIX,
+# PYTHONSTARTUP, NODE_COMPILE_CACHE, NODE_OPTIONS, a hostile HOME ...). Each round found another one, so every
+# date, Python and Node probe runs under `env -i` with a fixed PATH and only what the probe reports on is passed
+# through: TZDIR to date (glibc reads zone files from it) and PYTHONTZPATH to Python (zoneinfo's own search path,
+# kept so the relative-entry rule still applies). The interpreter is resolved to an absolute path first, from the
+# caller's PATH, so a node or python outside /usr/bin still runs.
+clean() {  # [VAR=value ...] command args...
+  local vars=() cmd
+  while [ $# -gt 0 ] && [[ "$1" == *=* ]]; do vars+=("$1"); shift; done
+  cmd=$(command -v "$1") || return 127
+  shift
+  env -i PATH=/usr/local/bin:/usr/bin:/bin "${vars[@]}" "$cmd" "$@"
+}
+
 echo "host zone: $(readlink -f /etc/localtime 2>/dev/null || echo unknown)  TZ=${TZ:-unset}"
 # CC-054: glibc (date, cron, ccd) reads the zone files from TZDIR when it is set, else /usr/share/zoneinfo, so the
 # version printed must come from that same directory; the dpkg package version describes only the default one.
@@ -17,7 +31,7 @@ ZDIR=${TZDIR:-/usr/share/zoneinfo}
 if [ -n "${TZDIR:-}" ]; then pkg="TZDIR=$TZDIR overrides the system package"
 else pkg="package $(dpkg-query -W -f '${Version}' tzdata 2>/dev/null || echo unknown)"; fi
 echo "tzdata (C library): $pkg, $(head -1 "$ZDIR/tzdata.zi" 2>/dev/null || echo "tzdata.zi not readable in $ZDIR")"
-check "C library (date)" "$(TZ=America/Winnipeg date -d "$AT" +%z 2>/dev/null)"
+check "C library (date)" "$(clean TZ=America/Winnipeg ${TZDIR+TZDIR="$TZDIR"} date -d "$AT" +%z 2>/dev/null)"
 # CC-054: report the tz data ZoneInfo really reads for America/Winnipeg, in ZoneInfo's own order: the first TZPATH
 # directory that holds the zone, and only when none does, the pip tzdata package. The first tzdata.zi on TZPATH can
 # sit in a different directory than the zone file, so it is looked up in the directory that supplied the zone.
@@ -50,15 +64,15 @@ except Exception:
 '
 for py in python3 "$(dirname "$0")/../server/.venv/bin/python"; do
   command -v "$py" >/dev/null 2>&1 || continue
-  out=$(PYTHONDONTWRITEBYTECODE=1 "$py" -B -I -c "$PYSRC" "${CHECK_TZ_PYPATH:-}" 2>/dev/null)
+  out=$(clean PYTHONDONTWRITEBYTECODE=1 ${PYTHONTZPATH+PYTHONTZPATH="$PYTHONTZPATH"} "$py" -B -I -c "$PYSRC" "${CHECK_TZ_PYPATH:-}" 2>/dev/null)
   echo "tzdata (Python $py): $(printf '%s\n' "$out" | sed -n 's/^SOURCE //p;T;q' | grep . || echo unavailable)"
   check "Python zoneinfo ($py)" "$(printf '%s\n' "$out" | sed -n 's/^OFFSET //p')"
 done
 if command -v node >/dev/null 2>&1; then
-  off=$(node -e '
+  off=$(clean node -e '
     const p = new Intl.DateTimeFormat("en-US", {timeZone: "America/Winnipeg", timeZoneName: "longOffset"})
       .formatToParts(new Date(process.argv[1])).find((x) => x.type === "timeZoneName").value;
     console.log(p.replace("GMT", "").replace(":", ""))' "$AT" 2>/dev/null)
-  check "Node $(node -v) ICU tz $(node -p process.versions.tz 2>/dev/null)" "$off"
+  check "Node $(clean node -v) ICU tz $(clean node -p process.versions.tz 2>/dev/null)" "$off"
 fi
 exit $fail

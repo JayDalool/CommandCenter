@@ -96,6 +96,42 @@ class CheckTzScript(unittest.TestCase):
             self.assertIn("2099d", line)
             self.assertNotIn("pip tzdata package", line)   # not "pip": a random temp dir name can contain it
 
+    def test_hostile_environment_cannot_make_a_probe_write(self):
+        # CC-054 review round 3: NODE_COMPILE_CACHE, PYTHONPYCACHEPREFIX, PYTHONSTARTUP, NODE_OPTIONS and HOME each
+        # made a probe write somewhere. The script runs its probes under env -i, so none may reach them.
+        def snapshot(root):
+            out = {}
+            for p in Path(root).rglob("*"):
+                st = p.lstat()
+                out[str(p)] = (st.st_mtime_ns, st.st_size)
+            return out
+
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            node_cache, py_cache, home = t / "node-cache", t / "py-cache", t / "home"
+            for d in (node_cache, py_cache, home):
+                d.mkdir()
+            (t / "startup.py").write_text(f"open({str(t / 'ran-startup')!r}, 'w').write('x')\n")
+            (t / "preload.js").write_text(f"require('fs').writeFileSync({str(t / 'ran-preload')!r}, 'x')\n")
+            pkg = t / "site" / "tzdata"          # a writable pip tzdata the Python probe imports
+            (pkg / "zoneinfo" / "America").mkdir(parents=True)
+            (pkg / "__init__.py").write_text('IANA_VERSION = "2099c"\n')
+            (pkg / "zoneinfo" / "__init__.py").write_text("")
+            (pkg / "zoneinfo" / "America" / "__init__.py").write_text("")
+            shutil.copy(WINNIPEG, pkg / "zoneinfo" / "America" / "Winnipeg")
+            empty = self.make_dir(t, "empty", "2001a", zone=False)
+            env = {k: v for k, v in os.environ.items() if k not in ("PYTHONTZPATH", "TZDIR")}
+            env.update(NODE_COMPILE_CACHE=str(node_cache), PYTHONPYCACHEPREFIX=str(py_cache),
+                       PYTHONSTARTUP=str(t / "startup.py"), NODE_OPTIONS=f"--require {t / 'preload.js'}",
+                       HOME=str(home), PYTHONTZPATH=str(empty), CHECK_TZ_PYPATH=str(t / "site"))
+            before, git_before = snapshot(t), _porcelain()
+            r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, timeout=90, env=env)
+            self.assertIn(r.returncode, (0, 1), r.stderr)
+            self.assertIn("pip tzdata package: 2099c", r.stdout)      # the probe did run, with PYTHONTZPATH passed through
+            self.assertEqual(snapshot(t), before, "a probe wrote or changed a file")
+            self.assertFalse((t / "ran-startup").exists() or (t / "ran-preload").exists())
+            self.assertEqual(_porcelain(), git_before)
+
     def test_the_pip_fallback_writes_no_bytecode(self):
         # CC-054 review round 2: importing a writable pip tzdata used to leave __pycache__ files in its tree.
         with tempfile.TemporaryDirectory() as t:
