@@ -30,7 +30,7 @@ The delivery flow (docs/flow/FLOW.md). Each line runs as the seat named in brack
                                            [--requirement "keep the CSV export"] [--parent SV-050]            [lead]
     python -m ccd.pipeline_cli criteria    SV-056 --criterion "…" [--criterion …] [--requirement …] [--size risky]  [lead]
     python -m ccd.pipeline_cli criteria    SV-056 --priority URGENT --due 2026-11-18     (any stage while open)  [lead]
-    python -m ccd.pipeline_cli plan-review SV-056 APPROVE|SEND_BACK --session <fresh> --note "…" [--blast "…"] \
+    python -m ccd.pipeline_cli plan-review SV-056 APPROVE|SEND_BACK --session <fresh> --note "…" [--blast "…" …] \
                                            [--test "…"] [--size risky]                                       [tech-reviewer]
     python -m ccd.pipeline_cli user-check  SV-056 pass|fail --head <sha> --session <fresh> --note "…" \
                                            --criterion c1=pass [--criterion c2=fail …]                        [user-reviewer]
@@ -176,7 +176,7 @@ def build(argv):
     p.add_argument("--criterion", action="append", help="intake/criteria: a criterion's text; user-check: ID=pass|fail")
     p.add_argument("--requirement", action="append")
     p.add_argument("--parent")
-    p.add_argument("--blast")
+    p.add_argument("--blast", action="append")
     p.add_argument("--test", action="append")
     a = p.parse_args(argv)
     if a.decision is not None and a.op not in ("plan-review", "user-check"):
@@ -215,7 +215,9 @@ def build(argv):
         "criteria": lambda: {k: v for k, v in (("criteria", a.criterion), ("requirements", a.requirement),
                                                ("size", a.size), ("priority", a.priority), ("due", a.due))
                              if v is not None},
-        "plan-review": lambda: {"verdict": a.decision or a.verdict, "note": a.note, "blast": a.blast,
+        "plan-review": lambda: {"verdict": a.decision or a.verdict, "note": a.note,
+                                # CC-055: --blast repeats; the ticket keeps one text, so a single value is unchanged.
+                                "blast": "; ".join(a.blast) if a.blast else None,
                                 "tests": a.test or [], **({"size": a.size} if a.size else {}), **meta},
         "user-check": lambda: {"result": a.decision or a.result, "head": a.head, "note": a.note,
                                "criteria": a.criterion or [], **meta},
