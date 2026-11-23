@@ -37,7 +37,7 @@ or `scope out` (a later ticket).
 
 Risky tickets and changes to protected paths also get a second review from a different model family (Codex), on
 top of yours (D-024 clause 15). A small ticket that touches no protected or sensitive path gets one Sonnet reviewer per
-round and no second reviewer; a fix after REQUEST_CHANGES gets a new fresh Sonnet session on the new head, within the
+round and no second reviewer; on a small ticket a fix after REQUEST_CHANGES gets a new fresh Sonnet session on the new head, within the
 two-round limit. Model table: [FLOW.md](../FLOW.md#models-and-usage).
 
 ## Bundled review (small tickets only)

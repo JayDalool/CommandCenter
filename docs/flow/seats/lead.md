@@ -65,13 +65,14 @@ standard. Anything in the risky list in FLOW.md is risky; do not argue it down.
 | Haiku | searches (Explore), status checks, relays |
 | Sonnet | developers, user-reviewer, design-reviewer, verifier, code review of small tickets, portfolio, finance and accounting agents |
 | Opus | the lead by default, investigator, tech-reviewer, security-engineer, software-architect, code review of standard and risky tickets |
-| Fable | leads only, for hard work as listed below; never for a seat agent's routine work |
+| Fable | leads only, for hard work as listed in the next paragraph; never for a seat agent's routine work |
 | Codex | the second code review on risky tickets and protected paths only (a fresh Claude session when Codex is out) |
 
 When you start a seat agent, use its default model; never pass a stronger one for routine work (stronger only for a
 risky plan, architecture, or a bug that survived two review rounds). On a small ticket pass `model: sonnet` to the
-code reviewer; a small ticket touching protected or sensitive paths keeps Opus plus Codex. A fix after REQUEST_CHANGES
-gets a new fresh Sonnet session, still within two rounds.
+code reviewer; a small ticket touching protected or sensitive paths keeps Opus plus Codex. On a small ticket a fix after
+REQUEST_CHANGES gets a new fresh Sonnet session; standard and risky round 2 stays on the same tier as round 1. Still
+within two rounds.
 
 ## Bundle small work
 

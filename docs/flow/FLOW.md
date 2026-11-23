@@ -63,12 +63,12 @@ rounds.
 | Haiku | searches (Explore), status checks, relays |
 | Sonnet | developers, user-reviewer, design-reviewer, verifier, code review of small tickets, portfolio, finance and accounting agents |
 | Opus | the lead by default, investigator, tech-reviewer, security-engineer, software-architect, code review of standard and risky tickets |
-| Fable | leads only, for hard work as listed below; never for a seat agent's routine work |
+| Fable | leads only, for hard work as listed above (a risky plan, architecture, a bug that survived two review rounds); never for a seat agent's routine work |
 | Codex | the second code review on risky tickets and protected paths only (a fresh Claude session when Codex is out) |
 
 - Small tickets get one Sonnet code reviewer per round and no second reviewer, unless they touch the repo's protected
   or sensitive paths (its `AGENTS.md` list, which wins over this page): those get Opus plus Codex as for risky tickets.
-- A fix after REQUEST_CHANGES is reviewed by a new fresh Sonnet session on the new head. The two-round limit stays.
+- On a small ticket, a fix after REQUEST_CHANGES is reviewed by a new fresh Sonnet session on the new head. Standard and risky tickets keep round 2 on the same tier as round 1 (Opus, plus Codex where it applied). The two-round limit stays.
 - Codex reviews only risky tickets and protected paths (D-024 clause 15).
 - Nothing in ccd enforces models or this split; the lead follows it by instruction.
 
