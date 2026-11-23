@@ -47,6 +47,8 @@ class CheckTzScript(unittest.TestCase):
     def python_line(self, tzpath=None, pypath=""):
         env = {k: v for k, v in os.environ.items() if k not in ("PYTHONTZPATH", "TZDIR")}
         env["CHECK_TZ_PYPATH"] = pypath
+        if pypath:
+            env["CHECK_TZ_TESTING"] = "1"       # the script ignores CHECK_TZ_PYPATH without it (round 4)
         if tzpath is not None:
             env["PYTHONTZPATH"] = tzpath
         r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, timeout=60, env=env)
@@ -123,7 +125,7 @@ class CheckTzScript(unittest.TestCase):
             env = {k: v for k, v in os.environ.items() if k not in ("PYTHONTZPATH", "TZDIR")}
             env.update(NODE_COMPILE_CACHE=str(node_cache), PYTHONPYCACHEPREFIX=str(py_cache),
                        PYTHONSTARTUP=str(t / "startup.py"), NODE_OPTIONS=f"--require {t / 'preload.js'}",
-                       HOME=str(home), PYTHONTZPATH=str(empty), CHECK_TZ_PYPATH=str(t / "site"))
+                       HOME=str(home), PYTHONTZPATH=str(empty), CHECK_TZ_PYPATH=str(t / "site"), CHECK_TZ_TESTING="1")
             before, git_before = snapshot(t), _porcelain()
             r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, timeout=90, env=env)
             self.assertIn(r.returncode, (0, 1), r.stderr)
@@ -131,6 +133,38 @@ class CheckTzScript(unittest.TestCase):
             self.assertEqual(snapshot(t), before, "a probe wrote or changed a file")
             self.assertFalse((t / "ran-startup").exists() or (t / "ran-preload").exists())
             self.assertEqual(_porcelain(), git_before)
+
+    def test_pypath_is_ignored_without_the_testing_marker(self):
+        # CC-054 round 4: a package on a caller-supplied path would run its __init__ inside the probe.
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            marker = t / "ran-init"
+            pkg = t / "site" / "tzdata"
+            pkg.mkdir(parents=True)
+            (pkg / "__init__.py").write_text(f"open({str(marker)!r}, 'w').write('x')\nIANA_VERSION = 'x'\n")
+            empty = self.make_dir(t, "empty", "2001a", zone=False)
+            env = {k: v for k, v in os.environ.items() if k not in ("TZDIR", "CHECK_TZ_TESTING")}
+            env.update(PYTHONTZPATH=str(empty), CHECK_TZ_PYPATH=str(t / "site"))
+            r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, timeout=60, env=env)
+            self.assertFalse(marker.exists(), "caller-supplied package code ran")
+            self.assertIn("no source has America/Winnipeg", r.stdout)
+
+    def test_host_zone_and_version_probes_ignore_the_callers_path(self):
+        # CC-054 round 4: readlink, dpkg-query and head also ran with the caller's environment and PATH.
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            bin_dir = t / "bin"
+            bin_dir.mkdir()
+            for tool in ("readlink", "dpkg-query", "head", "date"):
+                f = bin_dir / tool
+                f.write_text(f"#!/bin/sh\ntouch {t}/ran-{tool}\necho hostile\n")
+                f.chmod(0o755)
+            env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+            env.pop("TZDIR", None)
+            r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, timeout=60, env=env)
+            self.assertEqual(sorted(p.name for p in t.iterdir()), ["bin"], "a hostile PATH tool ran")
+            self.assertNotIn("hostile", r.stdout)
+            self.assertRegex(r.stdout, r"(?m)^PASS  C library \(date\): -0500")
 
     def test_the_pip_fallback_writes_no_bytecode(self):
         # CC-054 review round 2: importing a writable pip tzdata used to leave __pycache__ files in its tree.

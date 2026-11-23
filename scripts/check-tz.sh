@@ -19,25 +19,30 @@ check() {  # name, offset found
 clean() {  # [VAR=value ...] command args...
   local vars=() cmd
   while [ $# -gt 0 ] && [[ "$1" == *=* ]]; do vars+=("$1"); shift; done
-  cmd=$(command -v "$1") || return 127
+  # System tools are looked up only in the fixed PATH below, never in the caller's: a hostile PATH directory must not
+  # be able to put its own date, head, readlink or dpkg-query in front. python and node come from the caller's PATH
+  # (nvm, NodeSource) and are resolved to an absolute path first.
+  case "$1" in date|head|readlink|dpkg-query) cmd=$1 ;; *) cmd=$(command -v "$1") || return 127 ;; esac
   shift
   env -i PATH=/usr/local/bin:/usr/bin:/bin "${vars[@]}" "$cmd" "$@"
 }
 
-echo "host zone: $(readlink -f /etc/localtime 2>/dev/null || echo unknown)  TZ=${TZ:-unset}"
+echo "host zone: $(clean readlink -f /etc/localtime 2>/dev/null || echo unknown)  TZ=${TZ:-unset}"
 # CC-054: glibc (date, cron, ccd) reads the zone files from TZDIR when it is set, else /usr/share/zoneinfo, so the
 # version printed must come from that same directory; the dpkg package version describes only the default one.
 ZDIR=${TZDIR:-/usr/share/zoneinfo}
 if [ -n "${TZDIR:-}" ]; then pkg="TZDIR=$TZDIR overrides the system package"
-else pkg="package $(dpkg-query -W -f '${Version}' tzdata 2>/dev/null || echo unknown)"; fi
-echo "tzdata (C library): $pkg, $(head -1 "$ZDIR/tzdata.zi" 2>/dev/null || echo "tzdata.zi not readable in $ZDIR")"
+else pkg="package $(clean dpkg-query -W -f '${Version}' tzdata 2>/dev/null || echo unknown)"; fi
+echo "tzdata (C library): $pkg, $(clean head -1 "$ZDIR/tzdata.zi" 2>/dev/null || echo "tzdata.zi not readable in $ZDIR")"
 check "C library (date)" "$(clean TZ=America/Winnipeg ${TZDIR+TZDIR="$TZDIR"} date -d "$AT" +%z 2>/dev/null)"
 # CC-054: report the tz data ZoneInfo really reads for America/Winnipeg, in ZoneInfo's own order: the first TZPATH
 # directory that holds the zone, and only when none does, the pip tzdata package. The first tzdata.zi on TZPATH can
 # sit in a different directory than the zone file, so it is looked up in the directory that supplied the zone.
 # zoneinfo reads PYTHONTZPATH from os.environ itself (so -I does not hide it) and ignores relative entries with a
 # warning; that native handling is used as is. -B: never write bytecode, because a writable pip tzdata fallback would
-# otherwise get __pycache__ files. CHECK_TZ_PYPATH (extra sys.path entry) lets the test stand in for a pip tzdata.
+# otherwise get __pycache__ files. CHECK_TZ_PYPATH (extra sys.path
+# entry, standing in for a pip tzdata) is honoured only when CHECK_TZ_TESTING=1 as well: importing a package runs its
+# __init__, so a caller-supplied path would be code execution that env -i does not stop (CC-054 round 4).
 PYSRC='
 import sys, os, pathlib, zoneinfo
 from datetime import datetime, timezone
@@ -64,7 +69,7 @@ except Exception:
 '
 for py in python3 "$(dirname "$0")/../server/.venv/bin/python"; do
   command -v "$py" >/dev/null 2>&1 || continue
-  out=$(clean PYTHONDONTWRITEBYTECODE=1 ${PYTHONTZPATH+PYTHONTZPATH="$PYTHONTZPATH"} "$py" -B -I -c "$PYSRC" "${CHECK_TZ_PYPATH:-}" 2>/dev/null)
+  out=$(clean PYTHONDONTWRITEBYTECODE=1 ${PYTHONTZPATH+PYTHONTZPATH="$PYTHONTZPATH"} "$py" -B -I -c "$PYSRC" "$([ "${CHECK_TZ_TESTING:-}" = 1 ] && echo "${CHECK_TZ_PYPATH:-}")" 2>/dev/null)
   echo "tzdata (Python $py): $(printf '%s\n' "$out" | sed -n 's/^SOURCE //p;T;q' | grep . || echo unavailable)"
   check "Python zoneinfo ($py)" "$(printf '%s\n' "$out" | sed -n 's/^OFFSET //p')"
 done
