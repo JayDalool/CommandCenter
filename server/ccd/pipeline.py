@@ -1750,7 +1750,7 @@ class Pipeline:
         _meta(session, "session")
         # CC-066: the review text now goes into ticket_events, which is append-only, so a secret could never be
         # removed again (ticket_flow.plan_review is overwritten by the next review). Refuse before anything is written.
-        for field, val in (("note", note), ("blast", blast), *[("tests", x) for x in tests]):
+        for field, val in (("session", session), ("note", note), ("blast", blast), *[("tests", x) for x in tests]):
             if val and redact(val)[1]:
                 raise TaskError(400, f"the {field} has text the secret filter would hide (a key, token, password or "
                                      "connection string): reword it, plan reviews are kept for good")

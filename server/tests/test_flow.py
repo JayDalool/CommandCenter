@@ -316,9 +316,10 @@ class TechReview(Base):
     def test_a_secret_in_a_plan_review_is_refused_and_nothing_is_written(self):
         k = self.planned()
         secret = "password=hunter2hunter2"
-        for kw in ({"note": secret}, {"note": "ok", "blast": secret}, {"note": "ok", "tests": ["fine", secret]}):
-            self.refused(400, self.pl.plan_review, k, "APPROVE", "agent:tech-reviewer", kw.pop("note"), session="tr-1",
-                         **kw)
+        for kw in ({"note": secret}, {"note": "ok", "blast": secret}, {"note": "ok", "tests": ["fine", secret]},
+                   {"note": "ok", "session": "ghp_" + "a" * 24}):      # a reviewer session is stored in the event too
+            kw.setdefault("session", "tr-1")
+            self.refused(400, self.pl.plan_review, k, "APPROVE", "agent:tech-reviewer", kw.pop("note"), **kw)
         self.assertEqual(self.pl.work(k)["planReviews"], [])
         self.assertIsNone(self.pl.work(k)["planReview"])
         self.assertEqual(self.status(k), "RESEARCHING")
