@@ -1,9 +1,13 @@
 """The HTTP/WS surface: what exists, who may call it, what leaves it."""
 import contextlib
 import json
+import os
 import re
+import sys
+import tempfile
 import time
 import unittest
+from unittest import mock
 
 from starlette.testclient import TestClient
 
@@ -16,7 +20,7 @@ from ccd.store import Store
 from ccd.tasks import TaskStore
 
 from .fake_herdr import FakeHerdr
-from .helpers import PROJECTS, FakeGitHub, cfg, fake_git, fake_host, new_db, wait_sync
+from .helpers import PROJECTS, WORKTREES, FakeGitHub, cfg, fake_git, fake_host, new_db, wait_sync
 
 PORT = 7777
 TOKEN = "t" * 43
@@ -89,6 +93,82 @@ FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rul
                    "shell", "run", "kill", "restart", "delete", "worktree", "settings")
 
 
+# CC-062: the project paths in tests.helpers are the real repos, so the API tests used to read live checklists and
+# agent folders (CC-061 found it through a failing NoSecrets scan). NoLiveData gives every project a throwaway root and
+# an audit hook fails the test if anything still touches the live repos, the worktrees or ~/command-center.
+LIVE_ROOTS = tuple(sorted({os.path.realpath(p) for p in
+                           [q["path"] for q in PROJECTS] + [w for ws in WORKTREES.values() for w in ws]
+                           + ["/srv/server/worktrees", os.path.expanduser("~/command-center")]}))
+_WATCH = {"on": False, "hits": []}
+_PATH_EVENTS = {"open", "os.listdir", "os.scandir", "os.mkdir", "os.remove", "os.rename"}
+
+
+def _is_live(path):
+    try:
+        path = os.path.realpath(os.fsdecode(path))
+    except (TypeError, ValueError):
+        return False
+    return any(path == r or path.startswith(r + os.sep) for r in LIVE_ROOTS)
+
+
+def _live_data_hook(event, args):
+    if not _WATCH["on"]:
+        return
+    if event in _PATH_EVENTS and args and isinstance(args[0], (str, bytes, os.PathLike)):
+        targets = [args[0]]
+    elif event == "subprocess.Popen" and len(args) > 2:
+        # ccd runs git as `git -C <root> ...` (gitops.py, sources.py), so the cwd alone misses a live-repo read
+        # (CC-062 review). Check the cwd and every argument, including the value of --git-dir=<path> style flags.
+        targets = [args[2]] if args[2] else []
+        for a in (args[1] if isinstance(args[1], (list, tuple)) else [args[1]]):
+            if isinstance(a, (str, bytes, os.PathLike)):
+                a = os.fsdecode(a)
+                targets += [a, a.split("=", 1)[1]] if "=" in a else [a]
+    else:
+        return
+    for target in targets:
+        if _is_live(target):
+            _WATCH["hits"].append((event, os.fsdecode(target)))
+
+sys.addaudithook(_live_data_hook)  # audit hooks cannot be removed; _WATCH["on"] scopes it to one test
+
+
+class NoLiveData:
+    roots = None
+
+    def make_temp_roots(self):
+        self.roots = {}
+        for p in PROJECTS:
+            root = tempfile.mkdtemp(prefix="nolive-")
+            os.makedirs(os.path.join(root, "docs", "jay"))
+            self.roots[p["key"]] = root
+
+    def setUp(self):
+        if self.roots is None:
+            self.make_temp_roots()
+        real_cfg = cfg
+
+        def temp_cfg(**over):
+            c = real_cfg(**over)
+            for p in c["projects"]:
+                p["path"] = self.roots[p["key"]]
+            return c
+
+        patcher = mock.patch(f"{__name__}.cfg", temp_cfg)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        _WATCH["hits"].clear()
+        _WATCH["on"] = True
+        self.addCleanup(self.assert_no_live_reads)
+        super().setUp()
+
+    def assert_no_live_reads(self):
+        # runs after tearDown, so the daemon threads are already stopped
+        _WATCH["on"] = False
+        hits, _WATCH["hits"] = sorted(set(_WATCH["hits"])), []
+        self.assertEqual(hits, [], "the test touched live project data")
+
+
 class ApiBase(unittest.TestCase):
     def setUp(self):
         self.fake = FakeHerdr().start_in_thread()
@@ -133,7 +213,7 @@ class ApiBase(unittest.TestCase):
         return self.client.post(path, content=json.dumps(body), headers=headers)
 
 
-class Surface(ApiBase):
+class Surface(NoLiveData, ApiBase):
     def test_route_table_is_exactly_the_allowlist(self):
         table = set()
         for r in self.app.state.routes_table:
@@ -192,7 +272,7 @@ class Surface(ApiBase):
         self.assertEqual(self.post("/api/state", {}).status_code, 405)
 
 
-class Guarding(ApiBase):
+class Guarding(NoLiveData, ApiBase):
     def test_health_is_open_but_nothing_else_is(self):
         self.assertEqual(self.client.get("/api/health", headers=HOST).status_code, 200)
         for path in ("/api/state", "/api/activity", "/api/agents/wE:p2/tail"):
@@ -231,7 +311,7 @@ class Guarding(ApiBase):
                 ws.receive_json()
 
 
-class Reads(ApiBase):
+class Reads(NoLiveData, ApiBase):
     def test_state_shape(self):
         st = self.get("/api/state").json()
         for key in ("seq", "latestSeq", "agents", "coordinators", "projects", "alerts", "host", "sources",
@@ -286,7 +366,7 @@ class Reads(ApiBase):
         self.assertNotIn("UNIQUE-TAIL-MARKER-7731", json.dumps(rows) + json.dumps(kv))
 
 
-class WebSocket(ApiBase):
+class WebSocket(NoLiveData, ApiBase):
     def test_hello_then_live_event(self):
         with self.client.websocket_connect("/api/events", headers=AUTH) as ws:
             hello = ws.receive_json()
@@ -332,7 +412,7 @@ class WebSocket(ApiBase):
         self.daemon.unsubscribe(q)
 
 
-class Actions(ApiBase):
+class Actions(NoLiveData, ApiBase):
     def test_answer_only_reaches_a_blocked_agent(self):
         r = self.post("/api/action/answer", {"agentId": "wE:p2", "text": "1"})
         self.assertEqual(r.status_code, 409)
@@ -438,37 +518,20 @@ class Actions(ApiBase):
         self.fake = FakeHerdr().start_in_thread()  # for tearDown
 
 
-class NoSecrets(ApiBase):
+class NoSecrets(NoLiveData, ApiBase):
     # Credential-SHAPED values. The bare word "password" is allowed: checklist
     # lines like "create restic password" are instructions, not secrets.
     PATTERNS = [r"gh[pousr]_[A-Za-z0-9]{20,}", r"github_pat_", r"sk-[A-Za-z0-9_-]{20,}", r"ntfy\.sh/",
                 r"(?i)\b(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*[^\s'\",]{6,}",
                 r"(?i)bearer\s+[A-Za-z0-9._-]{10,}", r"BEGIN [A-Z ]*PRIVATE KEY", r"postgres(ql)?://[^\s:@]+:[^\s@]+@"]
 
-    # CC-061: the project paths in tests.helpers are the real repos, so /api/state used to read their live
-    # docs/jay/*.md and failed whenever a real task slug looked like an sk- key ("sk-status-in-github-issues").
-    # Every project now points at a throwaway root holding only made-up checklist files.
+    # CC-061: /api/state used to read the real repos' docs/jay/*.md and failed whenever a real task slug looked like
+    # an sk- key ("sk-status-in-github-issues"). NoLiveData (CC-062) now supplies the throwaway roots; each one holds
+    # only a made-up checklist.
     def setUp(self):
-        import os
-        import tempfile
-        from unittest import mock
-        self.roots = {}
-        for p in PROJECTS:
-            root = tempfile.mkdtemp(prefix="nosecrets-")
-            os.makedirs(os.path.join(root, "docs", "jay"))
-            self.roots[p["key"]] = root
-            self.write_checklist(p["key"], "UI_TESTS.md", "- [ ] T-1 \u00b7 check the made-up screen \u00b7 https://example.test/x\n")
-        real_cfg = cfg
-
-        def temp_cfg(**over):
-            c = real_cfg(**over)
-            for p in c["projects"]:
-                p["path"] = self.roots[p["key"]]
-            return c
-
-        patcher = mock.patch(f"{__name__}.cfg", temp_cfg)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.make_temp_roots()
+        for key in self.roots:
+            self.write_checklist(key, "UI_TESTS.md", "- [ ] T-1 \u00b7 check the made-up screen \u00b7 https://example.test/x\n")
         super().setUp()
 
     def write_checklist(self, project, name, text):
@@ -504,6 +567,49 @@ class NoSecrets(ApiBase):
         st = self.get("/api/state").text
         self.assertNotIn("supersecret-topic-123", st)
         self.assertNotIn("ntfy", st)
+
+
+class NoLiveDataTripwire(unittest.TestCase):
+    """CC-062: the audit hook really fires, so a clean run of the five API classes means something."""
+
+    def tripwire(self, action):
+        _WATCH["hits"].clear()
+        _WATCH["on"] = True
+        try:
+            action()
+            return list(_WATCH["hits"])
+        finally:
+            _WATCH["on"] = False
+            _WATCH["hits"].clear()
+
+    def attempt(self, fn, path):
+        def run():
+            try:
+                fn(path)
+            except OSError:
+                pass  # the event fires before the open, so a missing path still counts
+        return self.tripwire(run)
+
+    def test_reading_a_live_repo_or_home_is_caught(self):
+        self.assertTrue(self.attempt(open, os.path.join(PROJECTS[1]["path"], "docs", "jay", "UI_TESTS.md")))
+        self.assertTrue(self.attempt(os.listdir, PROJECTS[0]["path"]))
+        self.assertTrue(self.attempt(os.scandir, os.path.expanduser("~/command-center")))
+
+    def test_git_against_a_live_repo_is_caught_by_argument(self):
+        import subprocess
+        live = PROJECTS[1]["path"]
+        for argv in (["git", "-C", live, "status"], ["git", f"--git-dir={live}/.git", "log"],
+                     ["git", "--work-tree", live, "diff"], ["ls", live]):
+            self.assertTrue(self.attempt(lambda _p, a=argv: subprocess.run(a, capture_output=True), live), argv)
+
+    def test_git_in_a_temp_root_is_not_flagged(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self.tripwire(lambda: subprocess.run(["git", "-C", d, "status"], capture_output=True)), [])
+
+    def test_a_temp_root_is_not_flagged(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self.tripwire(lambda: os.listdir(d)), [])
 
 
 class Tokens(unittest.TestCase):
