@@ -16,7 +16,7 @@ from ccd.store import Store
 from ccd.tasks import TaskStore
 
 from .fake_herdr import FakeHerdr
-from .helpers import FakeGitHub, cfg, fake_git, fake_host, new_db, wait_sync
+from .helpers import PROJECTS, FakeGitHub, cfg, fake_git, fake_host, new_db, wait_sync
 
 PORT = 7777
 TOKEN = "t" * 43
@@ -444,6 +444,50 @@ class NoSecrets(ApiBase):
     PATTERNS = [r"gh[pousr]_[A-Za-z0-9]{20,}", r"github_pat_", r"sk-[A-Za-z0-9_-]{20,}", r"ntfy\.sh/",
                 r"(?i)\b(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*[^\s'\",]{6,}",
                 r"(?i)bearer\s+[A-Za-z0-9._-]{10,}", r"BEGIN [A-Z ]*PRIVATE KEY", r"postgres(ql)?://[^\s:@]+:[^\s@]+@"]
+
+    # CC-061: the project paths in tests.helpers are the real repos, so /api/state used to read their live
+    # docs/jay/*.md and failed whenever a real task slug looked like an sk- key ("sk-status-in-github-issues").
+    # Every project now points at a throwaway root holding only made-up checklist files.
+    def setUp(self):
+        import os
+        import tempfile
+        from unittest import mock
+        self.roots = {}
+        for p in PROJECTS:
+            root = tempfile.mkdtemp(prefix="nosecrets-")
+            os.makedirs(os.path.join(root, "docs", "jay"))
+            self.roots[p["key"]] = root
+            self.write_checklist(p["key"], "UI_TESTS.md", "- [ ] T-1 \u00b7 check the made-up screen \u00b7 https://example.test/x\n")
+        real_cfg = cfg
+
+        def temp_cfg(**over):
+            c = real_cfg(**over)
+            for p in c["projects"]:
+                p["path"] = self.roots[p["key"]]
+            return c
+
+        patcher = mock.patch(f"{__name__}.cfg", temp_cfg)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+
+    def write_checklist(self, project, name, text):
+        import os
+        with open(os.path.join(self.roots[project], "docs", "jay", name), "w") as f:
+            f.write(text)
+
+    def test_reads_only_its_own_temp_projects(self):
+        paths = {p["path"] for p in self.cfg["projects"]}
+        self.assertEqual(paths, set(self.roots.values()))
+        self.assertIn("made-up screen", self.get("/api/state").text)
+
+    def test_a_planted_real_looking_key_still_fails_the_scan(self):
+        key = "sk-" + "a1B2c3D4e5" * 4
+        self.write_checklist("samvision", "MY_ACTIONS.md", f"- [ ] T-2 \u00b7 rotate {key} \u00b7 https://example.test/y\n")
+        self.settle()
+        blob = self.get("/api/state").text
+        self.assertIn(key, blob, "the planted line reaches the response, so the scan below is exercised")
+        self.assertTrue(any(re.search(pat, blob) for pat in self.PATTERNS))
 
     def test_no_read_endpoint_leaks_the_token_or_credentials(self):
         blobs = [self.client.get("/api/health", headers=HOST).text, self.get("/api/state").text,
