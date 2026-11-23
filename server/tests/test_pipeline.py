@@ -185,6 +185,22 @@ class Review(Base):
             self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr(draft=draft))
             self.assertEqual(self.ts.get(k)["status"], "IN_REVIEW")
 
+    def test_one_reviewer_session_reviews_several_tickets_each_at_its_own_head(self):
+        # CC-068: a day's small tickets may share one review session (FLOW.md, bundled review). ccd must keep
+        # each verdict, head and review cycle on its own ticket, and still refuse the session that built one of them.
+        a, b = self.ticket(), self.ticket()
+        for k in (a, b):
+            self.to_review(k)
+        head_b = "1234567" + "0" * 33
+        self.pl.role(b, "implementer", "agent:implementer", model="sonnet", session="shared-review")
+        self.pl.review(a, "REQUEST_CHANGES", HEAD, "agent:reviewer", session="shared-review")
+        with self.assertRaises(TaskError):                                    # it built B, so it may not review B
+            self.pl.review(b, "APPROVE", head_b, "agent:reviewer", session="shared-review", pr=self.pr(head=head_b))
+        self.pl.review(b, "APPROVE", head_b, "agent:reviewer", session="other-review", pr=self.pr(head=head_b))
+        wa, wb = self.pl.work(a), self.pl.work(b)
+        self.assertEqual((wa["review"]["head"], wb["review"]["head"]), (HEAD, head_b))
+        self.assertEqual((wa["review"]["cycles"], wb["review"]["cycles"]), (1, 0))   # A's round never counts on B
+
     def test_review_keeps_the_model_of_the_same_session_only(self):
         # CC-067: writing the verdict used to reset the model; a new session must not inherit the old one either.
         k = self.ticket()

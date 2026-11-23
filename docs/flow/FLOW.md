@@ -40,13 +40,37 @@ The lead sets the size at intake. The technical reviewer may raise it. Only Jay 
 
 | Size | For | Route |
 |---|---|---|
-| small | wording, a setting, a one-file fix with a test | Intake, Build, Code review, Merge, Release, Done. User check too when the ticket is a UI ticket (`ui` label, needs-ui-review flag or DESIGN type) |
+| small | wording, a setting, a one-file fix with a test, or a bundle of small related items (see the bundle rule below) | Intake, Build, Code review, Merge, Release, Done. User check too when the ticket is a UI ticket (`ui` label, needs-ui-review flag or DESIGN type) |
 | standard | a feature or a bug across several files | all nine |
 | risky | security, sign-in, money, data migration, licensed or personal data, a redesign clients notice | all nine, plus Jay approves the plan after Technical review and approves the release |
 
 A ticket with a plan-gate label (`security`, `migration`, `destructive`, `architecture`, `product-decision`,
 `ambiguous`, `financial`, `legal`, `gate:plan`), a SECURITY or LEGAL type, or a needs-Jay or needs-legal flag is risky whatever
 was typed. The route decides which stages run; a skipped stage is refused by ccd, never chosen by an agent.
+
+**Bundle exception (Jay to confirm).** Related small requests in one area may be one ticket with several criteria and
+stay small only when every item would be small alone, all are in one area, none touches a protected or sensitive path,
+and the whole change is at most 3 files plus their tests. Otherwise the bundle is standard.
+
+## Models and usage
+
+Use the cheapest model that can do the seat's work. The agent's own default is the model; a lead never passes a
+stronger one for routine work. A stronger model is for a risky plan, architecture, or a bug that survived two review
+rounds.
+
+| Model | Used for |
+|---|---|
+| Haiku | searches (Explore), status checks, relays |
+| Sonnet | developers, user-reviewer, design-reviewer, verifier, code review of small tickets, portfolio, finance and accounting agents |
+| Opus | the lead by default, investigator, tech-reviewer, security-engineer, software-architect, code review of standard and risky tickets |
+| Fable | leads only, for hard work as listed below; never for a seat agent's routine work |
+| Codex | the second code review on risky tickets and protected paths only (a fresh Claude session when Codex is out) |
+
+- Small tickets get one Sonnet code reviewer per round and no second reviewer, unless they touch the repo's protected
+  or sensitive paths (its `AGENTS.md` list, which wins over this page): those get Opus plus Codex as for risky tickets.
+- A fix after REQUEST_CHANGES is reviewed by a new fresh Sonnet session on the new head. The two-round limit stays.
+- Codex reviews only risky tickets and protected paths (D-024 clause 15).
+- Nothing in ccd enforces models or this split; the lead follows it by instruction.
 
 ## What a ticket carries
 

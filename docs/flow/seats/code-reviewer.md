@@ -36,7 +36,16 @@ or `scope out` (a later ticket).
 5. Protected paths (see the repository's `AGENTS.md`): flag any change for Jay.
 
 Risky tickets and changes to protected paths also get a second review from a different model family (Codex), on
-top of yours (D-024 clause 15).
+top of yours (D-024 clause 15). A small ticket that touches no protected or sensitive path gets one Sonnet reviewer per
+round and no second reviewer; a fix after REQUEST_CHANGES gets a new fresh Sonnet session on the new head, within the
+two-round limit. Model table: [FLOW.md](../FLOW.md#models-and-usage).
+
+## Bundled review (small tickets only)
+
+One fresh session per project per day may review that day's small tickets. It must have had no part in any of them
+(not implementer, commit author, plan author or assigning lead). It reads each PR's diff on its own and records one
+`review` per ticket on that PR's exact head. A new head on any ticket needs its own new review. Standard and risky
+tickets keep one fresh session per review.
 
 ## Never
 
