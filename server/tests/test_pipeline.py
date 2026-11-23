@@ -185,6 +185,20 @@ class Review(Base):
             self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr(draft=draft))
             self.assertEqual(self.ts.get(k)["status"], "IN_REVIEW")
 
+    def test_review_keeps_the_model_of_the_same_session_only(self):
+        # CC-067: writing the verdict used to reset the model; a new session must not inherit the old one either.
+        k = self.ticket()
+        self.to_review(k)
+        model = lambda: self.pl.work(k)["roles"]["reviewer"]["model"]
+        self.pl.role(k, "reviewer", "agent:reviewer", model="opus", session="review-1")
+        self.pl.review(k, "REQUEST_CHANGES", HEAD, "agent:reviewer", session="review-1")
+        self.assertEqual(model(), "opus")
+        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-2")
+        self.assertIsNone(model())
+        self.pl.role(k, "reviewer", "agent:reviewer", model="sonnet", session="review-2")
+        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-2", model="haiku")
+        self.assertEqual(model(), "haiku")
+
     def test_two_failed_review_cycles_block_for_jay(self):
         k = self.ticket()
         self.to_review(k)
