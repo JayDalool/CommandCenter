@@ -434,8 +434,27 @@ class Pipeline:
         f = self._flow(tid)
         out.update(size=flow_mod.shown_size(f["size"], out["policy"]), requirements=f["requirements"],
                    criteria=f["criteria"], planReview=f["planReview"], userCheck=f["userCheck"], closing=f["closing"])
-        out["flow"], out["handoffs"] = flow_mod.view(t, out, f, self._events(tid), out["policy"],
+        events = self._events(tid)
+        out["planReviews"] = self._plan_reviews(events)
+        out["flow"], out["handoffs"] = flow_mod.view(t, out, f, events, out["policy"],
                                                      len(self._children(tid)["open"]))
+        return out
+
+    @staticmethod
+    def _plan_reviews(events):
+        """CC-066: every technical plan review, oldest first. planReview holds only the latest (a new plan clears it),
+        so earlier notes, blast radius and tests are read back from the events. Events written before the fix carry
+        only the verdict: their text fields are None."""
+        out = []
+        for at, actor, kind, _field, _frm, _to, data in events:
+            if kind != "pipeline.plan_reviewed":
+                continue
+            try:
+                d = json.loads(data or "{}") if isinstance(data, str) else (data or {})
+            except ValueError:
+                d = {}
+            out.append({"verdict": d.get("verdict"), "by": actor, "session": d.get("session"), "at": at,
+                        "note": d.get("note"), "blast": d.get("blast"), "tests": d.get("tests")})
         return out
 
     def questions(self, tid):
@@ -1729,6 +1748,12 @@ class Pipeline:
         if not session:
             raise TaskError(400, "say which reviewer session reviews the plan (--session)")
         _meta(session, "session")
+        # CC-066: the review text now goes into ticket_events, which is append-only, so a secret could never be
+        # removed again (ticket_flow.plan_review is overwritten by the next review). Refuse before anything is written.
+        for field, val in (("session", session), ("note", note), ("blast", blast), *[("tests", x) for x in tests]):
+            if val and redact(val)[1]:
+                raise TaskError(400, f"the {field} has text the secret filter would hide (a key, token, password or "
+                                     "connection string): reword it, plan reviews are kept for good")
 
         def fn(tid, t, w, at):
             self._need(t, ("RESEARCHING",), "a plan review")
@@ -1750,6 +1775,9 @@ class Pipeline:
                 new = size
             review = {"verdict": verdict, "by": actor, "session": session, "at": at, "note": note, "blast": blast,
                       "tests": tests}
+            # CC-066: every verdict's text also rides on its event, so work().planReviews keeps reviews that
+            # ticket_flow.plan_review loses when a new plan clears it.
+            kept = {"session": session, "note": note, "blast": blast, "tests": tests}
             work = {"roles": self._role(w, "tech-reviewer", model, session, at)}
             cols = {"plan_review": review}
             if new != f["size"]:
@@ -1765,10 +1793,10 @@ class Pipeline:
                                 blocked={"stage": "PLAN", "flowStage": "techReview", "reason": reason, "at": at})
                     return {"status": "BLOCKED"}, work, [
                         ("pipeline.plan_reviewed", f"plan sent back (round {rounds['techReview']})",
-                         {"verdict": verdict, "rounds": rounds["techReview"], "blocked": True}),
+                         dict(kept, verdict=verdict, rounds=rounds["techReview"], blocked=True)),
                         ("pipeline.blocked", reason, {"stage": "PLAN"})]
                 return {}, work, [("pipeline.plan_reviewed", f"plan sent back (round {rounds['techReview']})",
-                                   {"verdict": verdict, "rounds": rounds["techReview"]})]
+                                   dict(kept, verdict=verdict, rounds=rounds["techReview"]))]
             if new == "risky":
                 # The existing plan gate: Jay approves a risky plan after the technical review.
                 self._flow_set(tid, at, **cols)
@@ -1776,13 +1804,13 @@ class Pipeline:
                 work.update(gate="plan", gate_reason=reason[:300], plan_state="proposed",
                             confirmed=sorted(set(w["confirmed"]) | {"owner:plan"}))
                 return {}, work, [("pipeline.plan_reviewed", "plan approved; Jay approves risky plans",
-                                   {"verdict": verdict, "gate": True}),
+                                   dict(kept, verdict=verdict, gate=True)),
                                   ("pipeline.gate_opened", "plan gate: " + reason[:200], {"gate": "plan"})]
             cols["review_due"] = None
             self._flow_set(tid, at, **cols)
             work.update(plan_state="accepted", gate=None, gate_reason=None)
             return {"status": "READY_TO_IMPLEMENT"}, work, [("pipeline.plan_reviewed", "plan approved",
-                                                             {"verdict": verdict, "gate": False})]
+                                                             dict(kept, verdict=verdict, gate=False))]
         return self._tx(key, actor, fn)
 
     @staticmethod

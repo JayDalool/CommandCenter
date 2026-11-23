@@ -110,7 +110,7 @@ session re-opens them.
 | | |
 |---|---|
 | `GET /api/workspace/projects` | `{projects[{key,name,prefix,root,exists,branch,github{owner,repo,slug,url},coordinator,coordinatorState{state,how,candidates[{paneId,sessionId,status}]}}]}`. Roots come from `ccd/registry.py` only. `state` is `ready`, `found` (one unnamed Claude at the root: adopt it), `multiple` (pick one) or `none`, from the one resolver `ccd/coordid.py` |
-| `GET /api/tasks/{key}/work` | The ticket's durable pipeline state in one object: `stage`, `stages[]`, `plan`, `planState`, `policy`, `gate`, `roles`, `branch`, `worktree`, `prs`, `review{verdict,head,cycles}`, `verification`, `merge`, `handoff`, `blocked`, `findings[]` (plans/TICKET-PIPELINE-V1.md), and the delivery flow's `size`, `requirements`, `criteria`, `planReview`, `userCheck`, `closing`, `flow`, `handoffs` (see **Delivery flow** below) |
+| `GET /api/tasks/{key}/work` | The ticket's durable pipeline state in one object: `stage`, `stages[]`, `plan`, `planState`, `policy`, `gate`, `roles`, `branch`, `worktree`, `prs`, `review{verdict,head,cycles}`, `verification`, `merge`, `handoff`, `blocked`, `findings[]` (plans/TICKET-PIPELINE-V1.md), and the delivery flow's `size`, `requirements`, `criteria`, `planReview`, `planReviews`, `userCheck`, `closing`, `flow`, `handoffs` (see **Delivery flow** below) |
 | `POST /api/tasks/{key}/work/{op}` | One pipeline step, recorded as `X-CCD-Actor` (`agent:<role>`): `plan {plan}`, `start {branch, worktree}`, `review {verdict, head, findings}`, `verify {result, evidence}`, `handoff`, `block {reason}`, `role`, `finding`. `confirm {gate}` closes an owner gate and needs Jay AND Developer Unlock. Agents use `python -m ccd.pipeline_cli` |
 | `POST /api/coordinators/adopt` | DEVELOPER. `{project, sessionId}` binds that EXISTING Claude (a live one at the project root) as the coordinator; recorded by session id in `state/coordinator-bindings.json`, so a title change or a new pane id never breaks it. Never starts, resumes, renames or types into Claude |
 | `GET /api/files/list?project=&path=&git=1` | one folder: `{entries[{name,kind,size,mtime,protected,link,git?}], crumbs, truncated}`; `.git` never listed |
@@ -379,7 +379,9 @@ A sized ticket is in the pipeline from the moment it is sized (even in INBOX): l
 `GET /api/tasks/{key}/work` adds:
 
     size: "small"|"standard"|"risky"|null, requirements: string[], criteria: [{id, text, state: open|pass|fail, by, at, head}],
-    planReview: {verdict, by, session, at, note, blast, tests} | null,
+    planReview: {verdict, by, session, at, note, blast, tests} | null,   // the latest review; null once a new plan is recorded
+    planReviews: [{verdict, by, session, at, note, blast, tests}],        // every review, oldest first (CC-066); reviews
+                                                                          // from before CC-066 have note/blast/tests null
     userCheck: {result, head, pr, by, session, at, note} | null,
     closing: {note, by, at} | null,
     flow: {size, stage, route: string[], openChildren: number,
@@ -403,7 +405,7 @@ Every seat appears at least once per project; a seat with several holders (two d
 row each, oldest first; an empty seat has `session: null`. The lead's session is the coordinator's pane from the
 coordinator resolver; the others come from the `roles` of tickets in flight (open, past intake).
 
-Events (ticket timeline and `/api/activity` `task.pipeline` with `data.kind`; ids only): `pipeline.intake`,
+Events (ticket timeline and `/api/activity` `task.pipeline` with `data.kind`; mostly ids, but `pipeline.plan_reviewed` data in the timeline also carries the review's `session`, `note`, `blast` and `tests`, kept for good because events are append-only, so plan-review refuses text the secret filter would hide): `pipeline.intake`,
 `pipeline.criteria`, `pipeline.plan_reviewed`, `pipeline.user_checked`, `pipeline.user_check_stale`,
 `pipeline.closed_note`, `pipeline.flow_stale`.
 

@@ -1,6 +1,7 @@
 """The delivery flow (ccd/flow.py over ccd/pipeline.py): sizes, acceptance criteria, intake, technical review, user
 check, the closing note, WIP limits, children before parents, stale tickets, and the flow / handoffs read shapes."""
 import datetime
+import json
 import unittest
 from unittest import mock
 
@@ -268,6 +269,60 @@ class TechReview(Base):
                          ("RESEARCHING", "plan", "techReview", "jay"))
         self.pl.confirm(k, "plan", "jay")
         self.assertEqual(self.pl.work(k)["flow"]["stage"], "build")
+
+    def test_every_plan_review_stays_readable_after_a_new_plan(self):
+        # CC-066: a new plan cleared planReview, so the first review's note, blast and tests were lost for good.
+        k = self.planned()
+        self.pl.plan_review(k, "SEND_BACK", "agent:tech-reviewer", "A note", blast="A blast", tests=["A test"],
+                            session="s1")
+        self.pl.plan(k, PLAN, "agent:planner", session="inv-1")
+        w = self.pl.work(k)
+        self.assertIsNone(w["planReview"])
+        self.assertEqual([(r["verdict"], r["note"], r["blast"], r["tests"], r["session"]) for r in w["planReviews"]],
+                         [("SEND_BACK", "A note", "A blast", ["A test"], "s1")])
+        self.pl.plan_review(k, "APPROVE", "agent:tech-reviewer", "B note", blast="B blast", tests=["B test"],
+                            session="s2")
+        w = self.pl.work(k)
+        self.assertEqual([(r["verdict"], r["note"], r["blast"], r["tests"], r["session"], r["by"])
+                          for r in w["planReviews"]],
+                         [("SEND_BACK", "A note", "A blast", ["A test"], "s1", "agent:tech-reviewer"),
+                          ("APPROVE", "B note", "B blast", ["B test"], "s2", "agent:tech-reviewer")])
+        self.assertEqual(w["planReview"]["note"], "B note")
+        data = [json.loads(d) for (d,) in self.pl.db.execute(
+            "SELECT data FROM ticket_events WHERE kind='pipeline.plan_reviewed' ORDER BY id")]
+        self.assertEqual((data[0]["rounds"], data[1]["gate"]), (1, False))     # the old keys are still there
+
+    def test_a_risky_approve_and_the_blocking_send_back_keep_their_note(self):
+        k = self.planned(size="risky")
+        self.pl.plan_review(k, "APPROVE", "agent:tech-reviewer", "risky ok", session="tr-1")
+        self.assertEqual([r["note"] for r in self.pl.work(k)["planReviews"]], ["risky ok"])
+        k = self.planned()
+        self.pl.plan_review(k, "SEND_BACK", "agent:tech-reviewer", "first", session="tr-1")
+        self.pl.plan(k, PLAN, "agent:planner", session="inv-1")
+        self.pl.plan_review(k, "SEND_BACK", "agent:tech-reviewer", "second", session="tr-1")
+        self.assertEqual([r["note"] for r in self.pl.work(k)["planReviews"]], ["first", "second"])
+
+    def test_a_review_event_from_before_the_fix_has_null_text(self):
+        k = self.approved()
+        tid = self.ts._id_of(k)
+        # The table is append-only; drop the trigger in this throwaway test db to stage an event written before CC-066.
+        self.pl.db.execute("DROP TRIGGER ticket_events_append_only_u")
+        self.pl.db.execute("UPDATE ticket_events SET data=? WHERE ticket_id=? AND kind='pipeline.plan_reviewed'",
+                           ('{"verdict": "SEND_BACK", "rounds": 1}', tid))
+        r = self.pl.work(k)["planReviews"]
+        self.assertEqual((len(r), r[0]["verdict"], r[0]["note"], r[0]["blast"], r[0]["tests"], r[0]["session"]),
+                         (1, "SEND_BACK", None, None, None, None))
+
+    def test_a_secret_in_a_plan_review_is_refused_and_nothing_is_written(self):
+        k = self.planned()
+        secret = "password=hunter2hunter2"
+        for kw in ({"note": secret}, {"note": "ok", "blast": secret}, {"note": "ok", "tests": ["fine", secret]},
+                   {"note": "ok", "session": "ghp_" + "a" * 24}):      # a reviewer session is stored in the event too
+            kw.setdefault("session", "tr-1")
+            self.refused(400, self.pl.plan_review, k, "APPROVE", "agent:tech-reviewer", kw.pop("note"), **kw)
+        self.assertEqual(self.pl.work(k)["planReviews"], [])
+        self.assertIsNone(self.pl.work(k)["planReview"])
+        self.assertEqual(self.status(k), "RESEARCHING")
 
     def test_the_reviewer_raises_a_size_but_never_lowers_it(self):
         k = self.planned()
