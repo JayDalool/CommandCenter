@@ -185,6 +185,14 @@ class Review(Base):
             self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr(draft=draft))
             self.assertEqual(self.ts.get(k)["status"], "IN_REVIEW")
 
+    def test_review_keeps_the_model_recorded_by_role(self):
+        # CC-067: writing the verdict used to reset the reviewer's model to null.
+        k = self.ticket()
+        self.to_review(k)
+        self.pl.role(k, "reviewer", "agent:reviewer", model="opus")
+        self.pl.review(k, "REQUEST_CHANGES", HEAD, "agent:reviewer", session="review-1")
+        self.assertEqual(self.pl.work(k)["roles"]["reviewer"]["model"], "opus")
+
     def test_two_failed_review_cycles_block_for_jay(self):
         k = self.ticket()
         self.to_review(k)

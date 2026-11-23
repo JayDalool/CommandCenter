@@ -743,6 +743,9 @@ class Pipeline:
     @staticmethod
     def _role(w, role, model=None, session=None, at=None):
         roles = dict(w["roles"])
+        # CC-067: a later step that names no model (review, verify) must not erase the one `role --model` recorded.
+        if model is None:
+            model = (roles.get(role) or {}).get("model")
         roles[role] = {"model": _meta(model, "model"), "session": _meta(session, "session"), "at": at}
         return roles
 
