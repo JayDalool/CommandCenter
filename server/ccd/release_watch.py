@@ -1,25 +1,30 @@
 """CC-063: watch the release go-live.sh just switched to, and put the previous one back if it is bad.
 
-    python release_watch.py <watch dir>        (started by scripts/go-live.sh as the systemd user unit
-                                                cc-release-watch-<stamp>; the watch dir holds plan.json)
+    python release_watch.py <watch dir>            (started by scripts/go-live.sh as the systemd user unit
+                                                    cc-release-watch-<stamp>; the watch dir holds plan.json)
+    python release_watch.py --recover <watch dir>  (the unit's ExecStopPost: finish or undo an interrupted rollback)
 
 Why this is its own unit and a copy, with no ccd imports: it must outlive the pane that ran go-live.sh (a Bash tool
 call ends after 2 to 10 minutes), it must not die with the ccd it is judging, and it runs while the checkout it lives
-in is switched under it, so bash/python never read a file that changes underneath them. Standard library only.
+in is switched under it. Standard library only.
 
 What it does, in order:
-  1. takes the go-live lock (deploys/.go-live.lock) for the whole watch, so no second go-live starts;
-  2. checks the new release every 15 s for 60 s grace + 5 min: API (/api/health), daemon (unit, schema, /api/state,
-     herdr, crash rules), UI (GET / is the new index.html and every /assets/* it names answers 200). A check fails
-     after 2 bad samples in a row; a crash (NRestarts above the baseline, or the unit failed/inactive twice) at once;
-  3. on a failure puts back only what was live before: tasks.db (additive empty tables only), the checkout
-     (git switch --detach), the pins (pip --no-index from wheels go-live.sh downloaded), web/current. It never
-     fetches, builds, runs deploy-web.sh or npm, and never deploys a third release;
-  4. always leaves ccd started, writes result.json at once, one line to releases.jsonl at the end, and tells Jay in
-     Messages (retried for 30 minutes) as agent:lead-commandcenter.
+  1. takes the go-live lock (deploys/.go-live.lock) for the whole verdict, so no second go-live starts;
+  2. checks the new release every 15 s for 60 s grace + 5 min: API (/api/health), daemon (unit, the process that
+     answers is the unit's MainPID, schema, /api/state, herdr, crash rules), UI (GET / is the new index.html and
+     every /assets/* it names answers 200). A check fails after 2 bad samples in a row; a crash at once. A hard
+     deadline ends every watch: probes that never answered end as "inconclusive" (no rollback, no "healthy");
+  3. on a failure puts back only what was live before, as ONE transaction under .deploy.lock: tasks.db (additive
+     empty tables only), the checkout, the pins (pip --no-index from wheels go-live.sh downloaded), web/current. A
+     failed step undoes the ones before it, so ccd is only ever started on a whole release (never old code with the
+     new UI). It never fetches, builds, runs deploy-web.sh or npm, and never deploys a third release;
+  4. writes the verdict, a snapshot of what is live and its releases.jsonl line under the lock, then releases it and
+     tells Jay in Messages (retried for 30 minutes) as agent:lead-commandcenter.
+A journal (journal.json) lets --recover undo an interrupted rollback before ccd is started again.
 Failure table: docs/runbooks/go-live-auto-rollback.md.
 """
 import fcntl
+import http.client
 import json
 import os
 import re
@@ -27,28 +32,29 @@ import socket
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 
 ACTOR = "agent:lead-commandcenter"   # Messages accepts an agent post only as that conversation's lead
 CONVERSATION = "commandcenter"
 RUNBOOK = "docs/runbooks/go-live-auto-rollback.md"
 
-HEALTHY, ROLLED_BACK, ROLLBACK_FAILED, NO_PREVIOUS = "healthy", "rolled_back", "rollback_failed", "no_previous"
+HEALTHY, ROLLED_BACK, ROLLBACK_FAILED, NO_PREVIOUS, INCONCLUSIVE = (
+    "healthy", "rolled_back", "rollback_failed", "no_previous", "inconclusive")
 
 
 class Timing:
     interval = 15
     grace = 60              # the new ccd is still starting: bad samples do not count yet
     window = 300
+    hard_extra = 120        # the watch ends this long after grace + window whatever the probes say
     verify_grace = 60       # the same for the old release after a rollback
     verify_window = 120
     lock_wait = 30
-    answer_wait = 60        # how long the old code gets to answer after a pip failure
+    stop_wait = 30
     notify_total = 1800     # Messages retry budget
     backoff_first = 15
     backoff_cap = 300
-    http_timeout = 5
+    http_timeout = 5        # an overall budget per request, not an inactivity timeout
+    max_rebaselines = 2     # manual restarts tolerated in one watch
 
 
 class StepFailed(Exception):
@@ -110,7 +116,7 @@ class Watcher:
         self.cfg, self.plan = cfg, plan
         self.t = timing or Timing()
         self.run = run or _run
-        self._http = http or self._urllib_http
+        self._http = http or self._direct_http
         self.sleep, self.clock, self.wall = sleep, clock, wall
         self._herdr_up = herdr_up or self._socket_accepts
         self.python = os.path.join(cfg.repo, "server", ".venv", "bin", "python")
@@ -119,6 +125,7 @@ class Watcher:
         self.wheels = os.path.join(cfg.watch_dir, "wheels")
         self.checks, self.restarts, self.detail = {}, 0, {}
         self._lock_fd = None
+        self._deploy_fd = None
         self._token = None
 
     # ---------- plumbing ----------
@@ -137,18 +144,27 @@ class Watcher:
                 self._token = f.read().strip()
         return self._token
 
-    def _urllib_http(self, method, path, headers=None, body=None, timeout=5):
-        """(status, bytes); (None, b"") when nothing answered. urllib sends Host: 127.0.0.1:<port>, which is
-        exactly what ccd's Guard allows."""
-        req = urllib.request.Request(f"http://127.0.0.1:{self.cfg.port}{path}", data=body, method=method,
-                                     headers=headers or {})
+    def _direct_http(self, method, path, headers=None, body=None, timeout=5):
+        """(status, bytes); (None, b"") when nothing answered in time. Plain http.client to 127.0.0.1 only: no proxy
+        from the environment, no redirects, so X-CCD-Token can only ever reach the loopback ccd (CC-063 review). The
+        timeout is an overall budget, not just an idle timeout, so a trickling answer cannot stall the watch."""
+        deadline = time.monotonic() + timeout
+        conn = http.client.HTTPConnection("127.0.0.1", self.cfg.port, timeout=timeout)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return r.status, r.read()
-        except urllib.error.HTTPError as e:
-            return e.code, e.read()
-        except (OSError, ValueError):
+            conn.request(method, path, body=body, headers=headers or {})
+            resp = conn.getresponse()
+            data = b""
+            while True:
+                chunk = resp.read1(65536)   # what has arrived, so the budget check below runs between pieces
+                if not chunk:
+                    return resp.status, data
+                data += chunk
+                if time.monotonic() > deadline or len(data) > 16_000_000:
+                    return None, b""
+        except (OSError, http.client.HTTPException, ValueError):
             return None, b""
+        finally:
+            conn.close()
 
     def get(self, path, token=True):
         headers = {}
@@ -180,6 +196,7 @@ class Watcher:
     def unit_state(self):
         rc, out = self.systemctl("show", "ccd", "-p", "ActiveState", "-p", "NRestarts", "-p", "MainPID")
         kv = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+
         def num(k):
             try:
                 return int(kv.get(k, ""))
@@ -190,11 +207,25 @@ class Watcher:
     def git(self, *args, timeout=120):
         return self.run(["git", "-C", self.cfg.repo, *args], timeout)
 
+    def start_ccd(self):
+        return self.systemctl("start", "ccd")
+
+    def stop_ccd(self):
+        """Stop and CONFIRM it: switching files under a ccd that is still running would be a mixed release."""
+        self.systemctl("stop", "ccd")
+        end = self.clock() + self.t.stop_wait
+        while True:
+            if self.unit_state()["active"] in ("inactive", "failed"):
+                return True
+            if self.clock() >= end:
+                return False
+            self.sleep(1)
+
     # ---------- the checks ----------
 
-    def sample(self, expect_index, expect_schema, in_grace, unit):
+    def sample(self, expect_index, expect_schema, in_grace, unit, old_pid=None):
         """One round of the three checks. Each is 'ok', 'bad' or 'probe' (the watcher could not ask: a 401/403 or an
-        unreadable token says nothing about the release, so it never counts against it)."""
+        unreadable token says nothing about the release, so it never counts against it, and never counts for it)."""
         out = {"detail": {}}
         st, body = self.get("/api/health", token=False)
         health = None
@@ -210,9 +241,14 @@ class Watcher:
         daemon, why = "ok", ""
         if unit["active"] != "active":
             daemon, why = "bad", f"unit is {unit['active'] or 'unknown'}"
+        elif old_pid and unit["pid"] == old_pid:
+            daemon, why = "bad", f"ccd is still the process from before the restart (pid {old_pid})"
         elif health is not None:
             seen = (health.get("tasks") or {}).get("schemaVersion")
-            if expect_schema is not None and seen != expect_schema:
+            if health.get("pid") is not None and unit["pid"] and health["pid"] != unit["pid"]:
+                # The answer must come from the restarted instance, not from old code that is still running.
+                daemon, why = "bad", f"/api/health is pid {health['pid']} but the unit's MainPID is {unit['pid']}"
+            elif expect_schema is not None and seen != expect_schema:
                 daemon, why = "bad", f"schema v{seen}, expected v{expect_schema}"
             elif (health.get("herdr") or {}).get("ok") is False and self.plan.get("herdr_ok_before") is True \
                     and self._herdr_up():
@@ -224,6 +260,8 @@ class Watcher:
                 daemon = "probe"
             elif st != 200:
                 daemon, why = "bad", f"/api/state answered {st}"
+        if daemon == "ok" and health is None:
+            daemon = "probe"       # nothing proved the daemon's identity
         out["daemon"] = daemon
         if why:
             out["detail"]["daemon"] = why
@@ -247,16 +285,20 @@ class Watcher:
             out["detail"]["ui"] = why
         return out
 
-    def observe(self, grace, window, expect_index, expect_schema):
-        """None when the release stays healthy for grace + window, else the name of the failing check
-        (api, daemon, ui or crash). Crash rules look at systemd's NRestarts from a baseline taken now, from the NEW
-        ccd after go-live's own restart (systemd resets NRestarts to 0 on a manual restart, so an older baseline
-        would hide a crash loop)."""
+    def observe(self, grace, window, expect_index, expect_schema, base=None, old_pid=None):
+        """None when the release stays healthy for grace + window, a failing check (api, daemon, ui, crash), or
+        "inconclusive" when the probes never gave an answer either way by the HARD deadline. Always returns by
+        t0 + grace + window + hard_extra, whatever the samples say (CC-063 review: no watch may run for ever).
+        `base` is the instance go-live.sh recorded right after its restart (pid, NRestarts): a crash before the first
+        sample still shows as NRestarts above it. Without one the baseline is taken now."""
         t0 = self.clock()
         grace_until, end = t0 + grace, t0 + grace + window
-        base = self.unit_state()
+        hard = end + self.t.hard_extra
+        cur = self.unit_state()
+        base = dict(base) if base and base.get("restarts") is not None else cur
         streak = {"api": 0, "daemon": 0, "ui": 0}
-        down = 0
+        down, rebaselines = 0, 0
+        last_ok = False
         self.detail = {}
         while True:
             now = self.clock()
@@ -265,11 +307,15 @@ class Watcher:
                 self.detail["crash"] = f"ccd restarted by systemd ({base['restarts']} -> {u['restarts']})"
                 self.restarts = u["restarts"]
                 return "crash"
-            if u["pid"] and base["pid"] and u["pid"] != base["pid"]:
+            if u["pid"] and base.get("pid") and u["pid"] != base["pid"]:
                 # Someone restarted ccd by hand (NRestarts did not rise): not a crash. Start over with a new grace.
+                rebaselines += 1
                 self.log(f"ccd pid {base['pid']} -> {u['pid']} without a systemd restart: re-baselined")
-                base, grace_until = u, now + self.t.verify_grace
-                end = max(end, grace_until + 2 * self.t.interval)
+                if rebaselines > self.t.max_rebaselines:
+                    self.detail["inconclusive"] = "ccd was restarted by hand again and again"
+                    return INCONCLUSIVE
+                base, grace_until, old_pid = u, now + self.t.verify_grace, None
+                end = min(max(end, grace_until + 2 * self.t.interval), hard)
                 streak = dict.fromkeys(streak, 0)
                 down = 0
             if u["active"] in ("failed", "inactive"):
@@ -280,9 +326,10 @@ class Watcher:
             else:
                 down = 0
             in_grace = now < grace_until
-            s = self.sample(expect_index, expect_schema, in_grace, u)
+            s = self.sample(expect_index, expect_schema, in_grace, u, old_pid)
             self.checks = {k: s[k] for k in ("api", "daemon", "ui")}
             self.restarts = u["restarts"] or 0
+            last_ok = all(s[k] == "ok" for k in streak) and not in_grace
             for k in streak:
                 if s[k] == "ok":
                     streak[k] = 0
@@ -291,8 +338,15 @@ class Watcher:
                     self.detail[k] = s["detail"].get(k, "")
                     if streak[k] >= 2:
                         return k
-            if now >= end and not any(streak.values()):
+            if now >= end and last_ok:
                 return None
+            if now >= hard:
+                for k, n in streak.items():
+                    if n:
+                        return k
+                self.detail["inconclusive"] = "the probes did not give a clear answer before the deadline: " + \
+                    ", ".join(f"{k}={v}" for k, v in self.checks.items())
+                return INCONCLUSIVE
             self.sleep(self.t.interval)
 
     def _index(self, web_dir):
@@ -317,14 +371,22 @@ class Watcher:
     def pins_differ(self):
         return bool(self.plan.get("pins_differ"))
 
+    grew = False
+
     def preconditions(self):
         """Everything that can be checked before ccd is stopped. A miss changes nothing (ccd keeps running the new
         release) and returns (result, step, why); None means go."""
         p = self.plan
         prev = p.get("prev_web") or ""
-        if not prev or prev == p["new_web"] or self._index(prev) is None:
+        from_sha = p.get("from_sha") or ""
+        if not from_sha or not prev:
+            return NO_PREVIOUS, None, "no valid rollback target: the previous release could not be identified exactly"
+        if prev == p["new_web"] or self._index(prev) is None:
             return NO_PREVIOUS, None, "no previous UI release with an index.html to go back to"
-        rc, _ = self.git("cat-file", "-e", f"{p.get('from_sha') or 'x'}^{{commit}}")
+        rev = os.path.basename(prev).split("-")[1:2]
+        if "dirty" in os.path.basename(prev) or not rev or not from_sha.startswith(rev[0]) or len(from_sha) != 40:
+            return NO_PREVIOUS, None, "no valid rollback target: the previous UI release does not name its commit"
+        rc, _ = self.git("cat-file", "-e", f"{from_sha}^{{commit}}")
         if rc != 0:
             return NO_PREVIOUS, None, "the previous commit is not in the checkout"
         rc, out = self.git("status", "--porcelain", "--untracked-files=no")
@@ -353,8 +415,6 @@ class Watcher:
                     f"migration v{info['missing'][0]} has no in-place downgrade")
         return None
 
-    grew = False
-
     def moved(self):
         rc, head = self.git("rev-parse", "HEAD")
         if rc != 0 or head != self.plan["to_sha"]:
@@ -363,115 +423,180 @@ class Watcher:
             return "web/current is no longer the release being rolled back"
         return ""
 
-    def switch_link(self, target):
-        """ln -sfn + mv -T, under deploy-web.sh's own lock so a UI deploy cannot interleave."""
+    def take_deploy_lock(self):
+        """deploy-web.sh's .deploy.lock, held for the whole transaction so a UI deploy cannot interleave."""
+        os.makedirs(self.cfg.web_dir, exist_ok=True)
+        fd = os.open(os.path.join(self.cfg.web_dir, ".deploy.lock"), os.O_CREAT | os.O_RDWR, 0o644)
+        end = self.clock() + 10
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._deploy_fd = fd
+                return True
+            except OSError:
+                if self.clock() >= end:
+                    os.close(fd)
+                    return False
+                self.sleep(1)
+
+    def drop_deploy_lock(self):
+        if self._deploy_fd is not None:
+            os.close(self._deploy_fd)
+            self._deploy_fd = None
+
+    def switch_link(self, target, expect=None):
+        """ln -sfn + mv -T. The caller holds .deploy.lock. The target must be a real release directly under
+        releases/, and (when `expect` is given) web/current must still be exactly what the caller recorded."""
         base = self.cfg.web_dir
-        fd = os.open(os.path.join(base, ".deploy.lock"), os.O_CREAT | os.O_RDWR, 0o644)
+        real = os.path.realpath(target)
+        if os.path.dirname(real) != os.path.realpath(os.path.join(base, "releases")) or \
+                not os.path.isfile(os.path.join(real, "index.html")):
+            raise StepFailed("link", f"{target} is not a release under {base}/releases")
+        if expect is not None and self.current_web() != expect:
+            raise StepFailed("link", "web/current is not the release it was recorded as")
         try:
-            for _ in range(10):
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except OSError:
-                    self.sleep(1)
-            else:
-                raise StepFailed("link", ".deploy.lock is held (deploy-web.sh is running)")
             tmp = os.path.join(base, "current.next")
             try:
                 os.unlink(tmp)
             except FileNotFoundError:
                 pass
-            os.symlink(f"releases/{os.path.basename(target)}", tmp)
+            os.symlink(f"releases/{os.path.basename(real)}", tmp)
             os.replace(tmp, os.path.join(base, "current"))
         except OSError as e:
             raise StepFailed("link", str(e))
-        finally:
-            os.close(fd)
 
     def pip_from(self, name):
         # --no-index: a rollback never touches the network (CC-063); the wheels were downloaded during go-live.
-        rc, out = self.run([self.pip, "install", "-q", "--no-index", "--find-links", self.wheels, "-r",
-                            os.path.join(self.wheels, name)], 600)
-        return rc, out
+        return self.run([self.pip, "install", "-q", "--no-index", "--find-links", self.wheels, "-r",
+                         os.path.join(self.wheels, name)], 600)
 
-    def fall_back_to_target(self):
-        """The old release did not come up: put the release that was running back (not a third one). Best effort;
-        ccd is started afterwards whatever happened."""
-        self.log("falling back to the release that was live a moment ago")
-        self.systemctl("stop", "ccd")
-        for what, fn in (
-            ("checkout", lambda: self.git("switch", "-q", "--detach", self.plan["to_sha"])[0]),
-            ("pip", lambda: self.pip_from("new.txt")[0] if self.pins_differ() else 0),
-            ("link", lambda: self.switch_link(self.plan["new_web"])),
-        ):
+    def journal(self, state):
+        """What a --recover needs if this process is killed in the middle of the transaction."""
+        tmp = os.path.join(self.cfg.watch_dir, "journal.json.tmp")
+        with open(tmp, "w") as f:
+            json.dump({"state": state}, f)
+        os.replace(tmp, os.path.join(self.cfg.watch_dir, "journal.json"))
+
+    def read_journal(self):
+        try:
+            with open(os.path.join(self.cfg.watch_dir, "journal.json")) as f:
+                return json.load(f).get("state")
+        except (OSError, ValueError):
+            return None
+
+    def restore_target(self):
+        """Put the release that was running back, whole: checkout, pins, UI link. Every step is idempotent, so
+        this is also what --recover runs. ccd must be stopped. Returns what could not be restored."""
+        failed = []
+        rc, head = self.git("rev-parse", "HEAD")
+        if head != self.plan["to_sha"]:
+            rc, out = self.git("switch", "-q", "--detach", self.plan["to_sha"])
+            if rc != 0:
+                failed.append(f"checkout: {out[-120:]}")
+            elif self.pins_differ():
+                rc, out = self.pip_from("new.txt")
+                if rc != 0:
+                    failed.append(f"pip: {out[-120:]}")
+        if self.current_web() != self.plan["new_web"]:
             try:
-                if fn():
-                    self.log(f"fallback {what} failed")
+                self.switch_link(self.plan["new_web"])
             except StepFailed as e:
-                self.log(f"fallback {what} failed: {e.why}")
-        self.systemctl("start", "ccd")
-
-    def wait_answer(self, seconds):
-        end = self.clock() + seconds
-        while True:
-            st, _ = self.get("/api/health", token=False)
-            if st == 200:
-                return True
-            if self.clock() >= end:
-                return False
-            self.sleep(2)
+                failed.append(f"link: {e.why}")
+        return failed
 
     def roll_back(self):
-        """(result, step, why). Stops ccd only after every precondition passed; starts it again on every path."""
+        """(result, step, why). Stops ccd only after every precondition passed. Every step that fails is undone, so
+        ccd is started only on a whole release; it is started on every path."""
         pre = self.preconditions()
         if pre:
             return pre
         p = self.plan
-        self.systemctl("stop", "ccd")
+        if not self.take_deploy_lock():
+            return ROLLBACK_FAILED, "precondition", ".deploy.lock is held (a UI deploy is running)"
         started = False
         try:
-            if self.grew:
-                rc, out = self.run([self.python, "-m", "ccd.migration_safety", "rollback", "--db", self.db, "--to",
-                                    str(p["prev_schema"]), "--backup-dir",
-                                    os.path.join(self.cfg.watch_dir, "db-backup")],
-                                   300, cwd=os.path.join(self.cfg.repo, "server"))
-                if rc != 0:
-                    raise StepFailed("downgrade", out[-300:])
-            moved = self.moved()
-            if moved:
-                raise StepFailed("moved", moved)
-            rc, out = self.git("switch", "-q", "--detach", p["from_sha"])
-            if rc != 0:
-                raise StepFailed("checkout", out[-300:])
-            if self.pins_differ():
-                rc, out = self.pip_from("old.txt")
-                if rc != 0:
-                    self.systemctl("start", "ccd")
-                    started = True
-                    if self.wait_answer(self.t.answer_wait):
-                        raise StepFailed("pip", "old pins did not install; ccd runs the previous code anyway")
-                    self.fall_back_to_target()
-                    raise StepFailed("pip", "old pins did not install and the previous code did not answer")
+            self.journal("rolling_back")
+            if not self.stop_ccd():
+                raise StepFailed("stop", "ccd did not stop; nothing was switched")
             try:
-                self.switch_link(p["prev_web"])
-            except StepFailed:
-                self.systemctl("start", "ccd")
+                if self.grew:
+                    rc, out = self.run([self.python, "-m", "ccd.migration_safety", "rollback", "--db", self.db,
+                                        "--to", str(p["prev_schema"]), "--backup-dir",
+                                        os.path.join(self.cfg.watch_dir, "db-backup")],
+                                       300, cwd=os.path.join(self.cfg.repo, "server"))
+                    if rc != 0:
+                        raise StepFailed("downgrade", out[-300:])
+                moved = self.moved()
+                if moved:
+                    raise StepFailed("moved", moved)
+                rc, out = self.git("switch", "-q", "--detach", p["from_sha"])
+                if rc != 0:
+                    raise StepFailed("checkout", out[-300:])
+                if self.pins_differ():
+                    rc, out = self.pip_from("old.txt")
+                    if rc != 0:
+                        raise StepFailed("pip", out[-300:])
+                self.switch_link(p["prev_web"], expect=p["new_web"])
+            except StepFailed as e:
+                # Undo what was done: never start old code with the new UI or the other way round.
+                self.journal("restoring")
+                # "moved": someone else changed the checkout or UI under us; restoring would clobber their deploy.
+                undone = [] if e.step == "moved" else self.restore_target()
+                self.start_ccd()
                 started = True
-                raise
-            self.systemctl("start", "ccd")
+                self.journal("done")
+                raise StepFailed(e.step, e.why + (f"; COULD NOT RESTORE THE PREVIOUS STATE: {'; '.join(undone)}"
+                                                  if undone else ""))
+            self.start_ccd()
             started = True
+            self.journal("rolled_back")
             bad = self.observe(self.t.verify_grace, self.t.verify_window, self._index(p["prev_web"]),
                                p.get("prev_schema"))
+            if bad == INCONCLUSIVE:
+                self.journal("done")
+                raise StepFailed("verify", "the previous release could not be verified before the deadline; "
+                                           "it was left running: " + self.detail.get("inconclusive", ""))
             if bad:
-                self.fall_back_to_target()
-                raise StepFailed("verify", f"the previous release failed {bad}")
+                self.journal("restoring")
+                self.stop_ccd()
+                undone = self.restore_target()
+                self.start_ccd()
+                self.journal("done")
+                raise StepFailed("verify", f"the previous release failed {bad}" + (
+                    f"; COULD NOT RESTORE THE TARGET: {'; '.join(undone)}" if undone else ""))
+            self.journal("done")
             return ROLLED_BACK, None, ""
         except StepFailed as e:
             return ROLLBACK_FAILED, e.step, e.why
         finally:
             if not started:
                 # Restart=always does not restart a stopped unit: ccd must never be left down by this script.
-                self.systemctl("start", "ccd")
+                self.start_ccd()
+            self.drop_deploy_lock()
+
+    def recover(self):
+        """ExecStopPost: this process died or ended. If a rollback was cut off, restore the release that was running
+        (whole) before ccd is started; otherwise there is nothing to do. Never fights a go-live: no lock, no change."""
+        if self.read_journal() not in ("rolling_back", "restoring"):
+            return False
+        if not self.acquire_lock():
+            self.log("recover: the go-live lock is held; leaving ccd to that go-live")
+            return False
+        try:
+            if not self.take_deploy_lock():
+                self.log("recover: .deploy.lock is held; not touching the release")
+                return False
+            try:
+                self.stop_ccd()
+                failed = self.restore_target()
+                self.log("recover: restored the release that was running" + (f" (incomplete: {failed})" if failed else ""))
+                self.journal("done")
+                self.start_ccd()
+            finally:
+                self.drop_deploy_lock()
+        finally:
+            self._close_lock()
+        return True
 
     # ---------- result, lock, Messages ----------
 
@@ -484,15 +609,18 @@ class Watcher:
     def short(self, sha):
         return (sha or "")[:7]
 
-    def alert_text(self, result, step, why, check):
+    def alert_text(self, result, step, why, check, live):
         p = self.plan
         new = f"{os.path.basename(p['new_web'])} ({self.short(p['to_sha'])})"
-        name, sha = self.live_now()
+        name, sha = live
         if result == ROLLED_BACK:
             return f"Rollback: release {new} failed {check}; live is now {name} ({self.short(sha)})."
         if result == NO_PREVIOUS:
             return (f"Rollback: release {new} failed {check}; there is no previous release to go back to, "
                     f"so nothing was changed ({why}). Live is still {new}.")
+        if result == INCONCLUSIVE:
+            return (f"Release {new} could not be verified: {why}. It was left running and nothing was rolled back. "
+                    f"Check it by hand; live is {name} ({self.short(sha)}).")
         text = (f"Rollback FAILED at {step}: release {new} failed {check}; live is now {name} ({self.short(sha)}). "
                 f"{why}. ")
         if step == "downgrade":
@@ -515,11 +643,15 @@ class Watcher:
                     return False
                 self.sleep(1)
 
-    def release_lock(self):
-        # Once the verdict is final: a fix release must not wait for the 30-minute Messages retry.
+    def _close_lock(self):
         if self._lock_fd is not None:
             os.close(self._lock_fd)
             self._lock_fd = None
+
+    def release_lock(self):
+        """Clear the marker WHILE the lock is held (a later go-live writes its own marker only under the lock, so it
+        can never be the one deleted), then let go. Once the verdict is final a fix release need not wait for the
+        30-minute Messages retry."""
         path = os.path.join(self.cfg.deploys_dir, "watch", "active.json")
         try:
             with open(path) as f:
@@ -527,6 +659,27 @@ class Watcher:
                     os.unlink(path)
         except (OSError, ValueError):
             pass
+        self._close_lock()
+
+    def _jsonl(self, fn):
+        """releases.jsonl edits are serialised by a sidecar flock (one writer at a time)."""
+        os.makedirs(self.cfg.deploys_dir, exist_ok=True)
+        fd = os.open(os.path.join(self.cfg.deploys_dir, ".releases.lock"), os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            path = os.path.join(self.cfg.deploys_dir, "releases.jsonl")
+            try:
+                with open(path) as f:
+                    lines = [x for x in f.read().splitlines() if x]
+            except OSError:
+                lines = []
+            lines = fn(lines)
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                f.write("".join(x + "\n" for x in lines))
+            os.replace(tmp, path)
+        finally:
+            os.close(fd)
 
     def notify(self, text):
         """(notified, attempts). One Messages line as the lead; 2xx stops, 4xx other than 408/429 stops with
@@ -554,21 +707,36 @@ class Watcher:
             delay = min(delay * 2, self.t.backoff_cap)
 
     def finish(self, result, step, why, check):
+        """Under the lock: snapshot what is live, write the verdict and its releases.jsonl line. Then let go of the
+        lock and only then tell Jay, from that snapshot (a go-live that starts right after must not change the
+        story)."""
         p = self.plan
-        rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.wall())), "from": p.get("from_sha"),
-               "to": p["to_sha"], "checks": self.checks, "restarts": self.restarts, "result": result, "step": step,
-               "check": check, "reason": why, "notified": None, "attempts": 0}
+        live = self.live_now()
+        rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.wall())), "stamp": p.get("stamp"),
+               "from": p.get("from_sha"), "to": p["to_sha"], "checks": self.checks, "restarts": self.restarts,
+               "result": result, "step": step, "check": check, "reason": why, "notified": None, "attempts": 0,
+               "live": {"web": live[0], "sha": live[1]}}
+        if result != HEALTHY:
+            rec["message"] = self.alert_text(result, step, why, check, live)
         res_path = os.path.join(self.cfg.watch_dir, "result.json")
         self._write_json(res_path, rec)            # go-live.sh is polling for this file
+        keep = ("at", "stamp", "from", "to", "checks", "restarts", "result", "step", "notified", "attempts")
+        self._jsonl(lambda lines: lines + [json.dumps({k: rec[k] for k in keep})])
         self.release_lock()
         if result != HEALTHY:
-            text = self.alert_text(result, step, why, check)
-            rec["message"] = text
-            rec["notified"], rec["attempts"] = self.notify(text)
+            rec["notified"], rec["attempts"] = self.notify(rec["message"])
             self._write_json(res_path, rec)
-        with open(os.path.join(self.cfg.deploys_dir, "releases.jsonl"), "a") as f:
-            f.write(json.dumps({k: rec[k] for k in ("at", "from", "to", "checks", "restarts", "result", "step",
-                                                    "notified", "attempts")}) + "\n")
+
+            def update(lines):
+                out = []
+                for x in lines:
+                    d = json.loads(x)
+                    if d.get("stamp") == rec["stamp"] and d.get("at") == rec["at"]:
+                        d["notified"], d["attempts"] = rec["notified"], rec["attempts"]
+                        x = json.dumps(d)
+                    out.append(x)
+                return out
+            self._jsonl(update)
         return rec
 
     def run_all(self):
@@ -579,8 +747,13 @@ class Watcher:
             result, step, why, check = ROLLBACK_FAILED, "lock", "the go-live lock is held by another run", "none"
         else:
             try:
-                check = self.observe(self.t.grace, self.t.window, self._index(p["new_web"]), p.get("new_schema"))
-                if check:
+                base = {"restarts": p.get("base_restarts"), "pid": p.get("base_pid")}
+                check = self.observe(self.t.grace, self.t.window, self._index(p["new_web"]), p.get("new_schema"),
+                                     base=base, old_pid=p.get("old_pid"))
+                if check == INCONCLUSIVE:
+                    result, step, why = INCONCLUSIVE, None, self.detail.get("inconclusive", "")
+                    check = "probes"
+                elif check:
                     first = self.detail.get(check, "")   # the verify pass below overwrites self.detail
                     self.log(f"release failed {check}: {first}; rolling back")
                     result, step, why = self.roll_back()
@@ -588,19 +761,24 @@ class Watcher:
                 else:
                     self.log("release healthy")
             except Exception as e:   # noqa: BLE001 - whatever happens, ccd must end up started
-                self.systemctl("start", "ccd")
+                self.start_ccd()
                 result, step, why = ROLLBACK_FAILED, "error", f"{type(e).__name__}: {e}"
                 check = check or "error"
         return self.finish(result, step, why, check or "none")
 
 
 def main(argv):
-    if len(argv) != 2:
-        raise SystemExit("usage: release_watch.py <watch dir>")
-    watch_dir = os.path.abspath(argv[1])
+    recover = len(argv) == 3 and argv[1] == "--recover"
+    if not recover and len(argv) != 2:
+        raise SystemExit("usage: release_watch.py [--recover] <watch dir>")
+    watch_dir = os.path.abspath(argv[-1])
     with open(os.path.join(watch_dir, "plan.json")) as f:
         plan = json.load(f)
-    Watcher(Config(os.environ, watch_dir), plan).run_all()
+    w = Watcher(Config(os.environ, watch_dir), plan)
+    if recover:
+        w.recover()
+    else:
+        w.run_all()
     return 0
 
 

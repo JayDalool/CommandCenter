@@ -28,7 +28,7 @@
 #   9. starts the release watch (server/ccd/release_watch.py, its own systemd user unit, run from a copy) and waits
 #      for its verdict. The watch checks the new release for 5 minutes and, if it is bad, puts the previous one
 #      back by itself (CC-063). Exit codes: 0 healthy, 3 rolled back, 4 rollback failed, 5 no previous release,
-#      6 still watching (run --result), 7 not watched. Anything but 0: do not record the ticket deployed.
+#      6 still watching (run --result), 7 not watched, 8 inconclusive. Anything but 0: do not record the ticket deployed.
 # and prints the exact manual rollback. It never touches herdr or any agent.
 set -euo pipefail
 
@@ -78,6 +78,9 @@ cd "$REPO"
 DEPLOYS="$HOME/command-center/deploys/commandcenter"
 WATCH_ROOT="$DEPLOYS/watch"
 DEADLINE="${CC_GOLIVE_DEADLINE_S:-540}"
+START_TS="$(date +%s)"
+WEB="${CCD_WEB_DIR:-$HOME/.local/share/command-center/web}"
+elapsed() { echo $(( $(date +%s) - START_TS )); }
 
 unit_active() { systemctl --user is-active --quiet "$1" 2>/dev/null; }
 jget() {  # jget <file> <key>: a JSON value as text, "" when missing
@@ -147,6 +150,12 @@ exit_for() {
       echo "   Log: $dir/watch.log; steps: docs/runbooks/go-live-auto-rollback.md"
       echo "   $rec"
       exit 4 ;;
+    inconclusive)
+      echo "== INCONCLUSIVE: the release could not be verified before the deadline and was left running (nothing was rolled back)."
+      echo "   $(jget "$dir/result.json" message)"
+      echo "   Log: $dir/watch.log"
+      echo "   Do not record the ticket deployed with pass; check the release by hand and tell Jay."
+      exit 8 ;;
     no_previous)
       echo "== NO PREVIOUS RELEASE: the new release failed $(jget "$dir/result.json" check) and there was nothing to go back to; nothing was changed."
       echo "   Log: $dir/watch.log"
@@ -156,6 +165,17 @@ exit_for() {
       echo "go-live: $dir/result.json has no usable verdict" >&2
       exit 4 ;;
   esac
+}
+
+# A watcher that died in the middle of a rollback may have left the checkout, pins and UI half switched: its
+# --recover puts the release that was running back, whole, before ccd is started (it takes the same locks).
+recover_watch() {
+  local dir="$1"
+  [ -f "$dir/release_watch.py" ] || return 0
+  CCD_PORT="$PORT" CCD_WEB_DIR="$WEB" CCD_DATA_DIR="$(dirname "$DB")" CC_REPO="$REPO" \
+    CCD_TOKEN_FILE="${CCD_TOKEN_FILE:-$HOME/.config/command-center/ccd.token}" \
+    CCD_HERDR_SOCKET="${CCD_HERDR_SOCKET:-$HOME/.config/herdr/herdr.sock}" \
+    python3 "$dir/release_watch.py" --recover "$dir" >/dev/null 2>&1 || true
 }
 
 # One look at a watch: a verdict, still running (6), or a dead watcher. A watcher that died between ccd's stop and
@@ -168,6 +188,7 @@ check_watch() {
     exit 6
   fi
   [ -f "$dir/result.json" ] && exit_for "$dir"
+  recover_watch "$dir"
   systemctl --user start ccd >/dev/null 2>&1 || true
   printf '{"result":"rollback_failed","step":"watcher_died","reason":"the watcher stopped without a verdict","notified":false,"message":"The release watcher died before reporting; ccd was started again but the release is unchecked."}\n' > "$dir/result.json"
   exit_for "$dir"
@@ -181,6 +202,24 @@ if [ "$RESULT_ONLY" = 1 ]; then
   check_watch "$latest"
 fi
 
+# Refuse while a go-live or a release watch is running. Used twice: first as a read-only look (so a refused run
+# writes nothing, not even a fetched ref), then again under the lock.
+refuse_if_busy() {
+  local busy
+  busy="$(jget "$WATCH_ROOT/active.json" unit)"
+  if [ -n "$busy" ] && unit_active "$busy"; then
+    echo "go-live: release watch $busy is still running; wait for it (scripts/go-live.sh --result); nothing was changed" >&2
+    exit 1
+  fi
+}
+if [ "$DRY_RUN" = 0 ]; then
+  if [ -e "$DEPLOYS/.go-live.lock" ] && ! flock -n "$DEPLOYS/.go-live.lock" true; then
+    echo "go-live: another go-live or release watch holds $DEPLOYS/.go-live.lock; nothing was changed" >&2
+    exit 1
+  fi
+  refuse_if_busy
+fi
+
 # Only real changes to tracked files stop the switch. Untracked files (e.g. Claude Code's local .claude/)
 # are left exactly where they are; git itself refuses the switch if the branch would overwrite one.
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
@@ -188,24 +227,37 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   git status --short --untracked-files=no >&2
   exit 1
 fi
-PREV_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-PREV_SHA="$(git rev-parse HEAD)"
+WEB="${CCD_WEB_DIR:-$HOME/.local/share/command-center/web}"
 # What is live is what ccd serves: deploy-web.sh names each UI release <stamp>-<rev>[-dirty] from the commit it
 # was built at, and ccd was restarted on that same commit. The checkout's HEAD can be ahead of it (a git pull
-# after a merge), so the release name decides the rollback; HEAD is only the fallback.
-WEB="${CCD_WEB_DIR:-$HOME/.local/share/command-center/web}"
-live_rev="$(basename "$(readlink "$WEB/current" 2>/dev/null || true)" | cut -s -d- -f2)"
-LIVE_SHA=""
-if [ -n "$live_rev" ]; then
-  LIVE_SHA="$(git rev-parse -q --verify "$live_rev^{commit}" 2>/dev/null || true)"
-fi
-if [ -z "$LIVE_SHA" ]; then
-  echo "note: cannot tell the live version from $WEB/current; using the checkout's HEAD ${PREV_SHA:0:12}"
-elif [ "$LIVE_SHA" != "$PREV_SHA" ]; then
-  echo "note: the checkout is at ${PREV_SHA:0:12} but live is ${LIVE_SHA:0:12}; rollback and commit lists use live"
-  PREV_BRANCH=live
-  PREV_SHA="$LIVE_SHA"
-fi
+# after a merge), so the release name decides the rollback; HEAD is only the fallback for the printed text.
+# LIVE_EXACT is the full sha ONLY when the release name resolves to one commit and was not built dirty: the
+# automatic rollback never guesses (CC-063), without it the watch answers "no valid rollback target".
+# Called again under the go-live lock, so the previous release is captured while nobody else can change it.
+resolve_live() {
+  local quiet="$1" live_rev name
+  PREV_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+  PREV_SHA="$(git rev-parse HEAD)"
+  PREV_WEB=""
+  [ -f "$WEB/current/index.html" ] && PREV_WEB="$(readlink -f "$WEB/current")"
+  name="$(basename "$(readlink "$WEB/current" 2>/dev/null || true)")"
+  live_rev="$(echo "$name" | cut -s -d- -f2)"
+  LIVE_SHA=""
+  LIVE_EXACT=""
+  if [ -n "$live_rev" ]; then
+    LIVE_SHA="$(git rev-parse -q --verify "$live_rev^{commit}" 2>/dev/null || true)"
+  fi
+  case "$name" in *-dirty) ;; *) LIVE_EXACT="$LIVE_SHA" ;; esac
+  [ -n "$PREV_WEB" ] || LIVE_EXACT=""
+  if [ -z "$LIVE_SHA" ]; then
+    [ "$quiet" = quiet ] || echo "note: cannot tell the live version from $WEB/current; using the checkout's HEAD ${PREV_SHA:0:12}"
+  elif [ "$LIVE_SHA" != "$PREV_SHA" ]; then
+    [ "$quiet" = quiet ] || echo "note: the checkout is at ${PREV_SHA:0:12} but live is ${LIVE_SHA:0:12}; rollback and commit lists use live"
+    PREV_BRANCH=live
+    PREV_SHA="$LIVE_SHA"
+  fi
+}
+resolve_live loud
 safe="$(echo "$BRANCH" | tr '/' '-')"
 backup="$BACKUPS/tasks.db.pre-$safe-<stamp>"
 
@@ -256,10 +308,14 @@ if ! flock -n 9; then
   echo "go-live: another go-live or release watch holds $DEPLOYS/.go-live.lock; nothing was changed" >&2
   exit 1
 fi
-busy="$(jget "$WATCH_ROOT/active.json" unit)"
-if [ -n "$busy" ] && unit_active "$busy"; then
-  echo "go-live: release watch $busy is still running; wait for it (scripts/go-live.sh --result); nothing was changed" >&2
-  exit 1
+refuse_if_busy
+# The lock is ours: whatever was live a moment ago may have changed (a rollback just finished), so the previous
+# release is captured again here, under the lock, together with its exact commit.
+OLD_SHA="$PREV_SHA"
+resolve_live quiet
+[ "$PREV_SHA" = "$OLD_SHA" ] || echo "note: live changed while waiting for the lock; the rollback target is now ${PREV_SHA:0:12}"
+if [ -z "$LIVE_EXACT" ]; then
+  echo "!! no valid rollback target: the live release does not name one exact commit, so the release watch can check this go-live but cannot roll it back"
 fi
 
 stamp="$(date +%Y%m%dT%H%M%S)"
@@ -276,6 +332,14 @@ names = sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n
 for n in names[:-5]:
     shutil.rmtree(os.path.join(root, n), ignore_errors=True)
 PY
+
+# The watcher is staged NOW, from the release being deployed (else from this checkout), before anything changes: a
+# target that predates the file, or a failed copy, must still end in the NOT WATCHED path (exit 7), not a crash.
+WATCHER_STAGED=0
+if git show "origin/$BRANCH:server/ccd/release_watch.py" > "$wdir/release_watch.py" 2>/dev/null \
+   || cp "$REPO/server/ccd/release_watch.py" "$wdir/release_watch.py" 2>/dev/null; then
+  WATCHER_STAGED=1
+fi
 
 # The rollback must not need the network, so both pin sets are downloaded NOW, before anything changes (CC-063).
 # If they cannot be, stop here: a go-live whose rollback could not run is not worth starting.
@@ -314,10 +378,6 @@ fi
 # What the rollback must put back, recorded BEFORE anything is switched (CC-063): the exact UI release dir that is
 # current (the previous release is not saved anywhere else), the schema version of tasks.db, and whether herdr was
 # fine under the old ccd (herdr is not part of a release, so it only counts against the new one if it was ok before).
-PREV_WEB=""
-if [ -f "$WEB/current/index.html" ]; then
-  PREV_WEB="$(readlink -f "$WEB/current")"
-fi
 PREV_SCHEMA=""
 if [ -f "$DB" ]; then
   PREV_SCHEMA="$(python3 - "$DB" <<'PY' 2>/dev/null || true
@@ -376,17 +436,27 @@ echo "== Claude skills (/night-shift, /ui-test) and the AskUserQuestion hook"
 scripts/install-claude-commands.sh | sed 's/^/   /'
 
 echo "== restart ccd"
-systemctl --user restart ccd
+# set -e must not end the script here: a restart that fails after the checkout and UI changed is exactly when the
+# release watch has to take over (it finds ccd down, rolls back and starts it).
+OLD_PID="$(systemctl --user show ccd -p MainPID --value 2>/dev/null || true)"
+RESTART_OK=1
+if ! systemctl --user restart ccd; then
+  RESTART_OK=0
+  echo "!! systemctl restart ccd failed; the release watch will judge it" >&2
+fi
+# The instance the watch must judge, recorded right after the restart: a crash before its first sample still
+# shows as NRestarts above this, and the process that answers must be this one (CC-063).
+BASE_PID="$(systemctl --user show ccd -p MainPID --value 2>/dev/null || true)"
+BASE_RESTARTS="$(systemctl --user show ccd -p NRestarts --value 2>/dev/null || true)"
 
-# CC-063: from here the release watch decides. It replaces the old 30 s "does it answer" loop, which could only
-# print a rollback and never checked more than /api/health once.
 echo "== start the release watch ($unit)"
 NEW_WEB="$(readlink -f "$WEB/current" 2>/dev/null || true)"
 NEW_SCHEMA="$(cd server && .venv/bin/python -c 'from ccd import tasks; print(tasks.SCHEMA_VERSION)' 2>/dev/null || true)"
-cp "$REPO/server/ccd/release_watch.py" "$wdir/release_watch.py"
-STAMP="$stamp" UNIT="$unit" FROM_SHA="$PREV_SHA" TO_SHA="$(git rev-parse HEAD)" PREV_WEB="$PREV_WEB" NEW_WEB="$NEW_WEB" \
+PLAN_OK=0
+if STAMP="$stamp" UNIT="$unit" FROM_SHA="$LIVE_EXACT" TO_SHA="$(git rev-parse HEAD)" PREV_WEB="$PREV_WEB" NEW_WEB="$NEW_WEB" \
   PREV_SCHEMA="$PREV_SCHEMA" NEW_SCHEMA="$NEW_SCHEMA" HERDR_OK_BEFORE="$HERDR_OK_BEFORE" PINS_DIFFER="$PINS_DIFFER" \
-  WHEELS_OK="$WHEELS_OK" BACKUP="$backup" python3 - "$wdir/plan.json" <<'PY'
+  WHEELS_OK="$WHEELS_OK" BACKUP="$backup" OLD_PID="$OLD_PID" BASE_PID="$BASE_PID" BASE_RESTARTS="$BASE_RESTARTS" \
+  python3 - "$wdir/plan.json" <<'PY'
 import json, os, sys
 e = os.environ
 def num(k):
@@ -394,51 +464,66 @@ def num(k):
 json.dump({"stamp": e["STAMP"], "unit": e["UNIT"], "from_sha": e["FROM_SHA"], "to_sha": e["TO_SHA"],
            "prev_web": e["PREV_WEB"], "new_web": e["NEW_WEB"], "prev_schema": num("PREV_SCHEMA"),
            "new_schema": num("NEW_SCHEMA"), "herdr_ok_before": {"true": True, "false": False}.get(e["HERDR_OK_BEFORE"]),
-           "pins_differ": e["PINS_DIFFER"] == "1", "wheels_ok": e["WHEELS_OK"] == "1", "backup": e["BACKUP"]},
+           "pins_differ": e["PINS_DIFFER"] == "1", "wheels_ok": e["WHEELS_OK"] == "1", "backup": e["BACKUP"],
+           "old_pid": num("OLD_PID"), "base_pid": num("BASE_PID"), "base_restarts": num("BASE_RESTARTS")},
           open(sys.argv[1], "w"))
 PY
+then
+  PLAN_OK=1
+fi
 
 watching=0
-if systemd-run --user --unit "$unit" --collect --quiet \
-     -p "ExecStopPost=$(command -v systemctl) --user start ccd" \
-     -p "StandardOutput=append:$wdir/watch.out" -p "StandardError=append:$wdir/watch.out" \
-     -E "CCD_PORT=$PORT" -E "CCD_WEB_DIR=$WEB" -E "CCD_DATA_DIR=$(dirname "$DB")" -E "CC_REPO=$REPO" \
-     -E "CCD_TOKEN_FILE=${CCD_TOKEN_FILE:-$HOME/.config/command-center/ccd.token}" \
-     -E "CCD_HERDR_SOCKET=${CCD_HERDR_SOCKET:-$HOME/.config/herdr/herdr.sock}" \
-     -E "HOME=$HOME" -E "PATH=$PATH" \
-     "$(command -v python3)" "$wdir/release_watch.py" "$wdir" >/dev/null 2>&1; then
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    if unit_active "$unit" || [ -f "$wdir/result.json" ]; then watching=1; break; fi
-    sleep 0.5
-  done
+if [ "$WATCHER_STAGED" = 1 ] && [ "$PLAN_OK" = 1 ]; then
+  # active.json is written BEFORE the watcher starts, while this script still holds the lock: there is no moment
+  # in which a live watcher is unannounced. (A shell that dies after this leaves a marker naming a unit that is
+  # not active, which the next go-live ignores.)
+  python3 -c 'import json,sys,time; json.dump({"unit": sys.argv[2], "until": time.time() + 600}, open(sys.argv[1], "w"))' \
+    "$WATCH_ROOT/active.json" "$unit" || true
+  # ExecStopPost, twice: first undo a cut-off rollback so ccd is never started on a half-switched release, then
+  # start ccd whatever happened (Restart=always does not restart a stopped unit).
+  if systemd-run --user --unit "$unit" --collect --quiet \
+       -p "ExecStopPost=-$(command -v python3) $wdir/release_watch.py --recover $wdir" \
+       -p "ExecStopPost=$(command -v systemctl) --user start ccd" \
+       -p "StandardOutput=append:$wdir/watch.out" -p "StandardError=append:$wdir/watch.out" \
+       -E "CCD_PORT=$PORT" -E "CCD_WEB_DIR=$WEB" -E "CCD_DATA_DIR=$(dirname "$DB")" -E "CC_REPO=$REPO" \
+       -E "CCD_TOKEN_FILE=${CCD_TOKEN_FILE:-$HOME/.config/command-center/ccd.token}" \
+       -E "CCD_HERDR_SOCKET=${CCD_HERDR_SOCKET:-$HOME/.config/herdr/herdr.sock}" \
+       -E "HOME=$HOME" -E "PATH=$PATH" \
+       "$(command -v python3)" "$wdir/release_watch.py" "$wdir" >/dev/null 2>&1; then
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      if unit_active "$unit" || [ -f "$wdir/result.json" ]; then watching=1; break; fi
+      sleep 0.5
+    done
+  fi
 fi
 if [ "$watching" = 0 ]; then
+  rm -f "$WATCH_ROOT/active.json"
+  systemctl --user start ccd >/dev/null 2>&1 || true   # never leave ccd stopped because the watch could not start
   echo "== NOT WATCHED: the release watch did not start, so nothing checks this release and nothing rolls it back." >&2
-  echo "   ccd was restarted on the new release. Do not record the ticket deployed; tell Jay." >&2
+  [ "$RESTART_OK" = 1 ] || echo "   ccd failed to restart on the new release." >&2
+  echo "   Do not record the ticket deployed; tell Jay." >&2
   echo "   Check by hand (curl 127.0.0.1:$PORT/api/health, the UI), and if it is bad:" >&2
   rollback_text >&2
   exit 7
 fi
-# The watcher takes the lock for its whole run; active.json is written before this script lets go of it, so a second
-# go-live is refused from the first moment (it checks both).
-python3 -c 'import json,sys,time; json.dump({"unit": sys.argv[2], "until": time.time() + 600}, open(sys.argv[1], "w"))' \
-  "$WATCH_ROOT/active.json" "$unit"
+# The watcher takes the lock for its whole verdict; the marker was written before it started. Let go now.
 exec 9>&-
 
-echo "== watching the release (up to $((DEADLINE - SECONDS)) s more; log $wdir/watch.log)"
+echo "== watching the release (up to $((DEADLINE - $(elapsed))) s more; log $wdir/watch.log)"
 while :; do
   if [ -f "$wdir/result.json" ]; then
     [ "$(jget "$wdir/result.json" result)" = healthy ] && break
     exit_for "$wdir"
   fi
-  if ! unit_active "$unit"; then
-    [ -f "$wdir/result.json" ] && continue   # the verdict landed as the unit ended: read it at the top
-    check_watch "$wdir"                      # no verdict, no unit: ccd is started here and this exits 4
-  fi
-  if [ "$SECONDS" -ge "$DEADLINE" ]; then
+  # the deadline is checked before anything else can fail or hang, and counts from the start of this script
+  if [ "$(elapsed)" -ge "$DEADLINE" ]; then
     echo "== still watching: the release is not judged yet. Run: scripts/go-live.sh --result"
     echo "   Do not record the ticket deployed until it says healthy (exit 0)."
     exit 6
+  fi
+  if ! unit_active "$unit"; then
+    [ -f "$wdir/result.json" ] && continue   # the verdict landed as the unit ended: read it at the top
+    check_watch "$wdir"                      # no verdict, no unit: recovered, ccd started here, exits 4
   fi
   sleep 0.5
 done
@@ -452,7 +537,8 @@ Sign in: start CommandCenter.exe on Windows, or run
   $REPO/scripts/cc-session --url
 and open the link.
 
-$(rollback_text)
+Rollback: automatic. The release watch (docs/runbooks/go-live-auto-rollback.md) has judged this release healthy;
+a later failure is handled by hand from that runbook, never by restoring a database backup over live data.
 
 Old Command Center UI tickets (dry run first, then --apply):
   $REPO/scripts/reconcile-cc-ui.py

@@ -118,8 +118,10 @@ GO_LIVE_TEMPLATE = (
     "10 lines.\n"
     "4. Then stop and wait for Jay. Not authorized by this message: deploying, running migrations, restarting "
     "services, merging, force-push, changing secrets or infrastructure config, any other project. Only after Jay "
-    "confirms the deploy in this pane: deploy by the runbook, run its checks, roll back by the runbook right away if "
-    "one fails, and record each ticket ({approved}): python -m ccd.pipeline_cli deployed <KEY> --role coordinator "
+    "confirms the deploy in this pane: deploy by the runbook and wait for the release watch of scripts/go-live.sh: it rolls back by itself "
+    "if a check fails (exit 0 healthy, 3 rolled back, 4 rollback failed, 5 no previous release, 6 still watching: run "
+    "scripts/go-live.sh --result, 7 not watched, 8 inconclusive); never roll back by hand while a watch is active. "
+    "Record each ticket ({approved}) as pass only on exit 0, else fail: python -m ccd.pipeline_cli deployed <KEY> --role coordinator "
     "--env live --result pass|fail --evidence \"…\" (it is refused if the approval did not go through: tell Jay).\n"
     "Report in one line when the preparation is ready: {project} go-live plan ready — <commit> — <checks> — "
     "<rollback target>."
@@ -134,8 +136,9 @@ GATE_DEPLOY_TEMPLATE = (
     "is none, stop and tell Jay. Write, in 10 lines or fewer: the steps, the migrations (or none), the pre-deploy "
     "checks that touch nothing in production, the post-deploy checks, and the rollback plan (the version live now "
     "and what failure triggers a rollback).\n"
-    "Then stop and wait for Jay to confirm the deploy in this pane. Only after he confirms: deploy, verify it live, "
-    "roll back if a check fails, and record it: python -m ccd.pipeline_cli deployed {key} --role coordinator "
+    "Then stop and wait for Jay to confirm the deploy in this pane. Only after he confirms: deploy, then wait for the "
+    "release watch (it rolls back by itself; never roll back by hand while a watch is active) and record pass only "
+    "on go-live.sh exit 0: python -m ccd.pipeline_cli deployed {key} --role coordinator "
     "--env live --result pass|fail --evidence \"…\""
 )
 
@@ -160,7 +163,8 @@ ASK_BACK_TEMPLATE = (
 )
 SLACK_DEPLOY_GO_TEMPLATE = (
     "Jay confirmed the live deploy of {key} from Slack, on the plan you recorded with deploy-plan. Deploy it now by "
-    "that plan and the runbook, verify it live, and roll back by the runbook right away if a check fails. Then record "
+    "that plan and the runbook, wait for the release watch (it rolls back by itself; never roll back by hand while a watch is "
+    "active) and record pass only on go-live.sh exit 0. Record "
     "it: python -m ccd.pipeline_cli deployed {key} --role coordinator --env live --result pass|fail --evidence \"…\"\n"
     "Not authorized by this message: anything outside that plan, any other ticket or project, changing secrets or "
     "infrastructure config."

@@ -132,7 +132,8 @@ main is the reviewed release line. `go-live.sh` prints the exact rollback (previ
 user unit, `cc-release-watch-<stamp>`) that checks the new release for 5 minutes: API, daemon, UI. If a check fails it
 puts the previous release back (UI link, checkout, empty additive migrations), starts ccd, and tells Jay in Messages.
 Never roll back by hand while a watch is active (`scripts/go-live.sh --result` says if one is); the printed manual
-rollback is for exit 7 only. Go Live is still Jay's press and the deploy still waits for his confirmation in the pane.
+rollback is for exit 7 only, and never restore a tasks.db backup over live data without keeping the rows written since
+(runbook). Go Live is still Jay's press and the deploy still waits for his confirmation in the pane.
 What to record when `go-live.sh` ends (`python -m ccd.pipeline_cli deployed <KEY> --role coordinator --env live ...`):
 
 | exit | meaning | record |
@@ -143,6 +144,7 @@ What to record when `go-live.sh` ends (`python -m ccd.pipeline_cli deployed <KEY
 | exit 5 | no previous release to go back to; nothing changed | `--result fail`, tell Jay |
 | exit 6 | still watching: run `scripts/go-live.sh --result` until it ends | nothing yet |
 | exit 7 | the watch did not start (not watched) | do not record; tell Jay |
+| exit 8 | inconclusive: the probes never gave a clear answer before the deadline; the release was left running | do not record pass; check by hand, tell Jay |
 
 Steps, failure table and recovery: [docs/runbooks/go-live-auto-rollback.md](docs/runbooks/go-live-auto-rollback.md).
 

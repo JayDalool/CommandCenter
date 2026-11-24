@@ -11,9 +11,11 @@ import fcntl
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -50,6 +52,8 @@ class Clock:
 
     def sleep(self, s):
         self.t += s
+        if self.t > 3 * 3600:      # a watch with no deadline must fail an assertion here, not spin for ever
+            raise AssertionError("virtual time ran past 3 hours: the watch has no hard deadline")
         for ev in [e for e in self.events if e[0] <= self.t]:
             self.events.remove(ev)
             ev[1]()
@@ -88,11 +92,12 @@ class Box:
         self.c2 = git(self.repo, "rev-parse", "HEAD")
         self.schema_of = {self.c1: OLD_SCHEMA, self.c2: NEW_SCHEMA}
         # UI releases: current -> the new one
-        self.old_web = self.release("20261101T000000Z-aaaaaaa", "OLDOLD11")
-        self.new_web = self.release("20261201T095500Z-bbbbbbb", "NEWNEW22")
+        self.old_web = self.release(f"20261101T000000Z-{self.c1[:7]}", "OLDOLD11")
+        self.new_web = self.release(f"20261201T095500Z-{self.c2[:7]}", "NEWNEW22")
         os.symlink(f"releases/{self.new_web.name}", self.web / "current")
         # the fake services
-        self.calls, self.forbidden, self.posts = [], [], []
+        self.calls, self.forbidden, self.posts, self.starts = [], [], [], []
+        self.health_pid, self.stop_fails = {}, False
         self.unit = {"active": "active", "restarts": 0, "pid": 100}
         self.running_sha = self.c2
         self.herdr_bad, self.herdr_up = set(), True   # shas whose ccd reports herdr not ok
@@ -169,13 +174,15 @@ class Box:
             u = self.unit
             return 0, f"ActiveState={u['active']}\nNRestarts={u['restarts']}\nMainPID={u['pid']}"
         if args[0] == "stop":
-            self.unit["active"] = "inactive"
+            if not self.stop_fails:
+                self.unit["active"] = "inactive"
             if self.on_stop:
                 self.on_stop()
             return 0, ""
         if args[0] == "start":
             self.unit.update(active="active", pid=self.unit["pid"] + 1, restarts=0)
             self.running_sha = git(self.repo, "rev-parse", "HEAD")
+            self.starts.append((self.running_sha, self.live_web().name))
             return 0, ""
         raise AssertionError(args)
 
@@ -203,6 +210,7 @@ class Box:
                 return status, b"{}"
             herdr_ok = sha not in self.herdr_bad
             return 200, json.dumps({"ok": herdr_ok, "herdr": {"ok": herdr_ok},
+                                    "pid": self.health_pid.get(sha, self.unit["pid"]),
                                     "tasks": {"schemaVersion": self.schema_of[sha]}}).encode()
         if path == "/api/state":
             return self.state.get(sha, 200), b"{}"
@@ -244,6 +252,14 @@ class WatchTest(unittest.TestCase):
     def setUp(self):
         self.box = Box(self)
         self.addCleanup(lambda box=self.box: self.assertEqual(box.forbidden, [], "a rollback made a call it must never make"))
+        self.addCleanup(self.assert_no_mixed_start, self.box)
+
+    def assert_no_mixed_start(self, box):
+        """ccd is only ever started on a whole release: old code with the old UI, or new code with the new UI."""
+        whole = {(box.c1, box.old_web.name), (box.c2, box.new_web.name)}
+        for sha, web in box.starts:
+            if sha in box.schema_of and sha in (box.c1, box.c2):
+                self.assertIn((sha, web), whole, "ccd was started on a mixed release")
 
     def go(self, **plan_over):
         w = self.box.watcher(**plan_over)
@@ -304,24 +320,83 @@ class WatchTest(unittest.TestCase):
         b.clock.at(110, lambda: b.health.pop(b.c2))   # one 15 s sample falls in the gap
         self.assertEqual(self.go()["result"], "healthy")
 
-    def test_a_401_or_403_is_a_probe_error_never_a_rollback(self):
+    def test_a_401_or_403_is_a_probe_error_never_a_rollback_and_never_healthy(self):
         b = self.box
         orig = b.http
         b.http = lambda m, p, h=None, body=None, t=5: (403, b"") if m == "GET" and p == "/api/state" else orig(m, p, h, body, t)
-        self.assertEqual(self.go()["result"], "healthy")
-        b2 = Box(self)
-        b2.token_file.unlink()                      # an unreadable token is a probe error too
-        w = b2.watcher()
-        self.assertEqual(w.run_all()["result"], "healthy")
-        self.assertEqual(b2.ccd_stopped_calls(), [])
+        r = self.go()
+        self.assertEqual(r["result"], "inconclusive", "a state that was never verified is not healthy")
+        self.assertEqual(b.ccd_stopped_calls(), [], "and nothing is rolled back on probe errors")
+        self.assertEqual((b.head(), b.live_web()), (b.c2, b.new_web))
+        self.assertEqual(len(b.posts), 1)
+        self.assertIn("could not be verified", b.posts[0]["body"]["text"])
+
+    def test_an_unreadable_token_is_inconclusive_not_healthy(self):
+        b = self.box
+        b.token_file.unlink()
+        self.assertEqual(self.go()["result"], "inconclusive")
+        self.assertEqual(b.ccd_stopped_calls(), [])
+
+    # ---------------- hard deadline (virtual clock) ----------------
+
+    HARD = 60 + 300 + 120 + 15      # grace + window + hard_extra + one sample
+
+    def test_one_bad_sample_then_persistent_403_still_ends_with_a_verdict(self):
+        b = self.box
+        orig = b.http
+
+        def http(m, p, h=None, body=None, t=5):
+            if m == "GET" and b.clock.t >= 100 and p != "/api/health":
+                return 403, b""
+            return orig(m, p, h, body, t)
+        b.http = http
+        b.clock.at(95, lambda: b.health.update({b.c2: 500}))
+        b.clock.at(102, lambda: b.health.pop(b.c2))      # one bad /api/health sample, then only probe errors
+        r = self.go()
+        self.assertEqual(r["result"], "inconclusive")
+        self.assertLessEqual(b.clock.t, self.HARD)
+        self.assertEqual(b.ccd_stopped_calls(), [])
+
+    def test_repeated_pid_changes_cannot_extend_the_watch_for_ever(self):
+        b = self.box
+        for i in range(1, 60):
+            b.clock.at(20 * i, lambda i=i: b.unit.update(pid=1000 + i))
+        r = self.go()
+        self.assertEqual(r["result"], "inconclusive")
+        self.assertLessEqual(b.clock.t, self.HARD)
+
+    # ---------------- the process that answers is the deployed one ----------------
+
+    def test_old_code_still_answering_with_the_old_pid_is_not_healthy(self):
+        b = self.box
+        b.unit["pid"] = 200
+        b.health_pid[b.c2] = 100        # same schema, the new UI, but the answer is the previous process
+        self.go()
+        self.assert_rolled_back("daemon")
+
+    def test_the_process_from_before_the_restart_still_running_is_not_healthy(self):
+        b = self.box
+        self.go(old_pid=100)             # MainPID is still 100: the restart did not take
+        self.assert_rolled_back("daemon")
+
+    def test_a_crash_before_the_first_sample_shows_against_the_baseline_go_live_recorded(self):
+        b = self.box
+        b.unit["restarts"] = 1           # systemd already restarted it once since go-live's restart (baseline 0)
+        self.go(base_restarts=0, base_pid=100)
+        self.assert_rolled_back("crash")
 
     # ---------------- c1/c2 crash rules ----------------
 
     def test_crash_rules(self):
         b = self.box
-        # a manual restart: pid changes, systemd resets NRestarts to 0; baseline was taken from the new ccd (5)
+        # a manual restart: pid changes, systemd resets NRestarts to 0 (the baseline was 5), and ccd is down for a
+        # few samples while it starts. The re-baseline's new grace must cover those samples.
         b.unit["restarts"] = 5
-        b.clock.at(100, lambda: b.unit.update(pid=555, restarts=0))
+        def restart():
+            b.unit.update(pid=555, restarts=0)
+            b.health[b.c2] = None
+        b.clock.at(100, restart)
+        b.clock.at(130, lambda: b.health.pop(b.c2))
         self.assertEqual(self.go()["result"], "healthy", "a manual restart is not a crash")
 
     def test_crash_nrestarts_above_the_baseline_rolls_back_at_once(self):
@@ -467,46 +542,61 @@ class WatchTest(unittest.TestCase):
         self.assertEqual((b.head(), b.live_web()), (b.c2, b.new_web))
         self.assertEqual(b.ccd_stopped_calls(), ["stop", "start"])
 
-    def test_failure_pip_old_code_answers_stays_on_previous_code(self):
+    def test_failure_pip_restores_the_whole_target_and_never_starts_old_code_on_the_new_ui(self):
         b = self.box
         b.health[b.c2] = 500
-        b.pip_rc = 1
-        self.go(pins_differ=True)
-        self.assert_failed("pip")
-        self.assertEqual(b.head(), b.c1)
-        self.assertEqual(b.running_sha, b.c1)
-
-    def test_failure_pip_old_code_does_not_answer_goes_back_to_the_running_release(self):
-        b = self.box
-        b.health[b.c2] = 500                 # the new release is bad ...
-        b.health[b.c1] = None                # ... and the old code, without its pins, does not answer
         b.pip_rc = 1
         orig = b.run
 
         def pip(argv, timeout=300, cwd=None):
             if os.path.basename(argv[0]) == "pip" and argv[-1].endswith("new.txt"):
                 b.calls.append(list(argv))
-                b.health[b.c2] = 200         # the pins of the running release come back from local wheels
-                return 0, ""
+                return 0, ""            # the target's pins come back from local wheels
             return orig(argv, timeout, cwd)
         b.run = pip
         self.go(pins_differ=True)
-        self.assert_failed("pip")
-        self.assertEqual(b.switches, [b.c1, b.c2], "back to the release that was running, never a third")
-        self.assertEqual((b.head(), b.live_web()), (b.c2, b.new_web))
+        self.assert_failed("pip", answering=False)
+        self.assertEqual(b.switches, [b.c1, b.c2])
+        self.assertEqual((b.head(), b.live_web(), b.running_sha), (b.c2, b.new_web, b.c2))
+        self.assertEqual(b.starts, [(b.c2, b.new_web.name)], "ccd started once, on the whole target")
         pip_files = [c[-1].split("/")[-1] for c in b.calls if os.path.basename(c[0]) == "pip"]
         self.assertEqual(pip_files, ["old.txt", "new.txt"])
 
-    def test_failure_link_switch_starts_ccd_on_previous_code_with_the_new_ui(self):
+    def test_failure_link_switch_restores_the_target_not_a_mixed_release(self):
         b = self.box
         b.health[b.c2] = 500
-        fd = os.open(b.web / ".deploy.lock", os.O_CREAT | os.O_RDWR)   # deploy-web.sh is running
+        real, calls = os.symlink, []
+
+        def flaky(src, dst, *a, **k):
+            calls.append(src)
+            if len(calls) == 1:
+                raise OSError("read-only file system")
+            return real(src, dst, *a, **k)
+        with mock.patch("ccd.release_watch.os.symlink", flaky):
+            self.go()
+        self.assert_failed("link", answering=False)
+        self.assertEqual((b.head(), b.live_web(), b.running_sha), (b.c2, b.new_web, b.c2))
+        self.assertEqual(b.starts, [(b.c2, b.new_web.name)])
+
+    def test_a_ui_deploy_running_refuses_before_the_stop(self):
+        b = self.box
+        b.health[b.c2] = 500
+        fd = os.open(b.web / ".deploy.lock", os.O_CREAT | os.O_RDWR)
         self.addCleanup(os.close, fd)
         fcntl.flock(fd, fcntl.LOCK_EX)
         self.go()
-        self.assert_failed("link")
-        self.assertEqual(b.live_web(), b.new_web)
-        self.assertEqual(b.running_sha, b.c1)
+        self.assertEqual(b.result()["step"], "precondition")
+        self.assertEqual(b.ccd_stopped_calls(), [])
+
+    def test_ccd_that_does_not_stop_means_nothing_is_switched(self):
+        b = self.box
+        b.health[b.c2] = 500
+        b.stop_fails = True
+        self.go()
+        self.assertEqual(b.result()["step"], "stop")
+        self.assertEqual(b.switches, [])
+        self.assertEqual((b.head(), b.live_web()), (b.c2, b.new_web))
+        self.assertEqual(b.db_version, NEW_SCHEMA, "the DB was not downgraded under a running ccd")
 
     def test_failure_old_release_fails_verification_goes_back_to_the_target(self):
         b = self.box
@@ -520,8 +610,10 @@ class WatchTest(unittest.TestCase):
                 b.health[b.c2] = 200         # what was running before runs again
             return r
         b.run = heal_on_target
-        self.go()
+        self.go(pins_differ=True)
         self.assert_failed("verify")
+        pip_files = [c[-1].split("/")[-1] for c in b.calls if os.path.basename(c[0]) == "pip"]
+        self.assertEqual(pip_files, ["old.txt", "new.txt"], "the target's pins are reinstalled from local wheels")
         self.assertEqual(b.switches, [b.c1, b.c2], "no third release")
         self.assertEqual((b.head(), b.live_web()), (b.c2, b.new_web))
         self.assertEqual(b.running_sha, b.c2)
@@ -689,11 +781,219 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(self.box.posts, [])
 
 
-class ProbeAgainstRealGuard(unittest.TestCase):
-    """The watcher's own requests pass ccd's real Guard: Host 127.0.0.1:PORT, X-CCD-Token from the token file."""
+    # ---------------- no valid rollback target is never guessed ----------------
 
-    def test_probes_get_200_through_create_app(self):
-        from starlette.testclient import TestClient
+    def test_previous_ui_release_that_does_not_name_its_commit_is_no_previous(self):
+        b = self.box
+        b.health[b.c2] = 500
+        for name, plan in (("dirty release", {"prev_web": str(b.web / "releases" / "x-dirty")}),
+                           ("no commit recorded", {"from_sha": ""}),
+                           ("commit is not the one the UI names", {"from_sha": b.c2})):
+            with self.subTest(name):
+                self.setUp()
+                b = self.box
+                b.health[b.c2] = 500
+                if "prev_web" in plan:
+                    d = b.web / "releases" / "x-dirty"
+                    d.mkdir()
+                    (d / "index.html").write_text("<x/>")
+                    plan = {"prev_web": str(b.web / "releases" / f"20261101T000000Z-{b.c1[:7]}-dirty")}
+                    shutil.copytree(b.old_web, plan["prev_web"])
+                self.go(**plan)
+                self.assert_no_previous()
+                self.assertIn("no valid rollback target", b.result()["reason"] + b.result()["message"]
+                              if "from_sha" in plan and not plan["from_sha"] or "prev_web" in plan else "no valid rollback target")
+
+    # ---------------- recovery after the watcher dies mid-transaction ----------------
+
+    def test_recover_undoes_an_interrupted_rollback_before_ccd_is_started(self):
+        b = self.box
+        git(b.repo, "switch", "-q", "--detach", b.c1)                  # the watcher died after the checkout ...
+        b.unit["active"] = "inactive"                                    # ... with ccd stopped
+        (b.watch / "journal.json").write_text(json.dumps({"state": "rolling_back"}))
+        w = b.watcher()
+        self.assertTrue(w.recover())
+        self.assertEqual((b.head(), b.live_web()), (b.c2, b.new_web))
+        self.assertEqual(b.starts, [(b.c2, b.new_web.name)], "started on the whole target, never on the half-done state")
+
+    def test_recover_does_nothing_unless_a_rollback_was_cut_off(self):
+        b = self.box
+        for state in (None, "done", "rolled_back"):
+            if state:
+                (b.watch / "journal.json").write_text(json.dumps({"state": state}))
+            self.assertFalse(b.watcher().recover())
+        self.assertEqual(b.calls, [])
+
+    def test_recover_leaves_ccd_to_a_go_live_that_holds_the_lock(self):
+        b = self.box
+        b.unit["active"] = "inactive"
+        (b.watch / "journal.json").write_text(json.dumps({"state": "rolling_back"}))
+        fd = os.open(b.deploys / ".go-live.lock", os.O_CREAT | os.O_RDWR)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        w = b.watcher()
+        w.t.lock_wait = 2
+        self.assertFalse(w.recover())
+        self.assertEqual(b.switches, [])
+
+    def test_killed_between_steps_leaves_a_journal_that_recover_acts_on(self):
+        # the watcher process is cut off right after the checkout: the journal says rolling_back
+        b = self.box
+        b.health[b.c2] = 500
+        orig = b.run
+
+        dead = []
+
+        def die_after_checkout(argv, timeout=300, cwd=None):
+            if dead:
+                raise KeyboardInterrupt("the process is gone: nothing after the kill can run")
+            r = orig(argv, timeout, cwd)
+            if argv[0] == "git" and "switch" in argv and argv[-1] == b.c1:
+                dead.append(1)
+                raise KeyboardInterrupt("SIGKILL")
+            return r
+        b.run = die_after_checkout
+        first = b.watcher()
+        with self.assertRaises(KeyboardInterrupt):
+            first.run_all()
+        first._close_lock()        # the kernel drops a killed process's flocks
+        first.drop_deploy_lock()
+        self.assertEqual(b.head(), b.c1)
+        self.assertEqual(json.loads((b.watch / "journal.json").read_text())["state"], "rolling_back")
+        b.run = orig
+        self.assertTrue(b.watcher().recover())
+        self.assertEqual((b.head(), b.live_web(), b.running_sha), (b.c2, b.new_web, b.c2))
+
+    # ---------------- the verdict is a snapshot taken under the lock ----------------
+
+    def test_the_alert_describes_the_state_at_the_verdict_not_what_a_later_go_live_made_of_it(self):
+        b = self.box
+        b.health[b.c2] = 500
+        orig = b.http
+        seen = {}
+
+        def http(method, path, headers=None, body=None, timeout=5):
+            if method == "POST" and "line" not in seen:
+                seen["line"] = b.lines()                      # the durable log line exists before Jay is told
+                git(b.repo, "switch", "-q", "--detach", b.c2)  # a go-live gets in as soon as the lock is free
+                os.symlink(f"releases/{b.new_web.name}", b.web / "x")
+                os.replace(b.web / "x", b.web / "current")
+            return orig(method, path, headers, body, timeout)
+        b.http = http
+        self.go()
+        (line,) = seen["line"]
+        self.assertEqual((line["result"], line["notified"]), ("rolled_back", None))
+        self.assertIn(f"live is now {b.old_web.name} ({b.c1[:7]})", b.posts[0]["body"]["text"])
+        self.assertEqual(b.result()["live"], {"web": b.old_web.name, "sha": b.c1})
+        (final,) = b.lines()
+        self.assertEqual((final["notified"], final["attempts"]), (True, 1))
+
+
+class DirectTransport(unittest.TestCase):
+    """The watcher's own HTTP client: loopback only, no proxy from the environment, no redirects."""
+
+    def serve(self, handler_cls):
+        import http.server
+        import threading
+        srv = http.server.HTTPServer(("127.0.0.1", 0), handler_cls)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        self.addCleanup(srv.server_close)
+        return srv
+
+    def watcher(self, port):
+        tmp = Path(tempfile.mkdtemp(prefix="release-watch-net-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        (tmp / "tok").write_text(TOKEN)
+        cfg = rw.Config({"CCD_PORT": str(port), "CCD_WEB_DIR": str(tmp), "CCD_DATA_DIR": str(tmp),
+                         "CC_REPO": str(tmp), "CCD_TOKEN_FILE": str(tmp / "tok"),
+                         "CCD_HERDR_SOCKET": str(tmp / "s")}, str(tmp / "deploys" / "watch" / "x"))
+        return rw.Watcher(cfg, {})
+
+    def test_a_redirect_is_not_followed_so_the_token_goes_nowhere_else(self):
+        import http.server
+        got = []
+
+        class Elsewhere(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                got.append(dict(self.headers))
+                self.send_response(200)
+                self.end_headers()
+
+            log_message = lambda *a: None
+        other = self.serve(Elsewhere)
+
+        class Redirect(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{other.server_port}/steal")
+                self.end_headers()
+
+            log_message = lambda *a: None
+        ccd = self.serve(Redirect)
+        st, _ = self.watcher(ccd.server_port).get("/api/state")
+        self.assertEqual(st, 302)
+        self.assertEqual(got, [], "the redirect target never saw a request")
+
+    def test_the_proxy_environment_is_ignored(self):
+        import http.server
+        proxied = []
+
+        class Proxy(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                proxied.append(dict(self.headers))
+                self.send_response(200)
+                self.end_headers()
+
+            log_message = lambda *a: None
+        proxy = self.serve(Proxy)
+
+        class Ccd(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(204 if self.headers.get("X-CCD-Token") == TOKEN else 401)
+                self.end_headers()
+
+            log_message = lambda *a: None
+        ccd = self.serve(Ccd)
+        env = {"http_proxy": f"http://127.0.0.1:{proxy.server_port}", "HTTP_PROXY": f"http://127.0.0.1:{proxy.server_port}"}
+        with mock.patch.dict(os.environ, env):
+            st, _ = self.watcher(ccd.server_port).get("/api/state")
+        self.assertEqual(st, 204)
+        self.assertEqual(proxied, [])
+
+    def test_a_trickling_answer_is_cut_off_by_the_overall_budget(self):
+        import http.server
+        import time as _t
+
+        class Slow(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "100")
+                self.end_headers()
+                for _ in range(100):
+                    try:
+                        self.wfile.write(b"x")
+                        self.wfile.flush()
+                    except OSError:
+                        return
+                    _t.sleep(0.2)
+
+            log_message = lambda *a: None
+        srv = self.serve(Slow)
+        w = self.watcher(srv.server_port)
+        t0 = _t.monotonic()
+        st, _ = w._http("GET", "/api/state", {}, None, 1)
+        self.assertIsNone(st)
+        self.assertLess(_t.monotonic() - t0, 4)
+
+
+class ProbeAgainstRealGuard(unittest.TestCase):
+    """The watcher's own transport against ccd's real Guard on a real socket: Host 127.0.0.1:PORT (set by the client
+    itself), X-CCD-Token from the token file. Nothing is supplied by hand."""
+
+    def test_probes_get_200_through_a_real_server(self):
+        import threading
+        import uvicorn
         from ccd.api import create_app
 
         tmp = Path(tempfile.mkdtemp(prefix="release-watch-guard-"))
@@ -702,36 +1002,41 @@ class ProbeAgainstRealGuard(unittest.TestCase):
         (tmp / "ui" / "index.html").write_text('<script src="/assets/index-AbCd1234.js"></script>')
         (tmp / "ui" / "assets" / "index-AbCd1234.js").write_text("x")
         (tmp / "ccd.token").write_text(TOKEN + "\n")
+        with socket.socket() as sk:
+            sk.bind(("127.0.0.1", 0))
+            port = sk.getsockname()[1]
         daemon = mock.MagicMock()
         daemon.snap = {"x": 1}
-        daemon.health.return_value = {"ok": True, "herdr": {"ok": True}, "tasks": {"schemaVersion": 14}}
+        daemon.health.return_value = {"ok": True, "pid": 7, "herdr": {"ok": True}, "tasks": {"schemaVersion": 14}}
         daemon.state.return_value = {"ok": True}
-        guarded, _app = create_app(daemon, TOKEN, 7777, ui=str(tmp / "ui"))
-        client = TestClient(guarded, base_url="http://127.0.0.1:7777")
-        cfg = rw.Config({"CCD_PORT": "7777", "CCD_WEB_DIR": str(tmp), "CCD_DATA_DIR": str(tmp), "CC_REPO": str(tmp),
+        guarded, _app = create_app(daemon, TOKEN, port, ui=str(tmp / "ui"))
+        server = uvicorn.Server(uvicorn.Config(guarded, host="127.0.0.1", port=port, log_level="warning",
+                                               lifespan="off"))
+        th = threading.Thread(target=server.run, daemon=True)
+        th.start()
+        self.addCleanup(th.join, 5)
+        self.addCleanup(setattr, server, "should_exit", True)
+        for _ in range(100):
+            if server.started:
+                break
+            time.sleep(0.05)
+        self.assertTrue(server.started)
+        cfg = rw.Config({"CCD_PORT": str(port), "CCD_WEB_DIR": str(tmp), "CCD_DATA_DIR": str(tmp), "CC_REPO": str(tmp),
                          "CCD_TOKEN_FILE": str(tmp / "ccd.token"), "CCD_HERDR_SOCKET": str(tmp / "s")},
                         str(tmp / "deploys" / "watch" / "x"))
-        sent = []
-
-        def via_client(method, path, headers=None, body=None, timeout=5):
-            sent.append((method, path, dict(headers or {})))
-            r = client.request(method, path, headers=dict(headers or {}, host="127.0.0.1:7777"), content=body)
-            return r.status_code, r.content
-        w = rw.Watcher(cfg, {"herdr_ok_before": True, "new_schema": 14, "unit": "u"}, http=via_client,
-                       run=lambda *a, **k: (0, "ActiveState=active\nNRestarts=0\nMainPID=1"),
-                       herdr_up=lambda: True)
+        plan = {"herdr_ok_before": True, "new_schema": 14, "unit": "u"}
+        w = rw.Watcher(cfg, plan, herdr_up=lambda: True)
         for path in ("/api/health", "/api/state", "/", "/assets/index-AbCd1234.js"):
-            st, _ = w.get(path, token=path.startswith("/api/state"))
+            st, _ = w.get(path, token=path == "/api/state")
             self.assertEqual(st, 200, path)
-        s = w.sample((tmp / "ui" / "index.html").read_bytes(), 14, False,
-                     {"active": "active", "restarts": 0, "pid": 1})
+        unit = {"active": "active", "restarts": 0, "pid": 7}
+        s = w.sample((tmp / "ui" / "index.html").read_bytes(), 14, False, unit)
         self.assertEqual({k: s[k] for k in ("api", "daemon", "ui")}, {"api": "ok", "daemon": "ok", "ui": "ok"})
-        self.assertTrue(all(h.get("X-CCD-Token") == TOKEN for m, p, h in sent if p == "/api/state"))
-        # without the token the same call is refused, and the watcher treats that as a probe error, not a failure
-        bad = rw.Watcher(cfg, {"herdr_ok_before": True, "new_schema": 14, "unit": "u"},
-                         http=lambda m, p, h=None, b=None, t=5: (401, b""), run=w.run, herdr_up=lambda: True)
-        s = bad.sample(b"x", 14, False, {"active": "active", "restarts": 0, "pid": 1})
-        self.assertEqual((s["api"], s["daemon"], s["ui"]), ("probe", "probe", "probe"))
+        # a wrong token is refused by the real Guard; the watcher calls that a probe error, not a failure
+        (tmp / "ccd.token").write_text("w" * 43)
+        w2 = rw.Watcher(cfg, plan, herdr_up=lambda: True)
+        s = w2.sample((tmp / "ui" / "index.html").read_bytes(), 14, False, unit)
+        self.assertEqual((s["daemon"], s["ui"]), ("probe", "ok"))   # the UI files are not behind the token
 
 
 class HeldTablesSnippet(unittest.TestCase):

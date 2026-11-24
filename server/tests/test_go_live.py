@@ -79,7 +79,7 @@ class GoLiveBase(unittest.TestCase):
         git(self.other, "push", "-q", "origin", "feature")
         return git(self.other, "rev-parse", "HEAD")
 
-    def run_script(self, *args, env=None):
+    def run_script(self, *args, env=None, timeout=60):
         env_extra = env or {}
         env = {
             "PATH": f"{self.shims}:{os.environ['PATH']}",
@@ -91,7 +91,7 @@ class GoLiveBase(unittest.TestCase):
         env.update(GIT_ENV)
         env.update(env_extra)
         return subprocess.run(["bash", str(SCRIPT), *args], env=env, cwd=self.tmp,
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, timeout=timeout)
 
     def head(self):
         return git(self.repo, "rev-parse", "HEAD")
@@ -322,6 +322,29 @@ exit 0
 """
 
 
+# Stands in for the committed watcher: --recover leaves a marker next to itself so a test can see it was run.
+WATCHER_STUB = (
+    "import sys, os\n"
+    "if '--recover' in sys.argv:\n"
+    "    open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'recovered'), 'w').write('1')\n"
+)
+
+# date +%s from a script the test controls: the values in clock-seq first, then +30 s per call. Every other use of
+# date is the real one (the stamp), so the deadline tests need no sleeping and no wall-clock timing.
+DATE_SHIM = """#!/bin/sh
+if [ "$1" = "+%s" ]; then
+  echo x >> "{m}/date-calls"
+  cur="$(cat "{m}/clock" 2>/dev/null || echo 1000)"
+  next="$(head -n 1 "{m}/clock-seq" 2>/dev/null)"
+  if [ -n "$next" ]; then sed -i 1d "{m}/clock-seq"; cur="$next"; else cur=$((cur + 30)); fi
+  echo "$cur" > "{m}/clock"
+  echo "$cur"
+  exit 0
+fi
+exec /bin/date "$@"
+"""
+
+
 class GoLiveRunTest(GoLiveBase):
     """CC-063: a REAL go-live run against the throw-away clone, with systemd-run and the watcher faked. Nothing here
     can reach the live install: HOME, CCD_DATA_DIR, CC_REPO and PATH are all temp."""
@@ -333,7 +356,7 @@ class GoLiveRunTest(GoLiveBase):
             f.write_text(body.format(m=self.markers))
             f.chmod(0o755)
         (self.repo / "server" / "ccd").mkdir(parents=True)
-        (self.repo / "server" / "ccd" / "release_watch.py").write_text("# stands in for the watcher copy\n")
+        (self.repo / "server" / "ccd" / "release_watch.py").write_text(WATCHER_STUB)
         (self.repo / "server" / "requirements.txt").write_text("a==1\n")
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "-q", "-m", "server files")
@@ -373,7 +396,8 @@ class GoLiveRunTest(GoLiveBase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("release watch: healthy", r.stdout)
         self.assertIn(f"Live is on main ({self.new[:7]})", r.stdout)
-        self.assertIn("Rollback (back to main @", r.stdout)       # the manual rollback text is still printed
+        self.assertIn("Rollback: automatic", r.stdout)             # no direct database replacement on the success path
+        self.assertNotIn("cp \"", r.stdout)
         self.assertEqual(self.head(), self.new)
         self.assertIn("restart ccd", (self.markers / "systemctl").read_text())
 
@@ -411,18 +435,42 @@ class GoLiveRunTest(GoLiveBase):
         self.assertIn("start ccd", (self.markers / "systemctl").read_text().split("restart ccd")[-1],
                       "a stopped ccd is started by go-live.sh itself")
 
+    def fake_clock(self, *seq):
+        date = self.shims / "date"
+        date.write_text(DATE_SHIM.format(m=self.markers))
+        date.chmod(0o755)
+        (self.markers / "clock-seq").write_text("".join(f"{v}\n" for v in seq))
+
     def test_the_deadline_counts_from_the_start_of_the_script(self):
-        # the steps before the restart took longer than the bound: the wait ends at once, 6, not deadline + the steps
-        slow = self.other / "scripts" / "deploy-web.sh"
-        slow.write_text('#!/bin/sh\nsleep 2\n')
-        git(self.other, "commit", "-q", "-am", "slow build")
-        git(self.other, "push", "-q", "origin", "main")
+        # Script start = t 1000; the first look at the verdict is at t 1240, i.e. the steps before the restart took 4
+        # minutes; then 30 s per poll. The bound (540 s from the start) must end the wait at t 1540: 10 polls. A
+        # deadline that restarted after the build would need 18.
+        self.fake_clock(1000, 1240)
         self.mode("hang")
-        t0 = time.monotonic()
-        r = self.run_script(env={"CC_GOLIVE_DEADLINE_S": "3"})
-        elapsed = time.monotonic() - t0
+        try:
+            r = self.run_script(env={"CC_GOLIVE_DEADLINE_S": "540"}, timeout=25)
+        except subprocess.TimeoutExpired:
+            self.fail("go-live.sh never gave up waiting: the deadline is not enforced")
         self.assertEqual(r.returncode, 6, r.stdout + r.stderr)
-        self.assertLess(elapsed, 3 + 2.5, "the wait must not start a fresh deadline after the build")
+        calls = len((self.markers / "date-calls").read_text().split())
+        self.assertLessEqual(calls, 14, "the wait must count from the start of the script")
+        self.assertGreaterEqual(calls, 6)
+
+    def test_the_deadline_is_checked_before_systemctl_can_hang(self):
+        # a systemctl that never returns for is-active must not push the exit past the bound
+        self.fake_clock(1000, 5000)       # the bound has long passed at the first look
+        self.mode("hang")
+        shim = SYSTEMCTL_SHIM.format(m=self.markers).replace(
+            'case "$1 $2" in',
+            'if [ "$1 $2" = "--user is-active" ]; then\n'
+            f'  n=$(cat "{self.markers}/n" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "{self.markers}/n"\n'
+            '  [ "$n" -gt 1 ] && sleep 20\nfi\ncase "$1 $2" in', 1)
+        (self.shims / "systemctl").write_text(shim)
+        try:
+            r = self.run_script(env={"CC_GOLIVE_DEADLINE_S": "540"}, timeout=15)
+        except subprocess.TimeoutExpired:
+            self.fail("the deadline was checked after a systemctl call that can hang")
+        self.assertEqual(r.returncode, 6, r.stdout + r.stderr)
 
     def test_a_watcher_that_dies_without_a_verdict_gets_ccd_started_and_exits_4(self):
         self.mode("die")
@@ -448,12 +496,14 @@ class GoLiveRunTest(GoLiveBase):
             self.assertIn(want, call)
         # the watcher dying after stop must not leave ccd stopped (Restart=always ignores a stopped unit)
         stop_post = [a for a in call if a.startswith("ExecStopPost=")]
-        self.assertEqual(len(stop_post), 1)
-        self.assertTrue(stop_post[0].endswith(" --user start ccd"), stop_post)
+        self.assertEqual(len(stop_post), 2)
+        self.assertIn("--recover", stop_post[0], "an interrupted rollback is undone before ccd is started")
+        self.assertTrue(stop_post[0].startswith("ExecStopPost=-"), "and a failing recovery must not skip the start")
+        self.assertTrue(stop_post[1].endswith(" --user start ccd"), stop_post)
         self.assertEqual(call[-2:], [str(wd / "release_watch.py"), str(wd)])
         self.assertTrue(any(a.startswith("PATH=") for a in call))
         copy = wd / "release_watch.py"
-        self.assertEqual(copy.read_text(), "# stands in for the watcher copy\n", "it runs from a copy, not the checkout")
+        self.assertEqual(copy.read_text(), WATCHER_STUB, "it runs from a copy, not the checkout")
         plan = json.loads((wd / "plan.json").read_text())
         self.assertEqual((plan["to_sha"], plan["unit"]), (self.new, f"cc-release-watch-{wd.name}"))
         self.assertFalse(plan["pins_differ"])
@@ -474,7 +524,96 @@ class GoLiveRunTest(GoLiveBase):
         self.assertEqual(r.returncode, 7, r.stdout + r.stderr)
         self.assertIn("NOT WATCHED", r.stderr)
 
+    # ---- review round 2: setup and restart failures go through the watch, exact targets, lock handoff
+
+    def test_a_failed_restart_still_goes_through_the_release_watch(self):
+        # under set -e a failing `systemctl restart ccd` used to end the script with the new release down, unwatched
+        (self.shims / "systemctl").write_text(SYSTEMCTL_SHIM.format(m=self.markers).replace(
+            'case "$1 $2" in', 'if [ "$1" = "--user" ] && [ "$2" = restart ]; then exit 1; fi\ncase "$1 $2" in', 1))
+        self.mode("rolled_back")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("systemctl restart ccd failed", r.stderr)
+        self.assertEqual(len(self.sysrun_calls()), 1, "the watcher was started")
+
+    def test_a_target_without_the_watcher_file_is_not_watched_exit_7_and_ccd_is_started(self):
+        git(self.other, "rm", "-q", "server/ccd/release_watch.py")
+        git(self.other, "commit", "-q", "-m", "predates the watcher")
+        git(self.other, "push", "-q", "origin", "main")
+        # the live checkout is only behind origin, and the file exists in neither
+        git(self.repo, "fetch", "-q", "origin")
+        git(self.repo, "reset", "-q", "--hard", "origin/main")
+        git(self.other, "commit", "-q", "--allow-empty", "-m", "a release that predates the watcher")
+        git(self.other, "push", "-q", "origin", "main")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 7, r.stdout + r.stderr)
+        self.assertIn("NOT WATCHED", r.stderr)
+        self.assertIn("--user start ccd", (self.markers / "systemctl").read_text())
+        self.assertFalse((self.watch_root / "active.json").exists())
+        self.assertFalse(self.ran("systemd-run"))
+
+    def test_active_json_exists_before_the_watcher_is_started(self):
+        shim = self.shims / "systemd-run"
+        shim.write_text(f'#!/bin/sh\n[ -f "{self.watch_root}/active.json" ] && echo yes > "{self.markers}/marker-first"\n'
+                        + SYSTEMD_RUN_SHIM.format(m=self.markers).split("\n", 1)[1])
+        self.mode("healthy")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue((self.markers / "marker-first").exists(), "no moment with a live watcher and no marker")
+
+    def test_a_marker_for_a_watcher_that_never_started_is_removed(self):
+        (self.markers / "systemd-run.fail").write_text("")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 7)
+        self.assertFalse((self.watch_root / "active.json").exists())
+
+    def test_the_previous_release_must_name_one_exact_commit(self):
+        for name, ok in ((f"20261012T000000Z-{{sha}}-dirty", False), ("20261012T000000Z-0000000", False),
+                         ("20261012T000000Z-{sha}", True)):
+            with self.subTest(name=name):
+                self.setUp()
+                sha = self.head()
+                rel = self.web / "releases" / name.format(sha=sha[:7])
+                rel.mkdir(parents=True)
+                (rel / "index.html").write_text("<html/>")
+                os.symlink(f"releases/{rel.name}", self.web / "current")
+                self.mode("healthy")
+                r = self.run_script()
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                (wd,) = self.watch_dirs()
+                plan = json.loads((wd / "plan.json").read_text())
+                self.assertEqual(plan["from_sha"], sha if ok else "", "the rollback target is never guessed")
+                self.assertEqual("no valid rollback target" in r.stdout, not ok)
+
+    def test_a_second_go_live_during_the_messages_retry_is_not_refused(self):
+        # the verdict is final: lock free, marker gone, the watcher unit still alive retrying Messages
+        d = self.make_watch("20261130T090000", {"result": "rolled_back", "notified": None, "message": "m"})
+        (self.markers / "active.cc-release-watch-20261130T090000").write_text("")
+        self.mode("healthy")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(d.exists())
+
+    def test_the_watcher_that_died_is_recovered_before_ccd_is_started(self):
+        self.mode("die")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        (wd,) = self.watch_dirs()
+        self.assertTrue((wd / "recovered").exists(), "--recover ran (undoes a half-done rollback)")
+        order = (self.markers / "systemctl").read_text()
+        self.assertIn("--user start ccd", order)
+
+    def test_a_refused_run_writes_no_ref_and_nothing_under_home(self):
+        self.hold_lock()
+        refs = self.refs()
+        r = self.run_script()
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(self.refs(), refs, "refused before the fetch")
+
     # ---- the lock
+
+    def refs(self):
+        return git(self.repo, "for-each-ref"), git(self.origin, "for-each-ref")
 
     def hold_lock(self):
         self.deploys.mkdir(parents=True, exist_ok=True)
@@ -633,7 +772,7 @@ class GoLiveRunTest(GoLiveBase):
     def test_readme_tells_the_coordinator_the_watch_rolls_back_by_itself(self):
         text = (SCRIPT.parents[1] / "README.md").read_text()
         for needle in ("rolls back by itself", "never roll back by hand while a watch is active",
-                       "scripts/go-live.sh --result", "exit 0", "exit 3", "exit 4", "exit 5", "exit 6", "exit 7",
+                       "scripts/go-live.sh --result", "exit 0", "exit 3", "exit 4", "exit 5", "exit 6", "exit 7", "exit 8",
                        "go-live-auto-rollback.md"):
             self.assertIn(needle.lower(), text.lower())
 
