@@ -16,6 +16,9 @@ check() {  # name, offset found
 # through: TZDIR to date (glibc reads zone files from it) and PYTHONTZPATH to Python (zoneinfo's own search path,
 # kept so the relative-entry rule still applies). The interpreter is resolved to an absolute path first, from the
 # caller's PATH, so a node or python outside /usr/bin still runs.
+# CC-074 (round 5): the launcher and the text helpers are absolute paths too. Bash resolves a bare `env`, `dirname`,
+# `sed` or `grep` through the caller's PATH before any env -i can fix it, so a hostile PATH directory could run its own.
+ENV=/usr/bin/env DIRNAME=/usr/bin/dirname SED=/usr/bin/sed GREP=/usr/bin/grep
 clean() {  # [VAR=value ...] command args...
   local vars=() cmd
   while [ $# -gt 0 ] && [[ "$1" == *=* ]]; do vars+=("$1"); shift; done
@@ -24,7 +27,7 @@ clean() {  # [VAR=value ...] command args...
   # (nvm, NodeSource) and are resolved to an absolute path first.
   case "$1" in date|head|readlink|dpkg-query) cmd=$1 ;; *) cmd=$(command -v "$1") || return 127 ;; esac
   shift
-  env -i PATH=/usr/local/bin:/usr/bin:/bin "${vars[@]}" "$cmd" "$@"
+  "$ENV" -i PATH=/usr/local/bin:/usr/bin:/bin "${vars[@]}" "$cmd" "$@"
 }
 
 echo "host zone: $(clean readlink -f /etc/localtime 2>/dev/null || echo unknown)  TZ=${TZ:-unset}"
@@ -46,7 +49,7 @@ check "C library (date)" "$(clean TZ=America/Winnipeg ${TZDIR+TZDIR="$TZDIR"} da
 PYSRC='
 import sys, os, pathlib, zoneinfo
 from datetime import datetime, timezone
-if sys.argv[1]: sys.path.append(sys.argv[1])
+if sys.argv[1]: sys.path.insert(0, sys.argv[1])   # CC-074: first, so a host pip tzdata cannot win in tests
 KEY = "America/Winnipeg"
 src = None
 for d in zoneinfo.TZPATH:
@@ -67,11 +70,11 @@ try:
 except Exception:
     print("OFFSET")
 '
-for py in python3 "$(dirname "$0")/../server/.venv/bin/python"; do
+for py in python3 "$("$DIRNAME" "$0")/../server/.venv/bin/python"; do
   command -v "$py" >/dev/null 2>&1 || continue
   out=$(clean PYTHONDONTWRITEBYTECODE=1 ${PYTHONTZPATH+PYTHONTZPATH="$PYTHONTZPATH"} "$py" -B -I -c "$PYSRC" "$([ "${CHECK_TZ_TESTING:-}" = 1 ] && echo "${CHECK_TZ_PYPATH:-}")" 2>/dev/null)
-  echo "tzdata (Python $py): $(printf '%s\n' "$out" | sed -n 's/^SOURCE //p;T;q' | grep . || echo unavailable)"
-  check "Python zoneinfo ($py)" "$(printf '%s\n' "$out" | sed -n 's/^OFFSET //p')"
+  echo "tzdata (Python $py): $(printf '%s\n' "$out" | "$SED" -n 's/^SOURCE //p;T;q' | "$GREP" . || echo unavailable)"
+  check "Python zoneinfo ($py)" "$(printf '%s\n' "$out" | "$SED" -n 's/^OFFSET //p')"
 done
 if command -v node >/dev/null 2>&1; then
   off=$(clean node -e '
