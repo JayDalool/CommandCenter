@@ -40,6 +40,9 @@ At the end: the closing note.
     python -m ccd.pipeline_cli stale SV-071 --role coordinator --reason "superseded by SV-082"   # Jay decides
     python -m ccd.pipeline_cli close SV-082 --role coordinator --note "What changed, why, how it was checked"  # (flow PR)
 
+When Jay asks in Slack to see open questions, do not list them yourself: an answer to your list is not recorded.
+Tell him to write "show questions" in the ticket's thread; ccd posts them there, and a reply such as "1. a" answers them.
+
 ## When a review sends it back (round 1)
 
 A failed user check or a code review asking for changes in round 1 is not Jay's to hear about. You do this:

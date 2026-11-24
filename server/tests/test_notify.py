@@ -1049,6 +1049,50 @@ class TeamThreads(ReplyBase):
         self.assertEqual(self.channel_posts()[-1]["text"], ":compass: *Lead*: Claude needs 1 answer")
         self.assertEqual(self.reply("1", self.channel_posts()[0]["ts"], channel="CSV")["did"], "lead_nudged")
 
+    def test_asking_in_a_tickets_thread_shows_every_open_question_and_one_reply_answers_them(self):
+        # Jay, 2026-11-24, in CC-082's thread: "Show me the question so that I can answer it here". The lead listed
+        # them but its list could not be answered; ccd now lists them itself, numbered across tickets.
+        self.d.questions["SV-50"] = [
+            {"id": 71, "text": "What should I admit?", "kind": "choice", "options": ["SV-50 only", "Hold all"],
+             "recommended": 0, "why": "installs the cap", "answer": None},
+            {"id": 72, "text": "How should it finish?", "kind": "choice", "options": ["Shrink", "Build all"],
+             "answer": None}]
+        self.d.questions["SV-51"] = [{"id": 81, "text": "Approval tiers?", "kind": "choice",
+                                      "options": ["As written", "Merges stay with Jay"], "recommended": 1,
+                                      "answer": None}]
+        self.d.needs_list = [need("SV-50", "questions", None), need("SV-51", "questions", None)]
+        self.step("SV-51", "pipeline.plan", "plan recorded", "agent:planner")
+        root = self.channel_posts()[0]
+        delivered = len(self.d.delivered)
+        r = self.reply("SHow me th question so that i can answer it ere .", root["ts"], channel="CSV")
+        self.assertEqual(r["did"], "questions_shown")
+        self.assertEqual(len(self.d.delivered), delivered)                  # ccd answers it, not the lead
+        shown = self.slack.posts[-1]
+        self.assertEqual(shown["thread"], root["ts"])
+        self.assertIn("3 questions wait on you:\n\n*Q1 · SV-51. Approval tiers?*\n>*a.*  As written\n"
+                      ">*b.*  Merges stay with Jay  ⭐ *Recommended*\n\n*Q2 · SV-50. What should I admit?*", shown["text"])
+        self.assertIn("*Q3 · SV-50. How should it finish?*\n>*a.*  Shrink\n>*b.*  Build all", shown["text"])
+        self.assertIn("one line per question, like 1. a and 2. b", shown["text"])
+        r = self.reply("1. b\n2. a\n3. a", root["ts"], channel="CSV")
+        self.assertEqual(r["did"], "answered")
+        self.assertEqual(self.d.answered[-2][:2], ("SV-51", {"answers": [{"id": 81, "answer": "Merges stay with Jay"}]}))
+        self.assertEqual(self.d.answered[-1][:2], ("SV-50", {"answers": [{"id": 71, "answer": "SV-50 only"},
+                                                                         {"id": 72, "answer": "Shrink"}]}))
+        self.assertIn("SV-51: Answered.", self.slack.posts[-1]["text"])
+        self.assertIn("SV-50: Answered.", self.slack.posts[-1]["text"])
+
+    def test_asking_with_nothing_open_says_so_and_ordinary_talk_still_reaches_the_lead(self):
+        self.step("SV-52", "pipeline.plan", "plan recorded", "agent:planner")
+        root = self.channel_posts()[0]
+        self.assertEqual(self.reply("show me the questions", root["ts"], channel="CSV")["did"], "questions_none")
+        self.assertEqual(self.slack.posts[-1]["text"], "No questions are waiting on you in this project.")
+        self.assertEqual(self.reply("why does the question about tiers matter?", root["ts"],
+                                    channel="CSV")["did"], "lead_nudged")
+
+    def test_a_client_projects_thread_never_lists_questions(self):
+        self.assertIsNone(run(self.n.ticket_answer({"type": "ticket", "project": "gauzemate", "ref": "GM-4"},
+                                                   "show me the questions")))
+
     def test_a_reply_still_finds_its_ticket_after_the_root_was_pruned(self):
         self.step("SV-46", "pipeline.plan", "plan recorded", "agent:planner")
         root = self.channel_posts()[0]
