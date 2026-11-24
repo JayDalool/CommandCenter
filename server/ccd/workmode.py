@@ -41,16 +41,18 @@ TZ = zoneinfo.ZoneInfo("America/Winnipeg")
 KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 PRIORITY_RANK = {"URGENT": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}     # NO_PRIORITY and anything else: last
-STAGE_ORDER = ("intake", "investigate", "techReview", "build", "userCheck", "codeReview", "release")
+STAGE_ORDER = ("intake", "investigate", "techReview", "build", "userCheck", "codeReview", "release", "blockerTriage")
 STAGE_LABEL = {"intake": "intake", "investigate": "investigate", "techReview": "technical review", "build": "build",
-               "userCheck": "user check", "codeReview": "code review", "release": "release, verify only"}
+               "userCheck": "user check", "codeReview": "code review", "release": "release, verify only",
+               "blockerTriage": "blocked, record the next action"}
 CLOSED = ("DONE", "DENIED", "CANCELLED")
 
 REMINDER = (
     "Work mode (Command Center): {project} has tickets that can move without Jay. Next: {tickets}. "
     "Take them in this order by your repository's rules and the flow: record each step with pipeline_cli, "
     "fill an empty seat per FLOW.md, and never merge or deploy. If a ticket needs Jay, ask him "
-    "(pipeline_cli ask, with options) or block it, then take the next one."
+    "(pipeline_cli ask, with options) or block it, then take the next one. For a blocked ticket needing triage, "
+    "record the next action in a handoff, rework an in-scope fix, re-plan changed scope, or ask Jay to decide."
 )
 
 
@@ -74,13 +76,17 @@ def movable(rows):
     flags, priority, dueAt, number, stage, holder, waitingOn, stale (flow.view's fields plus the ticket's)."""
     out = []
     for r in rows:
-        if r.get("status") in CLOSED or r.get("status") == "BLOCKED":
+        if r.get("status") in CLOSED:
             continue
-        if r.get("waitingOn") == "jay" or r.get("stage") not in STAGE_ORDER:
-            continue                                    # merge is Jay's; done has nothing left
         flags = {f.replace(":", "_").replace("-", "_") for f in r.get("flags") or ()}     # as pipeline.policy
         if r.get("type") == "OWNER_ACTION" or "needs_legal" in flags:
             continue                                    # Jay's own to-do; a lawyer's question (as the night shift)
+        if r.get("status") == "BLOCKED":
+            if r.get("needsBlockerTriage"):
+                out.append(dict(r, stage="blockerTriage"))
+            continue
+        if r.get("waitingOn") == "jay" or r.get("stage") not in STAGE_ORDER:
+            continue                                    # merge is Jay's; done has nothing left
         if "needs_jay" in flags and r.get("status") in ("INBOX", "PROPOSED"):
             continue                                    # the board shows it as Jay's until it is past intake
         if r.get("holder") and not r.get("stale"):

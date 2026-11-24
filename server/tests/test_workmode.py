@@ -41,6 +41,13 @@ class Movable(unittest.TestCase):
                 row("CC-15", stage="intake", status="INBOX", flags=["needs-legal"])]
         self.assertEqual(sorted(r["key"] for r in movable(rows)), ["CC-1", "CC-12", "CC-6", "CC-7", "CC-8"])
 
+    def test_a_blocker_without_a_next_step_asks_the_lead_to_triage(self):
+        triage = dict(row("CC-1", status="BLOCKED", waiting="jay"), needsBlockerTriage=True)
+        waiting = row("CC-2", status="BLOCKED", waiting="jay")
+        [next_step] = movable([triage, waiting])
+        self.assertEqual(next_step["key"], "CC-1")
+        self.assertIn("CC-1 (blocked, record the next action)", reminder_text("commandcenter", [next_step], now=T0))
+
     def test_order_is_priority_then_due_date_then_later_stage_then_oldest(self):
         rows = [row("A", priority="LOW", number=1),
                 row("B", priority="HIGH", due=T0 + 5 * 86400, number=2),

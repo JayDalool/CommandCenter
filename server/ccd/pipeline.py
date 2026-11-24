@@ -51,6 +51,7 @@ LEADS = ("jay", "agent:coordinator")          # who runs intake, edits criteria 
 USER_REVIEWERS = ("agent:user-reviewer", "agent:design-reviewer")
 CRITERION_ID_RE = re.compile(r"^c[0-9]{1,3}$")
 MAX_LANES = 2
+MAX_PROJECT_WORK = 4
 MAX_REVIEW_CYCLES = 2
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")   # the full PR head commit: no prefix can match another head
 SLUG_RE = r"[a-z0-9][a-z0-9-]{0,60}"
@@ -127,6 +128,8 @@ def policy(ticket, project_key=None):
 
 
 CLOSED_STATUSES = ("DONE", "DENIED", "CANCELLED")
+BACKLOG_STATUSES = ("INBOX", "PROPOSED")
+PROJECT_SLOT_EXCLUDED = BACKLOG_STATUSES + CLOSED_STATUSES
 HOLDING_GATES = ("plan", "failure")       # jay_first: Jay's decisions that hold a ticket (questions too)
 STALE_OPTIONS = ("Cancel it", "Keep it")   # the task check's question; "Cancel it" cancels the ticket
 # The ten stages Jay sees (spec §24). The canonical statuses stay as they are underneath.
@@ -651,6 +654,23 @@ class Pipeline:
             return True
         return not (pr.get("head") == r[0] and (not r[1] or pr.get("ref") == r[1]))
 
+    def project_slots(self, project):
+        """Work already admitted, including pending approvals, review and blocked work."""
+        marks = ", ".join("?" for _ in PROJECT_SLOT_EXCLUDED)
+        return [key for (key,) in self.db.execute(
+            f"SELECT t.key FROM tickets t LEFT JOIN ticket_work w ON w.ticket_id=t.id "
+            f"WHERE t.project=? AND t.archived=0 AND t.status NOT IN ({marks}) "
+            "AND NOT (t.status='VERIFYING' AND w.merge IS NOT NULL "
+            "AND COALESCE(json_extract(w.verification, '$.result'), '')='pass' "
+            "AND (w.gate IS NULL OR w.gate='deploy')) ORDER BY t.number",
+            (project, *PROJECT_SLOT_EXCLUDED))]
+
+    def check_project_admission(self, project):
+        slots = self.project_slots(project)
+        if len(slots) >= MAX_PROJECT_WORK:
+            raise TaskError(409, f"{project} has {len(slots)} of {MAX_PROJECT_WORK} work slots in use "
+                                 f"({', '.join(slots[:MAX_PROJECT_WORK])}). Finish or unblock existing work first.")
+
     def lanes(self, project):
         """Implementation lanes running in one project: its tickets IN_PROGRESS with a worktree."""
         return self.db.execute(
@@ -740,6 +760,8 @@ class Pipeline:
                 self.db.execute("INSERT INTO ticket_work(ticket_id, updated_at) VALUES (?,?)", (tid, at))
                 w = self._row(tid)
             fields, work, events = fn(tid, t, w, at)
+            if t["status"] in PROJECT_SLOT_EXCLUDED and fields.get("status", t["status"]) not in PROJECT_SLOT_EXCLUDED:
+                self.check_project_admission(t["project"])
             changes = self.ts._apply(tid, fields, actor, at, trigger=events[0][1] if events else None) if fields else []
             if work:
                 cols = ", ".join(f"{c}=?" for c in work)

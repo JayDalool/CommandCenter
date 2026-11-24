@@ -139,6 +139,7 @@ class PriorityAndDue(Base):
         for size, day in days.items():
             k = self.sized(size)
             self.assertEqual(self.ts.get(k)["dueAt"], self.end_of(2026, 11, day), size)
+            self.ts.update(k, {"status": "CANCELLED"}, "jay")
         k = self.ticket()
         self.pl.intake(k, "standard", ["works"], "agent:coordinator", priority="HIGH", due="2026-11-19")
         self.assertEqual(self.ts.get(k)["dueAt"], self.end_of(2026, 11, 19))

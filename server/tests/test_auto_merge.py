@@ -313,6 +313,7 @@ class Holds(Base):
             await d._auto_merge()
             self.assertEqual(gh.of("merge"), [], (over, pr))
             self.assertEqual(d.pipeline.work(k)["gate"], "merge", (over, pr))
+            self.tickets.update(k, {"status": "CANCELLED"}, "jay")
 
     async def test_a_failed_merge_opens_a_gate_and_is_not_retried(self):
         k = self.ready()

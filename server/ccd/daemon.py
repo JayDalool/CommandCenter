@@ -1112,11 +1112,21 @@ class Daemon(LeadChat, HqDaemon):
         for (key,) in pl.db.execute("SELECT key FROM tickets WHERE project=? AND archived=0 AND status NOT IN "
                                     "('DONE','DENIED','CANCELLED') ORDER BY number", (project,)).fetchall():
             t = pl.ts.get(key)
-            fl, _hs = pl.flow_of(key, t)
+            w = pl.work_row(t["id"])
+            fl, _hs = pl.flow_of(key, t, w)
+            blocked = w.get("blocked") or {}
+            handoff = w.get("handoff") or {}
+            needs_triage = (t["status"] == "BLOCKED" and blocked and not blocked.get("action")
+                            and not w["openQuestions"]
+                            and not (handoff.get("next") and (handoff.get("at") or 0) > (blocked.get("at") or 0)))
             out.append({"key": t["key"], "status": t["status"], "type": t.get("type"), "flags": t.get("flags") or [],
+                        "needsBlockerTriage": bool(needs_triage),
                         "priority": t.get("priority"), "dueAt": t.get("dueAt"),
                         "number": t.get("number"), "stage": fl["stage"], "holder": fl["holder"],
                         "waitingOn": fl["waitingOn"], "stale": fl["stale"]})
+        active = [r for r in out if r["status"] not in pipeline_mod.BACKLOG_STATUSES]
+        if len(pl.project_slots(project)) >= pipeline_mod.MAX_PROJECT_WORK or workmode_mod.movable(active):
+            return active
         return out
 
     async def work_tick(self, now=None):
@@ -1566,9 +1576,13 @@ class Daemon(LeadChat, HqDaemon):
         if extra:
             raise ActionError(400, f"cannot set {', '.join(sorted(extra))} on create")
         fields = {k: v for k, v in body.items() if k in CREATE_FIELDS}
+        project = str(body.get("project") or "")
         if actor != "jay":
-            self._not_paused(str(body.get("project") or ""), "agent work")
-        ticket, changes = self._wrap(ts.create, str(body.get("project") or ""), body.get("title"), actor, **fields)
+            self._not_paused(project, "agent work")
+        status = fields.get("status")
+        if self.pipeline and status in tasks_mod.ALL_STATUSES and status not in pipeline_mod.PROJECT_SLOT_EXCLUDED:
+            self._wrap(self.pipeline.check_project_admission, project)
+        ticket, changes = self._wrap(ts.create, project, body.get("title"), actor, **fields)
         self._task_event("task.created", ticket, f"created · {ticket['title']}", {"status": ticket["status"]})
         return self._with_work([ticket])[0]
 
@@ -1590,6 +1604,10 @@ class Daemon(LeadChat, HqDaemon):
                 if set(body) & self.GATE_FIELDS and not owner:
                     raise ActionError(409, f"{w['key']} is in the pipeline: its labels, type, flags and archive "
                                            f"change only with Jay's Developer Unlock")
+            status = body.get("status")
+            if (w["status"] in pipeline_mod.PROJECT_SLOT_EXCLUDED and status in tasks_mod.ALL_STATUSES
+                    and status not in pipeline_mod.PROJECT_SLOT_EXCLUDED):
+                self._wrap(self.pipeline.check_project_admission, self.tasks.get(key)["project"])
         ticket, changes = self._wrap(self._need_tasks().update, key, body, actor)
         self._announce(ticket, changes, teardown=actor == "jay" and developer)
         return self._with_work([ticket])[0]
@@ -1614,7 +1632,10 @@ class Daemon(LeadChat, HqDaemon):
         repo = next((p.get("repo") for p in self.cfg["projects"] if p["key"] == ticket["project"]), None) \
             or registry.github_of(ticket["project"])
         out = []
+        target = (self._project(ticket["project"]) or {}).get("branch") or "main"
         for pr in g.get("prs") if isinstance(g.get("prs"), list) else []:
+            if pr.get("baseRefName") and pr["baseRefName"] != target:
+                continue
             ref = f"{repo}#{pr.get('number')}"
             if ref in refs:
                 ci = model.ci_mark(pr.get("statusCheckRollup"))
@@ -2821,6 +2842,8 @@ class Daemon(LeadChat, HqDaemon):
         t = self.tasks.get(key)
         if t["status"] not in frm:
             return t
+        if t["status"] in pipeline_mod.PROJECT_SLOT_EXCLUDED and to not in pipeline_mod.PROJECT_SLOT_EXCLUDED:
+            self.pipeline.check_project_admission(t["project"])
         last = self.tasks.last_status_event(key)
         if last and not last["actor"].startswith("system:") and last["trigger"] is None and last["from"] == to:
             return t
@@ -2836,7 +2859,7 @@ class Daemon(LeadChat, HqDaemon):
           linked PR approved, no failing or pending check ("–": no checks at all, said as such), not draft,
           ticket IN_REVIEW                                                 → READY_TO_MERGE
           linked PR no longer ready, ticket READY_TO_MERGE                 → IN_REVIEW
-          linked PR merged (found by link, not title), IN_REVIEW/READY_TO_MERGE → VERIFYING
+          linked PR merged into the project target, IN_REVIEW/READY_TO_MERGE → VERIFYING
 
         A merge moves a ticket once; a reopened ticket waits for a new merge. GitHub keeps listing a merged PR,
         so the move is skipped when automation already made it for that PR (a status event with trigger
@@ -2856,6 +2879,7 @@ class Daemon(LeadChat, HqDaemon):
                 continue
             self._auto_seen[p["key"]] = g.get("asOf")
             data = g["data"]
+            target = p.get("branch") or "main"
 
             def mine(k):
                 return prefixes.get(k.rsplit("-", 1)[0]) == p["key"] and self.tasks.exists(k)
@@ -2878,6 +2902,8 @@ class Daemon(LeadChat, HqDaemon):
                             t, _ = self.tasks.link(k, "github", "pr", ref, github.pr_ref_url(ref), pr.get("title"),
                                                    "system:automation", trigger=f"PR #{n} title or branch leads with {k}")
                             self._task_event("task.updated", t, f"linked PR #{n}", {"kind": "links"})
+                        if pr.get("baseRefName") and pr["baseRefName"] != target:
+                            continue  # Keep the link for context without treating a stacked PR as delivery.
                         t = self.tasks.get(k)
                         if not t["branch"] and pr.get("headRefName"):
                             t, ch = self.tasks.update(k, {"branch": pr["headRefName"]}, "system:automation",
@@ -2909,9 +2935,14 @@ class Daemon(LeadChat, HqDaemon):
                     log.warning(json.dumps({"msg": "ticket automation skipped a PR", "error": repr(e)[:200]}))
             for m in data.get("merged") if isinstance(data.get("merged"), list) else []:
                 try:
+                    if m.get("baseRefName") != target:
+                        continue  # A feature-branch merge or an unknown target cannot advance delivery.
                     ref = f"{p['repo']}#{m['number']}"
                     why = f"PR #{m['number']} merged"
                     for k in self.tasks.keys_linked("github", "pr", ref):
+                        review_pr = self.pipeline.work_row(self.tasks.get(k)["id"])["review"].get("pr")
+                        if review_pr and review_pr != ref:
+                            continue
                         # A merge moves a ticket once. GitHub keeps listing a merged PR for a while, so after a
                         # reopen or rework the old merge must not send the ticket on to VERIFYING again.
                         if self.tasks.moved_by(k, "VERIFYING", why) or (
@@ -3699,8 +3730,12 @@ class Daemon(LeadChat, HqDaemon):
         if not isinstance(task, str) or not (TASK_ID_RE.match(task) or is_ticket):
             raise ActionError(400, f"taskId must look like {registry.prefix_of('samvision')}-056, GYST-VN-009 or "
                                    f"#42, or be an existing ticket key")
-        if is_ticket and self.tasks.get(task)["project"] != project:
-            raise ActionError(409, f"{task} belongs to another project")
+        if is_ticket:
+            ticket = self.tasks.get(task)
+            if ticket["project"] != project:
+                raise ActionError(409, f"{task} belongs to another project")
+            if ticket["status"] in pipeline_mod.BACKLOG_STATUSES and verb in DISPATCH_TRANSITIONS:
+                self._wrap(self.pipeline.check_project_admission, project)
         if not isinstance(note, str) or not NOTE_RE.match(note):
             raise ActionError(400, "note must be printable, one line, at most 500 characters")
         self._throttle(f"dispatch:{project}", 5.0)
@@ -3732,5 +3767,11 @@ class Daemon(LeadChat, HqDaemon):
             self._task_event("task.updated", t, f"dispatched: {verb} → {name}", {"kind": "dispatch"})
             # A pipeline ticket moves only through its own steps (start records branch, worktree, lane).
             if rule and not self.pipeline.participating(task):
-                self._auto(task, rule[0], rule[1], f"dispatch '{verb}' accepted by idle coordinator {name}")
+                try:
+                    self._auto(task, rule[0], rule[1], f"dispatch '{verb}' accepted by idle coordinator {name}")
+                except tasks_mod.TaskError as e:
+                    if e.status != 409:
+                        raise
+                    return {"ok": True, "coordinator": name, "task": task, "verb": verb, "plan": plan,
+                            "queued": e.message}
         return {"ok": True, "coordinator": name, "task": task, "verb": verb, "plan": plan}

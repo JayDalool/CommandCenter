@@ -109,7 +109,7 @@ class Automation(ApiBase):
         self.assertEqual(self.tickets.get("SV-056")["status"], "READY_TO_MERGE")
         self.gh.data["samvision"]["prs"] = []
         self.gh.data["samvision"]["merged"] = [{"number": 94, "title": "SV-056: the feature", "url": "u",
-                                                "mergedAt": "2026-10-03T00:00:00Z"}]
+                                                "baseRefName": "main", "mergedAt": "2026-10-03T00:00:00Z"}]
         self.poll()
         self.assertEqual(self.tickets.get("SV-056")["status"], "VERIFYING")
 
@@ -117,14 +117,14 @@ class Automation(ApiBase):
         self.ticket("PROPOSED")
         self.tickets.create("samvision", "other", number=57, status="READY_TO_IMPLEMENT")
         # a merged PR never seen open, and a red PR: no status moves
-        self.gh.data["samvision"]["merged"] = [{"number": 90, "title": "SV-057 tidy", "url": "u", "mergedAt": "x"}]
+        self.gh.data["samvision"]["merged"] = [{"number": 90, "title": "SV-057 tidy", "url": "u", "baseRefName": "main", "mergedAt": "x"}]
         self.gh.data["samvision"]["prs"] = [pr(95, "SV-056 draft idea", ci="FAILURE")]
         self.poll()
         self.assertEqual(self.tickets.get("SV-056")["status"], "PROPOSED")  # linked, but not moved from PROPOSED
         self.assertEqual(self.tickets.get("SV-056")["prNumber"], 95)
         self.assertEqual(self.tickets.get("SV-057")["status"], "READY_TO_IMPLEMENT")
 
-    MERGED_94 = [{"number": 94, "title": "SV-056: the feature", "url": "u", "mergedAt": "2026-10-03T00:00:00Z",
+    MERGED_94 = [{"number": 94, "title": "SV-056: the feature", "url": "u", "baseRefName": "main", "mergedAt": "2026-10-03T00:00:00Z",
                   "mergeCommit": {"oid": "f" * 40}}]
 
     def test_a_merge_moves_a_ticket_once_and_a_reopen_waits_for_a_new_merge(self):
@@ -143,7 +143,7 @@ class Automation(ApiBase):
         # a NEW merge still moves it
         self.gh.data["samvision"]["prs"] = []
         self.gh.data["samvision"]["merged"] = [{"number": 95, "title": "SV-056: the fix", "url": "u",
-                                                "mergedAt": "2026-10-04T00:00:00Z"}] + self.MERGED_94
+                                                "baseRefName": "main", "mergedAt": "2026-10-04T00:00:00Z"}] + self.MERGED_94
         self.poll()
         self.assertEqual(self.tickets.get("SV-056")["status"], "VERIFYING")
 
@@ -294,7 +294,7 @@ class ReviewFindings(ApiBase):
         self.poll()
         self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
         self.gh.data["samvision"]["prs"] = []
-        self.gh.data["samvision"]["merged"] = [{"number": 94, "title": "Untitled", "url": "u", "mergedAt": "x"}]
+        self.gh.data["samvision"]["merged"] = [{"number": 94, "title": "Untitled", "url": "u", "baseRefName": "main", "mergedAt": "x"}]
         self.poll()
         self.assertEqual(self.tickets.get("SV-056")["status"], "VERIFYING")
 
@@ -432,7 +432,7 @@ class DevelopmentView(ApiBase):
         self.poll()
         self.gh.data["samvision"]["prs"] = []
         self.gh.data["samvision"]["merged"] = [{"number": 105, "title": "SV-001: work", "url": "u",
-                                               "mergedAt": "2026-10-03T00:00:00Z"}]
+                                               "baseRefName": "main", "mergedAt": "2026-10-03T00:00:00Z"}]
         self.poll()
         row = self.rows()["SV-001"]
         self.assertEqual((row["pr"]["state"], row["merge"], row["verify"]), ("MERGED", "MERGED", "PENDING"))
@@ -468,6 +468,18 @@ class PipelineApi(Automation):
     def step(self, op, body, actor="agent:coordinator", headers=None):
         h = dict(JSON, **{"x-ccd-actor": actor}, **(headers or {}))
         return self.client.post(f"/api/tasks/{self.key}/work/{op}", content=json.dumps(body), headers=h)
+
+    def test_direct_writes_cannot_admit_a_fifth_ticket(self):
+        for state in ("BLOCKED", "IN_REVIEW", "READY_TO_MERGE", "RESEARCHING"):
+            self.tickets.create("samvision", state, status=state)
+        backlog = self.post("/api/tasks", {"project": "samvision", "title": "Backlog feature"})
+        self.assertEqual(backlog.status_code, 201, backlog.text)
+        key = backlog.json()["key"]
+        attempt = self.client.patch(f"/api/tasks/{key}", headers=JSON, json={"status": "RESEARCHING"})
+        self.assertEqual(attempt.status_code, 409, attempt.text)
+        self.assertEqual(self.tickets.get(key)["status"], "INBOX")
+        direct = self.post("/api/tasks", {"project": "samvision", "title": "Active feature", "status": "RESEARCHING"})
+        self.assertEqual(direct.status_code, 409, direct.text)
 
     def test_a_ticket_travels_plan_to_done_and_every_step_is_attributed(self):
         self.ticket("INBOX")
@@ -506,7 +518,7 @@ class PipelineApi(Automation):
         self.assertEqual([n["gate"] for n in needs], ["merge"])
         self.gh.data["samvision"]["prs"] = []
         self.gh.data["samvision"]["merged"] = [{"number": 94, "title": "SV-056: the feature", "url": "u",
-                                                "mergedAt": "2026-10-03T00:00:00Z", "mergeCommit": {"oid": "f" * 40}}]
+                                                "baseRefName": "main", "mergedAt": "2026-10-03T00:00:00Z", "mergeCommit": {"oid": "f" * 40}}]
         self.poll()
         w = self.get("/api/tasks/SV-056/work").json()
         self.assertEqual((w["status"], w["gate"], w["merge"]["sha"]), ("VERIFYING", None, "f" * 40))
@@ -590,7 +602,7 @@ class PipelineApi(Automation):
         self.assertEqual(r.json()["status"], "READY_TO_MERGE", r.text)
         self.gh.data["samvision"]["prs"] = []
         self.gh.data["samvision"]["merged"] = [{"number": 156, "title": "SV-056: the feature", "url": "u",
-                                                "mergedAt": "2026-10-03T00:00:00Z", "mergeCommit": {"oid": "f" * 40}}]
+                                                "baseRefName": "main", "mergedAt": "2026-10-03T00:00:00Z", "mergeCommit": {"oid": "f" * 40}}]
         self.poll()
         self.assertEqual(self.status(), "VERIFYING")
         r = self.step("verify", {"result": "pass", "evidence": "health ok"}, "agent:verifier")
@@ -794,7 +806,7 @@ class PipelineApi(Automation):
                                    "agent:reviewer").json()["status"], "READY_TO_MERGE")
         self.gh.data["samvision"]["prs"] = []
         self.gh.data["samvision"]["merged"] = [{"number": 97, "title": "SV-056: fix the 500", "url": "u",
-                                                "mergedAt": "2026-10-05T00:00:00Z",
+                                                "baseRefName": "main", "mergedAt": "2026-10-05T00:00:00Z",
                                                 "mergeCommit": {"oid": "e" * 40}}] + merged_94
         for _ in range(2):
             self.poll()
@@ -804,6 +816,35 @@ class PipelineApi(Automation):
         unreviewed = [e for e in self.get("/api/activity?limit=200").json()["events"] if e["kind"] == "task.pipeline"
                       and e["data"].get("kind") == "pipeline.unreviewed_merge"]
         self.assertEqual(unreviewed, [])
+
+    def test_stack_and_unknown_target_cannot_advance_a_linked_ticket(self):
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "Feature"}}, "agent:planner")
+        self.step("start", {"branch": "SV-056-parent", "worktree": "/srv/w/SV-056"})
+        git = self.gh.data["samvision"]
+        parent = dict(pr(278, "SV-056: delivery"), baseRefName="main", headRefName="SV-056-parent")
+        child = dict(pr(279, "SV-056: follow-up"), baseRefName="SV-056-parent", headRefName="SV-056-child")
+        git["prs"] = [parent, child]
+        self.poll()
+        work = self.get("/api/tasks/SV-056/work").json()
+        self.assertEqual(work["status"], "IN_REVIEW")
+
+        git["prs"] = [parent]
+        git["merged"] = [{"number": 279, "title": child["title"], "url": child["url"], "mergedAt": "2026-10-03T00:00:00Z",
+                          "baseRefName": "SV-056-parent", "mergeCommit": {"oid": "c" * 40}}]
+        self.poll()
+        work = self.get("/api/tasks/SV-056/work").json()
+        self.assertEqual(work["status"], "IN_REVIEW")
+        self.assertIsNone(work["merge"])
+
+        git["prs"] = []
+        git["merged"] = [{"number": 278, "title": parent["title"], "url": parent["url"], "mergedAt": "2026-10-03T00:00:00Z"}]
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+
+        git["merged"][0]["baseRefName"] = "main"
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "VERIFYING")
 
     def test_a_ui_gate_cannot_be_skipped_by_marking_done(self):
         self.ticket("INBOX")
@@ -824,7 +865,7 @@ class PipelineApi(Automation):
         self.gh.data["samvision"]["prs"] = [dict(pr(94, "SV-056: x"), headRefName="SV-056-x")]
         self.poll()
         self.gh.data["samvision"]["prs"] = []
-        self.gh.data["samvision"]["merged"] = [{"number": 94, "title": "SV-056: x", "url": "u", "mergedAt": "x"}]
+        self.gh.data["samvision"]["merged"] = [{"number": 94, "title": "SV-056: x", "url": "u", "baseRefName": "main", "mergedAt": "x"}]
         self.poll()
         ev = [e for e in self.get("/api/activity?limit=200").json()["events"] if e["kind"] == "task.pipeline"
               and e["data"].get("kind") == "pipeline.unreviewed_merge"]

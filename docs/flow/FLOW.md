@@ -76,12 +76,18 @@ Never put secrets, tokens, customer data, licensed data or pasted terminal outpu
 
 ## Limits that stop half-finished work
 
-- Per project: at most 2 tickets in Investigate and 2 in Build.
+- Per project: admit at most four tickets beyond the backlog. Tickets in review, ready to merge or blocked still
+  take a slot. A verified merge waiting only for release no longer takes an engineering slot. Existing work can
+  continue when importing or reopening tickets puts the project above four, and new intake waits.
+- Within those four: at most 2 tickets in Investigate and 2 in Build.
 - Finishing first: no `start` and no first `plan` while another ticket in the same project has waited more than
   4 hours in Technical review, User check or Code review with nobody in that seat. Fill that seat instead.
 - Stale: 48 hours with no recorded step in stages 2 to 6 marks the ticket stale. The lead moves it, sends it back
   or proposes cancelling it (`pipeline_cli stale`; only Jay cancels).
-- Two rounds at most per review stage: the second send-back blocks the ticket.
+- Two rounds at most per review stage: the second send-back blocks the ticket. The lead reads the blocker and
+  records the next action. For an ordinary fix within the accepted scope, use `rework` and get fresh checks.
+  If the assumptions or scope changed, use `replan`. If the lead needs Jay to choose, use `ask` with options
+  and a recommendation. Keep the blocker visible until there is a recorded decision or a path forward.
 
 ## Work mode: work keeps moving
 
@@ -91,7 +97,8 @@ of the tickets that can move without Jay, in this order: priority, then the earl
 oldest. Take them in that order, within the limits above. A ticket that needs Jay: ask or block it, then take the
 next one. A ticket in intake flagged needs-Jay is not named; a release-stage ticket is named for verifying only.
 The reminder grants nothing; every gate still waits for Jay. It stays quiet while the project is paused,
-the night shift runs or a budget is on hold, rests 2 hours after 3 reminders with no ticket change, and stops for
+the night shift runs or a budget is on hold. The reminder puts existing work ahead of more intake and includes
+blockers that still need a next step. Work mode rests 2 hours after 3 reminders with no ticket change and stops for
 the day after 36 (per Winnipeg day, even if the switch goes off and on).
 
 ## Who answers a question

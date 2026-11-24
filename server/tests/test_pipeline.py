@@ -37,6 +37,29 @@ class Base(unittest.TestCase):
         return {"ref": "JayDalool/SamVisionAI#1", "head": head, "ciGreen": green, "draft": draft}
 
 
+class ProjectSlots(Base):
+    def test_blocked_review_and_merge_work_hold_slots_until_one_is_release_ready(self):
+        blocked, reviewing, merging, verifying = (
+            self.ticket(status=status) for status in ("BLOCKED", "IN_REVIEW", "READY_TO_MERGE", "VERIFYING")
+        )
+        self.assertEqual(self.pl.project_slots("samvision"), [blocked, reviewing, merging, verifying])
+        queued = self.ticket(description="A new feature")
+        with self.assertRaisesRegex(TaskError, "4 of 4 work slots"):
+            self.pl.intake(queued, "standard", ["The feature is visible"], "agent:coordinator", priority="MEDIUM")
+        self.assertIn(self.ts.get(queued)["status"], ("INBOX", "PROPOSED"))
+        self.assertIsNone(self.pl.work(queued)["size"])
+
+        other, _ = self.ts.create("gyst", "Independent work")
+        self.pl.plan(other["key"], PLAN, "agent:planner")
+
+        self.pl.merged(verifying, "JayDalool/SamVisionAI#7")
+        self.pl.deploy_request(verifying, "live", "Ship feature", "Check health", "agent:verifier")
+        self.pl.verify(verifying, "pass", "Preview health ok", "agent:verifier")
+        self.assertNotIn(verifying, self.pl.project_slots("samvision"))
+        self.pl.intake(queued, "standard", ["The feature is visible"], "agent:coordinator", priority="MEDIUM")
+        self.assertIn(queued, self.pl.project_slots("samvision"))
+
+
 class Stages(Base):
     def test_every_canonical_status_maps_to_one_stage(self):
         self.assertEqual({stage_of(s) for s in tasks.STATUSES},

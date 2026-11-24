@@ -936,6 +936,25 @@ class Notifier:
         text = str(ev.get("text") or "")
         if text.startswith(key + " "):
             text = text[len(key) + 1:]
+        if data.get("kind") in ("pipeline.handoff", "pipeline.blocked", "pipeline.user_checked"):
+            work = self._work(key)
+            when = ev.get("at") or self.clock()
+            if data.get("kind") == "pipeline.handoff":
+                handoff = work.get("handoff") or {}
+                if (handoff.get("at") or 0) > when:
+                    handoff = {}  # A newer handoff is a different Slack update.
+                parts = [f"{label}: {str(handoff[field])[:220]}" for field, label in
+                         (("done", "Completed"), ("next", "Next"), ("blockers", "Blocked by")) if handoff.get(field)]
+                text = "\n".join(parts) or text
+            elif data.get("kind") == "pipeline.blocked":
+                blocked = work.get("blocked") or {}
+                action = blocked.get("action") if (blocked.get("at") or 0) <= when else None
+                next_step = str(action)[:220] if action else "Lead reviews the blocker and asks Jay if a decision is needed."
+                text = f"{text}\nNext: {next_step}"
+            else:
+                check = work.get("userCheck") or {}
+                if check.get("note") and (check.get("at") or 0) <= when:
+                    text += f"\nChecked: {str(check['note'])[:220]}"
         root = await self._ticket_thread(key, ev.get("project"), chan)
         if root is not None:
             await self.post(chan, esc(text), thread_ts=root, who=SEATS.get(data.get("actor")),

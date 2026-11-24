@@ -984,6 +984,17 @@ class TeamThreads(ReplyBase):
         self.assertEqual(code["as"], ("Code reviewer", ":eyes:"))
         self.assertEqual(len([p for p in self.channel_posts() if p["thread"] is None]), 1)      # still one thread
 
+    def test_handoff_and_blocker_state_explain_the_next_action(self):
+        self.d.task_work = lambda key: {
+            "handoff": {"done": "Portion tests passed", "next": "Check the review screen"},
+            "blocked": {"action": "Check the missing fixture"},
+        }
+        self.step("SV-44", "pipeline.handoff", "handoff updated", "agent:implementer")
+        self.step("SV-44", "pipeline.blocked", "Preview data missing", "agent:coordinator")
+        _, handoff, blocker = self.channel_posts()
+        self.assertIn("Completed: Portion tests passed\nNext: Check the review screen", handoff["text"])
+        self.assertIn("Preview data missing\nNext: Check the missing fixture", blocker["text"])
+
     def test_milestones_also_show_in_the_channel_and_small_records_stay_out(self):
         self.step("SV-41", "pipeline.criteria", "criteria updated: 3 criteria", "agent:coordinator")
         self.step("SV-41", "pipeline.evidence", "evidence: screenshot", "agent:user-reviewer")
