@@ -34,6 +34,7 @@ The delivery flow (docs/flow/FLOW.md). Each line runs as the seat named in brack
                                            [--test "…"] [--size risky]                                       [tech-reviewer]
     python -m ccd.pipeline_cli user-check  SV-056 pass|fail --head <sha> --session <fresh> --note "…" \
                                            --criterion c1=pass [--criterion c2=fail …]                        [user-reviewer]
+    python -m ccd.pipeline_cli security-check SV-056 pass|fail --head <sha> --session <fresh> --note "…"  [security-engineer]
     python -m ccd.pipeline_cli close       SV-056 --note "what was done, what to know next time"             [lead]
 
 `criteria` replaces the whole list: repeat every criterion you keep (as its text; an unchanged text keeps its state).
@@ -65,10 +66,11 @@ import urllib.request
 from . import config
 
 ROLES = ("coordinator", "planner", "implementer", "reviewer", "verifier", "tech-reviewer", "user-reviewer",
-         "design-reviewer")
+         "design-reviewer", "security-engineer")
 # The flow's steps run as their seat when no --role is given.
 DEFAULT_ROLE = {"intake": "coordinator", "criteria": "coordinator", "close": "coordinator",
-                "plan-review": "tech-reviewer", "user-check": "user-reviewer"}
+                "plan-review": "tech-reviewer", "user-check": "user-reviewer",
+                "security-check": "security-engineer"}
 
 
 def call(method, path, body=None, actor=None, port=None, token=None):
@@ -133,8 +135,8 @@ def build(argv):
     p = argparse.ArgumentParser(prog="ccd.pipeline_cli", description="Record a ticket pipeline step in Command Center.")
     p.add_argument("op", choices=("work", "plan", "start", "review", "verify", "handoff", "block", "role", "finding",
                                   "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
-                                  "tasks", "add", "intake", "criteria", "plan-review", "user-check", "close",
-                                  "deploy-plan", "reply"))
+                                  "tasks", "add", "intake", "criteria", "plan-review", "user-check", "security-check",
+                                  "close", "deploy-plan", "reply"))
     p.add_argument("key")
     p.add_argument("decision", nargs="?", help="plan-review: APPROVE or SEND_BACK; user-check: pass or fail")
     p.add_argument("--role", choices=ROLES)
@@ -179,7 +181,7 @@ def build(argv):
     p.add_argument("--blast", action="append")
     p.add_argument("--test", action="append")
     a = p.parse_args(argv)
-    if a.decision is not None and a.op not in ("plan-review", "user-check"):
+    if a.decision is not None and a.op not in ("plan-review", "user-check", "security-check"):
         p.error(f"unexpected argument {a.decision}")
     if not a.role:
         a.role = DEFAULT_ROLE.get(a.op)
@@ -221,6 +223,7 @@ def build(argv):
                                 "tests": a.test or [], **({"size": a.size} if a.size else {}), **meta},
         "user-check": lambda: {"result": a.decision or a.result, "head": a.head, "note": a.note,
                                "criteria": a.criterion or [], **meta},
+        "security-check": lambda: {"result": a.decision or a.result, "head": a.head, "note": a.note, **meta},
         "close": lambda: {"note": a.note},
     }
     if a.op == "work":

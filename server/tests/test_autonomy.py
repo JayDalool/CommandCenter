@@ -241,6 +241,9 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
             d.gh[project] = {"data": {"prs": []}, "asOf": 1, "error": None}
         d.gh[project]["data"]["prs"].append(
             {"number": number, "headRefOid": HEAD, "statusCheckRollup": [], "isDraft": False})
+        pl.ts._begin()                          # CC-057: only a ticket sized small may auto-merge
+        pl._flow_set(pl.ts._id_of(k), time.time(), size="small")
+        pl.ts._commit()
         return k
 
     async def test_each_decision_is_recorded_next_to_what_ccd_did(self):
@@ -251,13 +254,13 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
             ("commandcenter", "plan", "auto", "jay", "target.plan_approval:unknown"),   # Q-01: risk unknown
             ("gyst", "plan", "auto", "jay", "target.plan_approval:unknown"),
             ("gyst", "merge", "jay", "jay", "target.merge:requires"),
-            ("commandcenter", "merge", "auto", "jay", "target.merge:requires"),   # ADR 0007 allows no checks; target doesn't
+            ("commandcenter", "merge", "auto", "auto", "target.merge"),   # CC-057: named checks green, engine agrees
         ])
         s = self.d.autonomy_state()
-        self.assertEqual((s["total"], s["disagree"], s["available"]), (4, 3, True))
+        self.assertEqual((s["total"], s["disagree"], s["available"]), (4, 2, True))
 
     async def test_green_ci_and_allowlisted_files_agree(self):
-        self.gh.pr = view(statusCheckRollup=[{"conclusion": "SUCCESS"}])
+        self.gh.pr = view()          # the named backend and web check runs are green
         self.to_ready()
         await self.d._auto_merge()
         self.assertEqual(self.rows()[-1], ("commandcenter", "merge", "auto", "auto", "target.merge"))
@@ -265,20 +268,21 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
     async def test_the_readiness_ccd_already_read_reaches_the_engine(self):
         # engine v2: the PR object _auto_merge_one fetched anyway supplies draft/mergeable/base/fork/head and whether
         # a check passed. No extra gh call: the same single `gh pr view` per ticket.
-        ok = [{"conclusion": "SUCCESS"}]
-        # The last case is U-08 seen from both sides: today's auto-merge (ci_state) merges an all-skipped PR; the
-        # engine says Jay. Legacy is deliberately unchanged here; the engine records the disagreement.
+        ok = [{"__typename": "CheckRun", "name": n, "workflowName": "CI", "conclusion": "SUCCESS", "status": "COMPLETED"}
+              for n in ("backend", "web")]
+        # The last case was U-08, where legacy merged an all-skipped PR and the engine said Jay. Since CC-057 only a
+        # SUCCESS run of each named job counts, so legacy agrees with the engine and merges nothing.
         for over, did, rule in (({"isDraft": True}, "jay", "merge:readiness"),
                                 ({"isCrossRepository": True}, "jay", "merge:readiness"),
                                 ({"baseRefName": "release"}, "jay", "merge:readiness"),
-                                ({"statusCheckRollup": [{"conclusion": "SKIPPED"}]}, "auto", "target.merge:requires")):
+                                ({"statusCheckRollup": [{"conclusion": "SKIPPED"}]}, "jay", "target.merge:requires")):
             self.gh.pr = view(**dict({"statusCheckRollup": ok}, **over))
             before = len(self.gh.of("view"))
             self.to_ready(number=11 + len(self.rows()))
             await self.d._auto_merge()
             self.assertEqual(self.rows()[-1][1:], ("merge", did, "jay", rule), over)
             self.assertEqual(len(self.gh.of("view")) - before, 1)
-        self.assertEqual(len(self.gh.of("merge")), 1)               # only the all-skipped one, by legacy, as before
+        self.assertEqual(len(self.gh.of("merge")), 0)               # none: skipped jobs are not SUCCESS (CC-057)
 
     async def test_a_pr_at_a_newer_head_is_not_used_as_the_reviewed_one(self):
         k = self.to_ready("gyst")

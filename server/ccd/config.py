@@ -61,9 +61,10 @@ DEFAULTS = {
     # Remove a DONE ticket's clean, fully pushed worktree after ccd's git poll (ccd/worktree_cleanup.py).
     # false = never remove anything.
     "worktree_cleanup": True,
-    # ccd may merge low-risk reviewed PRs itself (CC-025). Off until Jay sets it true; read at start.
-    # A project must also say pipeline merge "low-risk" in ccd/registry.py.
-    "auto_merge": False,
+    # Projects whose small low-risk reviewed PRs ccd may merge itself (CC-025, CC-057): a list of project keys, e.g.
+    # ["commandcenter"]. Empty (the default) = none. Read at start. A project must also say pipeline merge
+    # "low-risk" in ccd/registry.py. Anything that is not a list of known keys reads as empty (auto_merge_projects).
+    "auto_merge": [],
     # Onboarding groundwork (ccd/onboarding.py; D-024 proposed): agent registration records, drafts, validation,
     # read-only APIs and the shadow budget report. Off until Jay sets it true; read at start. Records only: it grants
     # nothing, issues no credential and starts no agent.
@@ -128,6 +129,22 @@ def load(path=None):
         proj.setdefault("path", "")
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     return cfg
+
+
+def auto_merge_projects(raw):
+    """(projects, problem) from config.json `auto_merge`. Fails closed (CC-057): a string, dict, number, null, a list
+    with a non-string or an unknown key, or a project that is paused or a client's, gives [] and says why. The old
+    `true` means ["commandcenter"] (what it switched on before), `false` means none."""
+    if raw is True:
+        return ["commandcenter"], None
+    if raw is False or raw == []:
+        return [], None
+    if not isinstance(raw, list) or any(not isinstance(k, str) or k not in registry.PROJECTS for k in raw):
+        return [], f"auto_merge must be a list of known project keys, got {str(raw)[:80]}"
+    bad = [k for k in raw if registry.paused(k) or registry.class_of(k) != "own"]
+    if bad:
+        return [], f"auto_merge names a paused or client project: {', '.join(bad)}"
+    return sorted(set(raw)), None
 
 
 def task_projects(cfg):

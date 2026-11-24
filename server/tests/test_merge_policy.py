@@ -18,10 +18,34 @@ def fr(project, files):
     return mp.file_reasons(project, files, sum(x["additions"] for x in ok), sum(x["deletions"] for x in ok))
 
 
+def run(name, concl="SUCCESS", status="COMPLETED", typ="CheckRun", workflow="CI"):
+    """One entry of `statusCheckRollup` as gh reports it."""
+    return {"__typename": typ, "name": name, "workflowName": workflow, "conclusion": concl, "status": status}
+
+
+def green(*names):
+    return [run(n) for n in names]
+
+
+CC_CHECKS = green("backend", "web")
+
+
+def facts_for(files, project="commandcenter", **over):
+    """Merge-time facts that say every changed file is a plain file with harmless text, no label, a small ticket."""
+    facts = {"modes": {x["path"]: {"base": None if x["changeType"] == "ADDED" else "100644", "head": "100644"}
+                       for x in files},
+             "texts": {x["path"]: {"head": "hello\n", **({} if x["changeType"] == "ADDED" else {"base": "hello\n"})}
+                       for x in files},
+             "truncated": False, "errors": [], "labels": [], "labelsComplete": True,
+             "size": {"stored": "small", "effective": "small", "everRisky": False, "raised": False, "parentRisky": False}}
+    facts.update(over)
+    return facts
+
+
 def view(files=None, **over):
     files = files if files is not None else [f("server/tests/test_x.py", "ADDED"), f("docs/API.md")]
     pr = {"state": "OPEN", "isDraft": False, "mergeable": "MERGEABLE", "baseRefName": "main", "headRefOid": HEAD,
-          "isCrossRepository": False, "files": files, "statusCheckRollup": [],
+          "isCrossRepository": False, "files": files, "statusCheckRollup": list(CC_CHECKS),
           "additions": sum(x["additions"] for x in files), "deletions": sum(x["deletions"] for x in files)}
     pr.update(over)
     return pr
@@ -40,8 +64,11 @@ def work(**over):
     return w
 
 
-def decide(pr=None, t=None, w=None, open_prs=(REF,), policy="low-risk", ref=REF):
-    return mp.classify("commandcenter", t or ticket(), w or work(), pr or view(), ref, list(open_prs), policy)
+def decide(pr=None, t=None, w=None, open_prs=(REF,), policy="low-risk", ref=REF, facts="default", project="commandcenter"):
+    pr = pr or view()
+    if facts == "default":
+        facts = facts_for(pr["files"], project)
+    return mp.classify(project, t or ticket(), w or work(), pr, ref, list(open_prs), policy, facts)
 
 
 class Paths(unittest.TestCase):
@@ -111,9 +138,9 @@ class Paths(unittest.TestCase):
             self.assertTrue(fr("commandcenter", [f(path)]), repr(path))
 
     def test_a_project_without_an_allowlist_never_qualifies(self):
-        for project in ("samvision", "gauzemate", "mfe", "gyst", "nope"):
+        for project in ("gauzemate", "nope"):
             self.assertEqual(fr(project, [f("docs/API.md")]), [f"{project} has no auto-merge allowlist"])
-        d = mp.classify("gyst", ticket(project="gyst"), work(), view(), REF, [REF])
+        d = mp.classify("gauzemate", ticket(project="gauzemate"), work(), view(), REF, [REF])
         self.assertFalse(d.ok)
 
     def test_only_added_or_modified_files(self):
@@ -170,18 +197,20 @@ class Ci(unittest.TestCase):
         self.assertEqual(mp.ci_state([{"status": "COMPLETED"}]), "unknown")
         self.assertEqual(mp.ci_state("green"), "unknown")
 
-    def test_no_checks_at_all_qualifies_and_is_not_called_green(self):
+    def test_no_checks_at_all_is_not_green(self):
+        # CC-057: every project runs CI on pull requests, so "no checks" now means CI did not run: refuse.
         d = decide(view(statusCheckRollup=[]))
-        self.assertEqual((d.ok, d.ci), (True, "none"))
-        self.assertEqual(decide(view(statusCheckRollup=[{"conclusion": "SUCCESS"}])).ci, "green")
+        self.assertFalse(d.ok)
+        self.assertIn("required CI check backend is missing", d.reasons)
+        self.assertEqual(decide(view()).ci, "green")
 
     def test_failing_blocks_and_pending_waits(self):
-        d = decide(view(statusCheckRollup=[{"conclusion": "FAILURE"}]))
+        d = decide(view(statusCheckRollup=[run("backend", "FAILURE"), run("web")]))
         self.assertEqual((d.ok, d.wait, d.ci), (False, False, "failing"))
         self.assertIn("a CI check is failing", d.reasons)
-        d = decide(view(statusCheckRollup=[{"conclusion": "SUCCESS"}, {"status": "QUEUED", "conclusion": ""}]))
+        d = decide(view(statusCheckRollup=[run("backend"), run("web", "", "QUEUED")]))
         self.assertEqual((d.ok, d.wait, d.ci), (False, True, "pending"))
-        d = decide(view(statusCheckRollup=[{"conclusion": "SOMETHING_NEW"}]))
+        d = decide(view(statusCheckRollup=[run("backend"), run("web", "SOMETHING_NEW")]))
         self.assertEqual((d.ok, d.wait), (False, False))
 
 
@@ -240,7 +269,7 @@ class Decide(unittest.TestCase):
         self.assertEqual((d.ok, d.wait), (False, True))
 
     def test_a_bad_file_beats_a_pending_check(self):
-        d = decide(pr=view([f("server/ccd/x.py")], statusCheckRollup=[{"state": "PENDING"}]))
+        d = decide(pr=view([f("server/ccd/x.py")], statusCheckRollup=[run("backend"), run("web", "", "QUEUED")]))
         self.assertEqual((d.ok, d.wait), (False, False))
 
     def test_the_policy_must_be_low_risk(self):

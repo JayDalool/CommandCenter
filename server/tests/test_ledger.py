@@ -148,6 +148,10 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         if not (d.gh.get(project) or {}).get("data"):
             d.gh[project] = {"data": {"prs": []}, "asOf": 1, "error": None}
         d.gh[project]["data"]["prs"].append({"number": number, "headRefOid": HEAD, "statusCheckRollup": [], "isDraft": False})
+        import time
+        pl.ts._begin()                  # CC-057: only a ticket sized small may auto-merge
+        pl._flow_set(pl.ts._id_of(k), time.time(), size="small")
+        pl.ts._commit()
         return k, ref
 
     async def test_a_merge_gate_is_requested_approved_by_jay_and_consumed_by_the_merge(self):

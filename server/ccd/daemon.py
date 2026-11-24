@@ -23,7 +23,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import __version__, autonomy, coordid, coordinators, github, ledger, merge_policy, model, profiles, registry, sources
+from . import __version__, autonomy, coordid, coordinators, github, ledger, merge_facts, merge_policy, model, profiles, registry, sources
 from . import flow as flow_mod
 from . import release as release_mod
 from . import pipeline as pipeline_mod
@@ -49,7 +49,7 @@ from . import records as records_mod
 from . import tasks as tasks_mod
 from . import worktree_cleanup
 from . import config as config_mod
-from .config import AUTO_MERGE_STOP, STATE_DIR, public_project
+from .config import AUTO_MERGE_STOP, STATE_DIR, auto_merge_projects, public_project
 
 log = logging.getLogger("ccd")
 
@@ -332,9 +332,12 @@ class Daemon(LeadChat, HqDaemon):
         self.work = workmode_mod.WorkMode(cfg.get("work_mode_path") or STATE_DIR / "work-mode.json")
         # Auto-merge (CC-025): the config switch is read once, here. `gh_cli(args) -> (code, stdout, stderr)` is the
         # only way ccd writes to GitHub; tests give it a fake. The stop file is checked before every merge.
-        self.auto_merge_on = cfg.get("auto_merge") is True
+        # CC-057: `auto_merge` is a list of project keys; anything else reads as [] (config.auto_merge_projects) and
+        # says so as a security event at start, so a typo never switches a project on.
+        self.auto_merge_list, self._auto_merge_problem = auto_merge_projects(cfg.get("auto_merge"))
+        self.auto_merge_on = bool(self.auto_merge_list)
         if self.pipeline is not None:
-            self.pipeline.auto_merge = self.auto_merge_on
+            self.pipeline.auto_merge = self.auto_merge_list
         self.gh_cli = gh_cli or sources._run
         self.auto_merge_stop = AUTO_MERGE_STOP
         self._am_busy = False
@@ -1598,7 +1601,8 @@ class Daemon(LeadChat, HqDaemon):
 
     PIPELINE_OPS = ("plan", "start", "review", "verify", "confirm", "handoff", "block", "role", "finding",
                     "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
-                    "intake", "criteria", "plan-review", "user-check", "close", "deploy-plan", "reply")
+                    "intake", "criteria", "plan-review", "user-check", "security-check", "close", "deploy-plan",
+                    "reply")
 
     def task_work(self, key):
         self._need_tasks()
@@ -1697,6 +1701,12 @@ class Daemon(LeadChat, HqDaemon):
                 raise ActionError(409, f"{t['key']} has several open PRs linked; one PR per user check")
             r = self._wrap(pl.user_check, key, body.get("result"), body.get("head"), actor, body.get("note"),
                            body.get("criteria"), pr=self._pr_state(t), open_prs=self._open_prs(t), **meta)
+        elif op == "security-check":
+            t = self._wrap(self.tasks.get, key)
+            if len(self._open_prs(t)) > 1:
+                raise ActionError(409, f"{t['key']} has several open PRs linked; one PR per security check")
+            r = self._wrap(pl.security_check, key, body.get("result"), body.get("head"), actor, body.get("note"),
+                           pr=self._pr_state(t), session=meta["session"])
         elif op == "close":
             r = self._wrap(pl.close, key, body.get("note"), actor)
         elif op == "deploy-plan":
@@ -2931,13 +2941,17 @@ class Daemon(LeadChat, HqDaemon):
                          "statusCheckRollup")
 
     def _auto_merge_projects(self):
-        """Registry projects whose merge policy is low-risk AND that have an allowlist: the only ones ccd merges for."""
-        return [k for k in registry.PROJECTS
+        """Registry projects whose merge policy is low-risk, that have an allowlist AND are in config `auto_merge`:
+        the only ones ccd merges for by itself (CC-057: the switch is per project)."""
+        return [k for k in registry.PROJECTS if k in self.auto_merge_list
                 if pipeline_mod.policy({"project": k}, k)["merge"] == "low-risk" and merge_policy.ALLOW.get(k)]
 
     def _log_merge_policy(self):
         """Startup: whether ccd may merge anything, as a security event (the audit trail of the first GitHub write)."""
         self._event("security", "merge.policy", self._merge_policy_text(), data={"status": self._merge_policy_state()})
+        if self._auto_merge_problem:
+            self._event("security", "merge.config", f"auto_merge ignored: {self._auto_merge_problem}", severity="warn",
+                        data={"status": "invalid"})
 
     def _log_policy(self):
         """Startup: which policy files ccd read (their combined SHA-256) and whether any is broken or drifts."""
@@ -3029,7 +3043,11 @@ class Daemon(LeadChat, HqDaemon):
             self._am_next[key] = time.monotonic() + 60
             return
         self._shadow_pr[key] = pr    # shadow mode only: the engine reads the changed files of the reviewed head from it
-        d = merge_policy.classify(project, t, w, pr, pr_ref, open_prs, pipeline_mod.policy(t, project)["merge"])
+        # CC-057: modes, file text and labels are read fresh, pinned to the reviewed head, in a worker thread; the size
+        # history comes from the ticket. A failed read refuses the merge (facts["errors"]); it never reads as empty.
+        facts = await asyncio.to_thread(merge_facts.fetch, self._gh_json, repo, int(number), head, pr.get("files"), project)
+        facts["size"] = self.pipeline.merge_size_facts(key)
+        d = merge_policy.classify(project, t, w, pr, pr_ref, open_prs, pipeline_mod.policy(t, project)["merge"], facts)
         if d.wait:
             stamp = self._review_stamp(w)
             since = self._am_waiting.setdefault(key, (stamp, time.monotonic()))

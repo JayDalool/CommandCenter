@@ -2,12 +2,12 @@
 schema = 1
 project = "commandcenter"
 mode = "experimental_autonomy"
-decisions = ["D-001", "D-003", "D-006", "D-007", "D-008"]
+decisions = ["D-001", "D-003", "D-006", "D-007", "D-008", "D-010"]
 learning = "contextual"
 
 # What Command Center does TODAY. Must equal ccd/registry.py (a test and a runtime drift check keep them equal).
 [enforced]
-merge = "low-risk"          # ccd merges reviewed tests/docs PRs only, and only while auto_merge is on (ADR 0007)
+merge = "low-risk"          # ccd merges small reviewed tests/docs PRs, and only while auto_merge lists this project (ADR 0007, D-010)
 night = "normal"
 paused = ""
 max_lanes = 2

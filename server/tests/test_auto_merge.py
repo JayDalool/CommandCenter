@@ -14,7 +14,7 @@ from ccd.store import Store
 from ccd.tasks import TaskStore
 
 from .helpers import cfg, new_db
-from .test_merge_policy import HEAD, REF, f, view
+from .test_merge_policy import HEAD, REF, f, run, view, green
 
 PLAN = {"summary": "add tests", "requirements": [], "approach": "tests", "affected": [], "risk": "low",
         "tests": ["unit"], "questions": []}
@@ -26,12 +26,43 @@ class FakeGh:
 
     def __init__(self, pr=None):
         self.calls = []
+        self.api_calls = []   # `gh api` reads (CC-057 merge facts); kept apart so the merge-argument tests stay exact
+        self.labels = []
+        self.body = ""
+        self.mode = "100644"
+        self.truncated = False
+        self.text = "hello\n"
+        self.api_fail = False
         self.pr = pr if pr is not None else view()
         self.merge = (0, "", "")
         self.delay = 0
         self.on_view = None
 
+    def api(self, args):
+        """The `gh api` answers merge_facts.fetch reads, derived from the PR the fake serves."""
+        import base64
+        self.api_calls.append(list(args))
+        if self.api_fail:
+            return 1, "", "api down"
+        path = args[2]
+        if "/pulls/" in path:
+            return 0, json.dumps({"base": {"sha": "ba" * 20}, "head": {"sha": self.pr.get("headRefOid")},
+                                  "labels": [{"name": x} for x in self.labels], "body": self.body}), ""
+        if "/issues/" in path:
+            return 0, json.dumps({"labels": []}), ""
+        if "/git/trees/" in path:
+            base = ("ba" * 20) in path      # an ADDED file is not in the base tree
+            return 0, json.dumps({"truncated": self.truncated,
+                                  "tree": [{"path": x["path"], "mode": self.mode} for x in self.pr.get("files") or []
+                                           if not (base and x.get("changeType") == "ADDED")]}), ""
+        if "/contents/" in path:
+            return 0, json.dumps({"type": "file", "encoding": "base64",
+                                  "content": base64.b64encode(self.text.encode()).decode()}), ""
+        return 1, "", "unexpected gh api call"
+
     def __call__(self, args):
+        if args[:2] == ["gh", "api"]:
+            return self.api(args)
         self.calls.append(list(args))
         if args[:3] == ["gh", "pr", "view"]:
             if self.delay:
@@ -64,7 +95,14 @@ class Base(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.store.close()
 
-    def ready(self, project="commandcenter", number=7, head=HEAD, cache=True, **fields):
+    def size(self, key, size="small"):
+        """Store a size on the ticket (CC-057: only a ticket sized small, never risky before, may auto-merge)."""
+        pl = self.daemon.pipeline
+        pl.ts._begin()
+        pl._flow_set(pl.ts._id_of(key), time.time(), size=size)
+        pl.ts._commit()
+
+    def ready(self, project="commandcenter", number=7, head=HEAD, cache=True, small=True, **fields):
         """A ticket in READY_TO_MERGE: planned, started, its PR linked, an approving review recorded at `head`."""
         d, pl = self.daemon, self.daemon.pipeline
         t, _ = self.tickets.create(project, "Add tests", **fields)
@@ -79,6 +117,8 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.tickets.link(k, "github", "pr", ref, None, "x", "system:automation")
         pl.review(k, "APPROVE", head, "agent:reviewer", session="review-1",
                   pr={"ref": ref, "head": head, "ciGreen": True, "ciNone": True, "draft": False})
+        if small:
+            self.size(k)
         if cache:
             if not (d.gh.get(project) or {}).get("data"):
                 d.gh[project] = {"data": {"prs": []}, "asOf": 1, "error": None}
@@ -107,15 +147,14 @@ class Merges(Base):
         self.assertEqual(self.daemon.pipeline.work(k)["gate"], None)
         merged = [e for e in self.tickets.get(k)["timeline"] if e["kind"] == "pipeline.auto_merged"]
         self.assertEqual([(e["actor"], e["data"]["head"], e["data"]["ci"]) for e in merged],
-                         [("system:auto-merge", HEAD, "none")])
-        self.assertIn("no CI checks", merged[0]["trigger"])
-        self.assertNotIn("green", merged[0]["trigger"])
+                         [("system:auto-merge", HEAD, "green")])
+        self.assertIn("CI green", merged[0]["trigger"])
         sec = self.events("merge.auto")
         self.assertEqual([(e["source"], e["ref"]) for e in sec], [("security", k)])
 
     async def test_green_ci_is_said_as_green(self):
         k = self.ready()
-        self.gh.pr = view(statusCheckRollup=[{"conclusion": "SUCCESS"}])
+        self.gh.pr = view(statusCheckRollup=green("backend", "web"))
         await self.daemon._auto_merge()
         self.assertEqual(len(self.gh.of("merge")), 1)
         text = [e["trigger"] for e in self.tickets.get(k)["timeline"] if e["kind"] == "pipeline.auto_merged"][0]
@@ -164,6 +203,80 @@ class Merges(Base):
         self.assertEqual(order, ["automation", "auto-merge"])
 
 
+class PerProjectSwitch(Base):
+    """CC-057: `auto_merge` is a list of project keys, and the pipeline reads list membership, not a bool."""
+
+    async def test_a_ready_pr_of_a_project_outside_the_list_opens_a_merge_gate(self):
+        self.daemon = self.make(auto_merge=["mfe"])
+        k = self.ready()                  # a Command Center ticket while only mfe is switched on
+        w = self.daemon.pipeline.work(k)
+        self.assertEqual((w["gate"], self.tickets.get(k)["status"]), ("merge", "READY_TO_MERGE"))
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.calls, [])
+
+    async def test_a_ready_pr_of_a_listed_project_has_no_gate_and_is_merged(self):
+        self.daemon = self.make(auto_merge=["commandcenter", "mfe"])
+        k = self.ready()
+        self.assertIsNone(self.daemon.pipeline.work(k)["gate"])
+        await self.daemon._auto_merge()
+        self.assertEqual(len(self.gh.of("merge")), 1)
+
+    async def test_the_pipeline_still_reads_the_old_boolean(self):
+        pl = self.daemon.pipeline
+        pl.auto_merge = True
+        self.assertEqual(tuple(pl.auto_merge), ("commandcenter",))
+        for bad in (False, None, "commandcenter", 3):
+            pl.auto_merge = bad
+            self.assertEqual(tuple(pl.auto_merge), ())
+
+    async def test_a_malformed_switch_is_ignored_and_says_so(self):
+        for bad in ("mfe", {"mfe": True}, ["nope"], ["gauzemate"], 7):
+            d = self.make(auto_merge=bad)
+            self.assertEqual((d.auto_merge_list, d.auto_merge_on), ([], False), bad)
+            self.assertEqual(d._auto_merge_projects(), [], bad)
+            before = len(self.events("merge.config"))
+            d._log_merge_policy()
+            self.assertEqual(len(self.events("merge.config")), before + 1, bad)
+        d = self.make(auto_merge=["mfe"])
+        before = len(self.events("merge.config"))
+        d._log_merge_policy()
+        self.assertEqual(len(self.events("merge.config")), before)
+
+    async def test_a_failed_fact_read_holds_the_merge(self):
+        k = self.ready()
+        self.gh.api_fail = True
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        w = self.daemon.pipeline.work(k)
+        self.assertEqual(w["gate"], "merge")
+        self.assertIn("could not read", w["gateReason"])
+
+    async def test_a_symlink_a_risk_label_or_an_unsized_ticket_holds_the_merge(self):
+        for name, setup in (("symlink", lambda gh: setattr(gh, "mode", "120000")),
+                            ("label", lambda gh: setattr(gh, "labels", ["risk:elevated"])),
+                            ("truncated", lambda gh: setattr(gh, "truncated", True))):
+            self.gh = FakeGh()
+            setup(self.gh)
+            self.daemon = self.make()
+            k = self.ready()
+            await self.daemon._auto_merge()
+            self.assertEqual(self.gh.of("merge"), [], name)
+            self.assertEqual(self.daemon.pipeline.work(k)["gate"], "merge", name)
+        self.gh = FakeGh()
+        self.daemon = self.make()
+        k = self.ready(small=False)
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertIn("not sized small", self.daemon.pipeline.work(k)["gateReason"])
+
+    async def test_the_facts_are_read_pinned_to_the_reviewed_head(self):
+        self.ready()
+        await self.daemon._auto_merge()
+        refs = [c[2] for c in self.gh.api_calls]
+        self.assertIn("repos/JayDalool/CommandCenter/git/trees/" + HEAD + "?recursive=1", refs)
+        self.assertIn("repos/JayDalool/CommandCenter/git/trees/" + "ba" * 20 + "?recursive=1", refs)
+
+
 class Skips(Base):
     async def assertQuiet(self, k, daemon=None):
         await (daemon or self.daemon)._auto_merge()
@@ -181,7 +294,7 @@ class Skips(Base):
         for v in (None, "true", 1, "yes"):
             d = self.make(auto_merge=v)
             self.assertFalse(d.auto_merge_on, v)
-        self.assertIs(DEFAULTS["auto_merge"], False)
+        self.assertEqual(DEFAULTS["auto_merge"], [])
 
     async def test_the_stop_file(self):
         k = self.ready()
@@ -208,7 +321,8 @@ class Skips(Base):
         self.assertEqual(self.gh.of("merge"), [])
         w = self.daemon.pipeline.work(k)
         self.assertEqual(w["gate"], "merge")
-        self.assertIn("needs Jay", w["gateReason"])
+        # CC-057: a needs:jay flag also makes the ticket risky, and the size history is read fresh with the facts
+        self.assertTrue("needs Jay" in w["gateReason"] or "not sized small" in w["gateReason"], w["gateReason"])
 
     async def test_the_stop_file_is_checked_right_before_the_merge(self):
         k = self.ready()
@@ -240,9 +354,10 @@ class Skips(Base):
         self.assertEqual(len(self.gh.of("merge")), 1)
         self.assertTrue(all(c[5] == REPO for c in self.gh.calls))
 
-    async def test_a_project_without_an_allowlist_is_not_a_candidate_even_if_low_risk(self):
-        with mock.patch.dict(registry.PROJECTS["gyst"], {"pipeline": {"merge": "low-risk"}}):
-            self.assertEqual(self.daemon._auto_merge_projects(), ["commandcenter"])
+    async def test_a_project_not_in_the_config_list_is_not_a_candidate_even_if_low_risk(self):
+        # CC-057: gyst, mfe and samvision are low-risk with allow lists, but only the listed project is looked at.
+        self.assertEqual(self.daemon._auto_merge_projects(), ["commandcenter"])
+        self.assertEqual(self.make(auto_merge=["commandcenter", "gyst"])._auto_merge_projects(), ["commandcenter", "gyst"])
 
     async def test_a_stale_head_is_skipped_without_a_gate(self):
         k = self.ready()
@@ -260,7 +375,7 @@ class Skips(Base):
 
     async def test_pending_ci_and_unknown_mergeability_wait_without_a_gate(self):
         k = self.ready()
-        self.gh.pr = view(statusCheckRollup=[{"status": "IN_PROGRESS", "conclusion": ""}])
+        self.gh.pr = view(statusCheckRollup=[run("backend"), run("web", "", "IN_PROGRESS")])
         await self.daemon._auto_merge()
         await self.daemon._auto_merge()      # looked at once, then left alone for a minute
         self.assertEqual((len(self.gh.of("view")), self.gh.of("merge")), (1, []))
@@ -302,7 +417,7 @@ class Holds(Base):
         for over, pr in (({"labels": ["migration"]}, None), ({"needs_jay": True}, None),
                          ({}, view(isDraft=True)), ({}, view(mergeable="CONFLICTING")),
                          ({}, view(baseRefName="dev")), ({}, view(isCrossRepository=True)),
-                         ({}, view(statusCheckRollup=[{"conclusion": "FAILURE"}])),
+                         ({}, view(statusCheckRollup=[run("backend", "FAILURE"), run("web")])),
                          ({}, view([f("docs/API.md", "DELETED")])), ({}, view([f("docs/img/a.png", "ADDED")])),
                          ({}, view([f(f"docs/a{i}.md", "ADDED") for i in range(11)]))):
             gh = FakeGh(pr or view())
@@ -415,7 +530,7 @@ class Startup(Base):
 
     async def test_the_default_config_is_off_and_the_stop_file_lives_in_the_state_folder(self):
         from ccd import config
-        self.assertIs(config.DEFAULTS["auto_merge"], False)
+        self.assertEqual(config.DEFAULTS["auto_merge"], [])
         self.assertEqual(config.AUTO_MERGE_STOP.name, "auto-merge.stop")
         self.assertEqual(config.AUTO_MERGE_STOP.parent, config.STATE_DIR)
 
@@ -496,7 +611,7 @@ class Gates(Base):
 class Pending(Base):
     async def test_a_pr_pending_too_long_opens_a_gate(self):
         k = self.ready()
-        self.gh.pr = view(statusCheckRollup=[{"status": "QUEUED", "conclusion": ""}])
+        self.gh.pr = view(statusCheckRollup=[run("backend"), run("web", "", "QUEUED")])
         await self.daemon._auto_merge()
         self.assertEqual(self.daemon.pipeline.work(k)["gate"], None)
         self.daemon._am_next.clear()

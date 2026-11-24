@@ -361,7 +361,7 @@ class Durable(Base):
         ts.close()
 
     def test_policy_defaults(self):
-        p = policy({"project": "samvision", "labels": [], "flags": [], "type": "FEATURE"})
+        p = policy({"project": "gauzemate", "labels": [], "flags": [], "type": "FEATURE"})
         self.assertEqual((p["plan"], p["merge"], p["ui"], p["deploy"]), ("auto", "owner", False, False))
 
 

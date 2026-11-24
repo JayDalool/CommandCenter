@@ -41,9 +41,12 @@ PROJECTS = {
     "samvision":     {"name": "SamVision",        "prefix": "SV",   "legacy": (),
                       "root": "/srv/server/apps/samvisionai",       "github": "JayDalool/SamVisionAI",
                       # SamVision's own rule: its merges need Jay (docs/jay/MORNING.md, SV-064).
-                      "pipeline": {"merge": "owner"},
+                      "pipeline": {"merge": "low-risk"},
                       # Jay (2026-10-09): a lot of research, very careful — the night shift's careful mode.
-                      "night": "careful"},
+                      "night": "careful",
+                      # CC-057: the PR's base branch and the CI jobs (GitHub Actions check runs) that must all be
+                      # SUCCESS at the head before ccd merges; a green rollup without them is not green.
+                      "base": "main", "checks": ("tests", "licensed-data", "stylesheet")},
     "gauzemate":     {"name": "GauzeMate",        "prefix": "GZ",   "legacy": ("GM",),
                       "root": "/srv/server/repos/GauzeMate",        "github": "JayDalool/GauzeMate",
                       "pipeline": {"merge": "owner"},    # Jay accepts every GauzeMate merge (2026-10-09)
@@ -55,20 +58,25 @@ PROJECTS = {
                       "paused": "Jay paused GauzeMate until he adds designs and files"},
     "mfe":           {"name": "MyFamilyExpenses", "prefix": "MFE",  "legacy": (),
                       "root": "/srv/server/repos/MyFamilyExpenses", "github": "JayDalool/MyFamilyExpenses",
-                      "pipeline": {"merge": "owner"}},   # Jay accepts every MFE merge (2026-10-09)
+                      # CC-057 (Jay Q1=B): low-risk, so the per-project auto_merge list decides; with the list empty
+                      # a ready MFE PR still opens a merge gate for Jay, as "owner" did.
+                      "pipeline": {"merge": "low-risk"}, "base": "main", "checks": ("checks",)},
     "commandcenter": {"name": "Command Center",   "prefix": "CC",   "legacy": (),
                       "root": "/srv/server/repos/CommandCenter",    "github": "JayDalool/CommandCenter",
-                      # The only project that may auto-merge, and only its tests and docs (merge_policy.ALLOW).
-                      "pipeline": {"merge": "low-risk"}},
+                      # Auto-merge is per project (config auto_merge list, CC-057); Command Center's own rule is
+                      # tests and docs only (merge_policy.PROJECT).
+                      "pipeline": {"merge": "low-risk"}, "base": "main", "checks": ("backend", "web")},
     "gyst":          {"name": "GYST / LifeOps",   "prefix": "GYST", "legacy": (),
                       "root": "/srv/server/repos/gyst-lifeops",     "github": "JayDalool/gyst-lifeops",
-                      "pipeline": {"merge": "owner"}},   # Jay accepts every GYST merge (2026-10-09)
+                      # GYST's default branch is master; CC-057 (Jay Q1=B) makes it low-risk behind the config list.
+                      "pipeline": {"merge": "low-risk"}, "base": "master", "checks": ("check",)},
 }
 
 # Ticket pipeline defaults (plans/TICKET-PIPELINE-V1.md), the one place they live.
 # merge: "owner" (the default) — Jay accepts and merges every PR. "low-risk" — ccd itself merges a PR that
-# merge_policy.classify calls low-risk (tests and docs only, small, reviewed at its exact head), and only while
-# config.json `auto_merge` is true and ~/command-center/state/auto-merge.stop does not exist; anything else
+# merge_policy.classify calls low-risk (small, reviewed at its exact head, inside the project's allow lists; CC-057),
+# and only while config.json `auto_merge` lists the project and ~/command-center/state/auto-merge.stop does not
+# exist; anything else
 # opens a merge gate for Jay (CC-025, docs/adr/0007-auto-merge-policy.md). Agents never merge. Any other value
 # (including the retired "auto") is read as "owner" (pipeline.policy). A live deployment always waits for Jay.
 # jay_first: a ticket does not start (pipeline `start`) while it — or an open ticket it is blocked by — has an
@@ -219,6 +227,16 @@ def class_of(key):
     value this code does not know is read as "client", the strictest, as D-024 says for an unknown class."""
     c = (PROJECTS.get(key) or {}).get("class") or "own"
     return c if c in CLASSES else "client"
+
+
+def base_of(key):
+    """The branch a project's PRs merge into ("main", GYST "master"), or None for an unknown project."""
+    return (PROJECTS.get(key) or {}).get("base")
+
+
+def checks_of(key):
+    """The CI job names that must all be SUCCESS at the head before ccd merges for the project (CC-057)."""
+    return tuple((PROJECTS.get(key) or {}).get("checks") or ())
 
 
 def github_of(key):

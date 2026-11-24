@@ -206,8 +206,8 @@ class AutoMerge(AutoMergeBase):
         rows = self.tickets.db.execute("SELECT verb, project, actor, target, terms FROM broker_observations").fetchall()
         self.assertEqual([(r[0], r[1], r[2]) for r in rows], [("pr.merge", "commandcenter", "system:ccd")])
         self.assertIn(k, rows[0][3])
-        # this fixture has no CI checks, so the engine's target policy says "jay": the record says so; ccd merged anyway
-        self.assertEqual(json.loads(rows[0][4])["approval"], {"result": "deny", "reason": "engine_not_auto"})
+        # CC-057: the fixture's named checks are green, so the engine's target policy says "auto" and agrees with ccd
+        self.assertEqual(json.loads(rows[0][4])["approval"], {"result": "ok", "reason": None})
 
     async def test_with_the_switch_off_nothing_is_recorded(self):
         self.ready()

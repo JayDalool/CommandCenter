@@ -2,11 +2,11 @@
 schema = 1
 project = "mfe"
 mode = "controlled_production"
-decisions = ["D-001", "D-004", "D-006", "D-008"]
+decisions = ["D-001", "D-004", "D-006", "D-008", "D-010"]
 learning = "contextual"
 
 [enforced]
-merge = "owner"
+merge = "low-risk"
 night = "normal"
 paused = ""
 max_lanes = 2

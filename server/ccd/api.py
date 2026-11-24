@@ -77,7 +77,7 @@
     GET   /api/tasks/{key}/work      the ticket's durable pipeline state (plan, stage, gate, roles, review head, …)
     POST  /api/tasks/{key}/work/{op} one pipeline step: plan start review verify handoff block role finding
                                      ask replan rework evidence writer deploy-request deploy-plan deployed stale reply,
-                                     and the flow's intake criteria plan-review user-check close;
+                                     and the flow's intake criteria plan-review user-check security-check close;
                                      `confirm` (close an owner gate) needs Jay AND Developer Unlock
     GET   /api/flow                  the delivery flow per project: seats, tickets in flight, WIP limits
     GET   /api/release               live per project, the weekly release window (next start) and the merge cutoff

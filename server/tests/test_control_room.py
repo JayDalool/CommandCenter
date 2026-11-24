@@ -138,8 +138,10 @@ class MergeAcceptance(Base):
         t = self.ts.get(self.cc())
         self.assertFalse(needs_acceptance(t, {"confirmed": []}))
         self.assertTrue(needs_acceptance(t, {"confirmed": ["owner:accept"]}))
-        for proj in ("samvision", "gauzemate", "mfe", "gyst"):
-            self.assertEqual(registry.pipeline_of(proj)["merge"], "owner", proj)
+        # CC-057 (D-010): the four live projects are low-risk (the config list is the switch); GauzeMate stays owner
+        self.assertEqual(registry.pipeline_of("gauzemate")["merge"], "owner")
+        for proj in ("samvision", "mfe", "gyst"):
+            self.assertEqual(registry.pipeline_of(proj)["merge"], "low-risk", proj)
         self.assertEqual(registry.pipeline_of("commandcenter")["merge"], "low-risk")
         self.assertEqual(registry.PIPELINE_DEFAULTS["merge"], "owner")
 

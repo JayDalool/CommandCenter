@@ -49,6 +49,7 @@ ROLE_NAMES = ("coordinator", "planner", "implementer", "reviewer", "verifier",
               "tech-reviewer", "user-reviewer", "design-reviewer")       # the flow's seats (flow.ROLE_OF)
 LEADS = ("jay", "agent:coordinator")          # who runs intake, edits criteria and writes the closing note
 USER_REVIEWERS = ("agent:user-reviewer", "agent:design-reviewer")
+SECURITY_REVIEWERS = ("agent:security-engineer",)     # CC-057: who may record a security sign-off at a head
 CRITERION_ID_RE = re.compile(r"^c[0-9]{1,3}$")
 MAX_LANES = 2
 MAX_REVIEW_CYCLES = 2
@@ -296,11 +297,21 @@ class Pipeline:
         self.ts = store
         self.db = store.db
         self.max_lanes = max_lanes
-        # Whether ccd's auto-merge is switched on (config.json `auto_merge`, set by the daemon). While it is off,
-        # a "low-risk" project behaves like "owner": a ready PR opens a merge gate for Jay.
-        self.auto_merge = False
+        # The projects ccd's auto-merge is switched on for (config.json `auto_merge`, set by the daemon). For a project
+        # not in it a "low-risk" project behaves like "owner": a ready PR opens a merge gate for Jay.
+        self._auto_merge = ()
         # The release window (ccd/release.py, set by the daemon): a live project's live deploys wait for it.
         self.releases = None
+
+    @property
+    def auto_merge(self):
+        return self._auto_merge
+
+    @auto_merge.setter
+    def auto_merge(self, value):
+        """A list of project keys. The old boolean still reads: True is Command Center alone (what it switched on
+        before CC-057), False is none; anything else is none (fails closed)."""
+        self._auto_merge = ("commandcenter",) if value is True else tuple(value) if isinstance(value, (list, tuple, set)) else ()
 
     # ---------- reading ----------
 
@@ -906,7 +917,8 @@ class Pipeline:
     def _gate_due(self, t, w, head):
         """Jay must accept this merge and has not: the project is `owner`, or the ticket needs acceptance, or the
         project is `low-risk` while ccd's auto-merge is switched off; and no `merge:<head>` approval is recorded."""
-        low_risk_off = policy(t)["merge"] == "low-risk" and not self.auto_merge
+        # CC-057: list membership, not a bool: a project outside the list gets its merge question like an "owner" one.
+        low_risk_off = policy(t)["merge"] == "low-risk" and t.get("project") not in self.auto_merge
         return (needs_acceptance(t, w) or low_risk_off) and not _merge_ok(w["confirmed"], head)
 
     def _ready(self, t, w, pr):
@@ -1783,6 +1795,9 @@ class Pipeline:
             # CC-066: every verdict's text also rides on its event, so work().planReviews keeps reviews that
             # ticket_flow.plan_review loses when a new plan clears it.
             kept = {"session": session, "note": note, "blast": blast, "tests": tests}
+            if new != f["size"]:
+                # CC-057: "raised by the technical reviewer" is read back from this event by merge_size_facts.
+                kept.update(sizeFrom=f["size"], sizeTo=new)
             work = {"roles": self._role(w, "tech-reviewer", model, session, at)}
             cols = {"plan_review": review}
             if new != f["size"]:
@@ -1842,6 +1857,69 @@ class Pipeline:
                 raise TaskError(400, "mark a criterion as ID=pass or ID=fail (ids look like c1)")
             out[cid.strip()] = state
         return out
+
+    def security_check(self, key, result, head, actor, note, pr=None, session=None):
+        """CC-057: the security engineer's sign-off at one PR head (Jay #187), recorded as a ticket event. It is
+        required before the merge question when the change touches sign-in, data or permissions (merge_policy.
+        security_required). A pass at head A says nothing about head B; the developer's own session cannot record it."""
+        if actor not in SECURITY_REVIEWERS:
+            raise TaskError(403, "a security sign-off is the security engineer's (--role security-engineer)")
+        if result not in ("pass", "fail"):
+            raise TaskError(400, "result must be pass or fail")
+        if not isinstance(head, str) or not SHA_RE.match(head):
+            raise TaskError(400, "head must be the PR head commit SHA")
+        note = _text(note, 2000, "note")
+        if not note:
+            raise TaskError(400, "say what was checked (--note)")
+        if not session:
+            raise TaskError(400, "say which session ran the security check (--session)")
+        _meta(session, "session")
+
+        def fn(tid, t, w, at):
+            self._need(t, ("IN_REVIEW", "READY_TO_MERGE"), "a security sign-off")
+            if not pr or pr.get("head") != head:
+                raise TaskError(409, f"{head[:7]} is not the PR's current head ({str((pr or {}).get('head') or '?')[:7]})")
+            impl = (w["roles"].get("implementer") or {})
+            if session in {x for x in (impl.get("session"), t["key"].lower(), t["key"]) if x}:
+                raise TaskError(409, "the developer cannot sign off its own work; a fresh session must")
+            return {}, {}, [("pipeline.security_checked", f"security check {result} at {head[:7]}",
+                             {"result": result, "head": head, "pr": pr.get("ref"), "session": session, "note": note})]
+        return self._tx(key, actor, fn)
+
+    def security_signoff(self, key, head):
+        """True when the newest security check recorded for this exact head is a pass."""
+        tid = self.ts._id_of(key)
+        for (data,) in self.db.execute("SELECT data FROM ticket_events WHERE ticket_id=? AND kind='pipeline.security_checked' "
+                                       "ORDER BY id DESC", (tid,)).fetchall():
+            d = json.loads(data or "{}")
+            if d.get("head") == head:
+                return d.get("result") == "pass"
+        return False
+
+    def merge_size_facts(self, key):
+        """What merge_policy.size_reasons needs (CC-057): the stored and effective size, whether the ticket was ever
+        sized risky or raised by the technical reviewer (read from its events), and whether any ancestor is risky."""
+        tid = self.ts._id_of(key)
+        t = self.ts.get(key)
+        stored = self._flow(tid)["size"]
+        ever = raised = False
+        for (kind, data) in self.db.execute("SELECT kind, data FROM ticket_events WHERE ticket_id=? AND kind IN "
+                                            "('pipeline.intake','pipeline.criteria','pipeline.plan_reviewed')",
+                                            (tid,)).fetchall():
+            d = json.loads(data or "{}")
+            ever = ever or d.get("size") == "risky" or d.get("sizeTo") == "risky" or d.get("asked") == "risky"
+            raised = raised or (kind == "pipeline.plan_reviewed" and bool(d.get("sizeTo")))
+        row = self.db.execute("SELECT parent_id FROM tickets WHERE id=?", (tid,)).fetchone()
+        parent_risky, seen, cur = False, {tid}, row[0] if row else None
+        while cur and cur not in seen and not parent_risky:
+            seen.add(cur)
+            pk = self.ts._key_of(cur)
+            pt = self.ts.get(pk)
+            parent_risky = self._flow(cur)["size"] == "risky" or policy(pt)["plan"] == "owner"
+            row = self.db.execute("SELECT parent_id FROM tickets WHERE id=?", (cur,)).fetchone()
+            cur = row[0] if row else None
+        return {"stored": stored, "effective": flow_mod.effective_size(stored, policy(t)) if stored else None,
+                "everRisky": ever, "raised": raised, "parentRisky": parent_risky}
 
     def user_check(self, key, result, head, actor, note, marks=None, pr=None, open_prs=(), model=None, session=None):
         """The user reviewer tries the change on the PR's current head against the acceptance criteria. pass needs
