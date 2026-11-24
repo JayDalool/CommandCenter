@@ -704,7 +704,10 @@ class Notifier:
 
     def needs(self):
         st = self.d.state()
-        items = [dict(n) for n in st.get("needs") or []]
+        # CC-057: a merge question waits until a required security sign-off exists at the reviewed head (Jay #187).
+        items = [dict(n) for n in st.get("needs") or []
+                 if not (n.get("kind") == "gate" and n.get("gate") == "merge" and is_ticket(n.get("ref"))
+                         and self.d.security_wait(n["ref"]))]
         for n in items:
             if n.get("kind") == "questions" and is_ticket(n.get("ref")) and not self.client(n.get("project")):
                 n["qids"] = [q["id"] for q in self.open_questions(n["ref"])]

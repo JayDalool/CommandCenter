@@ -16,7 +16,7 @@ import sys
 import uvicorn
 
 from . import (__version__, attachments, chat, config, files, gitops, hq, nightshift, notify, pty, records, search,
-               security, uitests)
+               security, sources, uitests)
 from .api import create_app
 from .daemon import Daemon
 from .herdr import Herdr
@@ -80,7 +80,7 @@ def build(cfg=None):
     store = Store(config.STATE_DIR / "ccd.db")
     config.DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     tasks = TaskStore(config.DATA_DIR / "tasks.db", config.task_projects(cfg))
-    daemon = Daemon(cfg, store, Herdr(config.HERDR_SOCKET), tasks=tasks)
+    daemon = Daemon(cfg, store, Herdr(config.HERDR_SOCKET), tasks=tasks, gh_cli=sources._run)
     token = security.load_or_create_token(config.TOKEN_PATH)
     # Workspace: registered roots only; attachments outside every repository;
     # a second credential (developer.token, 0600) for anything that writes.

@@ -33,6 +33,11 @@ class FakeGh:
         self.truncated = False
         self.text = "hello\n"
         self.api_fail = False
+        self.linked = []          # `gh pr view --json closingIssuesReferences`
+        self.issue_labels = {}    # issue number -> [label names]
+        self.history_extra = []   # paths touched by an intermediate commit that the net diff no longer shows
+        self.base_ref = None      # the PR's base branch as the pulls API says it (default: what `pr view` says)
+        self.base_sha = "ba" * 20
         self.pr = pr if pr is not None else view()
         self.merge = (0, "", "")
         self.delay = 0
@@ -45,11 +50,18 @@ class FakeGh:
         if self.api_fail:
             return 1, "", "api down"
         path = args[2]
+        if path.endswith("/commits?per_page=100"):
+            return 0, json.dumps([{"sha": "c1" * 20}]), ""
+        if "/commits/" in path:
+            names = [x["path"] for x in self.pr.get("files") or []] + list(self.history_extra)
+            return 0, json.dumps({"files": [{"filename": n} for n in names]}), ""
         if "/pulls/" in path:
-            return 0, json.dumps({"base": {"sha": "ba" * 20}, "head": {"sha": self.pr.get("headRefOid")},
+            return 0, json.dumps({"base": {"sha": self.base_sha, "ref": self.base_ref or self.pr.get("baseRefName")},
+                                  "head": {"sha": self.pr.get("headRefOid")},
                                   "labels": [{"name": x} for x in self.labels], "body": self.body}), ""
         if "/issues/" in path:
-            return 0, json.dumps({"labels": []}), ""
+            n = int(path.rsplit("/", 1)[1])
+            return 0, json.dumps({"labels": [{"name": x} for x in self.issue_labels.get(n, [])]}), ""
         if "/git/trees/" in path:
             base = ("ba" * 20) in path      # an ADDED file is not in the base tree
             return 0, json.dumps({"truncated": self.truncated,
@@ -63,6 +75,9 @@ class FakeGh:
     def __call__(self, args):
         if args[:2] == ["gh", "api"]:
             return self.api(args)
+        if args[:3] == ["gh", "pr", "view"] and "closingIssuesReferences" in args:
+            self.api_calls.append(list(args))
+            return 0, json.dumps({"closingIssuesReferences": self.linked}), ""
         self.calls.append(list(args))
         if args[:3] == ["gh", "pr", "view"]:
             if self.delay:
@@ -277,6 +292,169 @@ class PerProjectSwitch(Base):
         self.assertIn("repos/JayDalool/CommandCenter/git/trees/" + "ba" * 20 + "?recursive=1", refs)
 
 
+class RoundTwo(Base):
+    """Codex review round 1: sign-off wiring, base race, history, per-project stop file."""
+
+    def prepare(self, **gh):
+        for k, v in gh.items():
+            setattr(self.gh, k, v)
+        self.daemon = self.make(auto_merge=[])           # switch empty: Jay's path is what is under test
+        return self.ready()
+
+    def sign(self, key, head=HEAD, result="pass"):
+        pr = {"ref": f"{REPO}#7", "head": head}
+        self.daemon.pipeline.security_check(key, result, head, "agent:security-engineer", "looked", pr=pr, session="sec-1")
+
+    async def test_a_sensitive_ticket_is_not_offered_to_jay_without_a_sign_off(self):
+        k = self.prepare(labels=["migration"])
+        self.assertEqual(self.daemon.pipeline.work(k)["gate"], "merge")
+        await self.daemon._security_probes()
+        ready, skipped = self.daemon.merge_batch("commandcenter")
+        self.assertEqual((ready, [s_["key"] for s_ in skipped]), ([], [k]))
+        self.assertIn("security sign-off", skipped[0]["reason"])
+        self.sign(k, result="fail")                                  # a failed check is not a pass
+        self.assertEqual(self.daemon.merge_batch("commandcenter")[0], [])
+        self.sign(k)
+        self.assertEqual([r["key"] for r in self.daemon.merge_batch("commandcenter")[0]], [k])
+
+    async def test_a_sign_off_at_another_head_does_not_count(self):
+        k = self.prepare(labels=["migration"])
+        await self.daemon._security_probes()
+        self.sign(k, head=HEAD)
+        self.assertEqual(len(self.daemon.merge_batch("commandcenter")[0]), 1)
+        self.daemon.pipeline.review(k, "APPROVE", "cd" * 20, "agent:reviewer", session="review-2",
+                                    pr={"ref": f"{REPO}#7", "head": "cd" * 20, "ciGreen": True, "ciNone": True, "draft": False})
+        self.daemon._sec.pop(k, None)
+        self.daemon.pipeline.confirm  # (the merge gate itself is not what this test is about)
+        self.assertIn("security sign-off", self.daemon.security_wait(k) or "")
+
+    async def test_a_ticket_that_needs_no_sign_off_is_offered_as_before(self):
+        k = self.prepare()
+        await self.daemon._security_probes()
+        self.assertEqual([r["key"] for r in self.daemon.merge_batch("commandcenter")[0]], [k])
+        self.assertIsNone(self.daemon.security_wait(k))
+
+    async def test_a_ticket_the_probe_has_not_read_yet_waits_and_an_unreadable_pr_is_required(self):
+        k = self.prepare()
+        self.assertIn("security sign-off", self.daemon.security_wait(k))           # not probed yet: not offered
+        self.gh.api_fail = True
+        await self.daemon._security_probes()
+        self.assertIn("security sign-off", self.daemon.security_wait(k))           # unreadable: required, never "no"
+
+    async def test_the_slack_merge_and_the_merge_ready_press_refuse_without_a_sign_off(self):
+        k = self.prepare(labels=["security"])
+        await self.daemon._security_probes()
+        for via, dev in (("slack", False), (None, True)):
+            with self.assertRaises(Exception) as e:
+                await self.daemon.act_merge("commandcenter", [{"key": k, "head": HEAD}], developer=dev, via=via)
+            self.assertIn("security sign-off", str(getattr(e.exception, "message", e.exception)))
+        # Daemon.slack_merge ends in act_merge(via="slack"), the first case above
+
+    async def test_the_merge_question_in_slack_waits_for_the_sign_off(self):
+        from ccd import notify
+
+        class Slack:
+            pass
+        k = self.prepare(labels=["migration"])
+        await self.daemon._security_probes()
+        n = notify.Notifier(self.daemon, {"notify": {}}, slack=Slack())
+        refs = lambda: [x["ref"] for x in n.needs() if x.get("gate") == "merge"]       # noqa: E731
+        self.assertEqual(refs(), [])
+        self.sign(k)
+        self.assertEqual(refs(), [k])
+
+    async def test_auto_merge_refuses_a_sensitive_ticket_until_it_is_signed_and_signs_for_its_head(self):
+        self.gh.labels = ["migration"]
+        k = self.ready()                                  # auto-merge on for commandcenter
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertIn("security sign-off", self.daemon.pipeline.work(k)["gateReason"])
+        self.assertTrue(self.daemon._sec[k][1])
+
+    async def test_a_base_retarget_with_the_same_head_stops_the_merge(self):
+        k = self.ready()
+        seen = {"n": 0}
+        real = self.gh.api
+
+        def retarget(args):
+            if "/pulls/" in args[2] and not args[2].endswith("per_page=100"):
+                seen["n"] += 1
+                if seen["n"] >= 2:                         # the re-read right before the merge
+                    self.gh.base_ref = "release"
+            return real(args)
+        self.gh.api = retarget
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertEqual(self.daemon.pipeline.work(k)["gate"], None)      # a wait, not a hold: the next pass judges it
+        self.assertGreaterEqual(seen["n"], 2)
+
+    async def test_a_base_other_than_the_registered_one_in_the_pinned_read_refuses(self):
+        k = self.ready()
+        self.gh.base_ref = "release"
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertIn("base branch", self.daemon.pipeline.work(k)["gateReason"])
+
+    async def test_a_denied_path_in_an_intermediate_commit_holds_the_merge(self):
+        self.gh.history_extra = ["server/ccd/security.py"]
+        k = self.ready()
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertIn("a commit of the PR touched", self.daemon.pipeline.work(k)["gateReason"])
+
+    async def test_a_risk_label_on_an_issue_the_pr_links_holds_the_merge(self):
+        self.gh.linked = [{"number": 9, "repository": {"nameWithOwner": REPO}}]
+        self.gh.issue_labels = {9: ["risk:privileged"]}
+        k = self.ready()
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertIn("risk label", self.daemon.pipeline.work(k)["gateReason"])
+
+    async def test_a_pending_non_required_check_waits_and_is_not_merged_as_green(self):
+        k = self.ready()
+        self.gh.pr = view(statusCheckRollup=green("backend", "web") + [run("web-e2e", "", "IN_PROGRESS")])
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertEqual(self.daemon.pipeline.work(k)["gate"], None)
+        self.assertEqual([e for e in self.kinds(k) if e == "pipeline.auto_merged"], [])
+
+    async def test_a_project_stop_file_stops_only_that_project(self):
+        d = self.make(auto_merge=["commandcenter", "gyst"])
+        self.daemon = d
+        stop = os.path.join(self.tmp, "auto-merge.gyst.stop")
+        open(stop, "w").close()
+        self.assertFalse(d._auto_merge_stopped("commandcenter"))
+        self.assertTrue(d._auto_merge_stopped("gyst"))
+        self.assertFalse(d._auto_merge_stopped())         # the global file is its own file
+        k = self.ready()
+        await d._auto_merge()
+        self.assertEqual(len(self.gh.of("merge")), 1)      # commandcenter still merges
+        os.remove(stop)
+        open(os.path.join(self.tmp, "auto-merge.commandcenter.stop"), "w").close()
+        self.gh.calls.clear()
+        k2 = self.ready(number=8, head="cd" * 20)
+        await d._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])          # now its own stop file stops it
+        self.assertEqual(self.daemon.pipeline.work(k2)["gate"], None)
+
+    async def test_the_project_stop_file_is_checked_again_right_before_the_merge(self):
+        self.ready()
+        name = os.path.join(self.tmp, "auto-merge.commandcenter.stop")
+        self.gh.on_view = lambda: open(name, "w").close()
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+
+    async def test_an_unreadable_stop_file_counts_as_stopped(self):
+        d = self.daemon
+        os.mkdir(os.path.join(self.tmp, "locked"), 0o000)
+        try:
+            d.auto_merge_stop = os.path.join(self.tmp, "locked", "auto-merge.stop")   # stat fails: permission denied
+            self.assertTrue(d._auto_merge_stopped())
+            self.assertTrue(d._auto_merge_stopped("commandcenter"))
+        finally:
+            os.chmod(os.path.join(self.tmp, "locked"), 0o700)
+
+
 class Skips(Base):
     async def assertQuiet(self, k, daemon=None):
         await (daemon or self.daemon)._auto_merge()
@@ -314,15 +492,21 @@ class Skips(Base):
         self.assertIn("ui label", w["gateReason"])
         self.assertIn("pipeline.auto_merge_held", self.kinds(k))
 
-    async def test_a_needs_jay_flag_set_while_gh_view_runs_holds_the_merge(self):
+    async def test_a_needs_jay_flag_set_after_the_size_was_classified_holds_the_merge(self):
         k = self.ready()
-        self.gh.on_view = lambda: self.tickets.update(k, {"needs_jay": True}, "jay")
+        real = self.daemon.pipeline.merge_size_facts
+
+        def late(key):
+            out = real(key)                                   # the size is classified small ...
+            self.tickets.update(key, {"needs_jay": True}, "jay")      # ... and only then the flag arrives
+            return out
+        self.daemon.pipeline.merge_size_facts = late
         await self.daemon._auto_merge()
         self.assertEqual(self.gh.of("merge"), [])
         w = self.daemon.pipeline.work(k)
         self.assertEqual(w["gate"], "merge")
-        # CC-057: a needs:jay flag also makes the ticket risky, and the size history is read fresh with the facts
-        self.assertTrue("needs Jay" in w["gateReason"] or "not sized small" in w["gateReason"], w["gateReason"])
+        self.assertIn("needs Jay", w["gateReason"])
+        self.assertNotIn("sized small", w["gateReason"])
 
     async def test_the_stop_file_is_checked_right_before_the_merge(self):
         k = self.ready()

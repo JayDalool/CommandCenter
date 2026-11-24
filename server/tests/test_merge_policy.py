@@ -2,7 +2,7 @@
 import copy
 import unittest
 
-from ccd import merge_policy as mp
+from ccd import merge_policy as mp, registry
 
 HEAD = "ab" * 20
 REF = "JayDalool/CommandCenter#7"
@@ -37,6 +37,8 @@ def facts_for(files, project="commandcenter", **over):
              "texts": {x["path"]: {"head": "hello\n", **({} if x["changeType"] == "ADDED" else {"base": "hello\n"})}
                        for x in files},
              "truncated": False, "errors": [], "labels": [], "labelsComplete": True,
+             "base": {"ref": registry.base_of(project), "sha": "ba" * 20}, "head": HEAD,
+             "history": [x["path"] for x in files], "securityRequired": False, "securitySignoff": False,
              "size": {"stored": "small", "effective": "small", "everRisky": False, "raised": False, "parentRisky": False}}
     facts.update(over)
     return facts

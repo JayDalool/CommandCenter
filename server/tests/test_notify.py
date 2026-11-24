@@ -177,6 +177,9 @@ class FakeDaemon:
     def state(self):
         return {"needs": list(self.needs_list), "blocked": list(self.blocked), "projects": []}
 
+    def security_wait(self, key):
+        return None    # CC-057: the fake has no security gate; the real one is tested in test_merge_rules
+
     def _event(self, source, kind, text="", **kw):
         self.events.append((kind, text, kw))
 

@@ -499,7 +499,11 @@ class FactsFetch(unittest.TestCase):
     def gh(self, **over):
         calls = []
         text = base64.b64encode(b"export const x = 1;\n").decode()
-        answers = {"pull": {"base": {"sha": self.BASE}, "head": {"sha": HEAD}, "labels": [{"name": "bug"}], "body": "Refs #12"},
+        answers = {"pull": {"base": {"sha": self.BASE, "ref": "main"}, "head": {"sha": HEAD}, "labels": [{"name": "bug"}],
+                            "body": "Refs #12"},
+                   "linked": {"closingIssuesReferences": []},
+                   "commits": [{"sha": "c1" * 20}],
+                   "commit": {"files": [{"filename": "lib/utils.ts"}]},
                    "issue": {"labels": [{"name": "risk:elevated"}]},
                    "tree": {"truncated": False, "tree": [{"path": "lib/utils.ts", "mode": "100644"}]},
                    "contents": {"type": "file", "encoding": "base64", "content": text}}
@@ -507,8 +511,17 @@ class FactsFetch(unittest.TestCase):
 
         def run_(args):
             calls.append(args)
+            if args[:3] == ["gh", "pr", "view"]:
+                if isinstance(answers["linked"], Exception):
+                    raise answers["linked"]
+                return answers["linked"]
             path = args[2]
-            for key, marker in (("pull", "/pulls/"), ("issue", "/issues/"), ("tree", "/git/trees/"), ("contents", "/contents/")):
+            if path.endswith("/commits?per_page=100"):
+                if isinstance(answers["commits"], Exception):
+                    raise answers["commits"]
+                return answers["commits"]
+            for key, marker in (("commit", "/commits/"), ("pull", "/pulls/"), ("issue", "/issues/"), ("tree", "/git/trees/"),
+                                ("contents", "/contents/")):
                 if marker in path:
                     if isinstance(answers[key], Exception):
                         raise answers[key]
@@ -521,6 +534,7 @@ class FactsFetch(unittest.TestCase):
         facts = merge_facts.fetch(gh, "JayDalool/MyFamilyExpenses", 7, HEAD, [f("lib/utils.ts")], "mfe")
         self.assertEqual(facts["errors"], [])
         self.assertEqual(sorted(facts["labels"]), ["bug", "risk:elevated"])
+        self.assertEqual(facts["base"], {"ref": "main", "sha": self.BASE})
         self.assertTrue(facts["labelsComplete"])
         self.assertEqual(facts["modes"]["lib/utils.ts"], {"base": "100644", "head": "100644"})
         self.assertEqual(facts["texts"]["lib/utils.ts"], {"base": "export const x = 1;\n", "head": "export const x = 1;\n"})
@@ -563,6 +577,160 @@ class FactsFetch(unittest.TestCase):
         facts = merge_facts.fetch(gh, "o/r", 7, HEAD, [f("docs/x.md", "ADDED")], "mfe")
         self.assertEqual([c[2].rpartition("ref=")[2] for c in calls if "/contents/" in c[2]], [HEAD])
         self.assertEqual(list(facts["texts"]["docs/x.md"]), ["head"])
+
+
+class RoundTwo(FactsFetch):
+    """Codex review round 1 of PR A: base race, commit history, every reference source, pending checks, sign-off."""
+
+    def test_the_base_branch_comes_from_the_same_pinned_read_as_the_head(self):
+        gh, _ = self.gh(pull={"base": {"sha": self.BASE, "ref": "release"}, "head": {"sha": HEAD}, "labels": [], "body": ""})
+        facts = merge_facts.fetch(gh, "o/r", 7, HEAD, [f("lib/utils.ts")], "mfe")
+        self.assertEqual(facts["base"]["ref"], "release")
+        # the PR view said main a moment ago; the files were judged against release: refused
+        d = decide_in("mfe", [f("lib/utils.ts")], facts)
+        self.assertFalse(d.ok)
+        self.assertIn("the PR's base branch is not the one the files were judged against", d.reasons)
+        self.assertEqual(decide_in("mfe", [f("lib/utils.ts")], facts_for([f("lib/utils.ts")], "mfe", base=None)).ok, False)
+
+    def test_verify_catches_a_retarget_with_the_same_head(self):
+        facts = {"head": HEAD, "base": {"ref": "main", "sha": self.BASE}}
+        ok = lambda args: {"base": {"ref": "main", "sha": self.BASE}, "head": {"sha": HEAD}}      # noqa: E731
+        self.assertEqual(merge_facts.verify(ok, "o/r", 7, facts), "")
+        retarget = lambda args: {"base": {"ref": "release", "sha": self.BASE}, "head": {"sha": HEAD}}   # noqa: E731
+        self.assertIn("base", merge_facts.verify(retarget, "o/r", 7, facts))
+        advanced = lambda args: {"base": {"ref": "main", "sha": "cd" * 20}, "head": {"sha": HEAD}}       # noqa: E731
+        self.assertIn("base", merge_facts.verify(advanced, "o/r", 7, facts))
+        moved = lambda args: {"base": {"ref": "main", "sha": self.BASE}, "head": {"sha": "cd" * 20}}     # noqa: E731
+        self.assertIn("head", merge_facts.verify(moved, "o/r", 7, facts))
+
+        def down(args):
+            raise OSError("gh down")
+        self.assertTrue(merge_facts.verify(down, "o/r", 7, facts))
+        self.assertTrue(merge_facts.verify(lambda a: [], "o/r", 7, facts))
+
+    def test_a_denied_path_in_an_intermediate_commit_refuses_even_when_the_net_diff_is_clean(self):
+        files = [f("samvision/vehicle/helpers.py")]
+        clean = facts_for(files, "samvision")
+        self.assertTrue(decide_in("samvision", files, clean).ok)
+        for touched in ("parsed_csv/x.csv", "samvision/cma/x.py", "samvision/api/auth.py", ".github/workflows/ci.yml"):
+            facts = facts_for(files, "samvision", history=["samvision/vehicle/helpers.py", touched])
+            d = decide_in("samvision", files, facts)
+            self.assertFalse(d.ok, touched)
+            self.assertTrue(any("a commit of the PR touched" in r for r in d.reasons), d.reasons)
+        self.assertFalse(decide_in("samvision", files, facts_for(files, "samvision", history=None)).ok)
+
+    def test_the_history_is_read_from_every_commit_including_renames(self):
+        gh, calls = self.gh(commits=[{"sha": "c1" * 20}, {"sha": "c2" * 20}],
+                            commit={"files": [{"filename": "lib/utils.ts"},
+                                              {"filename": "lib/new.ts", "previous_filename": "prisma/schema.prisma"}]})
+        facts = merge_facts.fetch(gh, "o/r", 7, HEAD, [f("lib/utils.ts")], "mfe")
+        self.assertEqual(facts["errors"], [])
+        self.assertEqual(facts["history"], ["lib/new.ts", "lib/utils.ts", "prisma/schema.prisma"])
+        self.assertEqual(len([c for c in calls if "/commits/" in c[2]]), 2)
+        self.assertFalse(decide_in("mfe", [f("lib/utils.ts")], dict(facts, labels=[])).ok)     # the old name is denied
+
+    def test_a_history_that_cannot_be_inspected_refuses(self):
+        for over in ({"commits": []}, {"commits": [{"sha": "c1" * 20}] * 21}, {"commits": OSError("down")},
+                     {"commits": [{"sha": "nothex"}]}, {"commit": {"files": [{"filename": "a"}] * 300}},
+                     {"commit": {"nofiles": 1}}, {"commit": {"files": [{"nope": 1}]}}):
+            gh, _ = self.gh(**over)
+            facts = merge_facts.fetch(gh, "o/r", 7, HEAD, [f("lib/utils.ts")], "mfe")
+            self.assertTrue(facts["errors"], over)
+            self.assertFalse(decide_in("mfe", [f("lib/utils.ts")], facts).ok, over)
+
+    def test_every_reference_source_is_read(self):
+        body = ("Refs #1, see https://github.com/o/r/issues/2 and other/repo#3 and "
+                "https://github.com/third/place/pull/4. Not a ref: abc#5 or a/b/c#6.")
+        refs = merge_facts.references("o/r", body, [{"number": 9, "repository": {"nameWithOwner": "o/r"}},
+                                                    {"number": 10, "repository": {"nameWithOwner": "x/y"}}],
+                                      ["o/r#11", "z/z#12"])
+        self.assertEqual(refs, {("o/r", 1), ("o/r", 2), ("other/repo", 3), ("third/place", 4), ("o/r", 9), ("x/y", 10),
+                                ("o/r", 11), ("z/z", 12)})
+        for bad in ([{"number": "9"}], ["no-number"]):
+            with self.assertRaises(ValueError):
+                merge_facts.references("o/r", "", bad if isinstance(bad[0], dict) else [], bad if isinstance(bad[0], str) else [])
+
+    def test_a_risk_label_on_a_url_qualified_or_linked_issue_refuses(self):
+        for name, over in (("url", {"pull": {"base": {"sha": self.BASE, "ref": "main"}, "head": {"sha": HEAD}, "labels": [],
+                                             "body": "Fixes https://github.com/JayDalool/MyFamilyExpenses/issues/12"}}),
+                           ("qualified", {"pull": {"base": {"sha": self.BASE, "ref": "main"}, "head": {"sha": HEAD},
+                                                   "labels": [], "body": "Refs other/repo#12"}}),
+                           ("linked", {"pull": {"base": {"sha": self.BASE, "ref": "main"}, "head": {"sha": HEAD},
+                                                "labels": [], "body": ""},
+                                       "linked": {"closingIssuesReferences": [{"number": 12, "repository":
+                                                                               {"nameWithOwner": "o/r"}}]}})):
+            gh, calls = self.gh(**over)
+            facts = merge_facts.fetch(gh, "o/r", 7, HEAD, [f("lib/utils.ts")], "mfe")
+            self.assertEqual(facts["errors"], [], name)
+            self.assertIn("risk:elevated", facts["labels"], name)
+            self.assertFalse(decide_in("mfe", [f("lib/utils.ts")], facts).ok, name)
+        gh, calls = self.gh(pull={"base": {"sha": self.BASE, "ref": "main"}, "head": {"sha": HEAD}, "labels": [],
+                                  "body": "Refs other/repo#12"})
+        merge_facts.fetch(gh, "o/r", 7, HEAD, [f("lib/utils.ts")], "mfe")
+        self.assertIn("repos/other/repo/issues/12", [c[2] for c in calls])
+
+    def test_the_tickets_own_github_issue_links_count_and_unreadable_ones_refuse(self):
+        gh, calls = self.gh(pull={"base": {"sha": self.BASE, "ref": "main"}, "head": {"sha": HEAD}, "labels": [], "body": ""})
+        facts = merge_facts.fetch(gh, "o/r", 7, HEAD, [f("lib/utils.ts")], "mfe", ["o/r#40"])
+        self.assertIn("risk:elevated", facts["labels"])
+        for over in ({"linked": OSError("down")}, {"linked": {"closingIssuesReferences": [{"number": "x"}]}},
+                     {"issue": OSError("down")}):
+            gh, _ = self.gh(**over)
+            self.assertTrue(merge_facts.fetch(gh, "o/r", 7, HEAD, [f("lib/utils.ts")], "mfe")["errors"], over)
+
+
+class PendingAndSignOff(unittest.TestCase):
+    def test_a_pending_check_outside_the_required_names_waits(self):
+        files = [f("docs/x.md", "ADDED")]
+        rollup = green("backend", "web") + [run("web-e2e", "", "IN_PROGRESS")]
+        d = decide_in("commandcenter", files, rollup=rollup)
+        self.assertEqual((d.ok, d.wait, d.ci), (False, True, "pending"))
+        d = decide_in("commandcenter", files, rollup=green("backend", "web") + [run("codecov", "", "QUEUED", workflow="")])
+        self.assertEqual((d.ok, d.wait, d.ci), (False, True, "pending"))
+
+    def test_classify_needs_the_sign_off_when_it_is_required_or_unknown(self):
+        files = [f("docs/x.md", "ADDED")]
+        self.assertTrue(decide_in("commandcenter", files).ok)
+        for facts in (facts_for(files, securityRequired=True), facts_for(files, securityRequired=None),
+                      facts_for(files, securityRequired=True, securitySignoff=False)):
+            d = decide_in("commandcenter", files, facts)
+            self.assertFalse(d.ok)
+            self.assertIn("the change needs a security sign-off at this head", d.reasons)
+        self.assertTrue(decide_in("commandcenter", files, facts_for(files, securityRequired=True, securitySignoff=True)).ok)
+        bad = facts_for(files)
+        del bad["securityRequired"]
+        self.assertFalse(decide_in("commandcenter", files, bad).ok)
+
+
+class ConfigFile(unittest.TestCase):
+    def test_a_rejected_auto_merge_value_is_never_copied_into_the_message(self):
+        for bad in ("super-secret-token-123", {"k": "super-secret-token-123"}, ["super-secret-token-123"], 12345):
+            projects, why = config.auto_merge_projects(bad)
+            self.assertEqual(projects, [])
+            self.assertNotIn("super-secret", why)
+            self.assertNotIn("12345", why)
+
+    def test_an_unreadable_or_invalid_config_file_gives_defaults_an_empty_switch_and_a_diagnostic(self):
+        import os
+        import tempfile
+        d = tempfile.mkdtemp(prefix="cfg-")
+        bad = os.path.join(d, "config.json")
+        open(bad, "w").write('{"auto_merge": ["commandcenter"], oops')
+        cfg = config.load(bad)
+        self.assertEqual(cfg["auto_merge"], [])
+        self.assertIn("could not be read", cfg["_config_problem"])
+        self.assertNotIn("oops", cfg["_config_problem"])
+        os.chmod(bad, 0)
+        try:
+            cfg = config.load(bad)
+            self.assertEqual(cfg["auto_merge"], [])
+            self.assertIn("_config_problem", cfg)
+        finally:
+            os.chmod(bad, 0o600)
+        good = os.path.join(d, "ok.json")
+        open(good, "w").write('{"auto_merge": ["commandcenter"]}')
+        cfg = config.load(good)
+        self.assertEqual((cfg["auto_merge"], "_config_problem" in cfg), (["commandcenter"], False))
 
 
 if __name__ == "__main__":

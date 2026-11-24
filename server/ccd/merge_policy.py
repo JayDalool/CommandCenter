@@ -553,6 +553,9 @@ def classify(project, ticket, work, pr, pr_ref, open_prs, policy="low-risk", fac
         ci = ci if ci == "none" else "unknown"      # a green rollup that lacks the named jobs is not green
     elif named == "pending":
         ci = "pending"
+    # A pending check outside the required names (web-e2e, a third party) still waits, and is never called green.
+    if ci == "pending" and "CI is still running" not in wait:
+        wait.append("CI is still running")
 
     facts = facts if isinstance(facts, dict) else None
     reasons += file_reasons(project, pr.get("files"), pr.get("additions"), pr.get("deletions"), facts)
@@ -562,6 +565,27 @@ def classify(project, ticket, work, pr, pr_ref, open_prs, policy="low-risk", fac
         if not facts.get("labelsComplete"):
             reasons.append("the PR's and its Issues' labels could not all be read")
         reasons += label_reasons(facts.get("labels"))
+        # CC-057 round 2: the base branch the files were judged against comes from the same pinned read as the head
+        # and must be the registered one, and the same as the PR view said.
+        fbase = facts.get("base")
+        if not isinstance(fbase, dict) or fbase.get("ref") != base or fbase.get("ref") != pr.get("baseRefName"):
+            reasons.append("the PR's base branch is not the one the files were judged against")
+        if facts.get("head") != head:
+            reasons.append("the facts were read at another head")
+        # A denied path in ANY commit of the PR refuses, even when the net diff is clean (the merge commit brings
+        # every commit into the base branch's history).
+        hist = facts.get("history")
+        if not isinstance(hist, list):
+            reasons.append("the PR's commit history could not be inspected")
+        else:
+            for hp in hist:
+                if not safe_path(hp) or denied(hp, project):
+                    reasons.append(f"a commit of the PR touched {hp if safe_path(hp) else 'an unusable path'}, "
+                                   "which is never auto-merged")
+                    break
+        # The security sign-off: required unless the daemon said it is not, and then it must exist at this head.
+        if facts.get("securityRequired") is not False and not facts.get("securitySignoff"):
+            reasons.append("the change needs a security sign-off at this head")
         reasons += size_reasons(facts.get("size"))
         for f in pr.get("files") if isinstance(pr.get("files"), list) else []:
             path = f.get("path") if isinstance(f, dict) else None

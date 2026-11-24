@@ -98,8 +98,14 @@ PUBLIC_PROJECT_FIELDS = ("key", "name", "repo", "path", "branch", "model", "effo
 def load(path=None):
     cfg = json.loads(json.dumps(DEFAULTS))  # never hand out the module's own lists
     p = Path(path) if path else CONFIG_PATH
-    if p.exists():
-        cfg.update(json.loads(p.read_text()))
+    try:
+        if p.exists():
+            cfg.update(json.loads(p.read_text()))
+    except (OSError, ValueError):
+        # CC-057: a config file that cannot be read or parsed must not switch anything on. Defaults apply (auto_merge
+        # is []), and the daemon says so as a security event. The file's text is never put in the message.
+        cfg = json.loads(json.dumps(DEFAULTS))
+        cfg["_config_problem"] = "config.json could not be read or parsed; defaults apply and auto_merge is empty"
     for proj in cfg["projects"] + list(cfg.get("task_projects") or []):
         # Identity — display name, ticket prefix, retired prefixes — comes from
         # the one project registry, so the config file cannot drift from it. A
@@ -140,7 +146,8 @@ def auto_merge_projects(raw):
     if raw is False or raw == []:
         return [], None
     if not isinstance(raw, list) or any(not isinstance(k, str) or k not in registry.PROJECTS for k in raw):
-        return [], f"auto_merge must be a list of known project keys, got {str(raw)[:80]}"
+        # The rejected value is never copied into the message: it is arbitrary config text (CC-057 review).
+        return [], f"auto_merge must be a list of known project keys (got a {type(raw).__name__})"
     bad = [k for k in raw if registry.paused(k) or registry.class_of(k) != "own"]
     if bad:
         return [], f"auto_merge names a paused or client project: {', '.join(bad)}"
