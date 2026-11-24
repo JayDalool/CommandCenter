@@ -77,3 +77,12 @@ uses the same path). It is still a real live-deploy approval, but it is marked `
 (`daemon.GATE_DEPLOY_TEMPLATE`) asks Claude to PREPARE (steps, migrations, checks, rollback) and wait for Jay to confirm in
 the pane. "Deploy it now" is gone. As with Go Live, the wait rests on the message text only: `deployed` checks just
 `approvedAt`. The plan stays in the pane; it is not saved to a file.
+
+## Update 2026-11-24 (CC-063)
+
+`scripts/go-live.sh` no longer ends with a 30 s "does it answer" loop. After the restart it starts a release watch (its
+own systemd user unit, from a copy of `server/ccd/release_watch.py`) that checks API, daemon and UI for about 6 minutes
+and, if the release is bad, puts the previous one back by itself and tells Jay in Messages. Go Live is still Jay's press
+and the deploy still waits for his confirmation in the pane; the rollback only re-points to what was live before (no
+fetch, build or deploy). A failed release whose new tables already hold rows is not rolled back (Q182): ccd stays on the
+new release and the alert carries recovery steps. Exit codes and the failure table: docs/runbooks/go-live-auto-rollback.md.

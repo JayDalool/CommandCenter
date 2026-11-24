@@ -4,10 +4,13 @@ Every run is against a throw-away clone (CC_REPO), a temp HOME and CCD_DATA_DIR,
 systemctl, curl and go that leave a marker and fail. Only --dry-run and refusal paths are exercised, so no
 deploy step (pip, deploy-web.sh, ccd restart) ever runs.
 """
+import fcntl
+import json
 import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -27,7 +30,9 @@ def git(cwd, *args):
     return r.stdout.strip()
 
 
-class GoLiveTest(unittest.TestCase):
+class GoLiveBase(unittest.TestCase):
+    """The throw-away clone, origin and shims; no tests of its own."""
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="go-live-test-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
@@ -74,7 +79,8 @@ class GoLiveTest(unittest.TestCase):
         git(self.other, "push", "-q", "origin", "feature")
         return git(self.other, "rev-parse", "HEAD")
 
-    def run_script(self, *args):
+    def run_script(self, *args, env=None):
+        env_extra = env or {}
         env = {
             "PATH": f"{self.shims}:{os.environ['PATH']}",
             "HOME": str(self.home),
@@ -83,6 +89,7 @@ class GoLiveTest(unittest.TestCase):
             "CCD_LAUNCHER_DIR": str(self.tmp / "launcher"),
         }
         env.update(GIT_ENV)
+        env.update(env_extra)
         return subprocess.run(["bash", str(SCRIPT), *args], env=env, cwd=self.tmp,
                               capture_output=True, text=True, timeout=60)
 
@@ -94,6 +101,9 @@ class GoLiveTest(unittest.TestCase):
         self.assertEqual(os.listdir(self.markers), [], "a deploy step or shim ran")
         self.assertFalse((self.home / "command-center").exists(), "go-live wrote under HOME")
 
+
+
+class GoLiveTest(GoLiveBase):
     def test_syntax(self):
         r = subprocess.run(["bash", "-n", str(SCRIPT)], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -279,6 +289,353 @@ class GoLiveTest(unittest.TestCase):
         self.assertEqual(git(self.repo, "rev-parse", "refs/remotes/origin/feature"), feat)
         self.assertEqual(git(self.repo, "rev-parse", "refs/remotes/origin/main"), main_ref)
         self.assert_untouched(before)
+
+
+SYSTEMCTL_SHIM = """#!/bin/sh
+echo "$@" >> "{m}/systemctl"
+case "$1 $2" in
+  "--user is-active") exit $([ -f "{m}/active.$4" ] && echo 0 || echo 1) ;;
+esac
+exit 0
+"""
+
+# Plays systemd-run and the release watcher: records every argument, then writes the verdict the test chose
+# (watch-mode) into result.json after a moment, as the real watcher does. "hang" never ends, "die" ends with none.
+SYSTEMD_RUN_SHIM = """#!/bin/sh
+for a in "$@"; do printf '%s\\n' "$a" >> "{m}/systemd-run"; done
+echo '---' >> "{m}/systemd-run"
+[ -f "{m}/systemd-run.fail" ] && exit 1
+unit=""; prev=""
+for a in "$@"; do [ "$prev" = "--unit" ] && unit="$a"; prev="$a"; wdir="$a"; done
+mode="$(cat "{m}/watch-mode" 2>/dev/null || echo healthy)"
+touch "{m}/active.$unit"
+case "$mode" in
+  hang) ;;
+  die) ( sleep 1.5; rm -f "{m}/active.$unit" ) >/dev/null 2>&1 </dev/null & ;;
+  *) ( sleep 0.3
+       printf '{{"result":"%s","step":"%s","check":"api","reason":"why","restarts":0,"message":"Rollback: release x failed api; live is now y.","notified":true}}\\n' \\
+         "$mode" "$(cat "{m}/watch-step" 2>/dev/null)" > "$wdir/result.json.tmp"
+       mv "$wdir/result.json.tmp" "$wdir/result.json"
+       rm -f "{m}/active.$unit" ) >/dev/null 2>&1 </dev/null & ;;
+esac
+exit 0
+"""
+
+
+class GoLiveRunTest(GoLiveBase):
+    """CC-063: a REAL go-live run against the throw-away clone, with systemd-run and the watcher faked. Nothing here
+    can reach the live install: HOME, CCD_DATA_DIR, CC_REPO and PATH are all temp."""
+
+    def setUp(self):
+        super().setUp()
+        for name, body in (("systemctl", SYSTEMCTL_SHIM), ("systemd-run", SYSTEMD_RUN_SHIM)):
+            f = self.shims / name
+            f.write_text(body.format(m=self.markers))
+            f.chmod(0o755)
+        (self.repo / "server" / "ccd").mkdir(parents=True)
+        (self.repo / "server" / "ccd" / "release_watch.py").write_text("# stands in for the watcher copy\n")
+        (self.repo / "server" / "requirements.txt").write_text("a==1\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "server files")
+        git(self.repo, "push", "-q", "origin", "main")
+        venv = self.repo / "server" / ".venv" / "bin"   # untracked, so the "no uncommitted changes" check ignores it
+        venv.mkdir(parents=True)
+        (venv / "pip").write_text(f'#!/bin/sh\necho "$@" >> "{self.markers}/pip"\n'
+                                  f'[ "$1" = download ] && [ -f "{self.markers}/pip.fail" ] && exit 1\nexit 0\n')
+        (venv / "python").write_text('#!/bin/sh\nexec python3 "$@"\n')
+        for f in venv.iterdir():
+            f.chmod(0o755)
+        self.deploys = self.home / "command-center" / "deploys" / "commandcenter"
+        self.watch_root = self.deploys / "watch"
+        self.web = self.home / ".local" / "share" / "command-center" / "web"
+        git(self.other, "pull", "-q", "origin", "main")
+        self.new = self.push_main("the release going live")
+
+    def mode(self, mode, step=""):
+        (self.markers / "watch-mode").write_text(mode)
+        (self.markers / "watch-step").write_text(step)
+
+    def watch_dirs(self):
+        return sorted(p for p in self.watch_root.iterdir() if p.is_dir()) if self.watch_root.exists() else []
+
+    def sysrun_calls(self):
+        text = (self.markers / "systemd-run").read_text()
+        return [c.rstrip("\n").split("\n") for c in text.split("---\n") if c]
+
+    def ran(self, name):
+        return (self.markers / name).exists()
+
+    # ---- exit codes and the words
+
+    def test_healthy_watch_exits_0_and_the_rest_of_go_live_is_as_before(self):
+        self.mode("healthy")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("release watch: healthy", r.stdout)
+        self.assertIn(f"Live is on main ({self.new[:7]})", r.stdout)
+        self.assertIn("Rollback (back to main @", r.stdout)       # the manual rollback text is still printed
+        self.assertEqual(self.head(), self.new)
+        self.assertIn("restart ccd", (self.markers / "systemctl").read_text())
+
+    def test_failed_watch_exit_codes_and_words(self):
+        for mode, code, words in (("rolled_back", 3, "ROLLED BACK"), ("rollback_failed", 4, "ROLLBACK FAILED"),
+                                  ("no_previous", 5, "NO PREVIOUS RELEASE")):
+            with self.subTest(mode=mode):
+                self.setUp()
+                self.mode(mode, "verify")
+                r = self.run_script()
+                self.assertEqual(r.returncode, code, r.stdout + r.stderr)
+                self.assertIn(words, r.stdout)
+                (wd,) = self.watch_dirs()
+                self.assertIn(f"{wd}/watch.log", r.stdout)
+                self.assertIn("deployed <KEY> --role coordinator --env live --result fail", r.stdout)
+
+    def test_wait_bound_exits_6_and_result_reports_the_same_code(self):
+        self.mode("hang")
+        r = self.run_script(env={"CC_GOLIVE_DEADLINE_S": "2"})
+        self.assertEqual(r.returncode, 6, r.stdout + r.stderr)
+        self.assertIn("scripts/go-live.sh --result", r.stdout)
+        r = self.run_script("--result")
+        self.assertEqual(r.returncode, 6)
+        self.assertIn("still watching", r.stdout)
+        (wd,) = self.watch_dirs()
+        unit = f"cc-release-watch-{wd.name}"
+        for mode, code in (("rolled_back", 3), ("rollback_failed", 4), ("no_previous", 5), ("healthy", 0)):
+            (wd / "result.json").write_text(json.dumps({"result": mode, "step": "x", "check": "api"}))
+            self.assertEqual(self.run_script("--result").returncode, code, mode)
+        (wd / "result.json").unlink()
+        (self.markers / f"active.{unit}").unlink()          # the watcher is gone and left no verdict
+        r = self.run_script("--result")
+        self.assertEqual(r.returncode, 4, r.stdout)
+        self.assertIn("ROLLBACK FAILED", r.stdout)
+        self.assertIn("start ccd", (self.markers / "systemctl").read_text().split("restart ccd")[-1],
+                      "a stopped ccd is started by go-live.sh itself")
+
+    def test_the_deadline_counts_from_the_start_of_the_script(self):
+        # the steps before the restart took longer than the bound: the wait ends at once, 6, not deadline + the steps
+        slow = self.other / "scripts" / "deploy-web.sh"
+        slow.write_text('#!/bin/sh\nsleep 2\n')
+        git(self.other, "commit", "-q", "-am", "slow build")
+        git(self.other, "push", "-q", "origin", "main")
+        self.mode("hang")
+        t0 = time.monotonic()
+        r = self.run_script(env={"CC_GOLIVE_DEADLINE_S": "3"})
+        elapsed = time.monotonic() - t0
+        self.assertEqual(r.returncode, 6, r.stdout + r.stderr)
+        self.assertLess(elapsed, 3 + 2.5, "the wait must not start a fresh deadline after the build")
+
+    def test_a_watcher_that_dies_without_a_verdict_gets_ccd_started_and_exits_4(self):
+        self.mode("die")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertIn("ROLLBACK FAILED at watcher_died", r.stdout)
+        calls = (self.markers / "systemctl").read_text().splitlines()
+        self.assertIn("--user start ccd", calls)
+
+    # ---- systemd-run arguments and failure
+
+    def test_systemd_run_gets_explicit_environment_and_exec_stop_post(self):
+        self.mode("healthy")
+        r = self.run_script(env={"CCD_PORT": "7788", "CCD_TOKEN_FILE": str(self.tmp / "tok"),
+                                 "CCD_HERDR_SOCKET": str(self.tmp / "h.sock")})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        (call,) = self.sysrun_calls()
+        (wd,) = self.watch_dirs()
+        for want in ("--user", "--unit", f"cc-release-watch-{wd.name}", "--collect",
+                     "CCD_PORT=7788", f"CCD_WEB_DIR={self.web}", f"CCD_DATA_DIR={self.data}",
+                     f"CC_REPO={self.repo}", f"CCD_TOKEN_FILE={self.tmp / 'tok'}",
+                     f"CCD_HERDR_SOCKET={self.tmp / 'h.sock'}", f"HOME={self.home}"):
+            self.assertIn(want, call)
+        # the watcher dying after stop must not leave ccd stopped (Restart=always ignores a stopped unit)
+        stop_post = [a for a in call if a.startswith("ExecStopPost=")]
+        self.assertEqual(len(stop_post), 1)
+        self.assertTrue(stop_post[0].endswith(" --user start ccd"), stop_post)
+        self.assertEqual(call[-2:], [str(wd / "release_watch.py"), str(wd)])
+        self.assertTrue(any(a.startswith("PATH=") for a in call))
+        copy = wd / "release_watch.py"
+        self.assertEqual(copy.read_text(), "# stands in for the watcher copy\n", "it runs from a copy, not the checkout")
+        plan = json.loads((wd / "plan.json").read_text())
+        self.assertEqual((plan["to_sha"], plan["unit"]), (self.new, f"cc-release-watch-{wd.name}"))
+        self.assertFalse(plan["pins_differ"])
+
+    def test_systemd_run_failure_is_not_watched_and_exits_7(self):
+        (self.markers / "systemd-run.fail").write_text("")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 7, r.stdout + r.stderr)
+        self.assertIn("NOT WATCHED", r.stderr)
+        self.assertIn("Do not record the ticket deployed; tell Jay", r.stderr)
+        self.assertIn("git switch --detach", r.stderr)               # the manual rollback is printed
+
+    def test_a_unit_that_never_becomes_active_is_not_watched(self):
+        # systemd-run said yes but the unit is not there 5 s later
+        shim = self.shims / "systemd-run"
+        shim.write_text("#!/bin/sh\nexit 0\n")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 7, r.stdout + r.stderr)
+        self.assertIn("NOT WATCHED", r.stderr)
+
+    # ---- the lock
+
+    def hold_lock(self):
+        self.deploys.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.deploys / ".go-live.lock", os.O_CREAT | os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        self.addCleanup(os.close, fd)
+
+    def assert_nothing_deployed(self, before):
+        self.assertEqual(self.head(), before)
+        for name in ("pip", "systemd-run", "deploy-web.sh", "install-claude-commands.sh"):
+            self.assertFalse(self.ran(name), f"{name} ran")
+        self.assertFalse((self.home / "command-center" / "backups").exists(), "a backup was started")
+
+    def test_second_go_live_while_the_lock_is_held_refuses_before_any_change(self):
+        before = self.head()
+        self.hold_lock()
+        r = self.run_script()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("holds", r.stderr)
+        self.assert_nothing_deployed(before)
+
+    def test_second_go_live_while_a_watch_unit_is_active_refuses_before_any_change(self):
+        before = self.head()
+        self.watch_root.mkdir(parents=True)
+        (self.watch_root / "active.json").write_text(json.dumps({"unit": "cc-release-watch-20261201T100000"}))
+        (self.markers / "active.cc-release-watch-20261201T100000").write_text("")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("still running", r.stderr)
+        self.assert_nothing_deployed(before)
+
+    def test_a_stale_active_json_does_not_refuse_and_a_finished_watch_releases_the_lock(self):
+        # the watcher clears active.json and frees the lock when its verdict is final, so a fix release is not
+        # held up by the 30-minute Messages retry that follows
+        self.watch_root.mkdir(parents=True)
+        (self.watch_root / "active.json").write_text(json.dumps({"unit": "cc-release-watch-old"}))  # unit not active
+        self.mode("healthy")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        fd = os.open(self.deploys / ".go-live.lock", os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)      # go-live let go of it
+        finally:
+            os.close(fd)
+        self.assertTrue(json.loads((self.watch_root / "active.json").read_text())["unit"].startswith("cc-release-watch-2"))
+
+    def test_dry_run_takes_no_lock(self):
+        self.hold_lock()
+        r = self.run_script("--dry-run")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    # ---- notices on every run, dry run included
+
+    def make_watch(self, name, result=None, active=False, age=3600):
+        d = self.watch_root / name
+        d.mkdir(parents=True)
+        (d / "plan.json").write_text("{}")
+        if result is not None:
+            (d / "result.json").write_text(json.dumps(result))
+        if active:
+            (self.markers / f"active.cc-release-watch-{name}").write_text("")
+        old = time.time() - age
+        os.utime(d, (old, old))
+        return d
+
+    def test_watcher_died_is_printed_by_every_run_dry_run_included(self):
+        self.make_watch("20261130T090000")
+        for args in (("--dry-run",), ("--dry-run", "--branch", "main")):
+            r = self.run_script(*args)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("WATCHER DIED: 20261130T090000", r.stdout)
+
+    def test_unnotified_rollbacks_are_printed_and_notified_or_healthy_ones_are_not(self):
+        self.make_watch("20261130T090000", {"result": "rolled_back", "notified": False, "message": "Rollback: X"})
+        self.make_watch("20261130T100000", {"result": "rolled_back", "notified": True})
+        self.make_watch("20261130T110000", {"result": "healthy", "notified": None})
+        self.make_watch("20261130T120000", active=True, age=3600)          # still watching: not dead
+        self.make_watch("20261130T130000", age=2)                          # just created: its unit is starting
+        r = self.run_script("--dry-run")
+        self.assertIn("UNNOTIFIED: 20261130T090000", r.stdout)
+        self.assertIn("Rollback: X", r.stdout)
+        for quiet in ("20261130T100000", "20261130T110000", "20261130T120000", "20261130T130000"):
+            self.assertNotIn(quiet, r.stdout)
+
+    # ---- pins: both sets downloaded during go-live, before anything changes
+
+    def test_pins_that_differ_download_both_sets_before_the_switch(self):
+        self.push_main("pins moved")
+        (self.other / "server").mkdir(exist_ok=True)
+        (self.other / "server" / "requirements.txt").write_text("a==2\n")
+        git(self.other, "commit", "-q", "-am", "bump a")
+        git(self.other, "push", "-q", "origin", "main")
+        self.mode("healthy")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        pip = (self.markers / "pip").read_text().splitlines()
+        downloads = [l for l in pip if l.startswith("download")]
+        self.assertEqual(len(downloads), 2)
+        self.assertLess(pip.index(downloads[1]), next(i for i, l in enumerate(pip) if l.startswith("install")))
+        (wd,) = self.watch_dirs()
+        self.assertEqual((wd / "wheels" / "old.txt").read_text(), "a==1\n")
+        self.assertEqual((wd / "wheels" / "new.txt").read_text(), "a==2\n")
+        self.assertTrue(json.loads((wd / "plan.json").read_text())["pins_differ"])
+
+    def test_unchanged_pins_download_nothing(self):
+        self.mode("healthy")
+        self.run_script()
+        self.assertFalse([l for l in (self.markers / "pip").read_text().splitlines() if l.startswith("download")])
+
+    def test_wheels_that_cannot_be_downloaded_stop_go_live_before_any_change(self):
+        (self.other / "server").mkdir(exist_ok=True)
+        (self.other / "server" / "requirements.txt").write_text("a==2\n")
+        git(self.other, "commit", "-q", "-am", "bump a")
+        git(self.other, "push", "-q", "origin", "main")
+        (self.markers / "pip.fail").write_text("")
+        before = self.head()
+        r = self.run_script()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("could not download the wheels", r.stderr)
+        self.assertEqual(self.head(), before)
+        self.assertFalse(self.ran("deploy-web.sh"))
+        self.assertFalse((self.home / "command-center" / "backups").exists())
+
+    # ---- what is recorded before the switch
+
+    def test_the_exact_previous_ui_release_and_schema_are_recorded_before_the_switch(self):
+        import sqlite3
+        rel = self.web / "releases" / "20261012T000000Z-abcdef0"
+        rel.mkdir(parents=True)
+        (rel / "index.html").write_text("<html/>")
+        os.symlink("releases/20261012T000000Z-abcdef0", self.web / "current")
+        db = sqlite3.connect(self.data / "tasks.db")
+        db.execute("PRAGMA user_version = 14")
+        db.commit()
+        db.close()
+        self.mode("healthy")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        (wd,) = self.watch_dirs()
+        plan = json.loads((wd / "plan.json").read_text())
+        self.assertEqual(plan["prev_web"], str(rel))
+        self.assertEqual(plan["prev_schema"], 14)
+        self.assertEqual(plan["from_sha"], git(self.repo, "rev-parse", "HEAD~1") if False else plan["from_sha"])
+
+    def test_old_watch_dirs_are_pruned_to_the_newest_few(self):
+        for i in range(9):
+            self.make_watch(f"2026110{i + 1}T000000", {"result": "healthy"})
+        self.mode("healthy")
+        self.run_script()
+        left = [p.name for p in self.watch_dirs()]
+        self.assertEqual(len(left), 6)
+        self.assertNotIn("20261101T000000", left)
+
+    # ---- the coordinator's runbook (tech review: without it the coordinator and the watcher both roll back)
+
+    def test_readme_tells_the_coordinator_the_watch_rolls_back_by_itself(self):
+        text = (SCRIPT.parents[1] / "README.md").read_text()
+        for needle in ("rolls back by itself", "never roll back by hand while a watch is active",
+                       "scripts/go-live.sh --result", "exit 0", "exit 3", "exit 4", "exit 5", "exit 6", "exit 7",
+                       "go-live-auto-rollback.md"):
+            self.assertIn(needle.lower(), text.lower())
 
 
 if __name__ == "__main__":
