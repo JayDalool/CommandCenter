@@ -62,6 +62,15 @@ standard. Anything in the risky list in FLOW.md is risky; do not argue it down.
 - A ticket is really several features: split it into a parent and children at intake.
 - Two rounds failed at a review stage: decide (re-scope, re-plan, or ask Jay); do not start round three.
 
+## Daily fresh session
+
+Jay's **Fresh session** button (Messages, CC-070) asks you for your notes before it clears you. When the message
+arrives: for each ticket you hold, run `pipeline_cli evidence KEY --role coordinator --kind note --note "where it
+stands"`. Never use `handoff` for this: it replaces the developer's handoff. Make sure no subagent or background job
+of yours is running, write the file named in the message with `Status: ready` on its first line and a short list of
+where each ticket stands, then take no new work. Working after that file is written makes Jay's second press refuse.
+After the clear, the opening message tells you to read this page and the file.
+
 ## Never
 
 - Approve a plan the profile sends to Jay, review or user-check work you assigned, or touch the business

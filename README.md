@@ -19,7 +19,7 @@ own; when ccd is down, it builds locally exactly as before.
 
 - **herdr owns every Claude pane.** ccd never starts, splits or supervises an
   agent, and never touches a coordinator's lifecycle. Stopping or restarting ccd
-  affects no agent. Three deliberate exceptions (control room, spec §8–§9), all
+  affects no agent. Four deliberate exceptions (control room, spec §8–§9; the fourth is **Fresh session**, below), all
   through herdr's existing `agent.prompt` on an idle pane: Jay's answers resume
   the ticket's EXISTING task session (`sv-071`), when a ticket closes (a
   pipeline step, or Jay with Developer Unlock) its task session is asked to
@@ -33,6 +33,12 @@ own; when ccd is down, it builds locally exactly as before.
   last run, kept in the repo, findings for Jay to Fix it / Skip. ccd then reminds an
   idle night-shift coordinator to continue until its morning report says
   `Status: complete` (or nothing moves after 3 reminders). A coordinator is never a task session.
+  **Fresh session** (CC-070, Jay with Developer Unlock, `POST /api/coordinators/fresh`, never Slack, an agent or a timer):
+  two presses on an idle project lead with an empty input line. The first sends one fixed message asking it to record
+  each ticket as evidence notes (never `handoff`) and write a ready file; the second, once that file says
+  `Status: ready` and the lead has not worked since, sends `/clear` and one fixed opening line in the same pane under
+  the same name. Each of the three sends re-checks idle, input line, pause and night shift. ccd starts, kills and
+  moves nothing.
   **Work mode** (Jay's switch per project, every project off until he turns it on): ccd reminds an idle
   project lead, at most every 10 minutes, of the tickets it can move without Jay, by key, stage, priority and due
   date (`server/ccd/workmode.py`). Same safety as the night shift: idle pane, empty input line, never over a

@@ -88,3 +88,53 @@ test("who can answer now: the counts above the list fit a desktop and a phone, a
   }
   expect(await problems(page, watch)).toEqual([]);
 });
+
+// CC-070: Jay's Fresh session press on a running, idle project lead, behind Developer Unlock.
+test("Fresh session shows only on a running idle project lead with Developer Unlock, and shows the step that ran", async ({ page, watch }) => {
+  const off = { state: "none", status: null, running: false, idle: false };
+  const at = (id: string, name: string, kind: "cto" | "project", l: Record<string, unknown> = {}) =>
+    ({ ...conv(id, name, kind), lead: { ...lead, name: id, ...l } });
+  const convs = [at("cto", "CTO", "cto"), at("samvision", "SamVision", "project"), at("gyst", "GYST", "project", off)];
+  await page.route("**/api/chat", (r) => r.fulfill({ json: { canStart: false, unread: 0, limits: { text: 16000, fileBytes: 20971520, filesPerMessage: 10 }, conversations: convs } }));
+  await page.route(/\/api\/chat\/(samvision|cto|gyst)$/, (r) => r.fulfill({ json: { conversation: "x", messages: [], lead } }));
+  const presses: string[] = [];
+  await page.route("**/api/coordinators/fresh", (r) => {
+    presses.push(r.request().postData() ?? "");
+    const first = presses.length === 1;
+    return r.fulfill({ json: first ? { ok: true, project: "samvision", coordinator: "samvision", step: "notes", message: "Asked the lead to write its notes; press again when it says ready." }
+      : { ok: false, error: "the lead has not written its ready file yet; press again when it says ready" }, status: first ? 200 : 409 });
+  });
+  const fresh = (width: number) => page.setViewportSize({ width, height: 844 });
+  const button = () => page.getByRole("button", { name: "Fresh session" });
+
+  // locked: no button anywhere
+  await open(page, "messages?c=samvision");
+  await expect(page.getByRole("region", { name: "Conversation with the SamVision lead" })).toBeVisible();
+  await expect(button()).toHaveCount(0);
+
+  // unlocked (a session this browser already holds)
+  await page.evaluate(() => sessionStorage.setItem("ccd.dev", JSON.stringify({ id: "e2e_dev_session_not_a_secret_0000000000000", expiresAt: Date.now() / 1000 + 3600 })));
+  for (const width of [1440, 390]) {
+    await fresh(width);
+    await page.reload();
+    await expect(button()).toHaveCount(1);
+    await expect(button()).toBeVisible();
+    expect(await page.evaluate(wide), `${width}`).toBe(true);
+  }
+  await button().click();
+  await expect(page.getByRole("status").filter({ hasText: "press again when it says ready" })).toBeVisible();
+  await button().click();
+  await expect(page.getByRole("alert").filter({ hasText: "has not written its ready file yet" })).toBeVisible();
+  expect(presses.map((p) => JSON.parse(p))).toEqual([{ project: "samvision" }, { project: "samvision" }]);
+
+  // not the CTO conversation, and not a stopped lead (that one shows Start, not Fresh session)
+  await open(page, "messages?c=cto");
+  await expect(page.getByRole("region", { name: "Conversation with the CTO" })).toBeVisible();
+  await expect(button()).toHaveCount(0);
+  await open(page, "messages?c=gyst");
+  await expect(page.getByRole("region", { name: "Conversation with the GYST lead" })).toBeVisible();
+  await expect(button()).toHaveCount(0);
+  await expect(page.getByText("is not running")).toBeVisible();
+  // The browser logs the refused press (409) it was told to expect; nothing else may be wrong.
+  expect((await problems(page, watch)).filter((p) => !p.includes("status of 409"))).toEqual([]);
+});

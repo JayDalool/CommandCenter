@@ -358,6 +358,17 @@ complete, or after 3 reminders with no ticket or report change. The reminder tex
 ticket text is ever typed. (Go Live, End night shift and the other buttons are Jay's own presses and do not
 make this check.)
 
+**Fresh session (CC-070)** types into a project lead's pane three times, each through herdr `agent.prompt` to an
+idle pane: a fixed notes request, `/clear`, and a fixed opening line. It is Jay's press only (`POST
+/api/coordinators/fresh`, `jay` **and** Developer Unlock, two presses). `act_fresh_lead` has no Slack, agent or timer
+caller (a test asserts the call sites). Before each of the three sends ccd re-checks, on fresh state, that the
+project is not paused and has no night shift, that the lead is identified, idle and its input line is plainly
+empty. The texts are constants with only the project key and a ready-file path built by ccd; the request body is
+never typed. The ready file is read as ccd's own constant path (fixed when the notes were requested): its folder and
+the file must not be symlinks, it is opened without following links, must be a regular file, only its first 256 bytes
+are read and only a yes or no leaves the function. A lead that went busy after writing the file is not cleared. The
+actor is self-asserted, as for the night shift, so Developer Unlock is the real gate.
+
 **What a Go Live approval is.** A live-deploy gate that Go Live confirms is a full approval in the pipeline:
 afterwards any agent may record `deployed --env live` for that ticket. That the deploy waits for Jay's
 confirmation in the coordinator's pane is enforced only by the message text, not by ccd. The record is marked

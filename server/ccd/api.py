@@ -89,6 +89,9 @@
     POST  /api/tasks/check           Jay AND Developer Unlock. the task check: a fixed message asks the project's
                                      idle coordinator Claude to propose stale tasks and add missing ones
                                      ({copy: true}: send nothing, return the message to paste by hand)
+    POST  /api/coordinators/fresh    Jay AND Developer Unlock. Fresh session for a project lead: press 1 asks the idle lead
+                                     to record its tickets (evidence notes) and write a ready file; press 2 sends /clear
+                                     and one opening line (CC-070).
     POST  /api/tasks/night-shift     Jay AND Developer Unlock. night shift: ccd/skills/night-shift/SKILL.md (the same text as
                                      Claude's /night-shift) to the project's idle coordinator; it works the open
                                      tasks under the pipeline and never deploys ({copy: true} as above);
@@ -675,6 +678,13 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
         return await daemon.act_night_shift(str(body.get("project") or ""), request.state.actor, developer=dev,
                                             copy=bool(body.get("copy")))
+
+    async def fresh_lead(request, body):
+        # Jay's press only: the same guard and Developer Unlock check as the night shift. Only `project` and `copy`
+        # are read; no text from the request reaches the pane (CC-070).
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return await daemon.act_fresh_lead(str(body.get("project") or ""), request.state.actor, developer=dev,
+                                           copy=bool(body.get("copy")))
 
     async def ui_test(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
@@ -1546,6 +1556,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/tasks/import-preview", guarded(import_preview), methods=["GET"]),
         Route("/api/tasks/check", guarded(task_check), methods=["POST"]),
         Route("/api/tasks/night-shift", guarded(night_shift), methods=["POST"]),
+        Route("/api/coordinators/fresh", guarded(fresh_lead), methods=["POST"]),
         Route("/api/night-shift", guarded(night_state), methods=["GET"]),
         Route("/api/profiles", guarded(profiles_state), methods=["GET"]),
         Route("/api/autonomy", guarded(autonomy_state), methods=["GET"]),

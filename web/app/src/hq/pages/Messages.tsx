@@ -14,6 +14,7 @@ import { useSelector } from "../../lib/store";
 import { href } from "../../lib/router";
 import { ApiError, uploadBytes } from "../../api/client";
 import type { ChatConversation, ChatDelivery, ChatFile, ChatLead, ChatMessage, ChatOverBudget, ChatOverview } from "../../api/types";
+import { useDevActive } from "../../components/DevMode";
 import { jayQueue } from "../../tickets/model";
 import { ago } from "../../lib/time";
 import { Icon } from "../frame/icons";
@@ -209,6 +210,7 @@ function LeadBanner({ conv, canStart, onDone }: { conv: ChatConversation; canSta
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState<ChatOverBudget[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const dev = useDevActive();
   const l = conv.lead;
   const name = conv.kind === "cto" ? "The CTO" : `The ${conv.name} lead`;
   const room = conv.kind === "project" ? href("workspace", null, { console: conv.id, open: "1" }) : href("workspace");
@@ -216,6 +218,9 @@ function LeadBanner({ conv, canStart, onDone }: { conv: ChatConversation; canSta
     return <p className="hq-chat-banner">{name} is waiting for you in its pane. Answer it there
       {conv.kind === "project" && <> (<a className="hq-link" href={room}>open it in Workspace</a>)</>}; it is told about your
       messages when it is free.</p>;
+  }
+  if (l.running && l.idle && !l.paused && conv.kind === "project" && dev) {
+    return <FreshSession conv={conv} onDone={onDone} />;
   }
   if (l.running || l.state === "unknown") return null;
   if (l.paused) return <p className="hq-chat-banner">{conv.name} is paused. Messages wait until you resume it.</p>;
@@ -245,6 +250,25 @@ function LeadBanner({ conv, canStart, onDone }: { conv: ChatConversation; canSta
         <button type="button" className="hq-btn" onClick={() => setOver(null)}>Not now</button></div>
     </div>}
     {err && <p className="hq-note" role="alert">{err}</p>}
+  </div>;
+}
+
+/** Jay's Fresh session press (CC-070), two steps: the first asks the lead to write its notes and a ready file; the
+ *  second, once it says ready, clears the conversation. The step that ran, or ccd's refusal, is shown as is. */
+function FreshSession({ conv, onDone }: { conv: ChatConversation; onDone: (text: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const press = () => {
+    setBusy(true); setMsg(null);
+    app.api.leadFresh(conv.id).then((r) => {
+      setMsg({ ok: true, text: r.message });
+      if (r.step === "started") onDone(r.message);
+    }).catch((e) => setMsg({ ok: false, text: (e as Error).message })).finally(() => setBusy(false));
+  };
+  return <div className="hq-chat-banner" role="note">
+    <span>Start the {conv.name} lead on a fresh conversation. The first press asks it to write its notes; press again once it says ready.</span>
+    <button type="button" className="hq-btn" disabled={busy} onClick={press}>{busy ? "Working…" : "Fresh session"}</button>
+    {msg && <p className="hq-note" role={msg.ok ? "status" : "alert"}>{msg.text}</p>}
   </div>;
 }
 

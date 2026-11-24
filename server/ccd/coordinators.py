@@ -19,12 +19,16 @@ in state/coordinators.json so dispatch can still reach it; `rows` prints the
 `-c` restart line that retires that alias with the conversation intact.
 """
 import json
+import os
 import re
+import stat
 import time
+from datetime import datetime
+from pathlib import Path
 
 from . import coordid, sources
 from . import registry as project_registry
-from .config import STATE_DIR
+from .config import LEGACY, STATE_DIR
 
 REGISTRY = STATE_DIR / "coordinators.json"
 NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")  # herdr's rule for agent names
@@ -175,3 +179,69 @@ def report(cfg, panes):
                          f"dispatch still addresses {r['peer']}")
             lines.append(f"       retire the alias when it is idle: {r['restart']}")
     return "\n".join(lines) or "  no projects configured"
+
+
+# ---------- Fresh session (CC-070) ----------
+#
+# Jay's two presses: the first asks the idle lead to record where each ticket stands and to write a ready file;
+# the second, once the file says ready, sends /clear and one opening line. Both texts are fixed: only the project
+# key and the ready-file path (both built here from the registry and the clock) are filled in, never Jay's words and
+# never anything read from the file.
+
+READY_DIR = Path(os.environ.get("CCD_LEAD_READY_DIR", LEGACY / "lead-handoffs"))
+READY_MAX = 256                                  # only the first line is ever read
+READY_RE = re.compile(r"^\s*Status:\s*ready\s*$", re.IGNORECASE)
+
+# Evidence notes, never `handoff`: Pipeline.handoff replaces the developer's handoff wholesale (pipeline.py), so a
+# lead's daily notes written that way would hide it (CC-070).
+PREP_TEXT = (
+    "Fresh session prep from Jay via command-center ({project}). Take no new work. For each ticket of {project} "
+    "you hold, record where it stands with `python -m ccd.pipeline_cli evidence KEY --role coordinator --kind note "
+    "--note \"...\"` run from the Command Center server folder; never use `pipeline_cli handoff` for this, it replaces "
+    "the developer's handoff. Make sure no subagent or background job of yours is still running. Then, as your last "
+    "step, run `mkdir -p` for the folder of {path} and write that file: first line exactly `Status: ready`, then a "
+    "short list of where each ticket stands and what comes next. After writing it take no new work and stop; Jay "
+    "clears this session next."
+)
+OPEN_TEXT = (
+    "Fresh session for {project} (Jay, via command-center). Read docs/flow/seats/lead.md in the Command Center repo, "
+    "run `python -m ccd.pipeline_cli tasks {project}` from its server folder, and read yesterday's notes in {path}. "
+    "Then continue as {project}'s lead."
+)
+
+
+def ready_path(key, day=None):
+    """<READY_DIR>/<key>/<YYYY-MM-DD>.md, fixed when the notes request is sent so a midnight rollover cannot move it."""
+    day = day or datetime.now().strftime("%Y-%m-%d")
+    return str(READY_DIR / key / f"{day}.md")
+
+
+def prep_text(project, path):
+    return PREP_TEXT.format(project=project["key"], path=path)
+
+
+def open_text(project, path):
+    return OPEN_TEXT.format(project=project["key"], path=path)
+
+
+def read_ready(path):
+    """(ready, mtime) for the lead's ready file. Safe against a planted file: the project folder and the file must
+    not be symlinks, the file must be a regular one (opened without following links and without blocking), only
+    its first line is read and nothing of it is kept or returned beyond that verdict."""
+    try:
+        if os.path.islink(os.path.dirname(path)) or os.path.dirname(os.path.dirname(path)) != str(READY_DIR):
+            return False, 0.0
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return False, 0.0
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return False, 0.0
+        raw = os.read(fd, READY_MAX)
+    except OSError:
+        return False, 0.0
+    finally:
+        os.close(fd)
+    first = raw.decode("utf-8", "replace").splitlines()[0] if raw else ""
+    return bool(READY_RE.match(first)), st.st_mtime

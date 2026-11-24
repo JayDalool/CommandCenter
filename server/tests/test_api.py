@@ -37,6 +37,8 @@ ALLOWED = {
     ("GET", "/api/development"),
     ("GET", "/api/tasks"), ("POST", "/api/tasks"), ("GET", "/api/tasks/import-preview"),
     ("POST", "/api/tasks/check"), ("POST", "/api/tasks/night-shift"),
+    # CC-070: Jay + Developer Unlock; two fixed messages and /clear to an idle lead, never a Slack or agent path
+    ("POST", "/api/coordinators/fresh"),
     ("GET", "/api/night-shift"), ("POST", "/api/night-shift/end"),
     ("POST", "/api/tasks/ui-test"), ("GET", "/api/ui-tests"), ("POST", "/api/ui-tests/decide"),
     ("GET", "/api/jay/merge"), ("POST", "/api/jay/merge"), ("POST", "/api/jay/go-live"),

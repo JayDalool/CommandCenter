@@ -112,6 +112,12 @@ export class Api {
   nightShift(project: string, copy = false) {
     return this.req<TaskCheckResult>("POST", "/api/tasks/night-shift", copy ? { project, copy: true } : { project });
   }
+  /** Fresh session for a project lead (Developer Unlock, CC-070). Press 1 asks the idle lead to write its notes; press 2,
+   *  once it says ready, clears it and sends one opening line. `step` tells which one happened. */
+  leadFresh(project: string) {
+    return this.req<{ ok: boolean; project: string; coordinator: string; step: "notes" | "started"; message: string }>(
+      "POST", "/api/coordinators/fresh", { project });
+  }
   /** Every project's night shift: running?, coordinator, the newest morning report. */
   nightShiftState() {
     return this.req<NightShiftState>("GET", "/api/night-shift");

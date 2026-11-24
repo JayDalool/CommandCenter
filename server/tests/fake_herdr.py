@@ -28,6 +28,7 @@ class FakeHerdr:
         self.subscriptions = []        # list of (subscription list, writer)
         self.tails = {}                # pane_id -> text
         self.fail_methods = {}         # method -> (code, message)
+        self.on_prompt = None          # called with agent.prompt's params (a test can react to /clear)
         self.dir = tempfile.mkdtemp(prefix="fake-herdr-")
         self.path = os.path.join(self.dir, "herdr.sock")
         self.loop = None
@@ -171,6 +172,8 @@ class FakeHerdr:
                             "pane_id": a["pane_id"], "workspace_id": "wE", "tab_id": "wE:t1", "source": "recent",
                             "format": "text", "text": text, "revision": 1, "truncated": False}}}
                 elif method in ("agent.focus", "agent.prompt", "pane.send_text", "pane.send_keys", "workspace.focus", "tab.focus"):
+                    if method == "agent.prompt" and self.on_prompt:
+                        self.on_prompt(params)
                     reply = {"id": rid, "result": {"type": "ok"}}
                 else:
                     reply = {"id": rid, "error": {"code": "unknown_method", "message": method}}
