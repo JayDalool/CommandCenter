@@ -44,10 +44,12 @@ class ProjectSlots(Base):
         )
         self.assertEqual(self.pl.project_slots("samvision"), [blocked, reviewing, merging, verifying])
         queued = self.ticket(description="A new feature")
-        with self.assertRaisesRegex(TaskError, "4 of 4 work slots"):
-            self.pl.intake(queued, "standard", ["The feature is visible"], "agent:coordinator", priority="MEDIUM")
+        # A full project still takes the ticket and its definition; only admission to agent work waits.
+        self.pl.intake(queued, "standard", ["The feature is visible"], "agent:coordinator", priority="MEDIUM")
         self.assertIn(self.ts.get(queued)["status"], ("INBOX", "PROPOSED"))
-        self.assertIsNone(self.pl.work(queued)["size"])
+        self.assertEqual(self.ts.get(queued)["priority"], "MEDIUM")
+        self.assertEqual(self.pl.work(queued)["size"], "standard")
+        self.assertNotIn(queued, self.pl.project_slots("samvision"))
 
         other, _ = self.ts.create("gyst", "Independent work")
         self.pl.plan(other["key"], PLAN, "agent:planner")

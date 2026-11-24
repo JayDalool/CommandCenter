@@ -1580,11 +1580,21 @@ class Daemon(LeadChat, HqDaemon):
         if actor != "jay":
             self._not_paused(project, "agent work")
         status = fields.get("status")
+        queued = None
         if self.pipeline and status in tasks_mod.ALL_STATUSES and status not in pipeline_mod.PROJECT_SLOT_EXCLUDED:
-            self._wrap(self.pipeline.check_project_admission, project)
+            # CC-076, Jay 2026-11-24: creating a task always makes it. The four slots cap agent work, so a ticket
+            # asked for straight into an active stage while the project is full is made in the backlog instead.
+            try:
+                self.pipeline.check_project_admission(project)
+            except tasks_mod.TaskError as e:
+                if e.status != 409:
+                    raise
+                fields["status"], queued = "INBOX", e.message
         ticket, changes = self._wrap(ts.create, project, body.get("title"), actor, **fields)
-        self._task_event("task.created", ticket, f"created · {ticket['title']}", {"status": ticket["status"]})
-        return self._with_work([ticket])[0]
+        self._task_event("task.created", ticket, f"created · {ticket['title']}",
+                         {"status": ticket["status"], **({"queued": queued} if queued else {})})
+        out = self._with_work([ticket])[0]
+        return {**out, "queued": queued} if queued else out
 
     # What decides a pipeline ticket's gates and stage. On a ticket in the pipeline these move
     # only through pipeline steps — or by Jay with Developer Unlock, as an explicit override.

@@ -78,7 +78,9 @@ Never put secrets, tokens, customer data, licensed data or pasted terminal outpu
 
 - Per project: admit at most four tickets beyond the backlog. Tickets in review, ready to merge or blocked still
   take a slot. A verified merge waiting only for release no longer takes an engineering slot. Existing work can
-  continue when importing or reopening tickets puts the project above four, and new intake waits.
+  continue when importing or reopening tickets puts the project above four. The cap is on agent
+  work only: a new ticket is always made, and its intake (size, criteria, priority) is always saved. While all four
+  slots are in use it waits in the backlog, and the lead runs `intake` again when a slot opens to admit it.
 - Within those four: at most 2 tickets in Investigate and 2 in Build.
 - Finishing first: no `start` and no first `plan` while another ticket in the same project has waited more than
   4 hours in Technical review, User check or Code review with nobody in that seat. Fill that seat instead.

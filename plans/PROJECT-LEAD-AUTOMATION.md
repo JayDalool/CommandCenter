@@ -20,6 +20,8 @@ Each project gets four engineering slots. Work in investigation, build, review,
 ready to merge, blocked, or waiting for a decision uses a slot. A merged ticket
 with passing verification and only release work left frees its engineering slot.
 Its deployment still belongs on the release list.
+The cap is on agent work only. Creating a ticket and writing its intake always
+succeed; a full project keeps the new ticket in the backlog until a slot opens.
 
 ### Blocked work
 

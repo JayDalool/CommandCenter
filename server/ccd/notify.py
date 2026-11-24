@@ -144,7 +144,7 @@ LEAD_ICON, CTO_ICON = ":compass:", ":office:"
 # The steps a ticket's thread shows: each seat's result, the gates, and what happened to it. Not the many small
 # records (criteria edits, evidence, findings one by one, writer checkpoints, stale marks).
 TEAM_KINDS = frozenset({
-    "pipeline.intake", "pipeline.role", "pipeline.plan", "pipeline.plan_reviewed", "pipeline.plan_accepted",
+    "pipeline.intake", "pipeline.intake_queued", "pipeline.role", "pipeline.plan", "pipeline.plan_reviewed", "pipeline.plan_accepted",
     "pipeline.replan", "pipeline.started", "pipeline.handoff", "pipeline.user_checked", "pipeline.review",
     "pipeline.rework", "pipeline.blocked", "pipeline.questions", "pipeline.answered", "pipeline.gate_opened",
     "pipeline.gate_confirmed", "pipeline.ready_to_merge", "pipeline.unreviewed_merge", "pipeline.verified",

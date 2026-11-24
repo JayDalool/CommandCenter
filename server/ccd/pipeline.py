@@ -1684,6 +1684,17 @@ class Pipeline:
                 raise TaskError(400, f"intake needs a priority: {', '.join(PRIORITY_SET)}")
             due_at = clean_due(due, at) if due is not None else (t["dueAt"] or due_by_size(eff, at))
             to = "build" if eff == "small" else "investigate"
+            slots = self.project_slots(t["project"])
+            if len(slots) >= MAX_PROJECT_WORK:
+                # CC-076, Jay 2026-11-24: the four slots cap agent work, not ticket making. A full project still
+                # takes the ticket's definition; it waits in the backlog and the lead runs intake again to admit it.
+                self._flow_set(tid, at, size=eff, criteria=crit, requirements=reqs, review_due=None)
+                fields = {"priority": prio, "dueAt": due_at, **({"parent": parent} if parent else {})}
+                said = (f"intake queued: {eff}; {len(slots)} of {MAX_PROJECT_WORK} work slots in use "
+                        f"({', '.join(slots[:MAX_PROJECT_WORK])}), so it waits in the backlog")
+                return fields, {}, [("pipeline.intake_queued", said, {"size": eff, "asked": size, "criteria": len(crit),
+                                                                      "priority": prio, "due": due_at,
+                                                                      "slots": len(slots)})]
             fields = {"status": "READY_TO_IMPLEMENT" if eff == "small" else "RESEARCHING", "priority": prio,
                       "dueAt": due_at}
             if parent:

@@ -478,8 +478,12 @@ class PipelineApi(Automation):
         attempt = self.client.patch(f"/api/tasks/{key}", headers=JSON, json={"status": "RESEARCHING"})
         self.assertEqual(attempt.status_code, 409, attempt.text)
         self.assertEqual(self.tickets.get(key)["status"], "INBOX")
+        # Creating a task always makes it: asked for straight into an active stage, it lands in the backlog.
         direct = self.post("/api/tasks", {"project": "samvision", "title": "Active feature", "status": "RESEARCHING"})
-        self.assertEqual(direct.status_code, 409, direct.text)
+        self.assertEqual(direct.status_code, 201, direct.text)
+        self.assertEqual(direct.json()["status"], "INBOX")
+        self.assertIn("4 of 4 work slots", direct.json()["queued"])
+        self.assertEqual(len(self.daemon.pipeline.project_slots("samvision")), 4)
 
     def test_a_ticket_travels_plan_to_done_and_every_step_is_attributed(self):
         self.ticket("INBOX")
