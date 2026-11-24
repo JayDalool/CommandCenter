@@ -375,7 +375,7 @@ whose ref is well formed and whose repository is on the ticket's project allow l
 (`TaskStore.explicit_pr_links`); only such a link satisfies `start`'s native-branch rule, wins over key-led linking, or is
 polled in another repository. Rules that follow: (1) a PR with an explicit link belongs to those tickets only; a title or
 branch that leads with another key does not link it to a second ticket (PRs with no explicit link link exactly as before);
-(2) for an explicit link a merge counts only if GitHub's `mergedAt` is after the link was made, so an old merge never
+(1b) that ownership holds for every consumer: review, user check, rework, auto-merge and Merge ready only choose a PR whose explicit owners include the ticket (auto-merge re-checks just before merging); (1c) another repo's PR counts only on a successful, recent read, so a failed refresh drops it; (2) for an explicit link a merge counts only if GitHub's `mergedAt` is after the link was made, so an old merge never
 sends the ticket to VERIFYING; (3) the actor is self-asserted (`X-CCD-Actor`; a call with no header is `jay`), so
 "lead-only" is as strong as that header, as for every step. Agent `POST /api/tasks/{key}/links` rows are **not** display
 only: for a PR in the project's own repo they still feed review and user-check PR choice, IN_REVIEW and VERIFYING exactly

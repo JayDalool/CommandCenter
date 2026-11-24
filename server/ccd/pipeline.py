@@ -884,11 +884,15 @@ class Pipeline:
         """Record the explicit link (idempotent). A row this ticket already has from an agent or ccd's own linking
         becomes the lead's, with a fresh created_at: the merge-after-link rule and the helper then read it as explicit
         (N1). Returns the pipeline.linked event, or None when the lead's own row already existed."""
-        row = self.db.execute("SELECT id, created_by FROM ticket_links WHERE ticket_id=? AND provider='github' AND "
-                              "kind='pr' AND lower(ref)=lower(?)", (tid, canon)).fetchone()
-        if row and row[1] in LEADS:
+        rows = self.db.execute("SELECT id, created_by, ref FROM ticket_links WHERE ticket_id=? AND provider='github' "
+                               "AND kind='pr' AND lower(ref)=lower(?) ORDER BY id", (tid, canon)).fetchall()
+        if any(r[1] in LEADS for r in rows):
             return None
         url, title = github.pr_ref_url(canon), _printable(str(info.get("title") or ""), 300, "title")
+        # Links are unique by exact spelling, so several case variants of one PR can sit on a ticket. Promote the
+        # exact-canon row when there is one (renaming another could collide with it, an IntegrityError); else the
+        # oldest. Both happen in this one transaction.
+        row = next((r for r in rows if r[2] == canon), rows[0] if rows else None)
         if row:
             self.db.execute("UPDATE ticket_links SET ref=?, url=?, title=?, created_at=?, created_by=? WHERE id=?",
                             (canon, url, title, at, actor, row[0]))

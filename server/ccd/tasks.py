@@ -1310,7 +1310,7 @@ class TaskStore:
 
     def explicit_keys(self, ref):
         """The tickets explicitly linked to this PR ref (see explicit_pr_links)."""
-        return [r["key"] for r in self.explicit_pr_links(ref=ref)]
+        return list(dict.fromkeys(r["key"] for r in self.explicit_pr_links(ref=ref)))
 
     def last_status_event(self, key):
         """The newest status change: {actor, from, to, trigger}. A manual edit has no trigger; every

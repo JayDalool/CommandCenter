@@ -47,11 +47,16 @@ At the end: the closing note.
 ccd links a PR to a ticket by itself only when the key LEADS the PR's title or branch. For a repo-native branch (SamVision's
 `SV-118-advisor-typed-guard`) or a PR in another repository (Command Center tickets for `JayDalool/jay-dev`), you link it:
 
-1. The PR must be open and seen by ccd's last GitHub poll (wait one poll after it opens), and linked to no other open ticket.
+1. The PR must be open and linked to no other open ticket. Own repository: ccd must have seen it open in its last GitHub poll
+   (wait one poll after it opens). Another allow-listed repository: ccd reads that one PR itself when you link or start,
+   and refuses if the read fails or the PR is merged or closed.
 2. `pipeline_cli link KEY --role coordinator --pr owner/repo#N`, or give the same `--pr` to `start`, which links in the same step.
 3. `start --branch <the PR's head branch>`: a native branch is accepted only when it is that head branch.
-4. Only your link (or Jay's) counts; an agent's `/links` row never does. The repository must be on the project's allow list
-   (`registry.py` `link_repos`; Command Center: `JayDalool/jay-dev`); Jay approves additions.
+4. Only a link made by you or Jay counts as explicit, and the actor is self-asserted (`X-CCD-Actor`), so this is as strong as
+   that header. An explicit link makes the PR that ticket's alone for polling, review, user check, rework, auto-merge and Merge
+   ready. An agent's `/links` row is not explicit: for a PR with no explicit owner it still counts in its own repository as
+   before. The repository must be on the project's allow list (`registry.py` `link_repos`; Command Center:
+   `JayDalool/jay-dev`); Jay approves additions.
 5. A merge counts only after you linked the PR. ccd never merges a PR in another repository: it is Jay's, by hand.
 Full rules: `docs/API.md` (explicit links).
 

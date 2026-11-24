@@ -476,6 +476,27 @@ class ExplicitLinks(Base):
             self.pl.link(k, ref, "agent:coordinator", seen=lambda r: {"state": "OPEN", "branch": "b"})   # idempotent
             self.assertEqual(self.ts.explicit_pr_links(key=k)[0]["createdAt"], before)
 
+    def test_case_variants_of_one_pr_on_a_ticket_promote_in_one_transaction(self):
+        k = self.planned()
+        self.ts.link(k, "github", "pr", self.REF.lower(), None, "x", "agent:implementer")   # older, lowercase first
+        self.ts.link(k, "github", "pr", self.REF, None, "x", "system:automation")
+        self.pl.link(k, self.REF, "agent:coordinator", seen=self.seen())
+        leads = [r for r in self.rows(k) if r[1] == "agent:coordinator"]
+        self.assertEqual(leads, [(self.REF, "agent:coordinator")])
+        self.assertEqual(len(self.ts.explicit_pr_links(key=k)), 1)
+
+    def test_N1_the_promoted_row_gets_a_fresh_created_at_from_either_source(self):
+        import time
+        for creator in ("agent:implementer", "system:automation"):
+            k = self.planned()
+            ref = f"JayDalool/SamVisionAI#{500 + int(k[-3:])}"
+            self.ts.link(k, "github", "pr", ref, None, "x", creator)
+            old = time.time() - 3600
+            self.ts.db.execute("UPDATE ticket_links SET created_at=? WHERE ref=?", (old, ref))
+            self.pl.link(k, ref, "agent:coordinator", seen=lambda r: {"state": "OPEN", "branch": "b"})
+            [row] = self.ts.explicit_pr_links(key=k)
+            self.assertGreater(row["createdAt"], old + 3000, creator)
+
     def test_R6_a_native_branch_starts_only_on_the_linked_prs_head_branch(self):      # R6
         k = self.planned()
         with self.assertRaises(TaskError) as e:                              # no lead link

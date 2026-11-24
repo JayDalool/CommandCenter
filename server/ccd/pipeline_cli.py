@@ -40,8 +40,9 @@ The delivery flow (docs/flow/FLOW.md). Each line runs as the seat named in brack
 
 `link` (CC-071) is the lead's, or Jay's: it records, explicitly, the PR a ticket belongs to when the PR's branch does not
 lead with the ticket key (SamVision's SV-118-*) or lives in another repository on the project's allow list
-(Command Center: JayDalool/jay-dev). The PR must be open and seen by ccd's last GitHub poll, and linked to no other open
-ticket. `start` with a repo-native branch needs that link (or `--pr`, which links in the same step) and the branch must
+(Command Center: JayDalool/jay-dev). The PR must be open and linked to no other open
+ticket (own repo: seen by the last poll; another repo: ccd reads it once and needs a successful read). Only the lead's or
+Jay's link counts as explicit, and the actor is self-asserted. `start` with a repo-native branch needs that link (or `--pr`, which links in the same step) and the branch must
 be the PR's head branch.
 
 `criteria` replaces the whole list: repeat every criterion you keep (as its text; an unchanged text keeps its state).

@@ -1166,4 +1166,127 @@ class ExplicitLinks(Automation):
             self.pr_node[f"JayDalool/jay-dev#{n}"] = {"number": n, "state": "OPEN", "headRefName": "b", "title": "t"}
         self.poll()
         self.assertEqual(len(self.pr_reads), 20)
+        self.poll()                                    # the next poll starts with the PRs the cap left out
+        self.assertEqual(len(set(self.pr_reads)), 22, "every eligible PR is read within two polls")
         self.assertTrue(any(e["kind"] == "daemon.linked_capped" for e in self.get("/api/activity?limit=200").json()["events"]))
+
+    def iso(self, epoch):
+        import datetime
+        return datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def test_N1_promotion_takes_a_fresh_created_at_from_either_source(self):                   # N1 (strong)
+        import time
+        for number, creator in ((90, "agent:implementer"), (91, "system:automation")):
+            ref = f"JayDalool/SamVisionAI#{number + 170}"
+            key = f"SV-{number:03d}"
+            self.tickets.create("samvision", f"t{number}", number=number, status="IN_REVIEW")
+            self.open_prs((number + 170, f"x-{number}", self.HEAD, "no key here"))
+            self.tickets.link(key, "github", "pr", ref, None, "x", creator)
+            old = time.time() - 3600
+            self.tickets.db.execute("UPDATE ticket_links SET created_at=? WHERE provider='github' AND ref=?", (old, ref))
+            self.tickets.db.commit()
+            self.assertEqual(self.step("link", {"pr": ref}, key=key).status_code, 200)
+            [row] = self.tickets.explicit_pr_links(key=key)
+            self.assertGreater(row["createdAt"], old + 3000, creator)       # fresh, not the original timestamp
+            self.gh.data["samvision"]["prs"] = []
+            # a merge between the original row and the promotion must not count...
+            self.gh.data["samvision"]["merged"] = [{"number": number + 170, "title": "x", "url": "u",
+                                                    "mergedAt": self.iso(old + 1800)}]
+            self.poll()
+            self.assertEqual(self.tickets.get(key)["status"], "IN_REVIEW", creator)
+            # ...one after it does
+            self.gh.data["samvision"]["merged"][0]["mergedAt"] = self.future()
+            self.poll()
+            self.assertEqual(self.tickets.get(key)["status"], "VERIFYING", creator)
+
+    def test_High1_a_plain_link_elsewhere_never_makes_an_owned_pr_eligible(self):             # N2 downstream
+        self.planned(87)
+        self.open_prs((249, self.BRANCH, self.HEAD, "Typed guard"))
+        self.assertEqual(self.step("link", {"pr": self.REF}).status_code, 200)
+        self.tickets.create("samvision", "plain", number=119, status="IN_REVIEW")
+        self.tickets.link("SV-119", "github", "pr", self.REF, None, "x", "agent:implementer")
+        t87, t119 = self.tickets.get("SV-087"), self.tickets.get("SV-119")
+        self.assertEqual([p["ref"] for p in self.daemon._open_prs(t87)], [self.REF])
+        self.assertEqual((self.daemon._open_prs(t119), self.daemon._linked_prs(t119), self.daemon._pr_state(t119)),
+                         ([], [], None))
+        # with no explicit owner the legacy same-repo behaviour is unchanged
+        self.open_prs((300, "plain-300", self.HEAD, "no key"))
+        self.tickets.link("SV-119", "github", "pr", "JayDalool/SamVisionAI#300", None, "x", "agent:implementer")
+        self.assertEqual([p["ref"] for p in self.daemon._open_prs(self.tickets.get("SV-119"))],
+                         ["JayDalool/SamVisionAI#300"])
+
+    def test_High2_a_failed_refresh_never_leaves_an_old_open_pr_deciding(self):               # High 2
+        self.add_cc_project()
+        cc = self.planned(1, "commandcenter")
+        self.pr_node[self.JD] = {"number": 10, "title": "t", "state": "OPEN", "isDraft": False, "headRefName": "feature/jd",
+                                 "headRefOid": self.HEAD, "statusCheckRollup": [{"state": "SUCCESS"}]}
+        self.assertEqual(self.step("link", {"pr": self.JD}).status_code, 200)
+        good = dict(self.pr_node[self.JD])
+        del self.pr_node[self.JD]                                      # GitHub now fails for this PR
+        r = self.step("start", {"branch": "feature/jd", "worktree": "/srv/server/worktrees/cc/CC-001"})
+        self.assertEqual((r.status_code, self.tickets.get(cc)["status"]), (409, "READY_TO_IMPLEMENT"), r.text)
+        self.pr_node[self.JD] = good
+        self.assertEqual(self.step("start", {"branch": "feature/jd", "worktree": "/srv/server/worktrees/cc/CC-001"}).status_code, 200)
+        self.poll()
+        self.assertEqual(len(self.daemon._linked_prs(self.tickets.get(cc))), 1)
+        del self.pr_node[self.JD]
+        self.poll()                                                    # the refresh fails
+        self.assertEqual(self.daemon._linked_prs(self.tickets.get(cc)), [])
+        self.pr_node[self.JD] = good
+        self.poll()
+        self.assertEqual(len(self.daemon._linked_prs(self.tickets.get(cc))), 1)
+        self.daemon.gh_linked[self.JD.lower()]["asOf"] -= 100000       # too old to act on
+        self.assertEqual(self.daemon._linked_prs(self.tickets.get(cc)), [])
+
+    def test_a_successful_foreign_read_advances_its_ticket_while_the_own_poll_is_failing(self):
+        self.add_cc_project()
+        cc = self.planned(1, "commandcenter")
+        self.pr_node[self.JD] = {"number": 10, "title": "t", "state": "OPEN", "isDraft": False, "headRefName": "feature/jd",
+                                 "headRefOid": self.HEAD, "statusCheckRollup": [{"state": "SUCCESS"}]}
+        self.step("link", {"pr": self.JD})
+        self.step("start", {"branch": "feature/jd", "worktree": "/srv/server/worktrees/cc/CC-001"})
+        self.gh.fail = True
+        self.poll()
+        self.assertEqual(self.tickets.get(cc)["status"], "IN_REVIEW")
+
+    def test_merge_dedup_is_by_the_full_pr_ref(self):
+        cc = self.tickets.create("commandcenter", "cc", status="IN_REVIEW")[0]["key"]
+        own = "JayDalool/CommandCenter#10"
+        self.tickets.link(cc, "github", "pr", own, None, "x", "system:automation")
+        self.daemon._automate_merged_pr(own, 10, None, self.future(-1))
+        self.assertEqual(self.tickets.get(cc)["status"], "VERIFYING")
+        self.tickets.update(cc, {"status": "IN_PROGRESS"}, "jay")
+        self.tickets.update(cc, {"status": "IN_REVIEW"}, "jay")
+        self.daemon._automate_merged_pr(own, 10, None, self.future(-1))      # replay of the same merge: ignored
+        self.assertEqual(self.tickets.get(cc)["status"], "IN_REVIEW")
+        self.tickets.link(cc, "github", "pr", self.JD, None, "x", "agent:coordinator")
+        self.daemon._automate_merged_pr(self.JD, 10, None, self.future())    # same number, another repo: counts
+        self.assertEqual(self.tickets.get(cc)["status"], "VERIFYING")
+        self.tickets.update(cc, {"status": "IN_PROGRESS"}, "jay")
+        self.tickets.update(cc, {"status": "IN_REVIEW"}, "jay")
+        self.daemon._automate_merged_pr(self.JD, 10, None, self.future())    # and its own replay is ignored
+        self.assertEqual(self.tickets.get(cc)["status"], "IN_REVIEW")
+
+    def test_c5_standard_cross_repo_ticket_is_user_checked_and_reviewed_on_the_foreign_pr(self):   # c5 (strong)
+        self.add_cc_project()
+        key = self.key = "CC-001"
+        self.tickets.create("commandcenter", "feature", number=1, status="INBOX", description="Needs a check")
+        self.step("intake", {"size": "standard", "criteria": ["Five comps show"], "priority": "HIGH"})
+        self.step("plan", {"plan": {"summary": "the feature"}, "session": "inv-1"}, "agent:planner")
+        r = self.step("plan-review", {"verdict": "APPROVE", "note": "ok", "session": "tr-1"}, "agent:tech-reviewer")
+        self.assertEqual(r.json()["status"], "READY_TO_IMPLEMENT", r.text)
+        self.pr_node[self.JD] = {"number": 10, "title": "t", "state": "OPEN", "isDraft": False, "headRefName": "feature/jd",
+                                 "headRefOid": self.HEAD, "statusCheckRollup": [{"state": "SUCCESS"}]}
+        self.assertEqual(self.step("link", {"pr": self.JD}).status_code, 200)
+        self.assertEqual(self.step("start", {"branch": "feature/jd", "worktree": "/srv/server/worktrees/cc/CC-001"}).status_code, 200)
+        self.poll()
+        self.assertEqual(self.tickets.get(key)["status"], "IN_REVIEW")
+        r = self.step("user-check", {"result": "pass", "head": self.HEAD, "note": "tried it", "session": "ur-1",
+                                     "criteria": ["c1=pass"]}, "agent:user-reviewer")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["userCheck"]["pr"], self.JD)
+        r = self.step("review", {"verdict": "APPROVE", "head": self.HEAD, "session": "cr-1"}, "agent:reviewer")
+        self.assertEqual((r.json()["status"], r.json()["review"]["pr"]), ("READY_TO_MERGE", self.JD), r.text)
+        self.pr_node[self.JD] = dict(self.pr_node[self.JD], state="MERGED", mergedAt=self.future())
+        self.poll()
+        self.assertEqual(self.tickets.get(key)["status"], "VERIFYING")

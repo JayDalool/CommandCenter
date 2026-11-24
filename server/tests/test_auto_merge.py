@@ -583,3 +583,30 @@ class ForeignPr(Base):
         self.assertEqual(len(self.gh.of("merge")), 1)
         self.assertTrue(k)
 
+    def other_owner(self, ref):
+        t, _ = self.tickets.create("commandcenter", "the PR's real owner")
+        self.tickets.link(t["key"], "github", "pr", ref, None, "x", "agent:coordinator")
+        return t["key"]
+
+    async def test_High1_a_pr_explicitly_owned_by_another_ticket_is_held_and_skipped(self):
+        k = self.ready(number=7)                     # plain system link on k
+        owner = self.other_owner("JayDalool/CommandCenter#7")
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.calls, [])
+        self.assertIn("explicitly linked to another ticket", self.daemon.pipeline.work(k)["gateReason"])
+        self.assertTrue(owner)
+
+    async def test_High1_merge_batch_names_the_owner_rule(self):
+        k = self.ready(number=7)
+        self.other_owner("JayDalool/CommandCenter#7")
+        ready, skipped = self.daemon.merge_batch("commandcenter")
+        self.assertEqual((ready, [s_["key"] for s_ in skipped]), ([], [k]))
+        self.assertIn("explicitly linked to another ticket", skipped[0]["reason"])
+
+    async def test_High1_ownership_is_rechecked_just_before_the_merge(self):
+        k = self.ready(number=7)
+        self.gh.on_view = lambda: self.other_owner("JayDalool/CommandCenter#7")   # appears while `gh pr view` runs
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertEqual(self.daemon.pipeline.work(k)["gate"], "merge")
+

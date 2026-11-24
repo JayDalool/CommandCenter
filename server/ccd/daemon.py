@@ -402,6 +402,7 @@ class Daemon(LeadChat, HqDaemon):
         self.github_pr_fn = github_pr_fn or sources.github_pr
         self.gh_linked = {}
         self._linked_seen = {}
+        self._linked_tried = {}
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
         self.git_fn = git_fn or self._git_collect
@@ -700,7 +701,9 @@ class Daemon(LeadChat, HqDaemon):
                 ref = self._foreign_ref(r["project"], r["ref"])
                 if ref:
                     wanted.setdefault(ref.lower(), ref)
-        refs = sorted(wanted.values())
+        # Least recently attempted first (a failing ref still moves to the back), so a cap never starves the same
+        # PRs poll after poll (CC-071 review).
+        refs = sorted(wanted.values(), key=lambda r: (self._linked_tried.get(r.lower(), 0), r))
         if len(refs) > self.LINKED_PR_CAP:
             log.warning(json.dumps({"msg": "linked PR poll capped", "cap": self.LINKED_PR_CAP, "wanted": len(refs)}))
             self._event("github", "daemon.linked_capped",
@@ -711,11 +714,13 @@ class Daemon(LeadChat, HqDaemon):
 
     async def _read_linked(self, ref):
         slug, _, num = ref.rpartition("#")
+        self._linked_tried[ref.lower()] = _now()
         node = await asyncio.to_thread(self.github_pr_fn, slug, int(num))
         old = self.gh_linked.get(ref.lower()) or {}
         if not isinstance(node, dict) or "error" in node:
             err = str((node or {}).get("error") if isinstance(node, dict) else "unreadable")[:160]
-            self.gh_linked[ref.lower()] = {"ref": ref, "pr": old.get("pr"), "error": err, "asOf": old.get("asOf") or 0}
+            # The old node is dropped, not kept: nothing may act on a PR whose refresh failed (CC-071 review).
+            self.gh_linked[ref.lower()] = {"ref": ref, "pr": None, "error": err, "asOf": old.get("asOf") or 0}
         else:
             self.gh_linked[ref.lower()] = {"ref": ref, "pr": node, "error": None, "asOf": _now()}
 
@@ -1684,6 +1689,13 @@ class Daemon(LeadChat, HqDaemon):
         w["project"] = self.tasks.get(w["key"])["project"]
         return w
 
+    def _eligible(self, key, ref):
+        """CC-071: a PR with an explicit owner belongs to those tickets only, for EVERY consumer (review, user check,
+        rework, auto-merge, Merge ready), not just the poll. A plain link on another ticket never makes it eligible
+        there. A PR with no explicit owner keeps the legacy same-repo behaviour."""
+        owners = self.tasks.explicit_keys(ref)
+        return not owners or key in owners
+
     def _open_prs(self, ticket):
         """The ticket's linked PRs that the last GitHub poll saw open, as pipeline PR states."""
         g = (self.gh.get(ticket["project"]) or {}).get("data") or {}
@@ -1695,7 +1707,7 @@ class Daemon(LeadChat, HqDaemon):
         out = []
         for pr in g.get("prs") if isinstance(g.get("prs"), list) else []:
             ref = f"{repo}#{pr.get('number')}"
-            if ref.lower() in refs:
+            if ref.lower() in refs and self._eligible(ticket["key"], ref):
                 ci = model.ci_mark(pr.get("statusCheckRollup"))
                 out.append({"ref": ref, "head": pr.get("headRefOid") or "", "ciGreen": ci in ("✓", "–"),
                             "ciNone": ci == "–", "draft": bool(pr.get("isDraft"))})
@@ -1707,12 +1719,22 @@ class Daemon(LeadChat, HqDaemon):
         out = self._open_prs(ticket)
         for r in self.tasks.explicit_pr_links(key=ticket["key"]):
             ref = self._foreign_ref(ticket["project"], r["ref"])
-            node = ((self.gh_linked.get(ref.lower()) if ref else None) or {}).get("pr")
+            node = self._fresh_linked(ref) if ref else None
             if node and node.get("state") == "OPEN":
                 ci = model.ci_mark(node.get("statusCheckRollup"))
                 out.append({"ref": r["ref"], "head": node.get("headRefOid") or "", "ciGreen": ci in ("✓", "–"),
                             "ciNone": ci == "–", "draft": bool(node.get("isDraft"))})
         return out
+
+    def _fresh_linked(self, ref):
+        """The last read of a PR in another repo, only when it succeeded and is recent; else None. A failed refresh
+        must never leave an old OPEN node deciding a link, a start, a review or a user check (CC-071)."""
+        ent = self.gh_linked.get(ref.lower())
+        if not ent or ent.get("error") or not ent.get("pr"):
+            return None
+        if _now() - (ent.get("asOf") or 0) > max(600, 3 * float(self.cfg.get("github_seconds") or 0)):
+            return None
+        return ent["pr"]
 
     def _pr_state(self, ticket):
         prs = self._linked_prs(ticket)
@@ -1727,15 +1749,17 @@ class Daemon(LeadChat, HqDaemon):
         def seen(ref):
             slug, _, num = ref.rpartition("#")
             if slug.lower() == own.lower():
-                data = (self.gh.get(project) or {}).get("data") or {}
+                g = self.gh.get(project) or {}
+                if g.get("error"):
+                    return None          # the last poll failed: its lists may be old
+                data = g.get("data") or {}
                 for state, rows in (("OPEN", data.get("prs")), ("MERGED", data.get("merged"))):
                     for pr in rows if isinstance(rows, list) else []:
                         if isinstance(pr, dict) and str(pr.get("number")) == num:
                             return {"state": state, "branch": pr.get("headRefName"), "title": pr.get("title")}
                 return None
-            ent = self.gh_linked.get(ref.lower())
-            node = (ent or {}).get("pr")
-            if not node or _now() - (ent.get("asOf") or 0) > 600:
+            node = self._fresh_linked(ref)
+            if not node:
                 return None
             return {"state": node.get("state"), "branch": node.get("headRefName"), "title": node.get("title")}
         return seen
@@ -3018,7 +3042,8 @@ class Daemon(LeadChat, HqDaemon):
                     self._automate_merged_pr(ref, m["number"], (m.get("mergeCommit") or {}).get("oid"), m.get("mergedAt"))
                 except Exception as e:  # noqa: BLE001
                     log.warning(json.dumps({"msg": "ticket automation skipped a merge", "error": repr(e)[:200]}))
-            self._automate_linked(p["key"])
+        # Another repo's PRs advance on their own successful reads, even while a project's own poll is failing.
+        self._automate_linked()
 
     def _automate_open_pr(self, pr, ref, n, keys):
         """One open PR → its tickets (the per-PR body of _ticket_automation, shared with explicitly linked PRs of
@@ -3065,7 +3090,6 @@ class Daemon(LeadChat, HqDaemon):
 
     def _automate_merged_pr(self, ref, number, merge_oid, merged_at):
         """One merged PR → its tickets (the per-merge body of _ticket_automation, shared with CC-071's linked PRs)."""
-        why = f"PR #{number} merged"
         # CC-071: for an explicit link only those tickets count, and only a merge AFTER the link was made: a PR that
         # merged before the lead linked it (a stale or wrong link) must never send the ticket on to VERIFYING.
         explicit = {r["key"]: r["createdAt"] for r in self.tasks.explicit_pr_links(ref=ref)}
@@ -3075,6 +3099,12 @@ class Daemon(LeadChat, HqDaemon):
         else:
             keys = self.tasks.keys_linked("github", "pr", ref)
         for k in keys:
+            # PR numbers repeat across repositories. Another repo's PR names its full ref in the trigger so a merge
+            # of jay-dev#10 is not mistaken for the earlier merge of #10 here; an own-repo PR keeps "PR #N merged",
+            # so records written before this change still stop a replay.
+            project = self.tasks.get(k)["project"]
+            own = ref.rpartition("#")[0].lower() == self._own_repo(project).lower()
+            why = f"PR #{number} merged" if own else f"PR {ref} merged"
             # A merge moves a ticket once. GitHub keeps listing a merged PR for a while, so after a
             # reopen or rework the old merge must not send the ticket on to VERIFYING again.
             if self.tasks.moved_by(k, "VERIFYING", why) or (
@@ -3106,13 +3136,13 @@ class Daemon(LeadChat, HqDaemon):
                 return f"{allowed}#{num}"
         return None
 
-    def _automate_linked(self, project):
+    def _automate_linked(self):
         """Part D: the explicitly linked PRs of other repos, as the last linked poll read them, through the same
         per-PR and per-merge bodies as the project's own PRs. Each entry runs once per read."""
         for r in self.tasks.explicit_pr_links():
             ref = r["ref"]
             ent = self.gh_linked.get(ref.lower())
-            if r["project"] != project or not ent or not ent.get("pr") or self._foreign_ref(project, ref) is None \
+            if not ent or not ent.get("pr") or ent.get("error") or self._foreign_ref(r["project"], ref) is None \
                     or self._linked_seen.get(ref.lower()) == ent["asOf"]:
                 continue
             self._linked_seen[ref.lower()] = ent["asOf"]
@@ -3216,6 +3246,10 @@ class Daemon(LeadChat, HqDaemon):
             # one of this repo's open PRs and no gh call: Jay merges it.
             self._auto_merge_hold(t, head, f"the reviewed PR is in {rv['pr'].rpartition('#')[0]}; Jay merges it")
             return
+        if rv.get("pr") and not self._eligible(key, rv["pr"]):
+            # CC-071: the reviewed PR is explicitly another ticket's; a plain link here never makes it ours to merge.
+            self._auto_merge_hold(t, head, f"{rv['pr']} is explicitly linked to another ticket; Jay merges it")
+            return
         open_prs = [p["ref"] for p in self._open_prs(t)]
         pr_ref = rv["pr"] if rv.get("pr") and rv["pr"].rpartition("#")[0] == repo else (open_prs[0] if len(open_prs) == 1 else None)
         number = (pr_ref or "").rpartition("#")[2]
@@ -3259,6 +3293,9 @@ class Daemon(LeadChat, HqDaemon):
         w2 = self.pipeline.work(key)
         if t2["status"] != "READY_TO_MERGE" or w2["gate"] or w2["review"]["head"] != head \
                 or w2["review"]["verdict"] != "APPROVE":
+            return
+        if not self._eligible(key, pr_ref):      # re-checked here: a link may have changed while gh ran
+            self._auto_merge_hold(t2, head, f"{pr_ref} is explicitly linked to another ticket; Jay merges it")
             return
         late = merge_policy.ticket_reasons(t2, w2)
         if late:
@@ -3688,11 +3725,13 @@ class Daemon(LeadChat, HqDaemon):
             ref = rv.get("pr") or (next(iter(prs)) if len(prs) == 1 else None)
             pr = prs.get(ref) if ref else None
             foreign = bool(ref) and ref.rpartition("#")[0].lower() != self._own_repo(project).lower()
+            taken = bool(ref) and not foreign and not self._eligible(t["key"], ref)
             # A convenience press, never a bypass: an open gate other than the merge gate itself (plan, UI,
             # deploy, failure) keeps the ticket out, exactly as it would keep it out of a merge by hand.
             reason = ("an open " + str(w["gate"]) + " gate" if w["gate"] not in (None, "merge")
                       else "no approved review" if rv["verdict"] != "APPROVE" or not rv["head"]
                       else "its PR is in another repository; merge it by hand" if foreign
+                      else "its PR is explicitly linked to another ticket" if taken
                       else "its PR is not open (or several are linked)" if not pr
                       else "the PR head changed since the review" if pr["head"] != rv["head"]
                       else "CI is not green" if not pr["ciGreen"]
