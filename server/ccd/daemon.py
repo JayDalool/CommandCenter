@@ -403,6 +403,8 @@ class Daemon(LeadChat, HqDaemon):
         self.gh_linked = {}
         self._linked_seen = {}
         self._linked_tried = {}
+        self._linked_seq = {}       # ref.lower() → reads issued; _linked_applied → newest one recorded
+        self._linked_applied = {}
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
         self.git_fn = git_fn or self._git_collect
@@ -713,16 +715,29 @@ class Daemon(LeadChat, HqDaemon):
             await self._read_linked(ref)
 
     async def _read_linked(self, ref):
+        """Read one PR of another repo and record the result, ordered per ref: every read takes a sequence number when it
+        is issued, and a result older than the newest one already recorded is dropped. A slow OPEN that completes after
+        a newer failure must never replace it (CC-071 review). A raised read is an error read."""
         slug, _, num = ref.rpartition("#")
-        self._linked_tried[ref.lower()] = _now()
-        node = await asyncio.to_thread(self.github_pr_fn, slug, int(num))
-        old = self.gh_linked.get(ref.lower()) or {}
+        key = ref.lower()
+        seq = self._linked_seq[key] = self._linked_seq.get(key, 0) + 1
+        self._linked_tried[key] = _now()
+        try:
+            node = await asyncio.to_thread(self.github_pr_fn, slug, int(num))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — a failed read is an error observation, never a crash
+            node = {"error": repr(e)[:160]}
+        if seq < self._linked_applied.get(key, 0):
+            return
+        self._linked_applied[key] = seq
+        old = self.gh_linked.get(key) or {}
         if not isinstance(node, dict) or "error" in node:
             err = str((node or {}).get("error") if isinstance(node, dict) else "unreadable")[:160]
-            # The old node is dropped, not kept: nothing may act on a PR whose refresh failed (CC-071 review).
-            self.gh_linked[ref.lower()] = {"ref": ref, "pr": None, "error": err, "asOf": old.get("asOf") or 0}
+            # The old node is dropped, not kept: nothing may act on a PR whose refresh failed.
+            self.gh_linked[key] = {"ref": ref, "pr": None, "error": err, "asOf": old.get("asOf") or 0}
         else:
-            self.gh_linked[ref.lower()] = {"ref": ref, "pr": node, "error": None, "asOf": _now()}
+            self.gh_linked[key] = {"ref": ref, "pr": node, "error": None, "asOf": _now()}
 
     async def github_loop(self):
         while not self._stopping:
@@ -1726,15 +1741,19 @@ class Daemon(LeadChat, HqDaemon):
                             "ciNone": ci == "–", "draft": bool(node.get("isDraft"))})
         return out
 
-    def _fresh_linked(self, ref):
-        """The last read of a PR in another repo, only when it succeeded and is recent; else None. A failed refresh
-        must never leave an old OPEN node deciding a link, a start, a review or a user check (CC-071)."""
+    def _fresh_ent(self, ref):
         ent = self.gh_linked.get(ref.lower())
         if not ent or ent.get("error") or not ent.get("pr"):
             return None
         if _now() - (ent.get("asOf") or 0) > max(600, 3 * float(self.cfg.get("github_seconds") or 0)):
             return None
-        return ent["pr"]
+        return ent
+
+    def _fresh_linked(self, ref):
+        """The last successful, recent read of a PR in another repo, or None. A failed refresh must never leave an old
+        OPEN node deciding a link, a start, a review or a user check (CC-071)."""
+        ent = self._fresh_ent(ref)
+        return ent["pr"] if ent else None
 
     def _pr_state(self, ticket):
         prs = self._linked_prs(ticket)
@@ -1802,7 +1821,8 @@ class Daemon(LeadChat, HqDaemon):
                            base=next((p.get("branch") for p in self.cfg["projects"] if p["key"] == project), None), **meta)
         elif op == "link":
             project = self._wrap(self.tasks.get, key)["project"]
-            r = self._wrap(pl.link, key, body.get("pr"), actor, seen=self._pr_seen(project))
+            r = self._wrap(pl.link, key, body.get("pr"), actor, seen=self._pr_seen(project),
+                           base=next((p.get("branch") for p in self.cfg["projects"] if p["key"] == project), None))
         elif op == "review":
             t = self._wrap(self.tasks.get, key)
             if len(self._linked_prs(t)) > 1:
@@ -3032,7 +3052,7 @@ class Daemon(LeadChat, HqDaemon):
                         keys = list(explicit)
                     else:
                         keys = [k for k in self.tasks.pr_keys(pr.get("title", ""), pr.get("headRefName", "")) if mine(k)]
-                        keys += [k for k in self.tasks.keys_linked("github", "pr", ref) if k not in keys]
+                        keys += [k for k in self._plain_linked(ref) if k not in keys]
                     self._automate_open_pr(pr, ref, n, keys)
                 except Exception as e:  # noqa: BLE001 — one odd PR must not fail the snapshot
                     log.warning(json.dumps({"msg": "ticket automation skipped a PR", "error": repr(e)[:200]}))
@@ -3092,12 +3112,13 @@ class Daemon(LeadChat, HqDaemon):
         """One merged PR → its tickets (the per-merge body of _ticket_automation, shared with CC-071's linked PRs)."""
         # CC-071: for an explicit link only those tickets count, and only a merge AFTER the link was made: a PR that
         # merged before the lead linked it (a stale or wrong link) must never send the ticket on to VERIFYING.
-        explicit = {r["key"]: r["createdAt"] for r in self.tasks.explicit_pr_links(ref=ref)}
+        explicit = {r["key"]: r["createdAt"] for r in self.tasks.explicit_pr_links(ref=ref)
+                    if r["status"] not in tasks_mod.CLOSED}
         if explicit:
             at = _iso_epoch(merged_at)
             keys = [k for k, made in explicit.items() if at is not None and at > made]
         else:
-            keys = self.tasks.keys_linked("github", "pr", ref)
+            keys = self._plain_linked(ref)
         for k in keys:
             # PR numbers repeat across repositories. Another repo's PR names its full ref in the trigger so a merge
             # of jay-dev#10 is not mistaken for the earlier merge of #10 here; an own-repo PR keeps "PR #N merged",
@@ -3115,6 +3136,14 @@ class Daemon(LeadChat, HqDaemon):
                 self._pipeline_result(*self.pipeline.merged(k, ref, merge_oid))
 
     LINKED_PR_CAP = 20     # CC-071 part D: cross-repo GitHub reads per poll
+
+    def _plain_linked(self, ref):
+        """Tickets with an ordinary link to `ref` whose OWN repository is the PR's. A plain (agent or ccd) row of a
+        SamVision PR on a Command Center ticket must not move it during SamVision's poll (CC-071 review): another
+        repo's PRs reach a ticket only through an explicit link."""
+        repo = ref.rpartition("#")[0].lower()
+        return [k for k in self.tasks.keys_linked("github", "pr", ref)
+                if self._own_repo(self.tasks.get(k)["project"]).lower() == repo]
 
     def _own_repo(self, project):
         return next((p.get("repo") for p in self.cfg["projects"] if p["key"] == project), None) \
@@ -3138,18 +3167,21 @@ class Daemon(LeadChat, HqDaemon):
 
     def _automate_linked(self):
         """Part D: the explicitly linked PRs of other repos, as the last linked poll read them, through the same
-        per-PR and per-merge bodies as the project's own PRs. Each entry runs once per read."""
+        per-PR and per-merge bodies as the project's own PRs. Each observation runs once, for the ref's ACTIVE
+        owners: a cancelled ticket's old row is skipped before the read is consumed, so a relinked ticket advances."""
+        by_ref = {}
         for r in self.tasks.explicit_pr_links():
-            ref = r["ref"]
-            ent = self.gh_linked.get(ref.lower())
-            if not ent or not ent.get("pr") or ent.get("error") or self._foreign_ref(r["project"], ref) is None \
-                    or self._linked_seen.get(ref.lower()) == ent["asOf"]:
+            if r["status"] not in tasks_mod.CLOSED and self._foreign_ref(r["project"], r["ref"]) is not None:
+                by_ref.setdefault(r["ref"].lower(), (r["ref"], []))[1].append(r["key"])
+        for lower, (ref, keys) in by_ref.items():
+            ent = self._fresh_ent(ref)     # the same success-and-freshness gate as review and user check
+            if not ent or self._linked_seen.get(lower) == ent["asOf"]:
                 continue
-            self._linked_seen[ref.lower()] = ent["asOf"]
+            self._linked_seen[lower] = ent["asOf"]
             node, n = ent["pr"], int(ref.rpartition("#")[2])
             try:
                 if node.get("state") == "OPEN":
-                    self._automate_open_pr(node, ref, n, [r["key"]])
+                    self._automate_open_pr(node, ref, n, list(dict.fromkeys(keys)))
                 elif node.get("state") == "MERGED":
                     self._automate_merged_pr(ref, n, (node.get("mergeCommit") or {}).get("oid"), node.get("mergedAt"))
             except Exception as e:  # noqa: BLE001 — one odd PR must not fail the snapshot

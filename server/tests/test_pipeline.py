@@ -476,6 +476,16 @@ class ExplicitLinks(Base):
             self.pl.link(k, ref, "agent:coordinator", seen=lambda r: {"state": "OPEN", "branch": "b"})   # idempotent
             self.assertEqual(self.ts.explicit_pr_links(key=k)[0]["createdAt"], before)
 
+    def test_Medium2_link_itself_refuses_an_unsafe_head_branch(self):
+        k = self.planned()
+        for bad in ("HEAD", "main", "master", "Main", "develop", "refs/heads/x", "origin/x", "x.lock", "a..b", "-x", None, ""):
+            with self.assertRaises(TaskError, msg=repr(bad)) as e:
+                self.pl.link(k, self.REF, "agent:coordinator", seen=self.seen(branch=bad), base="develop")
+            self.assertEqual(e.exception.status, 400)
+        self.assertEqual((self.rows(k), [e["kind"] for e in self.ts.get(k)["timeline"] if e["kind"] == "pipeline.linked"]),
+                         ([], []))
+        self.pl.link(k, self.REF, "agent:coordinator", seen=self.seen(), base="develop")
+
     def test_case_variants_of_one_pr_on_a_ticket_promote_in_one_transaction(self):
         k = self.planned()
         self.ts.link(k, "github", "pr", self.REF.lower(), None, "x", "agent:implementer")   # older, lowercase first

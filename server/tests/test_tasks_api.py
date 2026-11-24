@@ -1290,3 +1290,75 @@ class ExplicitLinks(Automation):
         self.pr_node[self.JD] = dict(self.pr_node[self.JD], state="MERGED", mergedAt=self.future())
         self.poll()
         self.assertEqual(self.tickets.get(key)["status"], "VERIFYING")
+
+    def test_High1_a_plain_link_to_another_projects_pr_never_moves_a_ticket(self):          # R2 across projects
+        cc = self.tickets.create("commandcenter", "cc ticket", status="IN_PROGRESS")[0]["key"]
+        self.tickets.link(cc, "github", "pr", "JayDalool/SamVisionAI#94", None, "x", "agent:implementer")
+        self.open_prs((94, "no-key-branch", self.HEAD, "no key in the title"))
+        self.assertEqual(self.tickets.get(cc)["status"], "IN_PROGRESS", "the SamVision poll must not move a CC ticket")
+        self.tickets.update(cc, {"status": "IN_REVIEW"}, "jay")
+        self.gh.data["samvision"]["prs"] = []
+        self.gh.data["samvision"]["merged"] = [{"number": 94, "title": "x", "url": "u", "mergedAt": self.future()}]
+        self.poll()
+        self.assertEqual(self.tickets.get(cc)["status"], "IN_REVIEW", "nor send it to VERIFYING on a merge")
+
+    def test_High2_an_older_open_read_never_replaces_a_newer_error(self):
+        import asyncio
+        import threading
+        self.add_cc_project()
+        release, calls = threading.Event(), []
+
+        def fake(slug, number):
+            calls.append(len(calls))
+            if len(calls) == 1:                      # the slow first read: OPEN, but only after the second one failed
+                release.wait(5)
+                return {"number": 10, "state": "OPEN", "headRefName": "b", "title": "t"}
+            return {"error": "gh failed"}
+        self.daemon.github_pr_fn = fake
+
+        async def scenario():
+            first = asyncio.create_task(self.daemon._read_linked(self.JD))
+            while not calls:
+                await asyncio.sleep(0.01)
+            await self.daemon._read_linked(self.JD)  # newer, completes first, with an error
+            release.set()
+            await first                              # the older OPEN arrives late
+        self.client.portal.call(scenario)
+        ent = self.daemon.gh_linked[self.JD.lower()]
+        self.assertEqual((ent["pr"], bool(ent["error"])), (None, True))
+        self.assertIsNone(self.daemon._fresh_linked(self.JD))
+
+    def test_a_raised_read_is_an_error_read(self):
+        def boom(slug, number):
+            raise RuntimeError("gh exploded")
+        self.daemon.github_pr_fn = boom
+        self.client.portal.call(self.daemon._read_linked, self.JD)
+        self.assertIsNone(self.daemon.gh_linked[self.JD.lower()]["pr"])
+        self.assertIn("exploded", self.daemon.gh_linked[self.JD.lower()]["error"])
+
+    def test_foreign_automation_applies_the_freshness_gate(self):
+        self.add_cc_project()
+        cc = self.planned(1, "commandcenter")
+        self.pr_node[self.JD] = {"number": 10, "title": "t", "state": "OPEN", "isDraft": False, "headRefName": "feature/jd",
+                                 "headRefOid": self.HEAD, "statusCheckRollup": [{"state": "SUCCESS"}]}
+        self.step("link", {"pr": self.JD})
+        self.step("start", {"branch": "feature/jd", "worktree": "/srv/server/worktrees/cc/CC-001"})
+        self.daemon.gh_linked[self.JD.lower()]["asOf"] -= 100000       # an old observation
+        self.daemon._linked_seen.clear()
+        self.daemon._ticket_automation()
+        self.assertEqual(self.tickets.get(cc)["status"], "IN_PROGRESS")
+
+    def test_Medium1_a_cancelled_owner_is_skipped_and_the_relinked_ticket_advances(self):
+        self.add_cc_project()
+        self.pr_node[self.JD] = {"number": 10, "title": "t", "state": "OPEN", "isDraft": False, "headRefName": "feature/jd",
+                                 "headRefOid": self.HEAD, "statusCheckRollup": [{"state": "SUCCESS"}]}
+        old = self.planned(1, "commandcenter")
+        self.assertEqual(self.step("link", {"pr": self.JD}).status_code, 200)
+        self.tickets.update(old, {"status": "CANCELLED"}, "jay")
+        new = self.planned(2, "commandcenter")
+        self.assertEqual(self.step("link", {"pr": self.JD}).status_code, 200)       # allowed: the old owner is closed
+        r = self.step("start", {"branch": "feature/jd", "worktree": "/srv/server/worktrees/cc/CC-002"})
+        self.assertEqual(r.json()["status"], "IN_PROGRESS", r.text)
+        self.poll()
+        self.poll()
+        self.assertEqual((self.tickets.get(new)["status"], self.tickets.get(old)["status"]), ("IN_REVIEW", "CANCELLED"))

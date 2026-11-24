@@ -840,17 +840,17 @@ class Pipeline:
         self._flow_set(tid, at, review_due=at, plan_review=None)
         return {}, work, [("pipeline.plan", "plan recorded for technical review", {"owner": False, "review": True})]
 
-    def link(self, key, ref, actor, seen=None):
+    def link(self, key, ref, actor, seen=None, base=None):
         """CC-071: the lead (or Jay) links a ticket to its PR, `owner/repo#N`, explicitly. The only way a repo-native
         branch (SamVision's SV-118-*) or a PR in another allow-listed repo reaches review. `seen(ref)` is the
         daemon's read of the PR ({state, branch, title} from the last GitHub poll or a one-off read) or None."""
         def fn(tid, t, w, at):
-            canon, info = self._link_checks(t, ref, actor, seen)
+            canon, info = self._link_checks(t, ref, actor, seen, base)
             ev = self._link_write(tid, t, canon, info, actor, at)
             return {}, {}, [ev] if ev else []
         return self._tx(key, actor, fn)
 
-    def _link_checks(self, t, ref, actor, seen):
+    def _link_checks(self, t, ref, actor, seen, base=None):
         """Every refusal of an explicit link, before anything is written. Returns (ref in registry casing, PR info)."""
         self._lead(actor, "link")
         if not isinstance(ref, str) or not PR_REF_RE.fullmatch(ref):
@@ -878,6 +878,11 @@ class Pipeline:
             raise TaskError(409, f"{canon} is already merged; a merged PR is never linked to a ticket")
         if info["state"] != "OPEN":
             raise TaskError(409, f"{canon} is {info['state'].lower()}, not open")
+        # The PR's head branch must be a name `start` would accept, so a link never records ownership of a PR that
+        # can only fail later (HEAD, main, the project's base, refs/..., .lock). Checked here, before anything is written.
+        problem = native_branch_problem(info.get("branch"), base)
+        if problem:
+            raise TaskError(400, f"{canon}'s head branch cannot be used: {problem}")
         return canon, info
 
     def _link_write(self, tid, t, canon, info, actor, at):
@@ -914,7 +919,7 @@ class Pipeline:
             key_led = isinstance(branch, str) and re.match(rf"^{re.escape(t['key'])}-{SLUG_RE}$", branch)
             link_ref = link_info = None
             if pr is not None:
-                link_ref, link_info = self._link_checks(t, pr, actor, seen)
+                link_ref, link_info = self._link_checks(t, pr, actor, seen, base)
             if not key_led:
                 self._native_branch(t, branch, base, link_ref, link_info, seen)
             if not isinstance(worktree, str) or not worktree.startswith("/") or len(worktree) > 300 \

@@ -1310,7 +1310,8 @@ class TaskStore:
 
     def explicit_keys(self, ref):
         """The tickets explicitly linked to this PR ref (see explicit_pr_links)."""
-        return list(dict.fromkeys(r["key"] for r in self.explicit_pr_links(ref=ref)))
+        # A closed ticket's old row no longer owns the PR: it can be relinked to another ticket (CC-071 review).
+        return list(dict.fromkeys(r["key"] for r in self.explicit_pr_links(ref=ref) if r["status"] not in CLOSED))
 
     def last_status_event(self, key):
         """The newest status change: {actor, from, to, trigger}. A manual edit has no trigger; every
