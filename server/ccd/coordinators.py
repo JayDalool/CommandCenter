@@ -25,6 +25,7 @@ import stat
 import time
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from . import coordid, sources
 from . import registry as project_registry
@@ -211,8 +212,9 @@ OPEN_TEXT = (
 
 
 def ready_path(key, day=None):
-    """<READY_DIR>/<key>/<YYYY-MM-DD>.md, fixed when the notes request is sent so a midnight rollover cannot move it."""
-    day = day or datetime.now().strftime("%Y-%m-%d")
+    """<READY_DIR>/<key>/<YYYY-MM-DD>.md, fixed when the notes request is sent so a midnight rollover cannot move it.
+    America/Winnipeg explicitly: the path must not depend on the host's zone (CC-070)."""
+    day = day or datetime.now(ZoneInfo("America/Winnipeg")).strftime("%Y-%m-%d")
     return str(READY_DIR / key / f"{day}.md")
 
 
@@ -225,16 +227,19 @@ def open_text(project, path):
 
 
 def read_ready(path):
-    """(ready, mtime) for the lead's ready file. Safe against a planted file: the project folder and the file must
-    not be symlinks, the file must be a regular one (opened without following links and without blocking), only
-    its first line is read and nothing of it is kept or returned beyond that verdict."""
-    try:
-        if os.path.islink(os.path.dirname(path)) or os.path.dirname(os.path.dirname(path)) != str(READY_DIR):
-            return False, 0.0
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except OSError:
+    """(ready, mtime) for the lead's ready file. The path must be <READY_DIR>/<key>/<file>. The chain is opened one
+    directory at a time without following links (READY_DIR itself, then the project folder, then the file, each
+    relative to the previous descriptor), so a swapped directory cannot redirect the read. The file must be regular;
+    only its first 256 bytes are read, a first line that reaches that limit is rejected, and only a yes or no leaves."""
+    p = Path(path)
+    if p.parent.parent != READY_DIR or not NAME_RE.match(p.parent.name) or "/" in p.name or p.name in ("", ".", ".."):
         return False, 0.0
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
+    base = key_fd = fd = None
     try:
+        base = os.open(str(READY_DIR), flags)
+        key_fd = os.open(p.parent.name, flags, dir_fd=base)
+        fd = os.open(p.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=key_fd)
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             return False, 0.0
@@ -242,6 +247,10 @@ def read_ready(path):
     except OSError:
         return False, 0.0
     finally:
-        os.close(fd)
+        for f in (fd, key_fd, base):
+            if f is not None:
+                os.close(f)
+    if b"\n" not in raw and len(raw) >= READY_MAX:
+        return False, 0.0              # the first line has no verified end
     first = raw.decode("utf-8", "replace").splitlines()[0] if raw else ""
     return bool(READY_RE.match(first)), st.st_mtime

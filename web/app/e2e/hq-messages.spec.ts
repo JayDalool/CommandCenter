@@ -94,9 +94,11 @@ test("Fresh session shows only on a running idle project lead with Developer Unl
   const off = { state: "none", status: null, running: false, idle: false };
   const at = (id: string, name: string, kind: "cto" | "project", l: Record<string, unknown> = {}) =>
     ({ ...conv(id, name, kind), lead: { ...lead, name: id, ...l } });
-  const convs = [at("cto", "CTO", "cto"), at("samvision", "SamVision", "project"), at("gyst", "GYST", "project", off)];
+  const busy = { status: "working", idle: false };
+  const convs = [at("cto", "CTO", "cto"), at("samvision", "SamVision", "project"), at("gyst", "GYST", "project", off),
+    at("mfe", "MFE", "project", busy), at("commandcenter", "CommandCenter", "project", { status: "blocked", idle: false })];
   await page.route("**/api/chat", (r) => r.fulfill({ json: { canStart: false, unread: 0, limits: { text: 16000, fileBytes: 20971520, filesPerMessage: 10 }, conversations: convs } }));
-  await page.route(/\/api\/chat\/(samvision|cto|gyst)$/, (r) => r.fulfill({ json: { conversation: "x", messages: [], lead } }));
+  await page.route(/\/api\/chat\/(samvision|cto|gyst|mfe|commandcenter)$/, (r) => r.fulfill({ json: { conversation: "x", messages: [], lead } }));
   const presses: string[] = [];
   await page.route("**/api/coordinators/fresh", (r) => {
     presses.push(r.request().postData() ?? "");
@@ -135,6 +137,12 @@ test("Fresh session shows only on a running idle project lead with Developer Unl
   await expect(page.getByRole("region", { name: "Conversation with the GYST lead" })).toBeVisible();
   await expect(button()).toHaveCount(0);
   await expect(page.getByText("is not running")).toBeVisible();
+  // a running lead that is busy or waiting for Jay is never offered a clear
+  for (const c of ["mfe", "commandcenter"]) {
+    await open(page, `messages?c=${c}`);
+    await expect(page.getByRole("region", { name: /Conversation with the .* lead/ })).toBeVisible();
+    await expect(button()).toHaveCount(0);
+  }
   // The browser logs the refused press (409) it was told to expect; nothing else may be wrong.
   expect((await problems(page, watch)).filter((p) => !p.includes("status of 409"))).toEqual([]);
 });

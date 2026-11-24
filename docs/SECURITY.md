@@ -364,9 +364,14 @@ idle pane: a fixed notes request, `/clear`, and a fixed opening line. It is Jay'
 caller (a test asserts the call sites). Before each of the three sends ccd re-checks, on fresh state, that the
 project is not paused and has no night shift, that the lead is identified, idle and its input line is plainly
 empty. The texts are constants with only the project key and a ready-file path built by ccd; the request body is
-never typed. The ready file is read as ccd's own constant path (fixed when the notes were requested): its folder and
-the file must not be symlinks, it is opened without following links, must be a regular file, only its first 256 bytes
-are read and only a yes or no leaves the function. A lead that went busy after writing the file is not cleared. The
+never typed. The ready file is read as ccd's own constant path (fixed when the notes were requested), opened one directory at
+a time without following links (the base, the project folder, then the file, each relative to the previous
+descriptor); it must be a regular file, only its first 256 bytes are read, a first line that reaches that limit is
+rejected, and only a yes or no leaves the function. The operation is bound to the pane and Claude session of the
+notes request, `/clear` must produce a new session id in that pane before the opening line, herdr's `agent.prompt`
+has no submit-time condition so every guard fails closed on a fresh read (Claude's `Try "…"` text counts as a
+draft) and pause and night shift are re-read synchronously right before each send, and a lead ccd could not watch
+continuously (reconnect, snapshot-only) is never cleared on an old ready file. A lead that went busy after writing the file is not cleared. The
 actor is self-asserted, as for the night shift, so Developer Unlock is the real gate.
 
 **What a Go Live approval is.** A live-deploy gate that Go Live confirms is a full approval in the pipeline:

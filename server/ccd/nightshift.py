@@ -86,6 +86,23 @@ def input_is_empty(text):
     return True
 
 
+def prompt_typed(text):
+    """What the LAST prompt line holds, stricter than input_is_empty (CC-070): "" when it is empty, the typed text
+    (a dim `Try "..."` placeholder included, since from text alone it looks like a draft) when it has any, and None
+    when no prompt line can be parsed or a further line of a draft follows. The caller decides what text it accepts."""
+    lines = str(text or "").splitlines()[-60:]
+    at = next((i for i in range(len(lines) - 1, -1, -1) if PROMPT_RE.match(lines[i])), None)
+    if at is None:
+        return None
+    typed = (PROMPT_RE.match(lines[at]).group(1) or "").strip()
+    for ln in lines[at + 1:]:
+        rest = ln.strip().strip("│┃").strip()
+        if not rest:
+            continue
+        return typed if all(c in BOX_CHARS for c in rest) else None
+    return typed
+
+
 def cutoff_after(started, hhmm=CUTOFF_DEFAULT):
     """The first local HH:MM strictly after `started` (epoch s): the shift's morning cutoff."""
     m = CUTOFF_RE.match(str(hhmm or "")) or CUTOFF_RE.match(CUTOFF_DEFAULT)

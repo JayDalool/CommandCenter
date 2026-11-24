@@ -401,6 +401,8 @@ class Daemon(LeadChat, HqDaemon):
         self.notifier = None      # notify.Notifier (Slack and ntfy; off until Jay switches it on); set by __main__
         self._activity = {}       # project → when one of its tickets last changed (night-shift progress)
         self._fresh = {}          # project → pending Fresh session: {phase, path, prepAt, paneId} (CC-070)
+        self._fresh_locks = {}    # project → asyncio.Lock: one fresh-session step at a time
+        self._obs_epoch = 0       # bumped whenever continuous watching of herdr status events is lost (CC-070)
         self._went_busy = {}      # pane id → when it last left idle/done (a lead that worked after its ready file)
         self._record_timers = {}
         self._closing = set()
@@ -571,6 +573,7 @@ class Daemon(LeadChat, HqDaemon):
     def _herdr_down(self, err):
         was = self.herdr_state["connected"] or self.herdr_state["error"] == "starting"
         self.herdr_state.update(ok=False, connected=False, error=str(err)[:200] or type(err).__name__)
+        self._obs_epoch += 1      # status changes during the outage are never seen: a pending fresh session is void
         if was:
             self._event("herdr", "daemon.herdr_lost", f"herdr unreachable: {self.herdr_state['error']}",
                         severity="warn", data={"connected": False, "error": self.herdr_state["error"]})
@@ -599,6 +602,7 @@ class Daemon(LeadChat, HqDaemon):
                     continue
                 watched = self.agent_ids()
                 reader, writer = await self.herdr.subscribe(herdr_mod.subscriptions_for(watched))
+                self._obs_epoch += 1      # a (re)opened subscription may have missed events in between (CC-070)
                 self._herdr_up()
                 backoff = 1.0
                 last_reconcile, resync_due = _now(), None
@@ -1137,7 +1141,7 @@ class Daemon(LeadChat, HqDaemon):
             if self.night is not None and self.night.active(key):
                 self.work.note(key, "night shift running")
                 continue
-            if self._fresh_pending(key):
+            if self._fresh_busy(key):
                 self.work.note(key, "fresh session pending")   # a reminder now would make the lead work after its ready file
                 continue
             if self.chat_budget_check(key):
@@ -1162,6 +1166,9 @@ class Daemon(LeadChat, HqDaemon):
                 screen = await self.herdr.read_tail(agent["pane_id"], 40)
                 if nightshift_mod.input_is_empty(screen["text"]) is not True:
                     self.work.note(key, "input line not empty or not recognised")
+                    continue
+                if self._fresh_busy(key):    # a notes request began while this tick was awaiting herdr (CC-070)
+                    self.work.note(key, "fresh session pending")
                     continue
                 self._broker("pane.input", key, f"work-mode reminder -> pane {agent['pane_id']}")
                 await self.herdr.prompt(agent["pane_id"], workmode_mod.reminder_text(key, nxt, now))
@@ -3408,9 +3415,9 @@ class Daemon(LeadChat, HqDaemon):
     # ---------- Fresh session (CC-070) ----------
 
     FRESH_PENDING_TTL = 2 * 3600    # a prep nobody finished stops holding work-mode reminders after this
-    FRESH_WAIT = 10.0               # s to wait for the pane to be idle again after /clear
+    FRESH_WAIT = 10.0               # s to wait for the new session after /clear
     FRESH_POLL = 0.5
-    FRESH_SETTLE = 1.0              # s before the first look: /clear shows as idle until Claude starts redrawing
+    FRESH_SETTLE = 1.0              # s before the first look at the pane after /clear
 
     def _fresh_pending(self, project):
         st = self._fresh.get(project)
@@ -3419,12 +3426,31 @@ class Daemon(LeadChat, HqDaemon):
             return False
         return bool(st)
 
-    async def _fresh_gate(self, project, proj, what):
-        """Everything that must hold right now, re-checked before EACH of the three sends (notes request, /clear,
-        opening line): not paused, no night shift, lead identified, idle, input line plainly empty. Returns the agent."""
+    def _fresh_busy(self, project):
+        """A fresh-session step is running or waiting for the lead: work-mode reminders must not be sent."""
+        lock = self._fresh_locks.get(project)
+        return self._fresh_pending(project) or bool(lock and lock.locked())
+
+    def _pane_session(self, pane_id):
+        for c in map(coordid.normalize, sources.agent_panes(self.panes)):
+            if c["paneId"] == pane_id:
+                return c["sessionId"] or None
+        return None
+
+    def _fresh_recheck(self, project):
+        """The ccd-owned conditions, read synchronously right before a send (pause or a night shift can change
+        during the awaits of the guard)."""
         self._not_paused(project, "fresh session")
         if self.night is not None and self.night.active(project):
             raise ActionError(409, f"{project}'s night shift is running; no fresh session until it ends")
+
+    async def _fresh_gate(self, project, proj, what, expect=None, allow=None):
+        """Everything that must hold, re-checked before EACH of the three sends: not paused, no night shift, lead
+        identified, idle, the pane and Claude session are the ones this operation started with (`expect`), and the
+        input line empty. herdr's agent.prompt has no submit-time condition, so this is a fail-closed check on a
+        fresh read, repeated by _fresh_send right before the call. `allow` is the one non-empty prompt text accepted:
+        the placeholder this very session showed once its own /clear had finished. Returns the agent."""
+        self._fresh_recheck(project)
         if not self.herdr_state["ok"]:
             raise ActionError(503, "herdr unreachable")
         await self.resync("action")
@@ -3434,17 +3460,30 @@ class Daemon(LeadChat, HqDaemon):
         agent = await self._fresh_agent(r["paneId"])
         if agent["status"] not in ("idle", "done"):
             raise ActionError(409, f"lead is busy ({agent['status']}); {what} goes only to an idle lead")
+        if expect and (agent["pane_id"], self._pane_session(agent["pane_id"])) != expect:
+            self._fresh.pop(project, None)    # notes written by another session must never clear this one
+            raise ActionError(409, "the lead's pane or Claude session is not the one this fresh session started with; "
+                                   "press again to start over")
         try:
             screen = await self.herdr.read_tail(agent["pane_id"], 40)
         except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
             raise ActionError(502, f"herdr refused: {e}")
-        if nightshift_mod.input_is_empty(screen["text"]) is not True:
+        typed = nightshift_mod.prompt_typed(screen["text"])
+        if typed is None or (typed != "" and typed != allow):
             raise ActionError(409, f"input line not empty or not recognised; {what} not sent")
         return agent
 
-    async def _fresh_send(self, project, proj, agent, what, text, data=None):
+    async def _fresh_send(self, project, proj, agent, what, text, expect=None, st=None):
+        # Synchronous from here to the call: the state this operation depends on must be unchanged.
+        self._fresh_recheck(project)
+        if st is not None and self._fresh.get(project) is not st:
+            raise ActionError(409, "this fresh session was reset meanwhile; press again")
+        if expect and (agent["pane_id"], self._pane_session(agent["pane_id"])) != expect:
+            raise ActionError(409, "the lead's Claude session changed; press again to start over")
+        if str(agent.get("status")) not in ("idle", "done") or self.find_agent(agent["pane_id"]) is None:
+            raise ActionError(409, "the lead is no longer idle")
         self._event("action", "action.fresh_lead", f"fresh session: {what} → {coordinators.canonical(proj)}",
-                    project=project, agent_id=agent["pane_id"], data={"kind": "fresh_lead", "step": what, **(data or {})})
+                    project=project, agent_id=agent["pane_id"], data={"kind": "fresh_lead", "step": what})
         self._broker("pane.input", project, f"fresh session {what} -> coordinator pane {agent['pane_id']}")
         try:
             await self.herdr.prompt(agent["pane_id"], text)
@@ -3457,80 +3496,123 @@ class Daemon(LeadChat, HqDaemon):
         """Fresh session for a project lead, two presses, Jay with Developer Unlock only (never called from Slack,
         an agent route or a timer). Press 1 asks the idle lead to record each ticket (evidence notes, never
         handoff) and write a ready file. Press 2, once the file says ready, sends /clear and one opening line.
-        The pane, its name and --rc stay; ccd starts, kills and moves nothing."""
+        The pane, its name and --rc stay; ccd starts, kills and moves nothing. One step per project at a time."""
         if actor != "jay" or not developer:
             raise ActionError(403, "Developer Unlock required: a fresh session types into the lead's pane")
         proj = self._project(project)
         if proj is None:
             raise ActionError(404, "unknown project")
         self._not_paused(project, "fresh session")
-        st = self._fresh.get(project) if self._fresh_pending(project) else None
-        path = st["path"] if st else coordinators.ready_path(project)
         if copy:
+            st = self._fresh.get(project) if self._fresh_pending(project) else None
+            path = st["path"] if st else coordinators.ready_path(project)
             return {"ok": True, "project": project, "coordinator": None,
                     "text": coordinators.prep_text(proj, path), "open": coordinators.open_text(proj, path)}
+        lock = self._fresh_locks.setdefault(project, asyncio.Lock())
+        if lock.locked():
+            raise ActionError(409, "a fresh-session step is already running for this project")
         self._throttle(f"fresh:{project}", 5.0)
+        async with lock:
+            return await self._fresh_step(project, proj)
+
+    async def _fresh_step(self, project, proj):
         name = coordinators.canonical(proj)
+        st = self._fresh.get(project) if self._fresh_pending(project) else None
         if st is None:
-            agent = await self._fresh_gate(project, proj, "the notes request")
-            path = coordinators.ready_path(project)
-            self._fresh[project] = {"phase": "prepped", "path": path, "prepAt": _now(), "paneId": agent["pane_id"]}
-            try:
-                await self._fresh_send(project, proj, agent, "notes", coordinators.prep_text(proj, path))
-            except ActionError:
-                self._fresh.pop(project, None)
-                raise
-            return {"ok": True, "project": project, "coordinator": name, "step": "notes",
-                    "message": "Asked the lead to write its notes; press again when it says ready."}
+            return await self._fresh_notes(project, proj, name)
         if st["phase"] == "cleared":
-            # /clear already went out and the pane was not ready for the opening line: send only that line.
-            agent = await self._fresh_gate(project, proj, "the opening line")
-            await self._fresh_send(project, proj, agent, "open", coordinators.open_text(proj, st["path"]))
+            return await self._fresh_open(project, proj, name, st)
+        # A lead we cannot watch continuously could have worked after writing its file without ccd seeing it.
+        if st["epoch"] != self._obs_epoch or self.herdr_state.get("warning") or not self.herdr_state["connected"]:
             self._fresh.pop(project, None)
-            return {"ok": True, "project": project, "coordinator": name, "step": "started",
-                    "message": "Fresh session started."}
+            raise ActionError(409, "ccd lost sight of the lead's status meanwhile; press again to ask for fresh notes")
         ready, mtime = coordinators.read_ready(st["path"])
         if not ready or mtime < st["prepAt"]:
             raise ActionError(409, "the lead has not written its ready file yet; press again when it says ready")
-        agent = await self._fresh_gate(project, proj, "the clear")
+        mine = (st["paneId"], st["sessionId"])
+        agent = await self._fresh_gate(project, proj, "the clear", expect=mine)
         # Canonical herdr name first: /clear changes Claude's session id, and the label is what finds the lead again.
         if agent.get("agent_name") != name:
             ok, err = sources.agent_rename(agent["pane_id"], name)
             if not ok:
                 raise ActionError(502, f"could not give the lead its canonical name: {err or 'rename failed'}")
-        agent = await self._fresh_gate(project, proj, "the clear")
-        if agent["pane_id"] != st["paneId"]:
-            self._fresh.pop(project, None)   # the notes were requested from another pane: start again
-            raise ActionError(409, "the lead is in a different pane than when notes were requested; press again")
-        if self._went_busy.get(agent["pane_id"], 0) > mtime:
+            agent = await self._fresh_gate(project, proj, "the clear", expect=mine)
+        if self._went_busy.get(agent["pane_id"], 0) > mtime or st["epoch"] != self._obs_epoch:
             self._fresh.pop(project, None)   # its notes may be stale: start again from the notes request
             raise ActionError(409, "the lead worked after writing its ready file; press again to ask for fresh notes")
-        st["phase"] = "cleared"              # recorded before sending: a half-done /clear is never repeated
-        await self._fresh_send(project, proj, agent, "clear", "/clear")
+        await self._fresh_send(project, proj, agent, "clear", "/clear", expect=mine, st=st)
+        st["phase"] = "cleared"              # only once herdr took it: a refused /clear must not look like a clear
         pane_id = agent["pane_id"]
         deadline = _now() + self.FRESH_WAIT
         await asyncio.sleep(self.FRESH_SETTLE)
-        settled = False
         while True:
             try:
                 await self.resync("action")
-                a = self.find_agent(pane_id)
-                if a and a["status"] in ("idle", "done"):
-                    screen = await self.herdr.read_tail(pane_id, 40)
-                    if nightshift_mod.input_is_empty(screen["text"]) is True:
-                        settled = True
-                        break
+                if self._settled(st, pane_id, await self.herdr.read_tail(pane_id, 40)):
+                    break
             except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError):
                 pass
             if _now() >= deadline:
-                break
+                raise ActionError(409, "/clear was sent but the lead has no new session ready for its opening line "
+                                       "yet; press again to check and send only that line")
             await asyncio.sleep(self.FRESH_POLL)
-        if not settled:
-            raise ActionError(409, "/clear was sent but the lead is not ready for its opening line yet; "
-                                   "press again to send only that line")
+        return await self._fresh_open(project, proj, name, st)
+
+    def _settled(self, st, pane_id, screen):
+        """The pane is the same one, idle, with a NEW Claude session id and a prompt that is empty or shows only a
+        placeholder; the placeholder's text is kept so a later draft cannot pass for it."""
+        a = self.find_agent(pane_id)
+        sid = self._pane_session(pane_id)
+        if not a or a["status"] not in ("idle", "done") or not sid or sid == st["sessionId"]:
+            return False
+        typed = nightshift_mod.prompt_typed(screen["text"])
+        if typed is None or (typed != "" and not typed.startswith('Try "')):
+            return False
+        st["newSession"], st["baseline"] = sid, typed
+        return True
+
+    async def _fresh_notes(self, project, proj, name):
+        if self.herdr_state.get("warning"):
+            raise ActionError(409, "herdr status events are unavailable, so ccd cannot watch the lead; no fresh session")
+        epoch = self._obs_epoch
+        agent = await self._fresh_gate(project, proj, "the notes request")
+        sid = self._pane_session(agent["pane_id"])
+        if not sid:
+            raise ActionError(409, "the lead's Claude session id is not known yet; try again in a moment")
+        path = coordinators.ready_path(project)
+        st = {"phase": "prepped", "path": path, "prepAt": _now(), "paneId": agent["pane_id"], "sessionId": sid,
+              "epoch": epoch}
+        self._fresh[project] = st
+        try:
+            await self._fresh_send(project, proj, agent, "notes", coordinators.prep_text(proj, path),
+                                   expect=(agent["pane_id"], sid), st=st)
+        except ActionError:
+            self._fresh.pop(project, None)
+            raise
+        return {"ok": True, "project": project, "coordinator": name, "step": "notes",
+                "message": "Asked the lead to write its notes; press again when it says ready."}
+
+    async def _fresh_open(self, project, proj, name, st):
+        """The opening line, only into the pane and the NEW session /clear produced. Used right after /clear and by
+        a later press when /clear had not finished in time."""
+        await self.resync("action")
+        pane_id = st["paneId"]
+        sid = self._pane_session(pane_id)
+        if sid is None:
+            self._fresh.pop(project, None)
+            raise ActionError(409, "the lead's pane is gone; start again")
+        if sid == st["sessionId"] and not st.get("newSession"):
+            self._fresh.pop(project, None)       # /clear did not take: never report a fresh session
+            raise ActionError(409, "the lead's Claude session did not change after /clear; start again")
+        if st.get("newSession") and sid != st["newSession"]:
+            self._fresh.pop(project, None)
+            raise ActionError(409, "the lead's Claude session changed again; start again")
+        st["newSession"] = sid
         self._rebind(project, proj, pane_id)
-        agent = await self._fresh_gate(project, proj, "the opening line")
-        await self._fresh_send(project, proj, agent, "open", coordinators.open_text(proj, st["path"]))
+        agent = await self._fresh_gate(project, proj, "the opening line", expect=(pane_id, sid),
+                                       allow=st.get("baseline"))
+        await self._fresh_send(project, proj, agent, "open", coordinators.open_text(proj, st["path"]),
+                               expect=(pane_id, sid), st=st)
         self._fresh.pop(project, None)
         return {"ok": True, "project": project, "coordinator": name, "step": "started",
                 "message": "Fresh session started."}
@@ -3539,7 +3621,7 @@ class Daemon(LeadChat, HqDaemon):
         """After /clear Claude has a new session id. The canonical label normally still finds the lead; only if the
         resolver says 'found' for the SAME pane at the exact root, with no second Claude there, bind that session."""
         r = coordinators.resolution(proj, self.panes)
-        if r["state"] == "ready" or r["state"] != "found":
+        if r["state"] != "found":
             return
         cands = r["candidates"]
         if len(cands) != 1 or cands[0]["paneId"] != pane_id:
