@@ -655,14 +655,26 @@ class Pipeline:
         return not (pr.get("head") == r[0] and (not r[1] or pr.get("ref") == r[1]))
 
     def project_slots(self, project):
-        """Work already admitted, including pending approvals, review and blocked work."""
+        """Work holding one of the project's engineering slots: admitted, not waiting on Jay, not release-only.
+
+        CC-076, Jay 2026-11-24: a ticket waiting on Jay's decision (an open question, or a plan, merge, UI or deploy
+        gate) frees its slot, so a few unanswered questions cannot stall every agent. A ticket blocked on CI or on
+        another ticket keeps its slot (`block` sets the failure gate, which is not a Jay decision here): that block
+        clears without him. Order: tickets that never came back from Jay first, then by when Jay last answered or
+        confirmed a gate, then number. So a ticket Jay just answered joins the back of the queue (`_slot_free`)."""
         marks = ", ".join("?" for _ in PROJECT_SLOT_EXCLUDED)
         return [key for (key,) in self.db.execute(
             f"SELECT t.key FROM tickets t LEFT JOIN ticket_work w ON w.ticket_id=t.id "
             f"WHERE t.project=? AND t.archived=0 AND t.status NOT IN ({marks}) "
             "AND NOT (t.status='VERIFYING' AND w.merge IS NOT NULL "
             "AND COALESCE(json_extract(w.verification, '$.result'), '')='pass' "
-            "AND (w.gate IS NULL OR w.gate='deploy')) ORDER BY t.number",
+            "AND (w.gate IS NULL OR w.gate='deploy')) "
+            "AND COALESCE(w.gate, '') NOT IN ('plan', 'merge', 'ui', 'deploy') "
+            "AND NOT EXISTS (SELECT 1 FROM ticket_questions q WHERE q.ticket_id=t.id AND q.answered_at IS NULL) "
+            "ORDER BY (SELECT MAX(e.at) FROM ticket_events e WHERE e.ticket_id=t.id "
+            "AND e.kind IN ('pipeline.answered', 'pipeline.gate_confirmed')) IS NOT NULL, "
+            "(SELECT MAX(e.at) FROM ticket_events e WHERE e.ticket_id=t.id "
+            "AND e.kind IN ('pipeline.answered', 'pipeline.gate_confirmed')), t.number",
             (project, *PROJECT_SLOT_EXCLUDED))]
 
     def check_project_admission(self, project):
@@ -670,6 +682,13 @@ class Pipeline:
         if len(slots) >= MAX_PROJECT_WORK:
             raise TaskError(409, f"{project} has {len(slots)} of {MAX_PROJECT_WORK} work slots in use "
                                  f"({', '.join(slots[:MAX_PROJECT_WORK])}). Finish or unblock existing work first.")
+
+    def _slot_free(self, t):
+        """A ticket back from Jay while the four slots are taken waits for the next free one (CC-076)."""
+        slots = self.project_slots(t["project"])
+        if t["key"] in slots[MAX_PROJECT_WORK:]:
+            raise TaskError(409, f"{t['key']} is queued for the next free work slot: {MAX_PROJECT_WORK} are in use "
+                                 f"({', '.join(slots[:MAX_PROJECT_WORK])}). Take one of those first.")
 
     def lanes(self, project):
         """Implementation lanes running in one project: its tickets IN_PROGRESS with a worktree."""
@@ -801,6 +820,7 @@ class Pipeline:
             f = self._flow(tid)
             first = not self.db.execute("SELECT 1 FROM ticket_events WHERE ticket_id=? AND kind='pipeline.plan' LIMIT 1",
                                         (tid,)).fetchone()
+            self._slot_free(t)
             if first:
                 self._finish_first(t, "planning new work")
             if f["size"] in flow_mod.SIZES:
@@ -853,6 +873,7 @@ class Pipeline:
             if not isinstance(worktree, str) or not worktree.startswith("/") or len(worktree) > 300 \
                     or not re.match(r"^/[A-Za-z0-9._/-]+$", worktree) or "/../" in worktree + "/":
                 raise TaskError(400, "worktree must be an absolute path")
+            self._slot_free(t)
             self._lane_free(t)
             self._finish_first(t, "starting new work")
             held = self.held(t["key"])
@@ -1423,6 +1444,7 @@ class Pipeline:
             if w["planState"] != "accepted" and self._flow(tid)["size"] != "small":
                 raise TaskError(409, f"{t['key']} has no accepted plan; re-plan instead")
             self._lane_free(t)
+            self._slot_free(t)
             # The change is being rewritten: an approval, a verification, a UI acceptance or a live-deploy
             # approval was for the old one, and an open UI / deploy / merge / failure gate no longer applies.
             work = {"review_verdict": None, "confirmed": [g for g in _no_merge(w["confirmed"]) if g not in ("ui", "deploy")],

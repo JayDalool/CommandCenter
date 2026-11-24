@@ -62,6 +62,27 @@ class ProjectSlots(Base):
         self.assertIn(queued, self.pl.project_slots("samvision"))
 
 
+    def test_waiting_on_jay_frees_a_slot_and_an_answer_queues_for_the_next_one(self):
+        # CC-076, Jay 2026-11-24: Jay's decisions free the slot; a block on CI or another ticket keeps it.
+        held = [self.ticket(status=s) for s in ("BLOCKED", "IN_REVIEW", "IN_PROGRESS")]
+        gated = self.ticket(status="READY_TO_MERGE")
+        self.pl.db.execute("INSERT INTO ticket_work(ticket_id, updated_at, gate) VALUES (?, 0, 'merge')",
+                           (self.ts.get(gated)["id"],))
+        asking = self.ticket(status="RESEARCHING")
+        self.pl.ask(asking, [{"text": "Which export columns?", "kind": "yesno"}], "agent:coordinator")
+        self.assertEqual(self.pl.project_slots("samvision"), held)
+        fourth = self.ticket(status="RESEARCHING")
+        self.assertEqual(self.pl.project_slots("samvision"), held + [fourth])
+
+        qid = self.pl.work(asking)["questions"][0]["id"]
+        self.pl.answer(asking, [{"id": qid, "answer": "yes"}], "jay")
+        self.assertEqual(self.pl.project_slots("samvision"), held + [fourth, asking])
+        with self.assertRaisesRegex(TaskError, "queued for the next free work slot"):
+            self.pl.plan(asking, PLAN, "agent:planner")
+        self.ts.update(held[1], {"status": "CANCELLED"}, "jay")
+        self.pl.plan(asking, PLAN, "agent:planner")
+
+
 class Stages(Base):
     def test_every_canonical_status_maps_to_one_stage(self):
         self.assertEqual({stage_of(s) for s in tasks.STATUSES},

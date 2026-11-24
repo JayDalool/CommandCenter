@@ -17,7 +17,8 @@ and activation. CommandCenter's GitHub `main` and the local base both point to
 ### Four slots per project
 
 Each project gets four engineering slots. Work in investigation, build, review,
-ready to merge, blocked, or waiting for a decision uses a slot. A merged ticket
+or blocked on CI or another ticket uses a slot. A ticket waiting on Jay's
+decision frees its slot; when he answers, it queues for the next free slot. A merged ticket
 with passing verification and only release work left frees its engineering slot.
 Its deployment still belongs on the release list.
 The cap is on agent work only. Creating a ticket and writing its intake always
@@ -28,7 +29,8 @@ succeed; a full project keeps the new ticket in the backlog until a slot opens.
 When Work Mode is enabled, prioritize work already admitted and remind the
 lead about blockers that still need a next step. The lead records the next
 action, reworks an in-scope fix, replans changed scope, or sends Jay a specific
-decision with a recommendation. A blocked ticket keeps its slot. A
+decision with a recommendation. A ticket blocked on CI or another ticket keeps its
+slot; once the lead asks Jay, the open question frees it. A
 project that starts over capacity can finish existing work as usual.
 
 ### Slack ticket updates and stacked PRs
