@@ -475,15 +475,20 @@ class PipelineApi(Automation):
         backlog = self.post("/api/tasks", {"project": "samvision", "title": "Backlog feature"})
         self.assertEqual(backlog.status_code, 201, backlog.text)
         key = backlog.json()["key"]
-        attempt = self.client.patch(f"/api/tasks/{key}", headers=JSON, json={"status": "RESEARCHING"})
+        agent = dict(JSON, **{"x-ccd-actor": "agent:coordinator"})
+        attempt = self.client.patch(f"/api/tasks/{key}", headers=agent, json={"status": "RESEARCHING"})
         self.assertEqual(attempt.status_code, 409, attempt.text)
         self.assertEqual(self.tickets.get(key)["status"], "INBOX")
         # Creating a task always makes it: asked for straight into an active stage, it lands in the backlog.
-        direct = self.post("/api/tasks", {"project": "samvision", "title": "Active feature", "status": "RESEARCHING"})
+        direct = self.post("/api/tasks", {"project": "samvision", "title": "Active feature", "status": "RESEARCHING"},
+                           headers=agent)
         self.assertEqual(direct.status_code, 201, direct.text)
         self.assertEqual(direct.json()["status"], "INBOX")
         self.assertIn("4 of 4 work slots", direct.json()["queued"])
         self.assertEqual(len(self.daemon.pipeline.project_slots("samvision")), 4)
+        # The cap is on agent work: Jay moves a backlog ticket into work past it (review of 9d7ae58, finding 2).
+        jay = self.client.patch(f"/api/tasks/{key}", headers=JSON, json={"status": "RESEARCHING"})
+        self.assertEqual(jay.status_code, 200, jay.text)
 
     def test_a_ticket_travels_plan_to_done_and_every_step_is_attributed(self):
         self.ticket("INBOX")

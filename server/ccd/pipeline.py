@@ -660,8 +660,7 @@ class Pipeline:
         CC-076, Jay 2026-11-24: a ticket waiting on Jay's decision (an open question, or a plan, merge, UI or deploy
         gate) frees its slot, so a few unanswered questions cannot stall every agent. A ticket blocked on CI or on
         another ticket keeps its slot (`block` sets the failure gate, which is not a Jay decision here): that block
-        clears without him. Order: tickets that never came back from Jay first, then by when Jay last answered or
-        confirmed a gate, then number. So a ticket Jay just answered joins the back of the queue (`_slot_free`)."""
+        clears without him."""
         marks = ", ".join("?" for _ in PROJECT_SLOT_EXCLUDED)
         return [key for (key,) in self.db.execute(
             f"SELECT t.key FROM tickets t LEFT JOIN ticket_work w ON w.ticket_id=t.id "
@@ -671,11 +670,17 @@ class Pipeline:
             "AND (w.gate IS NULL OR w.gate='deploy')) "
             "AND COALESCE(w.gate, '') NOT IN ('plan', 'merge', 'ui', 'deploy') "
             "AND NOT EXISTS (SELECT 1 FROM ticket_questions q WHERE q.ticket_id=t.id AND q.answered_at IS NULL) "
-            "ORDER BY (SELECT MAX(e.at) FROM ticket_events e WHERE e.ticket_id=t.id "
-            "AND e.kind IN ('pipeline.answered', 'pipeline.gate_confirmed')) IS NOT NULL, "
-            "(SELECT MAX(e.at) FROM ticket_events e WHERE e.ticket_id=t.id "
-            "AND e.kind IN ('pipeline.answered', 'pipeline.gate_confirmed')), t.number",
-            (project, *PROJECT_SLOT_EXCLUDED))]
+            "ORDER BY t.number", (project, *PROJECT_SLOT_EXCLUDED))]
+
+    def _back_from_jay(self, key):
+        """Jay answered or confirmed a gate on this ticket and no agent has recorded a step on it since."""
+        return bool(self.db.execute(
+            "SELECT 1 FROM tickets t JOIN ticket_events r ON r.ticket_id=t.id "
+            "AND r.kind IN ('pipeline.answered', 'pipeline.gate_confirmed') WHERE t.key=? "
+            "AND r.at=(SELECT MAX(at) FROM ticket_events WHERE ticket_id=t.id "
+            "AND kind IN ('pipeline.answered', 'pipeline.gate_confirmed')) "
+            "AND NOT EXISTS (SELECT 1 FROM ticket_events e WHERE e.ticket_id=t.id AND e.at>r.at "
+            "AND e.actor LIKE 'agent:%' AND e.kind LIKE 'pipeline.%')", (key,)).fetchone())
 
     def check_project_admission(self, project):
         slots = self.project_slots(project)
@@ -684,11 +689,14 @@ class Pipeline:
                                  f"({', '.join(slots[:MAX_PROJECT_WORK])}). Finish or unblock existing work first.")
 
     def _slot_free(self, t):
-        """A ticket back from Jay while the four slots are taken waits for the next free one (CC-076)."""
-        slots = self.project_slots(t["project"])
-        if t["key"] in slots[MAX_PROJECT_WORK:]:
-            raise TaskError(409, f"{t['key']} is queued for the next free work slot: {MAX_PROJECT_WORK} are in use "
-                                 f"({', '.join(slots[:MAX_PROJECT_WORK])}). Take one of those first.")
+        """A ticket back from Jay waits while four other tickets hold slots (CC-076). Only such a ticket waits:
+        work already admitted keeps going even when a project starts over four (review of 9d7ae58, finding 1)."""
+        if not self._back_from_jay(t["key"]):
+            return
+        held = [k for k in self.project_slots(t["project"]) if k != t["key"] and not self._back_from_jay(k)]
+        if len(held) >= MAX_PROJECT_WORK:
+            raise TaskError(409, f"{t['key']} is queued for the next free work slot: {len(held)} are in use "
+                                 f"({', '.join(held[:MAX_PROJECT_WORK])}). Take one of those first.")
 
     def lanes(self, project):
         """Implementation lanes running in one project: its tickets IN_PROGRESS with a worktree."""
@@ -779,7 +787,9 @@ class Pipeline:
                 self.db.execute("INSERT INTO ticket_work(ticket_id, updated_at) VALUES (?,?)", (tid, at))
                 w = self._row(tid)
             fields, work, events = fn(tid, t, w, at)
-            if t["status"] in PROJECT_SLOT_EXCLUDED and fields.get("status", t["status"]) not in PROJECT_SLOT_EXCLUDED:
+            # The cap is on agent work: Jay admits past it (review of 9d7ae58, finding 2).
+            if (actor != "jay" and t["status"] in PROJECT_SLOT_EXCLUDED
+                    and fields.get("status", t["status"]) not in PROJECT_SLOT_EXCLUDED):
                 self.check_project_admission(t["project"])
             changes = self.ts._apply(tid, fields, actor, at, trigger=events[0][1] if events else None) if fields else []
             if work:
@@ -1707,7 +1717,7 @@ class Pipeline:
             due_at = clean_due(due, at) if due is not None else (t["dueAt"] or due_by_size(eff, at))
             to = "build" if eff == "small" else "investigate"
             slots = self.project_slots(t["project"])
-            if len(slots) >= MAX_PROJECT_WORK:
+            if actor != "jay" and len(slots) >= MAX_PROJECT_WORK:
                 # CC-076, Jay 2026-11-24: the four slots cap agent work, not ticket making. A full project still
                 # takes the ticket's definition; it waits in the backlog and the lead runs intake again to admit it.
                 self._flow_set(tid, at, size=eff, criteria=crit, requirements=reqs, review_due=None)

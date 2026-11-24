@@ -1581,7 +1581,8 @@ class Daemon(LeadChat, HqDaemon):
             self._not_paused(project, "agent work")
         status = fields.get("status")
         queued = None
-        if self.pipeline and status in tasks_mod.ALL_STATUSES and status not in pipeline_mod.PROJECT_SLOT_EXCLUDED:
+        if (self.pipeline and actor != "jay" and status in tasks_mod.ALL_STATUSES
+                and status not in pipeline_mod.PROJECT_SLOT_EXCLUDED):
             # CC-076, Jay 2026-11-24: creating a task always makes it. The four slots cap agent work, so a ticket
             # asked for straight into an active stage while the project is full is made in the backlog instead.
             try:
@@ -1615,7 +1616,7 @@ class Daemon(LeadChat, HqDaemon):
                     raise ActionError(409, f"{w['key']} is in the pipeline: its labels, type, flags and archive "
                                            f"change only with Jay's Developer Unlock")
             status = body.get("status")
-            if (w["status"] in pipeline_mod.PROJECT_SLOT_EXCLUDED and status in tasks_mod.ALL_STATUSES
+            if (actor != "jay" and w["status"] in pipeline_mod.PROJECT_SLOT_EXCLUDED and status in tasks_mod.ALL_STATUSES
                     and status not in pipeline_mod.PROJECT_SLOT_EXCLUDED):
                 self._wrap(self.pipeline.check_project_admission, self.tasks.get(key)["project"])
         ticket, changes = self._wrap(self._need_tasks().update, key, body, actor)

@@ -76,11 +76,26 @@ class ProjectSlots(Base):
 
         qid = self.pl.work(asking)["questions"][0]["id"]
         self.pl.answer(asking, [{"id": qid, "answer": "yes"}], "jay")
-        self.assertEqual(self.pl.project_slots("samvision"), held + [fourth, asking])
+        self.assertEqual(self.pl.project_slots("samvision"), held + [asking, fourth])
         with self.assertRaisesRegex(TaskError, "queued for the next free work slot"):
             self.pl.plan(asking, PLAN, "agent:planner")
         self.ts.update(held[1], {"status": "CANCELLED"}, "jay")
         self.pl.plan(asking, PLAN, "agent:planner")
+
+    def test_work_already_admitted_keeps_going_when_a_project_starts_over_four(self):
+        # Review of 9d7ae58, finding 1: only a ticket back from Jay queues; six admitted tickets all keep working.
+        admitted = [self.ticket(status="RESEARCHING") for _ in range(6)]
+        self.assertEqual(len(self.pl.project_slots("samvision")), 6)
+        for key in admitted:
+            self.pl.plan(key, PLAN, "agent:planner")
+
+    def test_jay_admits_past_the_cap(self):
+        # Review of 9d7ae58, finding 2: the cap is on agent work, so Jay's intake still admits.
+        for status in ("BLOCKED", "IN_REVIEW", "READY_TO_MERGE", "IN_PROGRESS"):
+            self.ticket(status=status)
+        mine = self.ticket(description="Jay's own feature")
+        self.pl.intake(mine, "standard", ["The feature is visible"], "jay", priority="HIGH")
+        self.assertEqual(self.ts.get(mine)["status"], "RESEARCHING")
 
 
 class Stages(Base):
