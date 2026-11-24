@@ -131,6 +131,7 @@ CONFIG_DEFAULTS = {
     "link_base": "http://localhost:7777",   # where CommandCenter opens on Jay's devices (the SSH tunnel today)
 }
 HELD_MAX = 50
+DM_TRIES = 3                    # sends of one Needs You DM before a failure is left in the log
 THREADS_MAX = 1000
 SEEN_EVENTS_MAX = 500
 IDS_REFRESH_S = 60              # at most one re-read of the channel list a minute per unknown channel
@@ -618,6 +619,7 @@ class Notifier:
         seen, _ = self.store.get("notify:seen", None)
         self.seen = set(seen) if seen is not None else None   # None until the first tick sets a baseline
         self.held = list(self.store.get("notify:held", [])[0] or [])
+        self.retries = {}                                     # item key -> failed DM sends (check_needs)
         self.threads = dict(self.store.get("notify:threads", {})[0] or {})
         self.tickets = dict(self.store.get("notify:tickets", {})[0] or {})    # ticket key -> its thread in Slack
         self.daily = dict(self.store.get("notify:daily", {})[0] or {})
@@ -900,7 +902,7 @@ class Notifier:
             return f"{self.name(proj)}: {n.get('ref')} needs you"
         return f"{self.name(proj)}: {need_label(n)} · {n.get('ref')}"
 
-    async def send_need(self, n):
+    async def send_need(self, n, push=True):
         item = {"type": "need", "project": n.get("project"), "kind": n.get("kind"), "gate": n.get("gate"),
                 "ref": n.get("ref"), "stale": bool(n.get("stale")), "qids": list(n.get("qids") or []),
                 "textHash": _digest(n.get("text")), "since": n.get("since")}
@@ -917,8 +919,10 @@ class Notifier:
         if p is not None and (redact(text)[1] or unshown(text) or plan_unshown(p["plan"])):
             # Part of what an approve approves would not show: CommandCenter only.
             item["planHash"] = None
-        await self.post("dm", text, item=item)
-        await self.push(self.push_title(n), self.link(n))
+        ts = await self.post("dm", text, item=item)
+        if push:
+            await self.push(self.push_title(n), self.link(n))
+        return bool(ts) or not self.settings["slack"]
 
     async def check_needs(self):
         items = {item_key(n): n for n in self.needs()}
@@ -934,8 +938,16 @@ class Notifier:
         for n in new:
             if quiet:
                 self.held = (self.held + [n])[-HELD_MAX:]
-            else:
-                await self.send_need(n)
+            elif not await self.send_need(n, push=not self.retries.get(item_key(n))):
+                # The DM did not go out (no member ID, a token or scope missing, Slack down): try it again on the
+                # next ticks rather than drop it, since Jay found questions he was never sent (2026-11-24). A few
+                # tries only, so a broken setup is one failure in the log, not one every 20 s.
+                k = item_key(n)
+                self.retries[k] = self.retries.get(k, 0) + 1
+                if self.retries[k] < DM_TRIES:
+                    self.seen.discard(k)
+        self.retries = {k: v for k, v in self.retries.items() if k in items}
+        self.store.put("notify:seen", sorted(self.seen))
         if quiet:
             self.store.put("notify:held", self.held)
         elif self.held:

@@ -408,6 +408,39 @@ class Summaries(unittest.TestCase):
         self.assertEqual(len(slack.posts), 5)
 
 
+class DmRetries(unittest.TestCase):
+    def test_a_dm_that_fails_is_tried_again_a_few_times_and_pushed_once(self):
+        # 2026-11-24: questions were never in Jay's DM. A failed send was marked seen and never tried again.
+        n, d, slack, pushes = make(settings={"slack": True, "ntfy": True})
+        run(n.tick())
+        real = slack.dm
+        def broken(user):
+            raise notify.SlackError("conversations.open: missing_scope")
+        slack.dm = broken
+        d.needs_list = [need("SV-60", "questions", None, text="Claude needs 1 answer: Comps")]
+        d.questions["SV-60"] = [{"id": 90, "text": "Use last year's comps?", "kind": "yesno", "answer": None}]
+        run(n.tick())
+        self.assertEqual((slack.posts, len(pushes)), ([], 1))
+        slack.dm = real
+        run(n.tick())
+        self.assertIn("Use last year's comps?", slack.posts[-1]["text"])
+        self.assertEqual(len(pushes), 1)                      # the push went out the first time
+        run(n.tick())
+        self.assertEqual(len(slack.posts), 1)                 # sent, so not again
+
+    def test_a_dm_that_keeps_failing_stops_after_three_tries(self):
+        n, d, slack, pushes = make(settings={"slack": True})
+        run(n.tick())
+        def broken(user):
+            raise notify.SlackError("conversations.open: missing_scope")
+        slack.dm = broken
+        d.needs_list = [need("SV-61")]
+        for _ in range(5):
+            run(n.tick())
+        fails = [e for e in d.events if e[0] == "notify.failed" and e[2]["data"]["kind"] == "slack dm"]
+        self.assertEqual(len(fails), notify.DM_TRIES)
+
+
 class ReplyBase(unittest.TestCase):
     def setUp(self):
         self.n, self.d, self.slack, _ = make(settings={"slack": True})
