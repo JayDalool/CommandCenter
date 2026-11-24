@@ -13,7 +13,9 @@ What is sent where:
     DM to Jay        every new Needs You item (gate, questions, merge, task, CI, a blocked agent). A reply in its
                      thread is his answer (below).
     #<project>       that project's alerts (PR opened/closed, checks failing, merges, deploys) and each morning a
-                     technical summary: PRs, checks, reviews, deploys.
+                     technical summary: PRs, checks, reviews, deploys. Each ticket has a thread there with every
+                     seat's step; a questions step shows the questions and options too, and a reply there that only
+                     picks options ("2", or "1. a" / "2. b") answers them as the same DM reply does.
     #cto             host and ccd alerts, and each morning the owner's summary: per project, what shipped, what
                      waits on Jay, and spend against budget.
     ntfy             the same Needs You items as the DM, as a title and a link.
@@ -399,19 +401,67 @@ LETTERS = "abcdefgh"
 
 
 def option_lines(q, letters=False):
-    """A choice question's options for the DM: numbered (one question) or lettered (several), the recommended one
-    marked with why."""
+    """A choice question's options: numbered (one question) or lettered (several), the recommended one marked with
+    why on a line of its own. Each line is a Slack quote, so the options sit in one aligned block under the
+    question on a phone too; leading spaces did not (Jay, 2026-11-24: "dont look good or aligned well")."""
     if q.get("kind") != "choice" or not q.get("options"):
         return []
     out = []
     for j, o in enumerate(q["options"]):
         mark = LETTERS[j] if letters else str(j + 1)
-        rec = q.get("recommended") == j
-        line = f"      *{mark}*  {esc(str(o)[:200])}"
-        if rec:
-            line += "  ⭐ _recommended_" + (f": {esc(str(q.get('why') or '')[:300])}" if q.get("why") else "")
+        line = f">*{mark}.*  {esc(_cut(o, 200))}"
+        if q.get("recommended") == j:
+            line += "  ⭐ *Recommended*"
+            out.append(line)
+            if q.get("why"):
+                out.append(f">_Why: {esc(_cut(q['why'], 300))}_")
+            continue
         out.append(line)
     return out
+
+
+def question_lines(qs):
+    """Open questions as the DM and the ticket's channel thread both show them: each question in bold on its own
+    line (Q1, Q2 when there are several), its options below it, a blank line between questions. Agent text is put
+    on one line (_cut) so it cannot pass a line of its own off as ccd's."""
+    several = len(qs) > 1
+    out = []
+    for i, q in enumerate(qs, 1):
+        if out:
+            out.append("")
+        out.append("*" + (f"Q{i}. " if several else "") + f"{esc(_cut(q.get('text'), 400))}*")
+        if q.get("kind") == "yesno":
+            out.append(">Yes or no")
+        out += option_lines(q, letters=several)
+    return out
+
+
+def reply_hint(qs):
+    """How to answer these questions with a Slack reply."""
+    choice = any(q.get("kind") == "choice" and q.get("options") for q in qs)
+    if len(qs) > 1:
+        return ("_Reply in this thread with one numbered line per question (1. a, 2. b): "
+                + ("an option's letter, or your own answer" if choice else "one answer each") + "._")
+    return "_Reply in this thread with " + ("an option's number, or your own answer" if choice else "your answer") + "._"
+
+
+def only_picks(qs, text):
+    """Whether a reply is nothing but answers picked from these questions' options ("2"; "1. a" and "2. b" on lines
+    of their own; yes or no for a yes/no question). Only such a reply in a ticket's channel thread answers; anything
+    else there is talk with the lead, as before."""
+    def pick(q, a):
+        a = (a or "").strip()
+        if q.get("kind") == "yesno":
+            return a.lower().rstrip(".!") in ("yes", "no")
+        marks = _marks(a)
+        return q.get("kind") == "choice" and bool(q.get("options")) and marks is not None \
+            and all(0 <= j < len(q["options"]) for j in marks)
+    if len(qs) == 1:
+        return pick(qs[0], text)
+    lines = [line for line in (text or "").splitlines() if line.strip()]
+    found = dict(re.findall(r"(?m)^\s*(\d{1,2})[.):]\s*(.+?)\s*$", text or ""))
+    return len(lines) == len(qs) and set(found) == {str(i) for i in range(1, len(qs) + 1)} \
+        and all(pick(q, found[str(i)]) for i, q in enumerate(qs, 1))
 
 
 def pick_option(q, text):
@@ -728,17 +778,7 @@ class Notifier:
         if n.get("kind") == "questions" and is_ticket(n.get("ref")) and not n.get("stale"):
             shown = set(n.get("qids") or [])
             qs = [q for q in self.open_questions(n["ref"]) if q["id"] in shown]
-            several = len(qs) > 1
-            for i, q in enumerate(qs, 1):
-                lines.append(f"{i}. {esc(q['text'][:400])}")
-                lines += option_lines(q, letters=several)
-            choice = any(q.get("kind") == "choice" and q.get("options") for q in qs)
-            if several:
-                lines.append("_Reply in this thread with numbered lines (1. …, 2. …): "
-                             + ("an option's letter, or your own answer" if choice else "one answer each") + "._")
-            else:
-                lines.append("_Reply in this thread with " + ("an option's number, or your own answer" if choice
-                                                              else "your answer") + "._")
+            lines += ["", *question_lines(qs), "", reply_hint(qs)]
             lines.append("_A reply that ends with ? goes to the agent as your question; its answer comes back here._")
         elif n.get("kind") == "gate" and n.get("gate") in PLAN_GATES:
             p = plan
@@ -937,9 +977,29 @@ class Notifier:
         if text.startswith(key + " "):
             text = text[len(key) + 1:]
         root = await self._ticket_thread(key, ev.get("project"), chan)
-        if root is not None:
-            await self.post(chan, esc(text), thread_ts=root, who=SEATS.get(data.get("actor")),
-                            broadcast=data.get("kind") in PIPELINE_ALERTS)
+        if root is None:
+            return
+        body, qids = esc(text), None
+        if data.get("kind") == "pipeline.questions":
+            # The questions themselves, not just "Claude needs 1 answer": Jay reads the channel on his phone and
+            # did not see them until he asked (2026-11-24). The DM still carries them too.
+            qs = self.open_questions(key)
+            if qs:
+                qids = [q["id"] for q in qs]
+                pickable = all(q.get("kind") == "yesno" or (q.get("kind") == "choice" and q.get("options"))
+                               for q in qs)
+                # only_picks() decides what answers; this line says the same thing in words.
+                pick = (None if not pickable else "one line per question, like 1. a and 2. b" if len(qs) > 1
+                        else "just yes or no" if qs[0].get("kind") == "yesno" else "just an option's number")
+                hint = (f"_To answer, reply here with {pick}. Anything else you write here goes to the lead._" if pick
+                        else "_Answer in your DM or in CommandCenter. A reply here goes to the lead._")
+                body = "\n".join([body, "", *question_lines(qs), "", hint])
+        ts = await self.post(chan, body, thread_ts=root, who=SEATS.get(data.get("actor")),
+                             broadcast=data.get("kind") in PIPELINE_ALERTS)
+        if qids and ts and key in self.tickets:
+            # What a pick-only reply in this thread answers: exactly the questions this post showed (answer()).
+            self.tickets[key]["qids"] = qids
+            self.store.put("notify:tickets", self.tickets)
 
     def _ticket_item(self, cid, ts):
         """A ticket's thread found from notify:tickets, for a root that `threads` has already pruned (it keeps
@@ -1118,6 +1178,9 @@ class Notifier:
         if not text:
             return {"did": "empty"}
         if item and item.get("type") == "ticket":
+            r = await self.ticket_answer(item, text)
+            if r:
+                return dict(r, project=item.get("project"))
             return await self.to_lead(item.get("project"), text, item.get("ref"))
         if item and item.get("type") == "need":
             proj, ref = item.get("project"), item.get("ref")
@@ -1153,6 +1216,21 @@ class Notifier:
         if to:
             return await self.to_lead(to, text, None)
         return {"did": "ignored"}
+
+    async def ticket_answer(self, item, text):
+        """A reply in a ticket's channel thread that only picks options of the questions its latest questions post
+        showed answers them, as the same reply to the DM does. None for anything else, which goes to the lead."""
+        key = item.get("ref")
+        qids = (self.tickets.get(key) or {}).get("qids")
+        if self.client(item.get("project")) or not qids:
+            return None
+        open_ = {q["id"]: q for q in self.open_questions(key)}
+        if all(i in open_ for i in qids):
+            if not only_picks([open_[i] for i in qids], text):
+                return None
+        elif _marks(text) is None and not re.fullmatch(r"(?:\s*\d{1,2}[.):]\s*[a-zA-Z0-9]{1,3}[.)]?\s*)+", text):
+            return None
+        return await self.answer(key, text, qids)
 
     def _route(self, cid):
         """Whose a message outside an item's thread is: "cto" (the DM or #cto), a project key, or None."""
