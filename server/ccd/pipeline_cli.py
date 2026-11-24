@@ -3,6 +3,8 @@
     python -m ccd.pipeline_cli work     SV-056
     python -m ccd.pipeline_cli plan     SV-056 --role planner  --plan-file plan.json
     python -m ccd.pipeline_cli start    SV-056 --role coordinator --branch SV-056-x --worktree /srv/…/SV-056
+    python -m ccd.pipeline_cli link     SV-087 --pr JayDalool/SamVisionAI#249     (lead: tie the ticket to its PR; see below)
+    python -m ccd.pipeline_cli start    SV-087 --branch SV-118-advisor-typed-guard --worktree /srv/…/SV-087 [--pr owner/repo#N]
     python -m ccd.pipeline_cli review   SV-056 --role reviewer --session <fresh reviewer session> --verdict APPROVE --head <sha> [--findings-file f.json]
     python -m ccd.pipeline_cli verify   SV-056 --role verifier --result pass --evidence "…"
     python -m ccd.pipeline_cli handoff  SV-056 --role coordinator --done … --next … [--decisions …] [--blockers …]
@@ -36,6 +38,12 @@ The delivery flow (docs/flow/FLOW.md). Each line runs as the seat named in brack
                                            --criterion c1=pass [--criterion c2=fail …]                        [user-reviewer]
     python -m ccd.pipeline_cli close       SV-056 --note "what was done, what to know next time"             [lead]
 
+`link` (CC-071) is the lead's, or Jay's: it records, explicitly, the PR a ticket belongs to when the PR's branch does not
+lead with the ticket key (SamVision's SV-118-*) or lives in another repository on the project's allow list
+(Command Center: JayDalool/jay-dev). The PR must be open and seen by ccd's last GitHub poll, and linked to no other open
+ticket. `start` with a repo-native branch needs that link (or `--pr`, which links in the same step) and the branch must
+be the PR's head branch.
+
 `criteria` replaces the whole list: repeat every criterion you keep (as its text; an unchanged text keeps its state).
 Intake needs a priority (URGENT, HIGH, MEDIUM or LOW) unless the ticket already has one; without --due the ticket is
 due 2, 5 or 10 days from today for small, standard or risky.
@@ -67,7 +75,7 @@ from . import config
 ROLES = ("coordinator", "planner", "implementer", "reviewer", "verifier", "tech-reviewer", "user-reviewer",
          "design-reviewer")
 # The flow's steps run as their seat when no --role is given.
-DEFAULT_ROLE = {"intake": "coordinator", "criteria": "coordinator", "close": "coordinator",
+DEFAULT_ROLE = {"link": "coordinator", "intake": "coordinator", "criteria": "coordinator", "close": "coordinator",
                 "plan-review": "tech-reviewer", "user-check": "user-reviewer"}
 
 
@@ -134,7 +142,7 @@ def build(argv):
     p.add_argument("op", choices=("work", "plan", "start", "review", "verify", "handoff", "block", "role", "finding",
                                   "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
                                   "tasks", "add", "intake", "criteria", "plan-review", "user-check", "close",
-                                  "deploy-plan", "reply"))
+                                  "deploy-plan", "reply", "link"))
     p.add_argument("key")
     p.add_argument("decision", nargs="?", help="plan-review: APPROVE or SEND_BACK; user-check: pass or fail")
     p.add_argument("--role", choices=ROLES)
@@ -142,6 +150,7 @@ def build(argv):
     p.add_argument("--session")
     p.add_argument("--plan-file")
     p.add_argument("--branch")
+    p.add_argument("--pr", help="link, start: the ticket's PR as owner/repo#N")
     p.add_argument("--worktree")
     p.add_argument("--verdict", choices=("APPROVE", "REQUEST_CHANGES", "SEND_BACK"))
     p.add_argument("--head")
@@ -189,7 +198,8 @@ def build(argv):
     meta = {k: v for k, v in (("model", a.model), ("session", a.session)) if v}
     body = {
         "plan": lambda: {"plan": _json_file(a.plan_file) if a.plan_file else None, **meta},
-        "start": lambda: {"branch": a.branch, "worktree": a.worktree, **meta},
+        "start": lambda: {"branch": a.branch, "worktree": a.worktree, **({"pr": a.pr} if a.pr else {}), **meta},
+        "link": lambda: {"pr": a.pr},
         "review": lambda: {"verdict": a.verdict, "head": a.head,
                            "findings": _json_file(a.findings_file) if a.findings_file else [], **meta},
         "verify": lambda: {"result": a.result, "evidence": a.evidence, **meta},

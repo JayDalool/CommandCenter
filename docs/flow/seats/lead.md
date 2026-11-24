@@ -33,12 +33,27 @@ At the end: the closing note.
         --requirement "The Offers table layout does not change" [--parent SV-080]   # (flow PR)
     python -m ccd.pipeline_cli criteria SV-071 --role coordinator --priority medium --due 2026-11-21   # any stage
     python -m ccd.pipeline_cli start SV-082 --role coordinator --branch SV-082-csv --worktree /srv/…/SV-082
+    python -m ccd.pipeline_cli link SV-087 --role coordinator --pr JayDalool/SamVisionAI#249   # repo-native branch / another repo
+    python -m ccd.pipeline_cli start SV-087 --role coordinator --branch SV-118-advisor-typed-guard --worktree /srv/…/SV-087 --pr JayDalool/SamVisionAI#249
     python -m ccd.pipeline_cli handoff SV-082 --role coordinator --done "…" --next "…"
     python -m ccd.pipeline_cli ask SV-082 --role coordinator --question "Export which columns?" \
         --option "Same as the table" --option "All fields" --recommend 1 --why "matches what they see"
     python -m ccd.pipeline_cli block SV-082 --role coordinator --reason "…" --what "…" --action "…"
     python -m ccd.pipeline_cli stale SV-071 --role coordinator --reason "superseded by SV-082"   # Jay decides
     python -m ccd.pipeline_cli close SV-082 --role coordinator --note "What changed, why, how it was checked"  # (flow PR)
+
+## Linking a ticket to a PR whose branch does not lead with its key (CC-071)
+
+ccd links a PR to a ticket by itself only when the key LEADS the PR's title or branch. For a repo-native branch (SamVision's
+`SV-118-advisor-typed-guard`) or a PR in another repository (Command Center tickets for `JayDalool/jay-dev`), you link it:
+
+1. The PR must be open and seen by ccd's last GitHub poll (wait one poll after it opens), and linked to no other open ticket.
+2. `pipeline_cli link KEY --role coordinator --pr owner/repo#N`, or give the same `--pr` to `start`, which links in the same step.
+3. `start --branch <the PR's head branch>`: a native branch is accepted only when it is that head branch.
+4. Only your link (or Jay's) counts; an agent's `/links` row never does. The repository must be on the project's allow list
+   (`registry.py` `link_repos`; Command Center: `JayDalool/jay-dev`); Jay approves additions.
+5. A merge counts only after you linked the PR. ccd never merges a PR in another repository: it is Jay's, by hand.
+Full rules: `docs/API.md` (explicit links).
 
 ## When a review sends it back (round 1)
 

@@ -28,9 +28,10 @@ import unicodedata
 import zoneinfo
 
 from . import flow as flow_mod
+from . import github
 from . import registry
 from .security import redact
-from .tasks import TaskError, _printable
+from .tasks import CLOSED, PR_REF_RE, TaskError, _printable
 
 STAGES = ("PLAN", "BUILD", "REVIEW", "MERGE", "VERIFY", "DONE")
 STAGE_OF = {"INBOX": "PLAN", "PROPOSED": "PLAN", "RESEARCHING": "PLAN", "READY_TO_IMPLEMENT": "PLAN",
@@ -48,6 +49,26 @@ OWNER_GATES = ("plan", "ui", "deploy", "failure", "merge")
 ROLE_NAMES = ("coordinator", "planner", "implementer", "reviewer", "verifier",
               "tech-reviewer", "user-reviewer", "design-reviewer")       # the flow's seats (flow.ROLE_OF)
 LEADS = ("jay", "agent:coordinator")          # who runs intake, edits criteria and writes the closing note
+# CC-071: a branch that is not KEY-<slug> (a repo-native name such as SamVision's SV-118-*) may start a ticket only
+# when it is the head branch of the PR its lead linked. The name still has to be safe to hand to git, a worktree
+# and `git log`: segments of letters, digits, . _ - (never a leading - or .), at most 3 segments.
+NATIVE_BRANCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,2}")
+LINK_STATUSES = ("READY_TO_IMPLEMENT", "IN_PROGRESS", "IN_REVIEW")
+
+
+def native_branch_problem(branch, base=None):
+    """Why a repo-native branch name is refused, or None. Refs and base branches would let `start` name the wrong
+    thing (HEAD, origin/x, refs/heads/x are not task branches); .lock and .. are git-invalid or traversal."""
+    if not isinstance(branch, str) or not NATIVE_BRANCH_RE.fullmatch(branch):
+        return "the branch name has characters or a shape ccd will not accept"
+    segs = branch.split("/")
+    if segs[0].lower() in ("refs", "heads", "remotes", "origin"):
+        return "the branch name starts like a git ref, not a task branch"
+    if ".." in branch or any(x.endswith(".lock") or x.endswith(".") for x in segs):
+        return "the branch name is not valid for git"
+    if branch.lower() in ("head", "main", "master") or (base and branch.lower() == str(base).lower()):
+        return "that is the base branch, not a task branch"
+    return None
 USER_REVIEWERS = ("agent:user-reviewer", "agent:design-reviewer")
 CRITERION_ID_RE = re.compile(r"^c[0-9]{1,3}$")
 MAX_LANES = 2
@@ -819,15 +840,79 @@ class Pipeline:
         self._flow_set(tid, at, review_due=at, plan_review=None)
         return {}, work, [("pipeline.plan", "plan recorded for technical review", {"owner": False, "review": True})]
 
-    def start(self, key, branch, worktree, actor, model=None, session=None):
+    def link(self, key, ref, actor, seen=None):
+        """CC-071: the lead (or Jay) links a ticket to its PR, `owner/repo#N`, explicitly. The only way a repo-native
+        branch (SamVision's SV-118-*) or a PR in another allow-listed repo reaches review. `seen(ref)` is the
+        daemon's read of the PR ({state, branch, title} from the last GitHub poll or a one-off read) or None."""
+        def fn(tid, t, w, at):
+            canon, info = self._link_checks(t, ref, actor, seen)
+            ev = self._link_write(tid, t, canon, info, actor, at)
+            return {}, {}, [ev] if ev else []
+        return self._tx(key, actor, fn)
+
+    def _link_checks(self, t, ref, actor, seen):
+        """Every refusal of an explicit link, before anything is written. Returns (ref in registry casing, PR info)."""
+        self._lead(actor, "link")
+        if not isinstance(ref, str) or not PR_REF_RE.fullmatch(ref):
+            raise TaskError(400, "pr must be owner/repo#N (N without a leading zero)")
+        project = t["project"]
+        if registry.paused(project) or registry.class_of(project) != "own":
+            raise TaskError(409, f"{project} takes no explicit PR links (paused or not Jay's own repository)")
+        allowed = {a.lower(): a for a in registry.link_repos(project)}
+        slug, _, num = ref.rpartition("#")
+        if slug.lower() not in allowed:
+            raise TaskError(400, f"{slug} is not on {project}'s list of repositories a ticket may link a PR from "
+                                 f"({', '.join(sorted(allowed.values())) or 'none'})")
+        canon = f"{allowed[slug.lower()]}#{num}"
+        if t["status"] not in LINK_STATUSES:
+            raise TaskError(409, f"{t['key']} is {t['status']}; link needs {' or '.join(LINK_STATUSES)}")
+        for k, st in self.db.execute(
+                "SELECT t.key, t.status FROM ticket_links l JOIN tickets t ON t.id=l.ticket_id WHERE l.provider='github' "
+                "AND l.kind='pr' AND lower(l.ref)=lower(?) AND t.archived=0 AND t.key<>?", (canon, t["key"])).fetchall():
+            if st not in CLOSED:
+                raise TaskError(409, f"{canon} is already linked to {k}; one PR belongs to one open ticket")
+        info = seen(canon) if seen else None
+        if not isinstance(info, dict) or not info.get("state"):
+            raise TaskError(409, f"{canon} was not seen open yet; try again after the next GitHub poll")
+        if info["state"] == "MERGED":
+            raise TaskError(409, f"{canon} is already merged; a merged PR is never linked to a ticket")
+        if info["state"] != "OPEN":
+            raise TaskError(409, f"{canon} is {info['state'].lower()}, not open")
+        return canon, info
+
+    def _link_write(self, tid, t, canon, info, actor, at):
+        """Record the explicit link (idempotent). A row this ticket already has from an agent or ccd's own linking
+        becomes the lead's, with a fresh created_at: the merge-after-link rule and the helper then read it as explicit
+        (N1). Returns the pipeline.linked event, or None when the lead's own row already existed."""
+        row = self.db.execute("SELECT id, created_by FROM ticket_links WHERE ticket_id=? AND provider='github' AND "
+                              "kind='pr' AND lower(ref)=lower(?)", (tid, canon)).fetchone()
+        if row and row[1] in LEADS:
+            return None
+        url, title = github.pr_ref_url(canon), _printable(str(info.get("title") or ""), 300, "title")
+        if row:
+            self.db.execute("UPDATE ticket_links SET ref=?, url=?, title=?, created_at=?, created_by=? WHERE id=?",
+                            (canon, url, title, at, actor, row[0]))
+        else:
+            self.db.execute("INSERT INTO ticket_links(ticket_id, provider, kind, ref, url, title, created_at, created_by) "
+                            "VALUES (?,?,?,?,?,?,?,?)", (tid, "github", "pr", canon, url, title, at, actor))
+        head_branch = info.get("branch")
+        note = (f"; the PR's branch is {head_branch}, the ticket's is {t['branch']}"
+                if t["branch"] and head_branch and head_branch != t["branch"] else "")
+        return ("pipeline.linked", f"linked {canon} explicitly{note}", {"pr": canon, "branch": head_branch})
+
+    def start(self, key, branch, worktree, actor, model=None, session=None, pr=None, seen=None, base=None):
         def fn(tid, t, w, at):
             self._need(t, ("READY_TO_IMPLEMENT",), "start")
             f = self._flow(tid)
             small = flow_mod.effective_size(f["size"], policy(t)) == "small" and f["size"] == "small"
             if w["planState"] != "accepted" and not small:
                 raise TaskError(409, f"{t['key']} has no accepted plan")
-            if not isinstance(branch, str) or not re.match(rf"^{re.escape(t['key'])}-{SLUG_RE}$", branch):
-                raise TaskError(400, f"branch must be {t['key']}-<short-slug> (lowercase, digits, hyphens)")
+            key_led = isinstance(branch, str) and re.match(rf"^{re.escape(t['key'])}-{SLUG_RE}$", branch)
+            link_ref = link_info = None
+            if pr is not None:
+                link_ref, link_info = self._link_checks(t, pr, actor, seen)
+            if not key_led:
+                self._native_branch(t, branch, base, link_ref, link_info, seen)
             if not isinstance(worktree, str) or not worktree.startswith("/") or len(worktree) > 300 \
                     or not re.match(r"^/[A-Za-z0-9._/-]+$", worktree) or "/../" in worktree + "/":
                 raise TaskError(400, "worktree must be an absolute path")
@@ -841,9 +926,33 @@ class Pipeline:
             # The implementation runs in the ticket's task session (spec §8) unless another is named, so the
             # implementer always has a recorded session a reviewer must differ from.
             work = {"worktree": worktree, "roles": self._role(w, "implementer", model, session or t["key"].lower(), at)}
-            return ({"status": "IN_PROGRESS", "branch": branch}, work,
-                    [("pipeline.started", f"implementation started on {branch}", {"branch": branch})])
+            events = [("pipeline.started", f"implementation started on {branch}", {"branch": branch})]
+            if link_ref:
+                # Written last, after every refusal above, in the same transaction (N3): a refused start leaves no link.
+                ev = self._link_write(tid, t, link_ref, link_info, actor, at)
+                if ev:
+                    events.append(ev)
+            return {"status": "IN_PROGRESS", "branch": branch}, work, events
         return self._tx(key, actor, fn)
+
+    def _native_branch(self, t, branch, base, link_ref, link_info, seen):
+        """CC-071: a branch that does not lead with the key starts a ticket only when it is the head branch of a PR
+        the lead linked explicitly (a row already on the ticket, or the one `start --pr` is recording now)."""
+        problem = native_branch_problem(branch, base)
+        if problem:
+            raise TaskError(400, f"branch must be {t['key']}-<short-slug>, or a repo-native branch linked to its PR: {problem}")
+        found = {}
+        if link_ref:
+            found[link_ref.lower()] = link_info
+        for row in self.ts.explicit_pr_links(key=t["key"]):
+            found.setdefault(row["ref"].lower(), seen(row["ref"]) if seen else None)
+        if not found:
+            raise TaskError(400, f"branch must be {t['key']}-<short-slug>; for a repo-native branch the lead links the "
+                                 f"PR first (pipeline_cli link {t['key']} --pr owner/repo#N) or passes --pr to start")
+        heads = {i.get("branch") for i in found.values() if isinstance(i, dict) and i.get("state") == "OPEN"}
+        if branch not in heads:
+            raise TaskError(409, f"branch {branch} is not the head branch of {t['key']}'s linked PR "
+                                 f"({', '.join(sorted(h for h in heads if h)) or 'not seen open in the last GitHub poll'})")
 
     def review(self, key, verdict, head, actor, findings=(), model=None, session=None, pr=None):
         if verdict not in ("APPROVE", "REQUEST_CHANGES"):

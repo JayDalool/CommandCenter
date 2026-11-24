@@ -144,6 +144,46 @@ def github(project):
         return {k: bad for k in ("issues", "prs", "merged", "closed", "ci")}
 
 
+# CC-071 part D: one explicitly linked PR in another allow-listed repo. owner, name and number travel as gh argv
+# variables (-f / -F), never inside the query text, so no ticket-supplied string can change the query.
+PR_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number title url state isDraft reviewDecision headRefName headRefOid mergedAt mergeCommit { oid }
+      commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+    }
+  }
+}
+"""
+_SLUG_PART = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
+
+
+def github_pr(slug, number):
+    """One PR as the poll's own node shape (+ state, mergedAt), or {"error": ...}. Read-only; the caller
+    (daemon._foreign_ref) has already checked the repo against the registry allow list."""
+    owner, _, name = str(slug).partition("/")
+    if not (_SLUG_PART.fullmatch(owner) and _SLUG_PART.fullmatch(name) and isinstance(number, int)
+            and not isinstance(number, bool) and 0 < number < 10 ** 7):
+        return {"error": "not a repository and PR number"}
+    if FIXTURES:
+        return _fixture(f"{owner}__{name}__{number}.pr.json") or {"error": "no fixture"}
+    code, out, err = _run(["gh", "api", "graphql", "-f", f"query={PR_QUERY}", "-f", f"owner={owner}",
+                           "-f", f"name={name}", "-F", f"number={number}"])
+    if code != 0:
+        return {"error": (err.strip().splitlines() or ["gh failed"])[-1][:160]}
+    try:
+        n = json.loads(out or "{}")["data"]["repository"]["pullRequest"]
+        commits = (n.get("commits") or {}).get("nodes") or []
+        state = (((commits[0] if commits else {}).get("commit") or {}).get("statusCheckRollup") or {}).get("state")
+        return {"number": n["number"], "title": n["title"], "url": n["url"], "state": n["state"],
+                "isDraft": n["isDraft"], "reviewDecision": n.get("reviewDecision"), "headRefName": n["headRefName"],
+                "headRefOid": n["headRefOid"], "mergedAt": n.get("mergedAt"), "mergeCommit": n.get("mergeCommit"),
+                "statusCheckRollup": _rollup_list(state)}
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        return {"error": "PR not found or gh returned an unexpected shape"}
+
+
 # ---------- local checkout ----------
 
 def read_text(path):

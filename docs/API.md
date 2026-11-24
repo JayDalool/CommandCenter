@@ -111,7 +111,7 @@ session re-opens them.
 |---|---|
 | `GET /api/workspace/projects` | `{projects[{key,name,prefix,root,exists,branch,github{owner,repo,slug,url},coordinator,coordinatorState{state,how,candidates[{paneId,sessionId,status}]}}]}`. Roots come from `ccd/registry.py` only. `state` is `ready`, `found` (one unnamed Claude at the root: adopt it), `multiple` (pick one) or `none`, from the one resolver `ccd/coordid.py` |
 | `GET /api/tasks/{key}/work` | The ticket's durable pipeline state in one object: `stage`, `stages[]`, `plan`, `planState`, `policy`, `gate`, `roles`, `branch`, `worktree`, `prs`, `review{verdict,head,cycles}`, `verification`, `merge`, `handoff`, `blocked`, `findings[]` (plans/TICKET-PIPELINE-V1.md), and the delivery flow's `size`, `requirements`, `criteria`, `planReview`, `planReviews`, `userCheck`, `closing`, `flow`, `handoffs` (see **Delivery flow** below) |
-| `POST /api/tasks/{key}/work/{op}` | One pipeline step, recorded as `X-CCD-Actor` (`agent:<role>`): `plan {plan}`, `start {branch, worktree}`, `review {verdict, head, findings}`, `verify {result, evidence}`, `handoff`, `block {reason}`, `role`, `finding`. `confirm {gate}` closes an owner gate and needs Jay AND Developer Unlock. Agents use `python -m ccd.pipeline_cli` |
+| `POST /api/tasks/{key}/work/{op}` | One pipeline step, recorded as `X-CCD-Actor` (`agent:<role>`): `plan {plan}`, `start {branch, worktree, pr?}`, `link {pr}`, `review {verdict, head, findings}`, `verify {result, evidence}`, `handoff`, `block {reason}`, `role`, `finding`. `confirm {gate}` closes an owner gate and needs Jay AND Developer Unlock. Agents use `python -m ccd.pipeline_cli` |
 | `POST /api/coordinators/adopt` | DEVELOPER. `{project, sessionId}` binds that EXISTING Claude (a live one at the project root) as the coordinator; recorded by session id in `state/coordinator-bindings.json`, so a title change or a new pane id never breaks it. Never starts, resumes, renames or types into Claude |
 | `GET /api/files/list?project=&path=&git=1` | one folder: `{entries[{name,kind,size,mtime,protected,link,git?}], crumbs, truncated}`; `.git` never listed |
 | `GET /api/files/read?project=&path=` | `{kind: text|binary|large, text, sha, size, mtime, mode}`; text ≤ 2 MB UTF-8 |
@@ -363,6 +363,31 @@ order and state, 403 for the wrong seat, 400 for a bad body):
 | `user-check` | `agent:user-reviewer`, `agent:design-reviewer` | `{result: pass\|fail, head, note, criteria?: {id: pass\|fail} \| ["c1=pass"], session, model?}` | IN_REVIEW on a route with a user check; `head` must be the linked PR's current head; never the developer's session. `pass` needs every criterion passed at that head. `fail` → IN_PROGRESS (a rework, lane limit applies); the 2nd fail → BLOCKED. A new head after a pass clears it (`pipeline.user_check_stale`) |
 | `review` | `agent:reviewer` | as before | `APPROVE` is refused until the user check passed on the same head, when the route has one |
 | `close` | `agent:coordinator`, `jay` | `{note}` (≤4000) | the closing note. On standard/risky, `verify pass` waits in VERIFYING (`flow.waitingOn: "lead"`) until it; then DONE. Also allowed on a DONE ticket |
+| `link` | `agent:coordinator`, `jay` (403 otherwise) | `{pr: "owner/repo#N"}` | CC-071. Ties the ticket to its PR explicitly, for a repo-native branch (SamVision's `SV-118-*`, which does not lead with the ticket key) or a PR in another repository on the project's allow list. Ticket READY_TO_IMPLEMENT, IN_PROGRESS or IN_REVIEW. Refused (one line) for: a malformed ref (no leading zero, no spaces or newline); a repository not on the allow list (`registry.py` `link_repos`: the project's own repo, plus `JayDalool/jay-dev` for Command Center; matched in any case, stored as the registry spells it); a PR already linked to another open ticket; a PR that is merged, closed or not seen open (own repo: in the last GitHub poll's open list, else "not seen open yet, try after the next poll"; another repo: ccd reads that one PR once). Idempotent; a row an agent or ccd's own linking already made for the same PR becomes the lead's, with a new `created_at`. Records a `pipeline.linked` event. There is no unlink step (Jay unlinks in the UI) |
+
+`start {branch, worktree, pr?}`: the branch is `KEY-<slug>` as before, **or** a repo-native name that is the head branch of the
+ticket's explicitly linked PR (as the last GitHub read saw it). The name must be plain (letters, digits, `.` `_` `-`, at
+most three `/` segments; never `HEAD`, `main`, `master`, the project's base branch, `refs/…`, `origin/…`, `..` or `.lock`).
+`pr` (lead or Jay) runs the `link` checks and records the link in the same transaction; a refused start leaves no link.
+
+**What counts as an explicit link (CC-071).** A `github`/`pr` ticket link whose creator is `jay` or `agent:coordinator`,
+whose ref is well formed and whose repository is on the ticket's project allow list. One helper decides this
+(`TaskStore.explicit_pr_links`); only such a link satisfies `start`'s native-branch rule, wins over key-led linking, or is
+polled in another repository. Rules that follow: (1) a PR with an explicit link belongs to those tickets only; a title or
+branch that leads with another key does not link it to a second ticket (PRs with no explicit link link exactly as before);
+(2) for an explicit link a merge counts only if GitHub's `mergedAt` is after the link was made, so an old merge never
+sends the ticket to VERIFYING; (3) the actor is self-asserted (`X-CCD-Actor`; a call with no header is `jay`), so
+"lead-only" is as strong as that header, as for every step. Agent `POST /api/tasks/{key}/links` rows are **not** display
+only: for a PR in the project's own repo they still feed review and user-check PR choice, IN_REVIEW and VERIFYING exactly
+as before; they just never count as explicit. (A follow-up ticket may limit them to the lead.)
+
+Another repository (part D): an explicitly linked PR in an allow-listed repo other than the project's own is read by ccd
+read-only (`gh api graphql`, owner, name and number as argv variables, never in the query text), once per poll for tickets
+IN_PROGRESS, IN_REVIEW or READY_TO_MERGE, at most 20 per poll (the cap is logged as `daemon.linked_capped`). It moves the
+ticket like an own-repo PR (review, user check, merge → VERIFYING). `GET /api/development` rows say `repo` and `foreign`
+per PR and show that repo's PR, never the same number in the project's own repo; `GET /api/development/{key}/commits`
+returns no commits and says why when every PR is in another repository. ccd never auto-merges such a PR: auto-merge holds
+("the reviewed PR is in <repo>; Jay merges it"), and Merge ready lists it as skipped ("merge it by hand").
 
 Limits (409, one line): at most 2 tickets per project in investigate with an investigator (registry pipeline
 `max_investigate`) and 2 in build with a worktree (`max_lanes`); `start` and a first `plan` are refused while another

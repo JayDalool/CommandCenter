@@ -552,3 +552,34 @@ class Pending(Base):
         d._am_next.clear()
         await d._auto_merge()
         self.assertEqual(d.pipeline.work(k)["gate"], None)                 # the old clock would have opened a gate
+
+class ForeignPr(Base):
+    """CC-071: the reviewed PR is in another repository: #N here is a different PR, so ccd never merges it and never
+    falls back to this repo's open PR with the same number."""
+    FOREIGN = "JayDalool/jay-dev#10"
+
+    def foreign_ready(self):
+        k = self.ready(number=10)                    # JayDalool/CommandCenter#10 is open and linked too
+        self.tickets.db.execute("UPDATE ticket_work SET review_pr=? WHERE ticket_id=(SELECT id FROM tickets WHERE key=?)",
+                                (self.FOREIGN, k))
+        return k
+
+    async def test_R8_auto_merge_holds_and_never_runs_gh(self):
+        k = self.foreign_ready()
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.calls, [])
+        w = self.daemon.pipeline.work(k)
+        self.assertEqual(w["gate"], "merge")
+        self.assertIn("the reviewed PR is in JayDalool/jay-dev; Jay merges it", w["gateReason"])
+
+    async def test_R8_merge_batch_skips_it_by_name(self):
+        k = self.foreign_ready()
+        ready, skipped = self.daemon.merge_batch("commandcenter")
+        self.assertEqual((ready, skipped), ([], [{"key": k, "reason": "its PR is in another repository; merge it by hand"}]))
+
+    async def test_an_own_repo_review_pr_is_unchanged(self):
+        k = self.ready(number=10)
+        await self.daemon._auto_merge()
+        self.assertEqual(len(self.gh.of("merge")), 1)
+        self.assertTrue(k)
+

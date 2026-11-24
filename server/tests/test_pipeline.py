@@ -384,5 +384,135 @@ class Cli(unittest.TestCase):
         self.assertEqual((body["plan"]["summary"], body["model"]), (PLAN["summary"], "opus"))
 
 
+class ExplicitLinks(Base):
+    """CC-071: the lead links a ticket to its PR; a repo-native branch starts only on that PR's head branch."""
+    REF = "JayDalool/SamVisionAI#249"
+    BRANCH = "SV-118-advisor-typed-guard"
+
+    def seen(self, state="OPEN", branch=BRANCH, ref=REF):
+        return lambda r: {"state": state, "branch": branch, "title": "t"} if r.lower() == ref.lower() else None
+
+    def planned(self):
+        k = self.ticket()
+        self.pl.plan(k, PLAN, "agent:planner")
+        return k
+
+    def rows(self, k):
+        return self.ts.db.execute("SELECT ref, created_by FROM ticket_links l JOIN tickets t ON t.id=l.ticket_id "
+                                  "WHERE t.key=?", (k,)).fetchall()
+
+    def test_leads_actor_set_matches_the_helpers(self):
+        from ccd.pipeline import LEADS
+        self.assertEqual(tuple(LEADS), tasks.EXPLICIT_LINK_ACTORS)
+
+    def test_R1_only_the_lead_or_jay_links_and_it_is_recorded(self):                  # R1
+        k = self.planned()
+        for who in ("agent:implementer", "agent:reviewer", "agent:planner"):
+            with self.assertRaises(TaskError) as e:
+                self.pl.link(k, self.REF, who, seen=self.seen())
+            self.assertEqual(e.exception.status, 403)
+        self.assertEqual(self.rows(k), [])
+        for who in ("agent:coordinator", "jay"):
+            k2 = self.planned()
+            t, _, ev = self.pl.link(k2, self.REF.replace("249", str(300 + int(k2[-3:]))), who,
+                                    seen=lambda r: {"state": "OPEN", "branch": "b", "title": "t"})
+            self.assertEqual([c for _, c in self.rows(k2)], [who])
+            self.assertEqual([e[0] for e in ev], ["pipeline.linked"])
+            self.assertIn("pipeline.linked", [e["kind"] for e in self.ts.get(k2)["timeline"]])
+
+    def test_R3_malformed_and_unlisted_refs_are_refused_and_casing_is_the_registrys(self):   # R3
+        k = self.planned()
+        bad = ["JayDalool/SamVisionAI#0249", "JayDalool/SamVisionAI#0", "JayDalool/.#1", "JayDalool/..#1",
+               "JayDalool/SamVisionAI#1\n", "JayDalool/Sam VisionAI#1", " JayDalool/SamVisionAI#1", "SamVisionAI#1",
+               "JayDalool/GauzeMate#1", "JayDalool/gyst-lifeops#1", "JayDalool/jay-dev#1", "other/repo#1", None, 5]
+        for ref in bad:
+            with self.assertRaises(TaskError, msg=repr(ref)):
+                self.pl.link(k, ref, "agent:coordinator", seen=lambda r: {"state": "OPEN", "branch": "b"})
+        self.assertEqual(self.rows(k), [])
+        self.pl.link(k, "jaydalool/samvisionai#249", "agent:coordinator", seen=self.seen())
+        self.assertEqual(self.rows(k)[0][0], self.REF)
+        c = self.ts.create("commandcenter", "cc ticket")[0]["key"]
+        self.pl.plan(c, PLAN, "agent:planner")
+        self.pl.link(c, "jaydalool/JAY-DEV#10", "agent:coordinator", seen=lambda r: {"state": "OPEN", "branch": "b"})
+        self.assertEqual(self.rows(c)[0][0], "JayDalool/jay-dev#10")
+        with self.assertRaises(TaskError):                                  # jay-dev is CC's, not SamVision's
+            self.pl.link(self.planned(), "JayDalool/jay-dev#10", "agent:coordinator",
+                         seen=lambda r: {"state": "OPEN", "branch": "b"})
+
+    def test_R4_refuses_a_ref_on_another_open_ticket_and_a_pr_not_seen_open(self):    # R4
+        a, b = self.planned(), self.planned()
+        self.pl.link(a, self.REF, "agent:coordinator", seen=self.seen())
+        with self.assertRaises(TaskError) as e:
+            self.pl.link(b, self.REF, "agent:coordinator", seen=self.seen())
+        self.assertIn(a, e.exception.message)
+        self.ts.update(a, {"status": "CANCELLED"}, "jay")                   # a closed ticket frees the PR
+        self.pl.link(b, self.REF, "agent:coordinator", seen=self.seen())
+        c = self.planned()
+        other = "JayDalool/SamVisionAI#250"
+        for seen, word in ((self.seen("MERGED", ref=other), "merged"), (lambda r: None, "not seen open"),
+                           (None, "not seen open"), (self.seen("CLOSED", ref=other), "closed")):
+            with self.assertRaises(TaskError, msg=word) as e:
+                self.pl.link(c, other, "agent:coordinator", seen=seen)
+            self.assertIn(word, e.exception.message)
+
+    def test_link_needs_a_ticket_in_flight(self):
+        k = self.ticket()                                                    # INBOX
+        with self.assertRaises(TaskError) as e:
+            self.pl.link(k, self.REF, "agent:coordinator", seen=self.seen())
+        self.assertEqual(e.exception.status, 409)
+
+    def test_N1_the_lead_takes_over_a_row_an_agent_or_automation_made(self):         # N1
+        for creator in ("agent:implementer", "system:automation"):
+            k = self.planned()
+            ref = f"JayDalool/SamVisionAI#{400 + int(k[-3:])}"
+            self.ts.link(k, "github", "pr", ref, None, "x", creator)
+            self.assertEqual(self.ts.explicit_pr_links(key=k), [])
+            self.pl.link(k, ref, "agent:coordinator", seen=lambda r: {"state": "OPEN", "branch": "b"})
+            [row] = self.ts.explicit_pr_links(key=k)
+            self.assertEqual(self.rows(k), [(ref, "agent:coordinator")])
+            self.assertGreater(row["createdAt"], 0)
+            self.assertIn("pipeline.linked", [e["kind"] for e in self.ts.get(k)["timeline"]])
+            before = row["createdAt"]
+            self.pl.link(k, ref, "agent:coordinator", seen=lambda r: {"state": "OPEN", "branch": "b"})   # idempotent
+            self.assertEqual(self.ts.explicit_pr_links(key=k)[0]["createdAt"], before)
+
+    def test_R6_a_native_branch_starts_only_on_the_linked_prs_head_branch(self):      # R6
+        k = self.planned()
+        with self.assertRaises(TaskError) as e:                              # no lead link
+            self.pl.start(k, self.BRANCH, "/srv/w/a", "agent:coordinator", seen=self.seen())
+        self.assertIn("link", e.exception.message)
+        self.pl.link(k, self.REF, "agent:coordinator", seen=self.seen())
+        for bad in ("SV-118-other", "main", "master", "Main", "HEAD", "head", "develop", "refs/heads/x", "origin/x",
+                    "heads/x", "x/", "x.lock", "a/b.lock/c", "a..b", "-x", ".x", "x y", "a/b/c/d"):
+            with self.assertRaises(TaskError, msg=bad):
+                self.pl.start(k, bad, "/srv/w/a", "agent:coordinator", base="develop",
+                              seen=self.seen(branch=bad if bad != "SV-118-other" else self.BRANCH))
+        with self.assertRaises(TaskError):                                   # PR no longer seen open
+            self.pl.start(k, self.BRANCH, "/srv/w/a", "agent:coordinator", seen=lambda r: None)
+        self.assertEqual(self.ts.get(k)["status"], "READY_TO_IMPLEMENT")
+        t, _, _ = self.pl.start(k, self.BRANCH, "/srv/w/a", "agent:coordinator", seen=self.seen())
+        self.assertEqual((t["status"], t["branch"]), ("IN_PROGRESS", self.BRANCH))
+
+    def test_an_agent_links_row_does_not_open_a_native_branch(self):                  # R2 (pipeline side)
+        k = self.planned()
+        self.ts.link(k, "github", "pr", self.REF, None, "x", "agent:implementer")
+        with self.assertRaises(TaskError):
+            self.pl.start(k, self.BRANCH, "/srv/w/a", "agent:coordinator", seen=self.seen())
+
+    def test_N3_start_pr_links_in_the_same_transaction_and_a_refused_start_leaves_nothing(self):   # N3
+        k = self.planned()
+        events = lambda: [e["kind"] for e in self.ts.get(k)["timeline"] if e["kind"] == "pipeline.linked"]
+        with self.assertRaises(TaskError):                                   # wrong head branch
+            self.pl.start(k, self.BRANCH, "/srv/w/a", "agent:coordinator", pr=self.REF, seen=self.seen(branch="zzz"))
+        with self.assertRaises(TaskError):                                   # bad worktree, after the link checks
+            self.pl.start(k, self.BRANCH, "relative", "agent:coordinator", pr=self.REF, seen=self.seen())
+        with self.assertRaises(TaskError):                                   # not the lead
+            self.pl.start(k, self.BRANCH, "/srv/w/a", "agent:implementer", pr=self.REF, seen=self.seen())
+        self.assertEqual((self.rows(k), events(), self.ts.get(k)["status"]), ([], [], "READY_TO_IMPLEMENT"))
+        t, _, ev = self.pl.start(k, self.BRANCH, "/srv/w/a", "agent:coordinator", pr=self.REF, seen=self.seen())
+        self.assertEqual((t["status"], self.rows(k), [e[0] for e in ev]),
+                         ("IN_PROGRESS", [(self.REF, "agent:coordinator")], ["pipeline.started", "pipeline.linked"]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -44,6 +44,14 @@ FLAG_LABEL = {"needs_jay": "needs:jay", "needs_legal": "needs:legal", "needs_ui_
 RELATION_KINDS = ("blocks", "related", "duplicates")  # "blocked_by" is the inverse view of "blocks"
 LINK_PROVIDERS = ("github", "legacy", "url")
 
+# CC-071: an explicit PR link is a github/pr ticket_links row that Jay or the lead (agent:coordinator) created, with a
+# ref of exactly this shape, in a repo on the ticket's project allow list (registry.link_repos). Nothing else counts
+# for start's native-branch rule, explicit-wins linking or cross-repo polling. Must equal pipeline.LEADS (a test
+# asserts it); kept here because the helper below is the one place that decides what "explicit" means.
+EXPLICIT_LINK_ACTORS = ("jay", "agent:coordinator")
+# owner/repo#N: no leading zero on N, no "." or ".." repo, no spaces or newlines (matched with fullmatch).
+PR_REF_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}#[1-9][0-9]{0,6}")
+
 # Fields a PATCH may change, and how each is checked. Everything else is read-only.
 TEXT_FIELDS = {"title": 300, "description": 20000, "branch": 200}
 # Prefixes live in ccd/registry.py — the one authoritative project registry.
@@ -1277,6 +1285,32 @@ class TaskStore:
         return [r[0] for r in self.db.execute(
             "SELECT t.key FROM ticket_links l JOIN tickets t ON t.id=l.ticket_id WHERE l.provider=? AND l.kind=? "
             "AND l.ref=? AND t.archived=0", (provider, kind, ref))]
+
+    def explicit_pr_links(self, key=None, ref=None):
+        """The explicit PR links (CC-071), one decision for every reader: start, explicit-wins linking, the merge-after-
+        link rule, cross-repo polling. Rows: {key, project, status, ref, createdAt}. A row counts only when its
+        creator is Jay or the lead, its ref is well formed and its repo is on its ticket's project allow list
+        (case-insensitive); an agent's POST /links row never does. `ref` matches case-insensitively."""
+        sql = ("SELECT t.key, t.project, t.status, l.ref, l.created_at FROM ticket_links l JOIN tickets t "
+               "ON t.id=l.ticket_id WHERE l.provider='github' AND l.kind='pr' AND t.archived=0 AND l.created_by IN (?,?)")
+        args = list(EXPLICIT_LINK_ACTORS)
+        if key is not None:
+            sql += " AND t.key=?"
+            args.append(str(key).upper())
+        out = []
+        for k, project, status, r, at in self.db.execute(sql + " ORDER BY l.id", args).fetchall():
+            if not PR_REF_RE.fullmatch(r or ""):
+                continue
+            if r.rpartition("#")[0].lower() not in {a.lower() for a in registry.link_repos(project)}:
+                continue
+            if ref is not None and r.lower() != str(ref).lower():
+                continue
+            out.append({"key": k, "project": project, "status": status, "ref": r, "createdAt": at})
+        return out
+
+    def explicit_keys(self, ref):
+        """The tickets explicitly linked to this PR ref (see explicit_pr_links)."""
+        return [r["key"] for r in self.explicit_pr_links(ref=ref)]
 
     def last_status_event(self, key):
         """The newest status change: {actor, from, to, trigger}. A manual edit has no trigger; every
