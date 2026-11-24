@@ -1,4 +1,5 @@
-#!/usr/bin/env bash
+#!/bin/bash
+# CC-074: fixed interpreter path; `env bash` would search the caller's PATH.
 # Read-only check that this machine's time zone data knows Manitoba's permanent UTC−05 (IANA tzdata 2026e+).
 # Checks the C library (date, cron, ccd), Python zoneinfo and Node's bundled ICU (vitest, Vite). Changes nothing.
 #   scripts/check-tz.sh            on jay-server, a CI runner, or any Linux box (CC-054: also the hosted CI runner)

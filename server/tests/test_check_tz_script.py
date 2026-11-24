@@ -166,13 +166,14 @@ class CheckTzScript(unittest.TestCase):
             t = Path(t)
             bin_dir = t / "bin"
             bin_dir.mkdir()
-            for tool in ("readlink", "dpkg-query", "head", "date", "env", "dirname", "sed", "grep"):   # CC-074: launcher and helpers too
+            for tool in ("readlink", "dpkg-query", "head", "date", "env", "dirname", "sed", "grep", "bash"):   # CC-074: launcher and helpers too
                 f = bin_dir / tool
                 f.write_text(f"#!/bin/sh\ntouch {t}/ran-{tool}\necho hostile\n")
                 f.chmod(0o755)
             env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
             env.pop("TZDIR", None)
-            r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, timeout=60, env=env)
+            # CC-074 round 6: run the script directly so its shebang is used; a bare "bash" would hide a PATH lookup.
+            r = subprocess.run([str(SCRIPT)], capture_output=True, text=True, timeout=60, env=env)
             self.assertEqual(sorted(p.name for p in t.iterdir()), ["bin"], "a hostile PATH tool ran")
             self.assertNotIn("hostile", r.stdout)
             self.assertRegex(r.stdout, r"(?m)^PASS  C library \(date\): -0500")
