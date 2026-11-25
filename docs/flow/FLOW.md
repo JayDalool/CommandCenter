@@ -56,7 +56,7 @@ was typed. The route decides which stages run; a skipped stage is refused by ccd
 | Acceptance criteria: up to 20 lines that must be true when it is done | lead or Jay (only Jay edits them after Investigate) |
 | Requirements: what must not change, what it depends on | lead |
 | Size, parent | lead |
-| Priority (urgent, high, medium, low) and due date | lead at intake, and at any stage while the ticket is open; Jay any time. No due date given: the ticket's own, even a past one (it shows overdue and comes first), else 2, 5 or 10 days from intake for small, standard or risky |
+| Priority (urgent, high, medium, low) and due date | lead at intake, and at any stage while the ticket is open; Jay any time. No due date given: the ticket's own, even a past one (it shows overdue; priority and due date no longer order the lead's work, see Work mode), else 2, 5 or 10 days from intake for small, standard or risky |
 | Findings and plan | investigator |
 | Blast radius and required tests | tech-reviewer |
 | Screenshots: before (investigator), after (user-reviewer) | `pipeline_cli evidence` |
@@ -76,35 +76,47 @@ Never put secrets, tokens, customer data, licensed data or pasted terminal outpu
 
 ## Limits that stop half-finished work
 
-- Per project: admit at most four tickets beyond the backlog. Tickets in investigation, build, review or blocked
-  on CI or another ticket take a slot. A ticket waiting on Jay's decision (an open question, or a plan, merge, UI or
-  deploy gate) frees its slot; when he answers, it waits until fewer than four other tickets hold slots. Jay
-  himself is not capped. A verified merge waiting
-  only for release no longer takes an engineering slot. Existing work can
-  continue when importing or reopening tickets puts the project above four. The cap is on agent
-  work only: a new ticket is always made, and its intake (size, criteria, priority) is always saved. While all four
-  slots are in use it waits in the backlog, and the lead runs `intake` again when a slot opens to admit it.
-- Within those four: at most 2 tickets in Investigate and 2 in Build.
+- Per project: at most 2 tickets in Investigate and 2 in Build.
 - Finishing first: no `start` and no first `plan` while another ticket in the same project has waited more than
   4 hours in Technical review, User check or Code review with nobody in that seat. Fill that seat instead.
+- **Urgent exception** (Jay, 2026-11-24): a serious technical, security or production problem may start right away
+  even when both limits are full. Only the lead (or Jay) declares it, once per project at a time:
+  `pipeline_cli urgent KEY --role coordinator --kind technical|security|production --reason "…"`. It skips only the
+  2 and 2 limits and the 4-hour rule. Investigation, every review, and Jay's plan, merge and deploy approvals stay.
+  The ticket still counts toward the limits, so nothing new starts until work falls back under them, and the paused
+  work resumes first. Jay sees it in the project's Slack channel with its kind and reason: write no secret, customer
+  data or exploit detail in the reason. It ends at the first move to Verifying or close, and a later rework of that
+  ticket is limited like any other.
 - Stale: 48 hours with no recorded step in stages 2 to 6 marks the ticket stale. The lead moves it, sends it back
   or proposes cancelling it (`pipeline_cli stale`; only Jay cancels).
-- Two rounds at most per review stage: the second send-back blocks the ticket. The lead reads the blocker and
-  records the next action. For an ordinary fix within the accepted scope, use `rework` and get fresh checks.
-  If the assumptions or scope changed, use `replan`. If the lead needs Jay to choose, use `ask` with options
-  and a recommendation. Keep the blocker visible until there is a recorded decision or a path forward.
+- Two rounds at most per review stage: the second send-back blocks the ticket.
+- A blocked ticket names its next step and who owns it (`block … --action "…" --next-owner SEAT`, or a later
+  `handoff --next "…" --next-owner SEAT`; the seats are lead, investigator, tech-reviewer, developer, user-reviewer,
+  code-reviewer, verifier, jay). One that names neither is marked TRIAGE TODAY in `pipeline_cli tasks`, in every
+  project, and is put to the lead the same day. The lead records a next step with its owner, sends it back with
+  `rework`, re-plans with `replan` if the assumptions or scope changed, or asks Jay with `ask` (options and a
+  recommendation). Keep the blocker visible until there is a recorded decision or a way forward.
 
 ## Work mode: work keeps moving
 
 A lead acts when someone messages it. With **work mode** on for a project (Jay's switch in Settings › Operating
 profiles; every project starts off), ccd checks once a minute and reminds the idle lead, at most every 10 minutes,
-of the tickets that can move without Jay, in this order: priority, then the earliest due date, then the later stage, then the
-oldest. Take them in that order, within the limits above. A ticket that needs Jay: ask or block it, then take the
-next one. A ticket in intake flagged needs-Jay is not named; a release-stage ticket is named for verifying only.
+of the tickets that can move without Jay, finishing first: code review, user check and release (verify only), then a
+build fixing review findings, other builds, technical review, investigation. Inside a step the lowest ticket number
+goes first (first come, first served); priority and due date are shown but do not order the work. A ticket under the
+urgent exception comes before all. New ideas wait in line: an intake ticket is named only when nothing already
+started can move, oldest first, and is never dropped or moved aside. Take the tickets in that order, within the
+limits above. A ticket that needs Jay: ask or block it (with its next step and owner), then take the next one. A
+ticket in intake flagged needs-Jay is not named. A blocked ticket with no next step or owner gets its own line,
+"triage today", beyond the three named. The same mark shows in `pipeline_cli tasks`, work mode or not.
 The reminder grants nothing; every gate still waits for Jay. It stays quiet while the project is paused,
-the night shift runs or a budget is on hold. The reminder puts existing work ahead of more intake and includes
-blockers that still need a next step. Work mode rests 2 hours after 3 reminders with no ticket change and stops for
+the night shift runs or a budget is on hold, rests 2 hours after 3 reminders with no ticket change, and stops for
 the day after 36 (per Winnipeg day, even if the switch goes off and on).
+
+When a PR's checks pass (or the project has no CI checks) and nobody has reviewed that head, ccd records
+`pipeline.review_ready` once per head and posts it in the ticket's Slack thread. A lead in work mode with an empty,
+idle input line is also told, once, to start a fresh code reviewer; that text counts toward the day's 36 and is
+tried again while the lead is busy, until a reviewer starts. Work mode off: the record and the Slack post only.
 
 ## Who answers a question
 

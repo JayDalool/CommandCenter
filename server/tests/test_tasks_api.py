@@ -3,6 +3,8 @@ import json
 import os
 import tempfile
 
+from ccd import notify
+
 from .helpers import wait_sync, pr
 from .test_api import AUTH, HOST, JSON, PORT, TOKEN, ApiBase
 
@@ -469,27 +471,6 @@ class PipelineApi(Automation):
         h = dict(JSON, **{"x-ccd-actor": actor}, **(headers or {}))
         return self.client.post(f"/api/tasks/{self.key}/work/{op}", content=json.dumps(body), headers=h)
 
-    def test_direct_writes_cannot_admit_a_fifth_ticket(self):
-        for state in ("BLOCKED", "IN_REVIEW", "READY_TO_MERGE", "RESEARCHING"):
-            self.tickets.create("samvision", state, status=state)
-        backlog = self.post("/api/tasks", {"project": "samvision", "title": "Backlog feature"})
-        self.assertEqual(backlog.status_code, 201, backlog.text)
-        key = backlog.json()["key"]
-        agent = dict(JSON, **{"x-ccd-actor": "agent:coordinator"})
-        attempt = self.client.patch(f"/api/tasks/{key}", headers=agent, json={"status": "RESEARCHING"})
-        self.assertEqual(attempt.status_code, 409, attempt.text)
-        self.assertEqual(self.tickets.get(key)["status"], "INBOX")
-        # Creating a task always makes it: asked for straight into an active stage, it lands in the backlog.
-        direct = self.post("/api/tasks", {"project": "samvision", "title": "Active feature", "status": "RESEARCHING"},
-                           headers=agent)
-        self.assertEqual(direct.status_code, 201, direct.text)
-        self.assertEqual(direct.json()["status"], "INBOX")
-        self.assertIn("4 of 4 work slots", direct.json()["queued"])
-        self.assertEqual(len(self.daemon.pipeline.project_slots("samvision")), 4)
-        # The cap is on agent work: Jay moves a backlog ticket into work past it (review of 9d7ae58, finding 2).
-        jay = self.client.patch(f"/api/tasks/{key}", headers=JSON, json={"status": "RESEARCHING"})
-        self.assertEqual(jay.status_code, 200, jay.text)
-
     def test_a_ticket_travels_plan_to_done_and_every_step_is_attributed(self):
         self.ticket("INBOX")
         plan = {"summary": "the feature", "tests": ["unit"]}
@@ -854,6 +835,132 @@ class PipelineApi(Automation):
         git["merged"][0]["baseRefName"] = "main"
         self.poll()
         self.assertEqual(self.tickets.get("SV-056")["status"], "VERIFYING")
+
+    def test_a_stacked_pr_merged_before_it_was_seen_is_related_work_and_moves_nothing(self):
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "Feature"}}, "agent:planner")
+        self.step("start", {"branch": "SV-056-parent", "worktree": "/srv/w/SV-056"})
+        git = self.gh.data["samvision"]
+        git["merged"] = [{"number": 281, "title": "SV-056: stacked part", "url": "u", "mergedAt": "2026-10-03T00:00:00Z",
+                          "baseRefName": "SV-056-parent", "mergeCommit": {"oid": "c" * 40}}]
+        for _ in range(2):                                                    # idempotent across polls
+            self.poll()
+        t = self.tickets.get("SV-056")
+        self.assertEqual(t["status"], "IN_PROGRESS")
+        self.assertEqual([lk["ref"] for lk in t["links"] if lk["kind"] == "pr"], ["JayDalool/SamVisionAI#281"])
+        linked = [e for e in self.get("/api/activity?limit=200").json()["events"]
+                  if e["kind"] == "task.updated" and "281" in e["text"] and "linked" in e["text"]]
+        self.assertEqual(len(linked), 1)
+
+    def test_a_different_linked_pr_merging_into_main_moves_the_ticket_and_flags_it_unreviewed(self):
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "Feature"}}, "agent:planner")
+        self.step("start", {"branch": "SV-056-a", "worktree": "/srv/w/SV-056"})
+        git = self.gh.data["samvision"]
+        git["prs"] = [dict(pr(278, "SV-056: delivery"), headRefName="SV-056-a")]
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "IN_REVIEW")
+        git["prs"] = []
+        git["merged"] = [{"number": 279, "title": "SV-056: other path", "url": "u", "mergedAt": "2026-10-03T00:00:00Z",
+                          "baseRefName": "main", "mergeCommit": {"oid": "d" * 40}}]
+        self.tickets.link("SV-056", "github", "pr", "JayDalool/SamVisionAI#279", "https://x/279", "x",
+                          "system:automation")
+        self.poll()
+        self.assertEqual(self.tickets.get("SV-056")["status"], "VERIFYING")
+        kinds = [e["data"].get("kind") for e in self.get("/api/activity?limit=200").json()["events"]
+                 if e["kind"] == "task.pipeline"]
+        self.assertIn("pipeline.unreviewed_merge", kinds)
+
+    def test_no_cap_on_agent_work_and_the_two_by_two_limits_stay(self):
+        # c15: six tickets in work do not queue a new one; the 2 investigate / 2 build limits are the only caps.
+        for n in range(1, 7):
+            self.tickets.create("samvision", f"busy {n}", number=100 + n, status="RESEARCHING")
+        agent = {"x-ccd-actor": "agent:coordinator"}
+        made = self.post("/api/tasks", {"project": "samvision", "title": "new idea", "status": "RESEARCHING"},
+                         headers=dict(JSON, **agent))
+        self.assertEqual((made.status_code, made.json()["status"]), (201, "RESEARCHING"), made.text)
+        self.assertNotIn("queued", made.json())
+        self.ticket("INBOX")
+        self.tickets.update("SV-056", {"description": "do it"}, "jay")
+        r = self.step("intake", {"size": "standard", "criteria": ["works"], "priority": "HIGH"})
+        self.assertEqual((r.status_code, r.json()["status"]), (200, "RESEARCHING"), r.text)
+        events = [e["data"].get("kind") for e in self.get("/api/activity?limit=200").json()["events"]]
+        self.assertNotIn("pipeline.intake_queued", events)
+        self.assertNotIn("pipeline.intake_queued", notify.TEAM_KINDS)
+        for n in (1, 2):
+            self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+            k = self.tickets.create("samvision", f"lane {n}", number=200 + n, status="INBOX")[0]["key"]
+            self.client.post(f"/api/tasks/{k}/work/plan", content=json.dumps({"plan": {"summary": "x"}}),
+                             headers=dict(JSON, **{"x-ccd-actor": "agent:planner"}))
+            r = self.client.post(f"/api/tasks/{k}/work/start", headers=dict(JSON, **agent),
+                                 content=json.dumps({"branch": f"{k}-x", "worktree": f"/srv/w/{k}"}))
+            self.assertEqual(r.status_code, 200, r.text)
+        k = self.tickets.create("samvision", "third", number=210, status="INBOX")[0]["key"]
+        self.client.post(f"/api/tasks/{k}/work/plan", content=json.dumps({"plan": {"summary": "x"}}),
+                         headers=dict(JSON, **{"x-ccd-actor": "agent:planner"}))
+        r = self.client.post(f"/api/tasks/{k}/work/start", headers=dict(JSON, **agent),
+                             content=json.dumps({"branch": f"{k}-x", "worktree": f"/srv/w/{k}"}))
+        self.assertEqual(r.status_code, 409, r.text)
+
+    def test_urgent_exception_over_http_start_past_the_lanes_and_the_work_view_says_why(self):
+        agent = dict(JSON, **{"x-ccd-actor": "agent:coordinator"})
+        keys = []
+        for n in range(3):
+            k = self.tickets.create("samvision", f"lane {n}", number=300 + n, status="INBOX")[0]["key"]
+            keys.append(k)
+            self.client.post(f"/api/tasks/{k}/work/plan", content=json.dumps({"plan": {"summary": "x"}}),
+                             headers=dict(JSON, **{"x-ccd-actor": "agent:planner"}))
+
+        def start(k):
+            return self.client.post(f"/api/tasks/{k}/work/start", headers=agent,
+                                    content=json.dumps({"branch": f"{k}-x", "worktree": f"/srv/w/{k}"}))
+        self.assertEqual([start(k).status_code for k in keys[:2]], [200, 200])
+        self.assertEqual(start(keys[2]).status_code, 409)
+        urgent = lambda body, actor="agent:coordinator": self.client.post(  # noqa: E731
+            f"/api/tasks/{keys[2]}/work/urgent", content=json.dumps(body), headers=dict(JSON, **{"x-ccd-actor": actor}))
+        self.assertEqual(urgent({"kind": "production", "reason": "down"}, "agent:implementer").status_code, 403)
+        self.assertEqual(urgent({"kind": "nope", "reason": "down"}).status_code, 400)
+        self.assertEqual(urgent({"kind": "production", "reason": ""}).status_code, 400)
+        r = urgent({"kind": "production", "reason": "the live site is down"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((r.json()["urgent"]["kind"], r.json()["urgent"]["reason"]), ("production", "the live site is down"))
+        self.assertEqual(start(keys[2]).status_code, 200)
+        self.assertEqual(self.get(f"/api/tasks/{keys[0]}/work").json()["urgent"], None)
+        second = self.client.post(f"/api/tasks/{keys[0]}/work/urgent", headers=agent,
+                                  content=json.dumps({"kind": "technical", "reason": "also bad"}))
+        self.assertEqual(second.status_code, 409)
+        self.assertIn(keys[2], second.json()["error"])
+        events = [e for e in self.get("/api/activity?limit=200").json()["events"] if e["data"].get("kind") == "pipeline.urgent"]
+        self.assertEqual(len(events), 1)
+
+    def test_blocked_needs_triage_until_it_names_a_next_step_and_an_owner(self):
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        row = lambda: next(t for t in self.get("/api/tasks").json()["tickets"] if t["key"] == "SV-056")  # noqa: E731
+        self.assertFalse(row()["needsTriage"])
+        self.assertEqual(self.step("block", {"reason": "CI broke", "action": "Fix", "owner": "nobody"}).status_code, 400)
+        self.assertEqual(self.step("block", {"reason": "CI broke", "action": "Fix the test"}).status_code, 200)
+        self.assertTrue(row()["needsTriage"])                                    # action without an owner
+        self.assertEqual(self.step("handoff", {"next": "Fix the test", "owner": "nobody"}).status_code, 400)
+        self.assertTrue(row()["needsTriage"])                                    # handoff next without an owner
+        self.assertEqual(self.step("handoff", {"next": "Fix the test"}).status_code, 200)
+        self.assertTrue(row()["needsTriage"])
+        self.assertEqual(self.step("handoff", {"next": "Fix the test", "owner": "developer"}).status_code, 200)
+        self.assertFalse(row()["needsTriage"])
+        w = self.get("/api/tasks/SV-056/work").json()
+        self.assertEqual(w["blocked"]["action"], "Fix the test")
+        self.assertEqual(w["handoff"]["owner"], "developer")
+
+    def test_the_work_mode_triage_line_and_the_list_agree(self):
+        for n in range(1, 6):
+            self.tickets.create("samvision", f"busy {n}", number=n, status="RESEARCHING")
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")
+        self.step("block", {"reason": "CI broke"})
+        rows = self.daemon.work_rows("samvision")
+        from ccd import workmode
+        self.assertEqual([r["key"] for r in workmode.triage(rows)], ["SV-056"])
+        self.assertEqual(len(workmode.movable(rows)), 5)
 
     def test_a_ui_gate_cannot_be_skipped_by_marking_done(self):
         self.ticket("INBOX")

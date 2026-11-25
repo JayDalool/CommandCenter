@@ -37,65 +37,199 @@ class Base(unittest.TestCase):
         return {"ref": "JayDalool/SamVisionAI#1", "head": head, "ciGreen": green, "draft": draft}
 
 
-class ProjectSlots(Base):
-    def test_blocked_review_and_merge_work_hold_slots_until_one_is_release_ready(self):
-        blocked, reviewing, merging, verifying = (
-            self.ticket(status=status) for status in ("BLOCKED", "IN_REVIEW", "READY_TO_MERGE", "VERIFYING")
-        )
-        self.assertEqual(self.pl.project_slots("samvision"), [blocked, reviewing, merging, verifying])
-        queued = self.ticket(description="A new feature")
-        # A full project still takes the ticket and its definition; only admission to agent work waits.
-        self.pl.intake(queued, "standard", ["The feature is visible"], "agent:coordinator", priority="MEDIUM")
-        self.assertIn(self.ts.get(queued)["status"], ("INBOX", "PROPOSED"))
-        self.assertEqual(self.ts.get(queued)["priority"], "MEDIUM")
-        self.assertEqual(self.pl.work(queued)["size"], "standard")
-        self.assertNotIn(queued, self.pl.project_slots("samvision"))
+class Urgent(Base):
+    """CC-076, Jay 2026-11-24: the lead's urgent exception skips the 2/2 slot limits and the 4-hour rule, nothing else."""
 
-        other, _ = self.ts.create("gyst", "Independent work")
-        self.pl.plan(other["key"], PLAN, "agent:planner")
+    def started(self):
+        key = self.ticket()
+        self.pl.plan(key, PLAN, "agent:planner")
+        return key
 
-        self.pl.merged(verifying, "JayDalool/SamVisionAI#7")
-        self.pl.deploy_request(verifying, "live", "Ship feature", "Check health", "agent:verifier")
-        self.pl.verify(verifying, "pass", "Preview health ok", "agent:verifier")
-        self.assertNotIn(verifying, self.pl.project_slots("samvision"))
-        self.pl.intake(queued, "standard", ["The feature is visible"], "agent:coordinator", priority="MEDIUM")
-        self.assertIn(queued, self.pl.project_slots("samvision"))
+    def begin(self, key):
+        return self.pl.start(key, f"{key}-x", f"/srv/server/worktrees/sv/{key}", "agent:coordinator")
+
+    def full(self):
+        for _ in range(2):
+            self.begin(self.started())
+
+    def test_urgent_starts_past_two_lanes_and_a_plain_ticket_still_waits(self):
+        self.full()
+        urgent, plain = self.started(), self.started()
+        self.pl.urgent(urgent, "production", "live site down", "agent:coordinator")
+        self.begin(urgent)
+        self.assertEqual(self.pl.lanes("samvision"), 3)                  # it still counts toward the limit
+        with self.assertRaisesRegex(TaskError, "2 implementation lanes"):
+            self.begin(plain)
+
+    def test_urgent_skips_the_investigation_limit_and_the_four_hour_rule_and_nothing_else(self):
+        k, other = self.ticket(), self.ticket()
+        t, o = self.ts.get(k), self.ts.get(other)
+        self.pl.investigating = lambda *a, **kw: ["SV-90", "SV-91"]
+        self.pl.unseated = lambda *a, **kw: [("SV-92", "codeReview")]
+        with self.assertRaisesRegex(TaskError, "already being investigated"):
+            self.pl._investigate_free(t)
+        with self.assertRaisesRegex(TaskError, "waited more than 4 hours"):
+            self.pl._finish_first(t, "starting new work")
+        self.pl.urgent(k, "security", "leaked token in a PR", "agent:coordinator")
+        self.pl._investigate_free(self.ts.get(k))
+        self.pl._finish_first(self.ts.get(k), "starting new work")
+        with self.assertRaises(TaskError):                                # the other ticket gets no exemption
+            self.pl._investigate_free(o)
+        # the plan gate is not skipped: an urgent ticket still waits for its plan like any other
+        self.assertEqual(self.pl.work(k)["planState"], "none")
+
+    def test_only_the_lead_a_kind_a_reason_and_one_open_per_project(self):
+        a, b = self.ticket(), self.ticket()
+        with self.assertRaises(TaskError) as e:
+            self.pl.urgent(a, "production", "down", "agent:implementer")
+        self.assertEqual(e.exception.status, 403)
+        for kind, reason in (("whatever", "down"), ("production", ""), ("production", "x" * 400)):
+            with self.assertRaises(TaskError) as e:
+                self.pl.urgent(a, kind, reason, "agent:coordinator")
+            self.assertEqual(e.exception.status, 400, (kind, reason))
+        self.pl.urgent(a, "technical", "build is broken for everyone", "agent:coordinator")
+        with self.assertRaisesRegex(TaskError, f"{a} already holds"):
+            self.pl.urgent(b, "production", "down", "jay")
+        w = self.pl.work(a)
+        self.assertEqual((w["urgent"]["kind"], w["urgent"]["reason"], w["urgent"]["by"]),
+                         ("technical", "build is broken for everyone", "agent:coordinator"))
+        self.assertIsNone(self.pl.work(b)["urgent"])
+
+    def test_it_ends_at_the_first_move_to_verifying_and_a_rework_does_not_reopen_it(self):
+        self.full()
+        a = self.started()
+        self.pl.urgent(a, "production", "down", "agent:coordinator")
+        self.begin(a)
+        for status in ("IN_REVIEW", "VERIFYING"):
+            self.ts.update(a, {"status": status}, "system:automation", trigger="test")
+        self.assertIsNone(self.pl.work(a)["urgent"])
+        with self.assertRaises(TaskError) as e:                          # urgent is for work before verification
+            self.pl.urgent(a, "production", "again", "agent:coordinator")
+        self.assertEqual(e.exception.status, 409)
+        with self.assertRaisesRegex(TaskError, "2 implementation lanes"):  # rework is lane-limited again
+            self.pl.rework(a, "a defect", "agent:coordinator")
+        self.pl.urgent(self.ticket(), "security", "another one", "agent:coordinator")   # a second is accepted now
+
+    def test_urgent_on_a_new_ticket_survives_intake(self):
+        a = self.ticket(description="Something is on fire")
+        self.pl.urgent(a, "production", "on fire", "agent:coordinator")
+        self.pl.intake(a, "standard", ["It is out"], "agent:coordinator", priority="URGENT")
+        self.assertEqual(self.ts.get(a)["status"], "RESEARCHING")
+        self.assertEqual(self.pl.work(a)["urgent"]["kind"], "production")
 
 
-    def test_waiting_on_jay_frees_a_slot_and_an_answer_queues_for_the_next_one(self):
-        # CC-076, Jay 2026-11-24: Jay's decisions free the slot; a block on CI or another ticket keeps it.
-        held = [self.ticket(status=s) for s in ("BLOCKED", "IN_REVIEW", "IN_PROGRESS")]
-        gated = self.ticket(status="READY_TO_MERGE")
-        self.pl.db.execute("INSERT INTO ticket_work(ticket_id, updated_at, gate) VALUES (?, 0, 'merge')",
-                           (self.ts.get(gated)["id"],))
-        asking = self.ticket(status="RESEARCHING")
-        self.pl.ask(asking, [{"text": "Which export columns?", "kind": "yesno"}], "agent:coordinator")
-        self.assertEqual(self.pl.project_slots("samvision"), held)
-        fourth = self.ticket(status="RESEARCHING")
-        self.assertEqual(self.pl.project_slots("samvision"), held + [fourth])
+class Triage(Base):
+    """CC-076 (c20, c8): a blocked ticket names its next step and owner, or the lead triages it today."""
 
-        qid = self.pl.work(asking)["questions"][0]["id"]
-        self.pl.answer(asking, [{"id": qid, "answer": "yes"}], "jay")
-        self.assertEqual(self.pl.project_slots("samvision"), held + [asking, fourth])
-        with self.assertRaisesRegex(TaskError, "queued for the next free work slot"):
-            self.pl.plan(asking, PLAN, "agent:planner")
-        self.ts.update(held[1], {"status": "CANCELLED"}, "jay")
-        self.pl.plan(asking, PLAN, "agent:planner")
+    def blocked(self, **kw):
+        key = self.ticket()
+        self.pl.plan(key, PLAN, "agent:planner")
+        self.pl.block(key, "CI is red on main", "agent:implementer", **kw)
+        return key
 
-    def test_work_already_admitted_keeps_going_when_a_project_starts_over_four(self):
-        # Review of 9d7ae58, finding 1: only a ticket back from Jay queues; six admitted tickets all keep working.
-        admitted = [self.ticket(status="RESEARCHING") for _ in range(6)]
-        self.assertEqual(len(self.pl.project_slots("samvision")), 6)
-        for key in admitted:
-            self.pl.plan(key, PLAN, "agent:planner")
+    def needs(self, key):
+        return self.pl.needs_triage(self.ts.get(key), self.pl.work_row(self.ts.get(key)["id"]))
 
-    def test_jay_admits_past_the_cap(self):
-        # Review of 9d7ae58, finding 2: the cap is on agent work, so Jay's intake still admits.
-        for status in ("BLOCKED", "IN_REVIEW", "READY_TO_MERGE", "IN_PROGRESS"):
-            self.ticket(status=status)
-        mine = self.ticket(description="Jay's own feature")
-        self.pl.intake(mine, "standard", ["The feature is visible"], "jay", priority="HIGH")
-        self.assertEqual(self.ts.get(mine)["status"], "RESEARCHING")
+    def test_action_and_owner_together_clear_it_and_anything_less_does_not(self):
+        self.assertFalse(self.needs(self.blocked(explain={"action": "Fix the flaky test"}, owner="developer")))
+        self.assertTrue(self.needs(self.blocked(explain={"action": "Fix the flaky test"})))
+        self.assertTrue(self.needs(self.blocked(owner="developer")))
+        self.assertTrue(self.needs(self.blocked()))
+
+    def test_a_later_handoff_with_next_and_owner_clears_it_and_an_earlier_one_does_not(self):
+        key = self.ticket()
+        self.pl.plan(key, PLAN, "agent:planner")
+        self.pl.handoff(key, {"next": "Wait for CI", "owner": "developer"}, "agent:implementer")
+        self.pl.block(key, "CI is red", "agent:implementer")
+        self.assertTrue(self.needs(key))                                  # that handoff is older than the block
+        self.pl.handoff(key, {"next": "Re-run the job"}, "agent:coordinator")
+        self.assertTrue(self.needs(key))                                  # no owner
+        self.pl.handoff(key, {"next": "Re-run the job", "owner": "lead"}, "agent:coordinator")
+        self.assertFalse(self.needs(key))
+
+    def test_an_open_question_or_leaving_blocked_clears_it(self):
+        key = self.blocked()
+        self.pl.ask(key, [{"text": "Which way?", "kind": "yesno"}], "agent:coordinator")
+        self.assertFalse(self.needs(key))
+        other = self.blocked()
+        self.pl.rework(other, "fix it", "agent:coordinator")
+        self.assertFalse(self.needs(other))
+
+    def test_an_owner_outside_the_seat_list_is_refused(self):
+        key = self.ticket()
+        self.pl.plan(key, PLAN, "agent:planner")
+        with self.assertRaises(TaskError) as e:
+            self.pl.block(key, "stuck", "agent:implementer", owner="somebody")
+        self.assertEqual(e.exception.status, 400)
+        with self.assertRaises(TaskError) as e:
+            self.pl.handoff(key, {"next": "x", "owner": "somebody"}, "agent:implementer")
+        self.assertEqual(e.exception.status, 400)
+
+    def test_the_list_marks_agree_with_the_single_check(self):
+        flagged, clear = self.blocked(), self.blocked(explain={"action": "Fix"}, owner="lead")
+        ids = [self.ts.get(k)["id"] for k in (flagged, clear)]
+        marks = self.pl.compact(ids)
+        got = [Pipeline.list_marks(self.ts.get(k), marks[i])["needsTriage"] for k, i in zip((flagged, clear), ids)]
+        self.assertEqual(got, [True, False])
+
+
+class ReviewReady(Base):
+    def test_green_unreviewed_head_is_recorded_once_per_head(self):
+        key = self.ticket()
+        self.to_review(key)
+        kinds = lambda ev: [k for k, _t, _d in ev]  # noqa: E731
+        self.assertEqual(kinds(self.pl.sync_pr(key, self.pr())[2]), ["pipeline.review_ready"])
+        self.assertEqual(kinds(self.pl.sync_pr(key, self.pr())[2]), [])           # the same head again
+        new = "1" * 40
+        self.assertEqual(kinds(self.pl.sync_pr(key, self.pr(head=new))[2]), ["pipeline.review_ready"])
+
+    def test_not_for_a_draft_red_checks_or_a_head_already_reviewed(self):
+        key = self.ticket()
+        self.to_review(key)
+        self.assertEqual(self.pl.sync_pr(key, self.pr(draft=True))[2], [])
+        self.assertEqual(self.pl.sync_pr(key, self.pr(green=False))[2], [])
+        self.pl.review(key, "REQUEST_CHANGES", HEAD, "agent:reviewer", [{"summary": "x"}], pr=self.pr())
+        self.assertEqual([e for e in self.pl.sync_pr(key, self.pr())[2] if e[0] == "pipeline.review_ready"], [])
+
+    def test_no_ci_checks_are_said_as_such(self):
+        key = self.ticket()
+        self.to_review(key)
+        _t, _c, events = self.pl.sync_pr(key, dict(self.pr(), ciNone=True))
+        self.assertIn("no CI checks", events[0][1])
+        self.assertTrue(events[0][2]["ciNone"])
+
+
+class CliBuild(unittest.TestCase):
+    """CC-076: the CLI maps the urgent op and --next-owner onto the existing work route."""
+
+    def test_urgent_defaults_to_the_lead_and_carries_kind_and_reason(self):
+        m, path, body, actor = pipeline_cli.build(["urgent", "CC-9", "--kind", "security", "--reason", "token leaked"])
+        self.assertEqual((m, path, body, actor), ("POST", "/api/tasks/CC-9/work/urgent",
+                                                  {"kind": "security", "reason": "token leaked"}, "agent:coordinator"))
+
+    def test_next_owner_goes_with_block_and_handoff_and_must_be_a_seat(self):
+        _m, _p, body, _a = pipeline_cli.build(["block", "CC-9", "--role", "coordinator", "--reason", "CI", "--action",
+                                               "Fix it", "--next-owner", "developer"])
+        self.assertEqual((body["action"], body["owner"]), ("Fix it", "developer"))
+        _m, _p, body, _a = pipeline_cli.build(["handoff", "CC-9", "--role", "coordinator", "--next", "Wait",
+                                               "--next-owner", "lead"])
+        self.assertEqual(body, {"next": "Wait", "owner": "lead"})
+        with self.assertRaises(SystemExit):
+            pipeline_cli.build(["handoff", "CC-9", "--role", "coordinator", "--next", "x", "--next-owner", "nobody"])
+
+    def test_tasks_marks_a_blocked_ticket_that_needs_triage_whatever_work_mode_says(self):
+        import contextlib
+        import io
+        rows = {"tickets": [{"key": "CC-1", "number": 1, "status": "BLOCKED", "title": "stuck", "needsTriage": True},
+                            {"key": "CC-2", "number": 2, "status": "BLOCKED", "title": "owned", "needsTriage": False}]}
+        real, pipeline_cli.call = pipeline_cli.call, lambda *a, **kw: (0, rows)
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                pipeline_cli.main(["tasks", "commandcenter"])
+        finally:
+            pipeline_cli.call = real
+        self.assertEqual(out.getvalue().splitlines(), ["CC-1\tBLOCKED\tstuck\tTRIAGE TODAY", "CC-2\tBLOCKED\towned"])
 
 
 class Stages(Base):

@@ -139,7 +139,6 @@ class PriorityAndDue(Base):
         for size, day in days.items():
             k = self.sized(size)
             self.assertEqual(self.ts.get(k)["dueAt"], self.end_of(2026, 11, day), size)
-            self.ts.update(k, {"status": "CANCELLED"}, "jay")
         k = self.ticket()
         self.pl.intake(k, "standard", ["works"], "agent:coordinator", priority="HIGH", due="2026-11-19")
         self.assertEqual(self.ts.get(k)["dueAt"], self.end_of(2026, 11, 19))
@@ -563,7 +562,7 @@ class Shapes(Base):
         t = self.ts.get(k)
         m = self.pl.compact([t["id"]])[t["id"]]
         self.assertEqual(Pipeline.list_marks(t, m), {"size": "standard", "stage": "techReview", "stale": False,
-                                                     "route": list(flow.STAGES)})
+                                                     "route": list(flow.STAGES), "needsTriage": False})
         r = self.ticket(labels=["security"])                     # risky by policy, not sized: today's route
         t = self.ts.get(r)
         m = self.pl.compact([t["id"]]).get(t["id"]) or {"gate": None, "openQuestions": 0}

@@ -986,14 +986,45 @@ class TeamThreads(ReplyBase):
 
     def test_handoff_and_blocker_state_explain_the_next_action(self):
         self.d.task_work = lambda key: {
-            "handoff": {"done": "Portion tests passed", "next": "Check the review screen"},
-            "blocked": {"action": "Check the missing fixture"},
+            "handoff": {"done": "Portion tests passed", "next": "Check the review screen", "owner": "user-reviewer"},
+            "blocked": {"action": "Check the missing fixture", "owner": "developer"},
         }
         self.step("SV-44", "pipeline.handoff", "handoff updated", "agent:implementer")
         self.step("SV-44", "pipeline.blocked", "Preview data missing", "agent:coordinator")
         _, handoff, blocker = self.channel_posts()
-        self.assertIn("Completed: Portion tests passed\nNext: Check the review screen", handoff["text"])
-        self.assertIn("Preview data missing\nNext: Check the missing fixture", blocker["text"])
+        self.assertIn("Completed: Portion tests passed\nNext: Check the review screen (owner: user-reviewer)",
+                      handoff["text"])
+        self.assertIn("Preview data missing\nNext: Check the missing fixture (owner: developer)", blocker["text"])
+
+    def test_a_block_with_no_next_step_or_no_owner_says_the_lead_triages_it_today(self):
+        for blocked in ({}, {"action": "Fix the fixture"}, {"owner": "developer"}):
+            self.d.task_work = lambda key, blocked=blocked: {"blocked": blocked}
+            self.step("SV-45", "pipeline.blocked", "Preview data missing", "agent:coordinator")
+            self.assertIn("Preview data missing\nNo next step or owner: the lead triages it today",
+                          self.channel_posts()[-1]["text"])
+
+    def test_user_check_says_what_was_tested(self):
+        self.d.task_work = lambda key: {"userCheck": {"note": "Tried the export on 375px", "at": 1}}
+        self.step("SV-47", "pipeline.user_checked", "user check passed", "agent:user-reviewer")
+        post = self.channel_posts()[-1]
+        self.assertIn("user check passed\nChecked: Tried the export on 375px", post["text"])
+        self.assertIn("User reviewer", post["text"])                      # the seat label on the post
+
+    def test_an_urgent_exception_is_broadcast_with_its_kind_and_reason_and_escaped(self):
+        self.step("SV-48", "pipeline.urgent", "urgent exception (production): site <!channel> is down", "agent:coordinator")
+        root, urgent = self.channel_posts()
+        self.assertEqual((urgent["thread"], urgent["broadcast"]), (root["ts"], True))
+        self.assertIn("urgent exception (production)", urgent["text"])
+        self.assertIn("Lead", urgent["text"])
+        self.assertNotIn("<!channel>", urgent["text"])
+        before = len(self.slack.posts)
+        self.step("GM-4", "pipeline.urgent", "urgent exception (security): x", "agent:coordinator", project="gauzemate")
+        self.assertEqual(len(self.slack.posts), before)                   # a client project posts nothing
+
+    def test_review_ready_posts_in_the_ticket_thread(self):
+        self.step("SV-49", "pipeline.review_ready", "PR #9 at abc1234 has green checks and no review")
+        root, ready = self.channel_posts()
+        self.assertEqual((ready["thread"], ready["broadcast"]), (root["ts"], False))
 
     def test_milestones_also_show_in_the_channel_and_small_records_stay_out(self):
         self.step("SV-41", "pipeline.criteria", "criteria updated: 3 criteria", "agent:coordinator")

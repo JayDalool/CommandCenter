@@ -132,7 +132,9 @@ SEEN_EVENTS_MAX = 500
 IDS_REFRESH_S = 60              # at most one re-read of the channel list a minute per unknown channel
 ALERT_KINDS = ("pr.opened", "pr.closed", "ci.main_changed", "pr.ci_changed", "task.pipeline")
 PIPELINE_ALERTS = {"pipeline.merged": "merged", "pipeline.auto_merged": "auto-merged", "pipeline.deployed": "deployed",
-                   "pipeline.done": "done", "pipeline.auto_merge_failed": "auto-merge failed"}
+                   "pipeline.done": "done", "pipeline.auto_merge_failed": "auto-merge failed",
+                   # CC-076: Jay is told about every urgent exception in the channel, with its kind and reason.
+                   "pipeline.urgent": "urgent exception"}
 # Who posts a ticket's steps in its Slack thread: the seat of the actor that recorded the step (pipeline_cli
 # --role), with its icon. Anything else (Jay, ccd's own GitHub poll) posts as the app itself.
 SEATS = {"agent:coordinator": ("Lead", ":compass:"), "agent:planner": ("Investigator", ":mag:"),
@@ -144,7 +146,8 @@ LEAD_ICON, CTO_ICON = ":compass:", ":office:"
 # The steps a ticket's thread shows: each seat's result, the gates, and what happened to it. Not the many small
 # records (criteria edits, evidence, findings one by one, writer checkpoints, stale marks).
 TEAM_KINDS = frozenset({
-    "pipeline.intake", "pipeline.intake_queued", "pipeline.role", "pipeline.plan", "pipeline.plan_reviewed", "pipeline.plan_accepted",
+    "pipeline.intake", "pipeline.role", "pipeline.plan", "pipeline.plan_reviewed", "pipeline.plan_accepted",
+    "pipeline.review_ready",
     "pipeline.replan", "pipeline.started", "pipeline.handoff", "pipeline.user_checked", "pipeline.review",
     "pipeline.rework", "pipeline.blocked", "pipeline.questions", "pipeline.answered", "pipeline.gate_opened",
     "pipeline.gate_confirmed", "pipeline.ready_to_merge", "pipeline.unreviewed_merge", "pipeline.verified",
@@ -943,14 +946,21 @@ class Notifier:
                 handoff = work.get("handoff") or {}
                 if (handoff.get("at") or 0) > when:
                     handoff = {}  # A newer handoff is a different Slack update.
-                parts = [f"{label}: {str(handoff[field])[:220]}" for field, label in
+                parts = [f"{label}: {str(handoff[field])[:220]}"
+                         + (f" (owner: {handoff['owner']})" if field == "next" and handoff.get("owner") else "")
+                         for field, label in
                          (("done", "Completed"), ("next", "Next"), ("blockers", "Blocked by")) if handoff.get(field)]
                 text = "\n".join(parts) or text
             elif data.get("kind") == "pipeline.blocked":
                 blocked = work.get("blocked") or {}
-                action = blocked.get("action") if (blocked.get("at") or 0) <= when else None
-                next_step = str(action)[:220] if action else "Lead reviews the blocker and asks Jay if a decision is needed."
-                text = f"{text}\nNext: {next_step}"
+                if (blocked.get("at") or 0) > when:
+                    blocked = {}  # A newer block is a different Slack update.
+                # The same test as the work-mode line and `pipeline_cli tasks` (Pipeline.triage_needed), so the post
+                # never says a next step exists when the lead has been told to triage it.
+                if blocked.get("action") and blocked.get("owner"):
+                    text = f"{text}\nNext: {str(blocked['action'])[:220]} (owner: {blocked['owner']})"
+                else:
+                    text = f"{text}\nNo next step or owner: the lead triages it today"
             else:
                 check = work.get("userCheck") or {}
                 if check.get("note") and (check.get("at") or 0) <= when:

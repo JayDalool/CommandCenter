@@ -51,8 +51,13 @@ LEADS = ("jay", "agent:coordinator")          # who runs intake, edits criteria 
 USER_REVIEWERS = ("agent:user-reviewer", "agent:design-reviewer")
 CRITERION_ID_RE = re.compile(r"^c[0-9]{1,3}$")
 MAX_LANES = 2
-MAX_PROJECT_WORK = 4
 MAX_REVIEW_CYCLES = 2
+# CC-076: who can own a blocked ticket's next step (the seat names of FLOW.md, plus Jay). A fixed list, checked on
+# its own, so "owner" can never be free text that a reader mistakes for a decision.
+OWNERS = ("lead", "investigator", "tech-reviewer", "developer", "user-reviewer", "code-reviewer", "verifier", "jay")
+# The urgent exception (CC-076, Jay 2026-11-24): why the lead may start work past the 2/2 limits.
+URGENT_KINDS = ("technical", "security", "production")
+URGENT_ENDS = ("VERIFYING", "DONE", "DENIED", "CANCELLED")   # the first move to any of these ends it
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")   # the full PR head commit: no prefix can match another head
 SLUG_RE = r"[a-z0-9][a-z0-9-]{0,60}"
 META_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/@+-]{0,79}$")
@@ -75,6 +80,15 @@ def _end_of(day):
 def clean_priority(v):
     if v not in PRIORITY_SET:
         raise TaskError(400, f"priority must be one of {', '.join(PRIORITY_SET)}")
+    return v
+
+
+def clean_owner(v):
+    """The seat that owns a blocked ticket's next step, or None when none is given."""
+    if v in (None, ""):
+        return None
+    if v not in OWNERS:
+        raise TaskError(400, f"owner must be one of {', '.join(OWNERS)}")
     return v
 
 
@@ -128,8 +142,6 @@ def policy(ticket, project_key=None):
 
 
 CLOSED_STATUSES = ("DONE", "DENIED", "CANCELLED")
-BACKLOG_STATUSES = ("INBOX", "PROPOSED")
-PROJECT_SLOT_EXCLUDED = BACKLOG_STATUSES + CLOSED_STATUSES
 HOLDING_GATES = ("plan", "failure")       # jay_first: Jay's decisions that hold a ticket (questions too)
 STALE_OPTIONS = ("Cancel it", "Keep it")   # the task check's question; "Cancel it" cancels the ticket
 # The ten stages Jay sees (spec §24). The canonical statuses stay as they are underneath.
@@ -430,6 +442,7 @@ class Pipeline:
                    questions=questions, openQuestions=sum(1 for q in questions if q["answer"] is None),
                    evidence=evidence)
         out["visibleStage"] = visible_stage(t, out)
+        out["urgent"] = self.urgent_of(tid)
         d = out.get("deploy") or {}
         if d.get("env") == "live" and d.get("requestedAt") and not d.get("result") and not d.get("urgent"):
             # Worked out on every read: a missed window, or a project marked live after the request, moves it.
@@ -506,11 +519,12 @@ class Pipeline:
                                           f"AND ticket_id IN ({marks}) GROUP BY ticket_id", chunk):
                 out.setdefault(tid, {"gate": None, "gateReason": None, "deploy": None, "verification": None})["openQuestions"] = n
             # What the list's size / stage / stale need (flow.list_marks), without each ticket's whole history.
-            for tid, plan_state, blocked in self.db.execute(
-                    f"SELECT ticket_id, plan_state, blocked FROM ticket_work WHERE ticket_id IN ({marks})", chunk):
+            for tid, plan_state, blocked, handoff in self.db.execute(
+                    f"SELECT ticket_id, plan_state, blocked, handoff FROM ticket_work WHERE ticket_id IN ({marks})", chunk):
                 m = out.setdefault(tid, {"gate": None, "gateReason": None, "deploy": None, "verification": None,
                                          "openQuestions": 0})
-                m.update(planState=plan_state, blocked=json.loads(blocked) if blocked else None)
+                m.update(planState=plan_state, blocked=json.loads(blocked) if blocked else None,
+                         handoff=json.loads(handoff) if handoff else None)
             for tid, size, review_due, user_check in self.db.execute(
                     f"SELECT ticket_id, size, review_due, user_check FROM ticket_flow WHERE ticket_id IN ({marks})",
                     chunk) if self._has_flow() else ():
@@ -537,7 +551,9 @@ class Pipeline:
         idle = m.get("idleSince") or t.get("createdAt")
         now = time.time() if now is None else now
         return {"size": flow_mod.shown_size(f.get("size"), pol), "stage": stage, "route": list(rt),
-                "stale": flow_mod.is_stale(stage, t["status"], waiting, idle, now)}
+                "stale": flow_mod.is_stale(stage, t["status"], waiting, idle, now),
+                "needsTriage": Pipeline.triage_needed(t["status"], m.get("blocked"), m.get("handoff"),
+                                                      m.get("openQuestions"))}
 
     @staticmethod
     def _stages(status, stage):
@@ -654,50 +670,6 @@ class Pipeline:
             return True
         return not (pr.get("head") == r[0] and (not r[1] or pr.get("ref") == r[1]))
 
-    def project_slots(self, project):
-        """Work holding one of the project's engineering slots: admitted, not waiting on Jay, not release-only.
-
-        CC-076, Jay 2026-11-24: a ticket waiting on Jay's decision (an open question, or a plan, merge, UI or deploy
-        gate) frees its slot, so a few unanswered questions cannot stall every agent. A ticket blocked on CI or on
-        another ticket keeps its slot (`block` sets the failure gate, which is not a Jay decision here): that block
-        clears without him."""
-        marks = ", ".join("?" for _ in PROJECT_SLOT_EXCLUDED)
-        return [key for (key,) in self.db.execute(
-            f"SELECT t.key FROM tickets t LEFT JOIN ticket_work w ON w.ticket_id=t.id "
-            f"WHERE t.project=? AND t.archived=0 AND t.status NOT IN ({marks}) "
-            "AND NOT (t.status='VERIFYING' AND w.merge IS NOT NULL "
-            "AND COALESCE(json_extract(w.verification, '$.result'), '')='pass' "
-            "AND (w.gate IS NULL OR w.gate='deploy')) "
-            "AND COALESCE(w.gate, '') NOT IN ('plan', 'merge', 'ui', 'deploy') "
-            "AND NOT EXISTS (SELECT 1 FROM ticket_questions q WHERE q.ticket_id=t.id AND q.answered_at IS NULL) "
-            "ORDER BY t.number", (project, *PROJECT_SLOT_EXCLUDED))]
-
-    def _back_from_jay(self, key):
-        """Jay answered or confirmed a gate on this ticket and no agent has recorded a step on it since."""
-        return bool(self.db.execute(
-            "SELECT 1 FROM tickets t JOIN ticket_events r ON r.ticket_id=t.id "
-            "AND r.kind IN ('pipeline.answered', 'pipeline.gate_confirmed') WHERE t.key=? "
-            "AND r.at=(SELECT MAX(at) FROM ticket_events WHERE ticket_id=t.id "
-            "AND kind IN ('pipeline.answered', 'pipeline.gate_confirmed')) "
-            "AND NOT EXISTS (SELECT 1 FROM ticket_events e WHERE e.ticket_id=t.id AND e.at>r.at "
-            "AND e.actor LIKE 'agent:%' AND e.kind LIKE 'pipeline.%')", (key,)).fetchone())
-
-    def check_project_admission(self, project):
-        slots = self.project_slots(project)
-        if len(slots) >= MAX_PROJECT_WORK:
-            raise TaskError(409, f"{project} has {len(slots)} of {MAX_PROJECT_WORK} work slots in use "
-                                 f"({', '.join(slots[:MAX_PROJECT_WORK])}). Finish or unblock existing work first.")
-
-    def _slot_free(self, t):
-        """A ticket back from Jay waits while four other tickets hold slots (CC-076). Only such a ticket waits:
-        work already admitted keeps going even when a project starts over four (review of 9d7ae58, finding 1)."""
-        if not self._back_from_jay(t["key"]):
-            return
-        held = [k for k in self.project_slots(t["project"]) if k != t["key"] and not self._back_from_jay(k)]
-        if len(held) >= MAX_PROJECT_WORK:
-            raise TaskError(409, f"{t['key']} is queued for the next free work slot: {len(held)} are in use "
-                                 f"({', '.join(held[:MAX_PROJECT_WORK])}). Take one of those first.")
-
     def lanes(self, project):
         """Implementation lanes running in one project: its tickets IN_PROGRESS with a worktree."""
         return self.db.execute(
@@ -709,6 +681,8 @@ class Pipeline:
         return int(registry.pipeline_of(project).get("max_lanes") or self.max_lanes)
 
     def _lane_free(self, t, what="wait for one to finish"):
+        if self.urgent_of(t["id"]):
+            return      # the urgent exception skips this limit only; the ticket still counts toward it
         limit = self.lane_limit(t["project"])
         if self.lanes(t["project"]) >= limit:
             raise TaskError(409, f"{limit} implementation lanes are already running in {t['project']}; {what}")
@@ -737,6 +711,8 @@ class Pipeline:
                 and fl["holder"] and fl["holder"]["seat"] == "investigator"]
 
     def _investigate_free(self, t):
+        if self.urgent_of(t["id"]):
+            return
         limit = self.investigate_limit(t["project"])
         busy = self.investigating(t["project"], exclude=t["key"])
         if len(busy) >= limit:
@@ -761,11 +737,36 @@ class Pipeline:
     LABEL = {"techReview": "technical review", "userCheck": "user check", "codeReview": "code review"}
 
     def _finish_first(self, t, what):
+        if self.urgent_of(t["id"]):
+            return      # the 4-hour finish-first rule is the other check the exception skips
         waiting = self.unseated(t["project"], exclude=t["key"])
         if waiting:
             k, st = waiting[0]
             raise TaskError(409, f"{k} has waited more than 4 hours for {self.LABEL[st]} with nobody on it; "
                                  f"finish that before {what}")
+
+    def urgent_of(self, tid):
+        """The ticket's open urgent exception {at, by, kind, reason}, or None. Open means the newest pipeline.urgent
+        event has no move to VERIFYING, DONE, DENIED or CANCELLED after it: defined by order, not by the current
+        status, so a rework from VERIFYING does not reopen it (CC-076 tech review, condition 1)."""
+        r = self.db.execute("SELECT id, at, actor, data FROM ticket_events WHERE ticket_id=? AND kind='pipeline.urgent' "
+                            "ORDER BY id DESC LIMIT 1", (tid,)).fetchone()
+        if not r:
+            return None
+        marks = ",".join("?" * len(URGENT_ENDS))
+        if self.db.execute(f"SELECT 1 FROM ticket_events WHERE ticket_id=? AND id>? AND field='status' "
+                           f"AND to_value IN ({marks}) LIMIT 1", (tid, r[0], *URGENT_ENDS)).fetchone():
+            return None
+        d = json.loads(r[3] or "{}")
+        return {"at": r[1], "by": r[2], "kind": d.get("kind"), "reason": d.get("reason")}
+
+    def urgent_in(self, project, exclude=None):
+        """Keys of the project's tickets that hold an open urgent exception."""
+        return [k for k, tid in self.db.execute(
+            "SELECT DISTINCT t.key, t.id FROM tickets t JOIN ticket_events e ON e.ticket_id=t.id "
+            "AND e.kind='pipeline.urgent' WHERE t.project=? AND t.archived=0 AND t.status NOT IN "
+            "('DONE','DENIED','CANCELLED') ORDER BY t.number", (project,)).fetchall()
+            if k != exclude and self.urgent_of(tid)]
 
     def done_worktrees(self):
         """[(key, project, branch, worktree)] of every DONE ticket that still has a recorded worktree."""
@@ -787,10 +788,6 @@ class Pipeline:
                 self.db.execute("INSERT INTO ticket_work(ticket_id, updated_at) VALUES (?,?)", (tid, at))
                 w = self._row(tid)
             fields, work, events = fn(tid, t, w, at)
-            # The cap is on agent work: Jay admits past it (review of 9d7ae58, finding 2).
-            if (actor != "jay" and t["status"] in PROJECT_SLOT_EXCLUDED
-                    and fields.get("status", t["status"]) not in PROJECT_SLOT_EXCLUDED):
-                self.check_project_admission(t["project"])
             changes = self.ts._apply(tid, fields, actor, at, trigger=events[0][1] if events else None) if fields else []
             if work:
                 cols = ", ".join(f"{c}=?" for c in work)
@@ -830,7 +827,6 @@ class Pipeline:
             f = self._flow(tid)
             first = not self.db.execute("SELECT 1 FROM ticket_events WHERE ticket_id=? AND kind='pipeline.plan' LIMIT 1",
                                         (tid,)).fetchone()
-            self._slot_free(t)
             if first:
                 self._finish_first(t, "planning new work")
             if f["size"] in flow_mod.SIZES:
@@ -883,7 +879,6 @@ class Pipeline:
             if not isinstance(worktree, str) or not worktree.startswith("/") or len(worktree) > 300 \
                     or not re.match(r"^/[A-Za-z0-9._/-]+$", worktree) or "/../" in worktree + "/":
                 raise TaskError(400, "worktree must be an absolute path")
-            self._slot_free(t)
             self._lane_free(t)
             self._finish_first(t, "starting new work")
             held = self.held(t["key"])
@@ -987,6 +982,19 @@ class Pipeline:
         passed on another head of the same PR is cleared: the new commits are checked again."""
         def fn(tid, t, w, at):
             status, work, events = inner(tid, t, w, at)
+            rv = w["review"]
+            # CC-076 (c19): checks are green on a PR that nobody has reviewed at this head: say so once per head.
+            # Whether a lead's pane is told is ccd's call (work mode); the event and the Slack post always happen.
+            if (t["status"] == "IN_REVIEW" and status.get("status", "IN_REVIEW") == "IN_REVIEW" and pr.get("ciGreen")
+                    and not pr.get("draft") and pr.get("head") and rv["head"] != pr["head"]
+                    and not (rv.get("pr") and pr.get("ref") != rv["pr"])
+                    and not any(k == "pipeline.review_ready" and (json.loads(d or "{}")).get("head") == pr["head"]
+                                for _a, _b, k, _f, _fr, _to, d in self._events(tid))):
+                sha = pr["head"][:7]
+                events = events + [("pipeline.review_ready",
+                                    f"{pr.get('ref') or 'PR'} at {sha} has {'no CI checks' if pr.get('ciNone') else 'green checks'}"
+                                    f" and no review",
+                                    {"head": pr["head"], "pr": pr.get("ref"), "ciNone": bool(pr.get("ciNone"))})]
             uc = self._flow(tid)["userCheck"] or {}
             if uc.get("result") == "pass" and pr.get("head") and pr["head"] != uc.get("head") \
                     and (not uc.get("pr") or uc["pr"] == pr.get("ref")):
@@ -1226,12 +1234,60 @@ class Pipeline:
         h = {k: _text(body.get(k), 2000, k) for k in ("done", "decisions", "next", "blockers")}
         if not any(h.values()):
             raise TaskError(400, "a handoff says at least one of done, decisions, next, blockers")
+        owner = clean_owner(body.get("owner"))
+        if owner:
+            h["owner"] = owner      # who takes `next`; with it a blocked ticket no longer needs triage
         return self._tx(key, actor, lambda tid, t, w, at: ({}, {"handoff": dict(h, at=at, by=actor)},
                                                           [("pipeline.handoff", "handoff updated", {})]))
 
     EXPLAIN = ("what", "why", "action", "impact", "technical")
 
-    def block(self, key, reason, actor, explain=None):
+    @staticmethod
+    def triage_needed(status, blocked, handoff, open_questions):
+        """CC-076 (c20, c8): a BLOCKED ticket with no open question must name its next step AND who owns it, in the
+        block itself or in a later handoff. One check for the work-mode line, GET /api/tasks, `pipeline_cli tasks` and
+        the Slack blocked post, so they never disagree. Auto-blocks (send-backs, failed checks) name neither."""
+        if status != "BLOCKED" or open_questions:
+            return False
+        b, h = blocked or {}, handoff or {}
+        if b.get("action") and b.get("owner"):
+            return False
+        return not (h.get("next") and h.get("owner") and (h.get("at") or 0) > (b.get("at") or 0))
+
+    def needs_triage(self, t, w):
+        return self.triage_needed(t["status"], w.get("blocked"), w.get("handoff"), w.get("openQuestions", 0))
+
+    def urgent(self, key, kind, reason, actor):
+        """The lead's urgent exception: a serious technical, security or production problem may start right away
+        past the 2 investigate / 2 build limits and the 4-hour finish-first rule. Nothing else is skipped: every stage,
+        review, plan/merge/deploy gate and Jay's approval stay. One open per project; it ends at the first move to
+        VERIFYING or close. The reason is posted to the project's Slack channel: no secrets or customer data."""
+        self._lead(actor, "the urgent exception")
+        if kind not in URGENT_KINDS:
+            raise TaskError(400, f"kind must be one of {', '.join(URGENT_KINDS)}")
+        reason = _text(reason, 300, "reason", multiline=False)
+        if not reason:
+            raise TaskError(400, "say why it cannot wait")
+
+        def fn(tid, t, w, at):
+            if t["status"] == "VERIFYING" or t["status"] in CLOSED_STATUSES:
+                raise TaskError(409, f"{t['key']} is {t['status']}; the urgent exception is for work before verification")
+            other = self.urgent_in(t["project"], exclude=t["key"])
+            if other:
+                raise TaskError(409, f"{other[0]} already holds the urgent exception in {t['project']}; one at a time")
+            running = self._slot_keys(t["project"], t["key"])
+            return {}, {}, [("pipeline.urgent", f"urgent exception ({kind}): {reason}",
+                             {"kind": kind, "reason": reason, "inWork": running})]
+        return self._tx(key, actor, fn)
+
+    def _slot_keys(self, project, exclude):
+        """Keys holding a limited slot now (a build lane or an investigator seat): the work an exception pauses."""
+        lanes = [k for (k,) in self.db.execute(
+            "SELECT t.key FROM tickets t JOIN ticket_work w ON w.ticket_id=t.id WHERE t.status='IN_PROGRESS' "
+            "AND w.worktree IS NOT NULL AND t.project=? ORDER BY t.number", (project,))]
+        return [k for k in lanes + self.investigating(project, exclude=exclude) if k != exclude]
+
+    def block(self, key, reason, actor, explain=None, owner=None):
         """Blocked, explained for a manager first (what happened, why it matters, recommended action,
         estimated impact) with the technical details kept underneath."""
         reason = _text(reason, 300, "reason", multiline=False)
@@ -1241,6 +1297,9 @@ class Pipeline:
             raise TaskError(400, "explain must be an object")
         more = {k: _text((explain or {}).get(k), 4000 if k == "technical" else 2000, k) for k in self.EXPLAIN}
         more = {k: v for k, v in more.items() if v}
+        owner = clean_owner(owner)
+        if owner:
+            more["owner"] = owner       # next to `action`: who takes the recommended next step
 
         def fn(tid, t, w, at):
             stage = stage_of(t["status"])
@@ -1454,7 +1513,6 @@ class Pipeline:
             if w["planState"] != "accepted" and self._flow(tid)["size"] != "small":
                 raise TaskError(409, f"{t['key']} has no accepted plan; re-plan instead")
             self._lane_free(t)
-            self._slot_free(t)
             # The change is being rewritten: an approval, a verification, a UI acceptance or a live-deploy
             # approval was for the old one, and an open UI / deploy / merge / failure gate no longer applies.
             work = {"review_verdict": None, "confirmed": [g for g in _no_merge(w["confirmed"]) if g not in ("ui", "deploy")],
@@ -1716,17 +1774,6 @@ class Pipeline:
                 raise TaskError(400, f"intake needs a priority: {', '.join(PRIORITY_SET)}")
             due_at = clean_due(due, at) if due is not None else (t["dueAt"] or due_by_size(eff, at))
             to = "build" if eff == "small" else "investigate"
-            slots = self.project_slots(t["project"])
-            if actor != "jay" and len(slots) >= MAX_PROJECT_WORK:
-                # CC-076, Jay 2026-11-24: the four slots cap agent work, not ticket making. A full project still
-                # takes the ticket's definition; it waits in the backlog and the lead runs intake again to admit it.
-                self._flow_set(tid, at, size=eff, criteria=crit, requirements=reqs, review_due=None)
-                fields = {"priority": prio, "dueAt": due_at, **({"parent": parent} if parent else {})}
-                said = (f"intake queued: {eff}; {len(slots)} of {MAX_PROJECT_WORK} work slots in use "
-                        f"({', '.join(slots[:MAX_PROJECT_WORK])}), so it waits in the backlog")
-                return fields, {}, [("pipeline.intake_queued", said, {"size": eff, "asked": size, "criteria": len(crit),
-                                                                      "priority": prio, "due": due_at,
-                                                                      "slots": len(slots)})]
             fields = {"status": "READY_TO_IMPLEMENT" if eff == "small" else "RESEARCHING", "priority": prio,
                       "dueAt": due_at}
             if parent:
