@@ -1824,6 +1824,29 @@ class Daemon(LeadChat, HqDaemon):
             return
         for r in self.pipeline.sweep_stale():
             self._pipeline_result(*r)
+        # CC-085: the weekly "Still needed?" question. Its own once-a-week rule lives in the ticket's events.
+        for r in self.pipeline.sweep_still_needed():
+            self._pipeline_result(*r)
+
+    def _still_needed_answer(self, key, answer, actor):
+        """Jay's answer to the weekly "Still needed?" question (CC-085). Nothing here cancels: "Close it" only
+        proposes the ticket as stale, which asks Jay the usual Cancel it / Keep it question, and cancelling stays
+        his. "Move to backlog" is his own answer, so it may move the status (the task check cancels the same way)."""
+        done = {"work": None, "complete": True, "delivered": False, "cancelled": False}
+        if answer == pipeline_mod.SWEEP_OPTIONS[1]:
+            self.task_comment(key, "Moved to backlog in the weekly still-needed check", actor)
+            self.task_update(key, {"status": "PROPOSED"}, actor, developer=True)
+            done["reason"] = "moved to backlog"
+        elif answer == pipeline_mod.SWEEP_OPTIONS[2]:
+            self.task_comment(key, "Jay chose close in the weekly still-needed check; proposed as stale", actor)
+            self._pipeline_result(*self._wrap(self.pipeline.stale, key, "Jay chose close in the weekly "
+                                              "still-needed check", "system:automation"))
+            done["reason"] = "proposed as stale for Jay's cancel"
+        else:
+            self.task_comment(key, "Kept going in the weekly still-needed check", actor)
+            done["reason"] = "kept in the still-needed check"
+        done["work"] = self.task_work(key)
+        return done
 
     def task_session(self, key):
         """The ticket's task Claude session, from the one resolver (coordid.task_session). A pane that is any
@@ -1864,6 +1887,8 @@ class Daemon(LeadChat, HqDaemon):
         if stale:
             q = before[stale[0]["id"]]
             reason = q["text"].split(" — ", 1)[-1]
+            if q["text"].startswith(pipeline_mod.SWEEP_TEXT):
+                return self._still_needed_answer(key, str(stale[0].get("answer") or "").strip(), actor)
             if str(stale[0].get("answer") or "").strip() == pipeline_mod.STALE_OPTIONS[0]:
                 self.task_comment(key, f"Cancelled in the task check. Claude's reason: {reason}", actor)
                 self.task_update(key, {"status": "CANCELLED"}, actor, developer=True)
@@ -2897,6 +2922,7 @@ class Daemon(LeadChat, HqDaemon):
                                    else f"PR #{n} is open")
                             self._auto(k, frm, "IN_REVIEW", why)
                         if self.pipeline.participating(k):
+                            self.pipeline.note_pr_head(k, ref, pr_state["head"])   # a push is progress (CC-085)
                             # A pipeline ticket: only its recorded review, tied to this PR's head, decides.
                             self._pipeline_result(*self.pipeline.sync_pr(k, pr_state))
                         elif ready:

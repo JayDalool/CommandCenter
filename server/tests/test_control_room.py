@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from ccd import coordid, pty, records, registry
+from ccd import pipeline as pipeline_mod
 from ccd.pipeline import Pipeline, needs_acceptance, visible_stage  # noqa: F401
 from ccd.tasks import TaskError
 
@@ -687,6 +688,21 @@ class ControlRoomApi(PipelineApi):
         self.assertEqual(t["status"], "INBOX")
         self.assertIn("Kept in the task check", t["comments"][-1]["body"])
         self.assertEqual(self.get("/api/tasks/SV-056/work").json()["openQuestions"], 0)
+
+    def test_still_needed_close_only_proposes_it_as_stale(self):
+        """CC-085: answering the weekly question with "Close it" opens the usual Cancel it / Keep it question."""
+        self.ticket("IN_PROGRESS")
+        self.daemon.pipeline.sweep_still_needed(now=pipeline_mod._now() + 6 * 86400)
+        q = self.get("/api/tasks/SV-056/work").json()["questions"][-1]
+        self.assertTrue(q["text"].startswith(pipeline_mod.SWEEP_TEXT), q)
+        out = self.client.post("/api/tasks/SV-056/answers", content=json.dumps(
+            {"answers": [{"id": q["id"], "answer": "Close it"}]}), headers=dict(JSON, **self.dev())).json()
+        self.assertEqual((out["cancelled"], out["delivered"]), (False, False), out)
+        t = self.get("/api/tasks/SV-056").json()
+        self.assertEqual(t["status"], "IN_PROGRESS")                                   # nothing was cancelled
+        nxt = self.get("/api/tasks/SV-056/work").json()["questions"][-1]
+        self.assertEqual(nxt["options"], ["Cancel it", "Keep it"])
+        self.assertIsNone(nxt["answer"])
 
     def test_the_task_check_sends_one_fixed_message_to_the_idle_coordinator(self):
         self.ticket("INBOX")

@@ -129,6 +129,14 @@ def policy(ticket, project_key=None):
 CLOSED_STATUSES = ("DONE", "DENIED", "CANCELLED")
 HOLDING_GATES = ("plan", "failure")       # jay_first: Jay's decisions that hold a ticket (questions too)
 STALE_OPTIONS = ("Cancel it", "Keep it")   # the task check's question; "Cancel it" cancels the ticket
+# CC-085: the weekly "Still needed?" sweep. Its question reuses purpose 'stale' (the column's CHECK allows nothing
+# else and a migration is not worth it) and is told apart from the task check by SWEEP_TEXT. Only "Close it" does
+# anything beyond a note, and even that only proposes the ticket as stale: Jay's own cancel is a second question.
+SWEEP_TEXT = "Still needed? No progress recorded for"
+SWEEP_OPTIONS = ("Finish it", "Move to backlog", "Close it")
+SWEEP_QUIET = 5 * 86400    # no recorded progress for this long
+SWEEP_EVERY = 7 * 86400    # one question per ticket per week
+SWEEP_KIND = "sweep.still_needed"   # not 'pipeline.%': asking must not count as progress and restart the quiet spell
 # The ten stages Jay sees (spec §24). The canonical statuses stay as they are underneath.
 VISIBLE_STAGES = ("Planning", "Implementing", "Reviewing", "UI Testing", "Verifying", "Ready to Merge", "Deploying",
                   "Needs Jay", "Blocked", "Closed")
@@ -1964,5 +1972,62 @@ class Pipeline:
             def fn(tid, t, w, at):
                 self._flow_set(tid, at, stale_at=at)
                 return {}, {}, ([] if first else [(flow_mod.STALE_KIND, "no step recorded for 48 hours", {})])
+            out.append(self._tx(key, "system:automation", fn))
+        return out
+
+    def note_pr_head(self, key, ref, head):
+        """Record a linked PR's head the first time ccd sees it and whenever it moves, so a push counts as progress
+        for the weekly sweep (CC-085). Nothing else persists a push before review. No event when nothing moved."""
+        if not head:
+            return
+        last = self.db.execute(
+            "SELECT e.data FROM ticket_events e JOIN tickets t ON t.id=e.ticket_id WHERE t.key=? AND "
+            "e.kind='pipeline.pr_head' ORDER BY e.id DESC", (str(key).upper(),)).fetchall()
+        for (data,) in last:
+            d = json.loads(data or "{}")
+            if d.get("ref") == ref:
+                if d.get("head") == head:
+                    return
+                break
+        self._tx(key, "system:automation",
+                 lambda tid, t, w, at: ({}, {}, [("pipeline.pr_head", f"PR {ref} head {head[:7]}",
+                                                  {"ref": ref, "head": head})]))
+
+    def sweep_still_needed(self, now=None):
+        """CC-085: once a week, every open ticket with no recorded progress in 5 days gets one "Still needed?"
+        question for Jay (finish it, move to backlog, close it). Progress is any pipeline step, handoff, answer, status
+        change, linked PR or PR push. A ticket already waiting on a Jay question is skipped, and so is one asked in the
+        last 7 days; that is read from ticket_events, so it holds across a ccd restart. Backlog tickets (INBOX,
+        PROPOSED) are not asked, or "Move to backlog" would only bring the question back next week. Never closes or
+        cancels anything. Returns [(ticket, changes, events)] for the daemon to announce."""
+        now = _now() if now is None else now
+        out = []
+        for key, tid, created in self.db.execute(
+                "SELECT key, id, created_at FROM tickets WHERE archived=0 AND status IN ('RESEARCHING',"
+                "'READY_TO_IMPLEMENT','IN_PROGRESS','IN_REVIEW','READY_TO_MERGE','VERIFYING','BLOCKED') "
+                "ORDER BY id").fetchall():
+            if self.db.execute("SELECT 1 FROM ticket_questions WHERE ticket_id=? AND answered_at IS NULL",
+                               (tid,)).fetchone():
+                continue
+            asked = self.db.execute("SELECT MAX(at) FROM ticket_events WHERE ticket_id=? AND kind=?",
+                                    (tid, SWEEP_KIND)).fetchone()[0]
+            if asked is not None and now - asked < SWEEP_EVERY:
+                continue
+            last = self.db.execute(
+                "SELECT MAX(at) FROM ticket_events WHERE ticket_id=? AND kind NOT IN (?,?) AND "
+                "(kind LIKE 'pipeline.%' OR field = 'status' OR kind = 'linked')",
+                (tid, flow_mod.STALE_KIND, SWEEP_KIND)).fetchone()[0]
+            if now - max(last or 0, created or 0) < SWEEP_QUIET:
+                continue
+
+            def fn(tid, t, w, at, key=key, quiet=now - max(last or 0, created or 0)):
+                batch = (self.db.execute("SELECT MAX(batch) FROM ticket_questions WHERE ticket_id=?",
+                                         (tid,)).fetchone()[0] or 0) + 1
+                days = int(quiet // 86400)
+                self.db.execute("INSERT INTO ticket_questions(ticket_id, batch, position, text, kind, options, asked_at, "
+                                "asked_by, purpose) VALUES (?,?,0,?,'choice',?,?,?,'stale')",
+                                (tid, batch, f"{SWEEP_TEXT} {days} days: {t['title']}", json.dumps(list(SWEEP_OPTIONS)),
+                                 at, "system:automation"))
+                return {}, {}, [(SWEEP_KIND, f"asked Jay: still needed? (quiet {days} days)", {"batch": batch})]
             out.append(self._tx(key, "system:automation", fn))
         return out

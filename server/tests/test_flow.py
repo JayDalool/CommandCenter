@@ -536,6 +536,71 @@ class Stale(Base):
         self.assertEqual(self.pl.sweep_stale(now=pipeline._now() + 49 * 3600), [])
 
 
+class StillNeeded(Base):
+    """CC-085: the weekly "Still needed?" sweep."""
+    DAY = 86400
+
+    def asked(self, out):
+        return [r[0]["key"] for r in out]
+
+    def test_the_five_day_cutoff(self):
+        k = self.sized()
+        t0 = pipeline._now()
+        self.assertEqual(self.pl.sweep_still_needed(now=t0 + 4.9 * self.DAY), [])
+        out = self.pl.sweep_still_needed(now=t0 + 5.1 * self.DAY)
+        self.assertEqual(self.asked(out), [k])
+        q = self.pl.work(k)["questions"][-1]
+        self.assertEqual((q["purpose"], q["options"]), ("stale", list(pipeline.SWEEP_OPTIONS)))
+        self.assertTrue(q["text"].startswith(pipeline.SWEEP_TEXT))
+
+    def test_a_step_is_progress_and_a_ticket_waiting_on_jay_is_skipped(self):
+        k = self.sized()
+        t0 = pipeline._now()
+        with mock.patch.object(pipeline, "_now", return_value=t0 + 4 * self.DAY):
+            self.pl.role(k, "planner", "agent:planner", session="i")             # a pipeline step at day 4
+        self.assertEqual(self.pl.sweep_still_needed(now=t0 + 8 * self.DAY), [])  # only 4 quiet days since
+        self.assertEqual(self.asked(self.pl.sweep_still_needed(now=t0 + 9.5 * self.DAY)), [k])
+        # The question is open now: Jay has not answered, so a second ticket state of "waiting" skips it.
+        self.assertEqual(self.pl.sweep_still_needed(now=t0 + 30 * self.DAY), [])
+
+    def test_a_pr_push_and_a_jay_answer_are_progress(self):
+        k = self.sized()
+        t0 = pipeline._now()
+        with mock.patch.object(pipeline, "_now", return_value=t0 + 4 * self.DAY):
+            self.pl.note_pr_head(k, "o/r#1", HEAD)
+            self.pl.note_pr_head(k, "o/r#1", HEAD)                                # same head: recorded once
+        with mock.patch.object(pipeline, "_now", return_value=t0 + 8 * self.DAY):
+            self.pl.note_pr_head(k, "o/r#1", HEAD2)                               # a push
+        n = self.ts.db.execute("SELECT COUNT(*) FROM ticket_events WHERE kind='pipeline.pr_head'").fetchone()[0]
+        self.assertEqual(n, 2)
+        self.assertEqual(self.pl.sweep_still_needed(now=t0 + 12 * self.DAY), [])
+        self.assertEqual(self.asked(self.pl.sweep_still_needed(now=t0 + 13.5 * self.DAY)), [k])
+        with mock.patch.object(pipeline, "_now", return_value=t0 + 14 * self.DAY):
+            qid = self.pl.work(k)["questions"][-1]["id"]
+            self.pl.answer(k, [{"id": qid, "answer": "Finish it"}], "jay")       # Jay's answer
+        self.assertEqual(self.pl.sweep_still_needed(now=t0 + 18 * self.DAY), [])
+
+    def test_asked_at_most_once_a_week_also_after_a_restart(self):
+        k = self.sized()
+        t0 = pipeline._now()
+        late = t0 + 6 * self.DAY
+        with mock.patch.object(pipeline, "_now", return_value=late):
+            self.assertEqual(self.asked(self.pl.sweep_still_needed()), [k])
+            qid = self.pl.work(k)["questions"][-1]["id"]
+            self.pl.answer(k, [{"id": qid, "answer": "Finish it"}], "jay")
+        again = Pipeline(self.ts)                                                # a restarted ccd: no memory
+        self.assertEqual(again.sweep_still_needed(now=late + 6.5 * self.DAY), [])   # asked and answered < 7 days ago
+        self.assertEqual(self.asked(again.sweep_still_needed(now=late + 13 * self.DAY)), [k])
+
+    def test_backlog_and_closed_tickets_are_not_asked_and_nothing_is_cancelled(self):
+        k = self.ticket()                                                        # INBOX: the backlog
+        self.assertEqual(self.pl.sweep_still_needed(now=pipeline._now() + 30 * self.DAY), [])
+        k2 = self.sized()
+        self.pl.sweep_still_needed(now=pipeline._now() + 30 * self.DAY)
+        self.assertNotIn(self.status(k2), ("CANCELLED", "DONE", "DENIED"))
+        self.assertEqual(self.status(k), "INBOX")
+
+
 class Shapes(Base):
     def test_the_flow_object_has_nine_stages_and_a_holder(self):
         k = self.planned()

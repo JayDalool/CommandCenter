@@ -374,6 +374,14 @@ ticket in stages 2-6 with no pipeline step or status move for 48 hours (and not 
 ccd records one `pipeline.flow_stale` event per quiet spell (the briefing shows it as "gone quiet for 48 hours"); the
 next step clears it. Until ccd has made its first stale mark, marks are made without events, so switching the flow on does not flood the briefing with old tickets.
 
+**Weekly "Still needed?" sweep (CC-085).** Once a week per ticket, ccd asks Jay one `purpose: "stale"` choice question
+(**Finish it / Move to backlog / Close it**) on every open ticket (RESEARCHING to VERIFYING, BLOCKED) with no recorded
+progress for 5 days and no open question. Progress is any `pipeline.*` event (steps, handoffs, answers, a PR head change
+recorded as `pipeline.pr_head`), a status change or a linked PR. The ask is recorded as `sweep.still_needed`, which is
+how "once a week, also after a restart" is kept (no new table). On `/answers`: "Finish it" only comments; "Move to
+backlog" sets PROPOSED (Jay's answer, as the task check does); "Close it" calls `stale`, i.e. the usual Cancel it / Keep it
+question. Nothing is cancelled automatically.
+
 A sized ticket is in the pipeline from the moment it is sized (even in INBOX): like a ticket with a plan, its status, labels, type, flags and archive change only through pipeline steps or by Jay with Developer Unlock, and GitHub's review decision never promotes it. Jay's `criteria` edits past investigation, and lowering a risky size, also need Developer Unlock (`X-CCD-Developer`).
 
 `GET /api/tasks/{key}/work` adds:
