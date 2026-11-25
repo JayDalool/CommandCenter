@@ -437,6 +437,42 @@ class ReviewPrompts(WorkModeApi):
         self.tick()
         self.assertEqual(len(self.prompts()), 1)
 
+    def test_a_poll_and_a_work_tick_racing_for_one_prompt_type_it_once(self):
+        # CC-076 Codex round 1, finding 2: the second sender rechecks under the lock and finds it consumed.
+        import asyncio
+        self.lead_ready()
+        self.to_review()
+        self.assertEqual(len(self.prompts()), 1)
+        d = self.daemon
+        key = "SV-056"
+        item = ("samvision", self.HEAD, time.time(), "JayDalool/SamVisionAI#94", False)
+        d._review_pending[key] = item
+        d.work.state["samvision"]["dayCount"] = 0
+
+        async def race():
+            await asyncio.gather(d.send_review_prompts(), d.send_review_prompts(), d.send_review_prompts())
+        self.client.portal.call(race)
+        self.assertEqual(len(self.prompts()), 2)                         # the first one, plus exactly one more
+        self.assertNotIn(key, d._review_pending)
+
+    def test_a_queued_prompt_waits_while_the_head_is_red_or_a_draft_and_types_once_green(self):
+        # Finding 3: revalidate the PR's current checks and draft state before typing.
+        self.lead_ready()
+        self.fake.tails["wE:p2"] = self.DRAFT                          # the lead cannot take it yet
+        self.to_review()
+        self.assertEqual(self.prompts(), [])
+        self.assertIn("SV-056", self.daemon._review_pending)
+        self.push(self.HEAD, ci="FAILURE")                              # the same head turns red
+        self.fake.tails["wE:p2"] = self.EMPTY_PROMPT
+        self.client.portal.call(self.daemon.send_review_prompts)
+        self.assertEqual(self.prompts(), [])
+        self.assertIn("SV-056", self.daemon._review_pending)            # kept: it may turn green again
+        self.push(self.HEAD, draft=True)
+        self.assertEqual(self.prompts(), [])
+        self.push(self.HEAD)
+        [p] = self.prompts()
+        self.assertIn("green checks", p["text"])
+
     def test_a_herdr_error_is_logged_and_the_snapshot_still_publishes(self):
         from ccd import herdr as herdr_mod
         self.lead_ready()

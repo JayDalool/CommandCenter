@@ -1165,7 +1165,7 @@ class Daemon(LeadChat, HqDaemon):
                             data={"kind": "work_mode_nudge", "tickets": [t["key"] for t in nxt[:workmode_mod.SHOW]],
                                   "triage": [t["key"] for t in tri[:10]]})
 
-    async def _lead_send(self, proj, text, now, why, guard=None):
+    async def _lead_send(self, proj, text, now, why, guard=None, after=None):
         """Type one fixed text into a project's idle lead pane; the pane id, or None when nothing was sent.
 
         The one path for work-mode reminders and review prompts (CC-076): a lock per project so two never type at
@@ -1190,6 +1190,8 @@ class Daemon(LeadChat, HqDaemon):
                 self._broker("pane.input", key, f"{why} -> pane {agent['pane_id']}")
                 await self.herdr.prompt(agent["pane_id"], text)
                 self.work.nudged(key, now)
+                if after is not None:
+                    after()         # still under the lock: a waiting sender then finds the item consumed
                 return agent["pane_id"]
             except (ActionError, OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
                 self.work.note(key, "reminder failed")
@@ -1204,24 +1206,35 @@ class Daemon(LeadChat, HqDaemon):
         """CC-076 (c19): tell a lead in work mode that a PR's checks passed and nobody reviews it. One text per head
         (pipeline.review_ready is recorded once per head); retried while the lead is busy, dropped once the ticket,
         the head or the reviewer changes. Work mode off: the event and Slack post stand, nothing is typed."""
-        for key, (project, head, at, ref, none) in list(self._review_pending.items()):
+        for key, item in list(self._review_pending.items()):
+            project, head, at, ref, none = item
             try:
                 t = self.tasks.get(key)
                 w = self.pipeline.work_row(t["id"])
                 reviewer = ((w.get("roles") or {}).get("reviewer") or {}).get("at") or 0
-                live = (t["status"] == "IN_REVIEW" and w["review"]["head"] != head and reviewer <= at
-                        and any(p["head"] == head for p in self._open_prs(t)))
-                if not live:
+                if not (t["status"] == "IN_REVIEW" and w["review"]["head"] != head and reviewer <= at
+                        and any(p["head"] == head for p in self._open_prs(t))):
                     del self._review_pending[key]
                     continue
                 proj = self._project(project)
                 if (proj is None or not self.work.active(project) or registry.paused(project)
-                        or (self.night is not None and self.night.active(project)) or self.chat_budget_check(project)
-                        or self.work.day_full(project, now)):
+                        or (self.night is not None and self.night.active(project)) or self.chat_budget_check(project)):
                     continue
-                text = self.REVIEW_PROMPT.format(key=key, ref=ref, sha=head[:7], checks="no CI checks" if none else "green checks")
-                if await self._lead_send(proj, text, now, f"review prompt {key}"):
-                    del self._review_pending[key]
+
+                def ready(key=key, item=item, head=head):
+                    # Rechecked under the lead lock (a poll and a work tick can both get here): the item is still
+                    # pending, the day's limit holds, and the PR at this head is still green and not a draft.
+                    if self._review_pending.get(key) != item or self.work.day_full(item[0], now):
+                        return False
+                    pr_now = next((p for p in self._open_prs(self.tasks.get(key)) if p["head"] == head), None)
+                    return bool(pr_now and pr_now["ciGreen"] and not pr_now["draft"])
+                if not ready():
+                    continue      # red or a draft for now: kept, and typed once it is green again
+                text = self.REVIEW_PROMPT.format(key=key, ref=ref, sha=head[:7],
+                                                 checks="no CI checks" if none else "green checks")
+                if await self._lead_send(proj, text, now, f"review prompt {key}", guard=ready,
+                                         after=lambda key=key, item=item: self._review_pending.pop(key, None)
+                                         if self._review_pending.get(key) == item else None):
                     self._event("action", "action.work_mode", f"work mode review prompt for {key}", project=project,
                                 data={"kind": "work_mode_review_prompt", "ticket": key})
             except Exception as e:  # noqa: BLE001 — a prompt must never fail the poll
@@ -1694,7 +1707,15 @@ class Daemon(LeadChat, HqDaemon):
         prs = self._open_prs(ticket)
         return prs[0] if len(prs) == 1 else None
 
-    def task_work_op(self, key, op, body, actor="jay", developer=False):
+    def _trusted_actor(self, claimed, developer, actor_token):
+        """Who a claim is backed by: Jay only with Developer Unlock, an agent only with its own valid actor token.
+        X-CCD-Actor is self-asserted, so a lead-only op that widens limits (urgent, CC-076) trusts this instead."""
+        if developer and claimed == "jay":
+            return "jay"
+        hit = self.actor_tokens.lookup(actor_token) if actor_token and self.actor_tokens else None
+        return claimed if hit and hit["actor"] == claimed else None
+
+    def task_work_op(self, key, op, body, actor="jay", developer=False, actor_token=None):
         """One pipeline step. Owner gates (confirm) need Jay with Developer Unlock; the rest any token holder,
         recorded under the actor it states (X-CCD-Actor: agent:<role>)."""
         self._need_tasks()
@@ -1734,7 +1755,11 @@ class Daemon(LeadChat, HqDaemon):
                 {k: body.get(k) for k in pl.EXPLAIN if body.get(k)}
             r = self._wrap(pl.block, key, body.get("reason"), actor, explain or None, body.get("owner"))
         elif op == "urgent":
-            r = self._wrap(pl.urgent, key, body.get("kind"), body.get("reason"), actor)
+            trusted = self._trusted_actor(actor, developer, actor_token)
+            if trusted is None:
+                raise ActionError(403, "the urgent exception needs Jay with Developer Unlock or the lead's actor token: "
+                                       "X-CCD-Actor alone is a claim, not proof")
+            r = self._wrap(pl.urgent, key, body.get("kind"), body.get("reason"), trusted)
         elif op == "role":
             r = self._wrap(pl.role, key, body.get("role"), actor, **meta)
         elif op == "finding":
@@ -1806,8 +1831,8 @@ class Daemon(LeadChat, HqDaemon):
                     f"implementation.")
         return None
 
-    async def task_work_op_async(self, key, op, body, actor="jay", developer=False):
-        work = self.task_work_op(key, op, body, actor, developer)
+    async def task_work_op_async(self, key, op, body, actor="jay", developer=False, actor_token=None):
+        work = self.task_work_op(key, op, body, actor, developer, actor_token)
         if op == "reply":
             # The agent's answer to Jay's question from Slack goes back to the thread he asked in.
             posted = False

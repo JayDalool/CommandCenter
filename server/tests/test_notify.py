@@ -1003,6 +1003,27 @@ class TeamThreads(ReplyBase):
             self.assertIn("Preview data missing\nNo next step or owner: the lead triages it today",
                           self.channel_posts()[-1]["text"])
 
+    def test_the_blocked_post_uses_the_shared_triage_predicate(self):
+        # CC-076 Codex round 1, finding 4: an open question, or a later handoff with next and owner, is not a triage case.
+        from ccd.pipeline import Pipeline
+        cases = [
+            ({"blocked": {"at": 1}, "openQuestions": 1}, "Next: Jay's answer to the open question"),
+            ({"blocked": {"at": 1}, "handoff": {"next": "Re-run CI", "owner": "developer", "at": 2}},
+             "Next: Re-run CI (owner: developer)"),
+            ({"blocked": {"at": 1}, "handoff": {"next": "Re-run CI", "at": 2}},
+             "No next step or owner: the lead triages it today"),
+            ({"blocked": {"at": 1}, "handoff": {"next": "Old", "owner": "lead", "at": 0}},
+             "No next step or owner: the lead triages it today"),
+        ]
+        for work, expect in cases:
+            self.d.task_work = lambda key, work=work: work
+            self.step("SV-50", "pipeline.blocked", "stuck", "agent:coordinator")
+            post = self.channel_posts()[-1]["text"]
+            self.assertIn(expect, post)
+            needed = Pipeline.triage_needed("BLOCKED", work.get("blocked"), work.get("handoff"),
+                                            work.get("openQuestions", 0))
+            self.assertEqual(needed, "No next step" in post)
+
     def test_user_check_says_what_was_tested(self):
         self.d.task_work = lambda key: {"userCheck": {"note": "Tried the export on 375px", "at": 1}}
         self.step("SV-47", "pipeline.user_checked", "user check passed", "agent:user-reviewer")

@@ -68,7 +68,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from . import registry
-from .pipeline import plan_digest, unshown
+from .pipeline import Pipeline, plan_digest, unshown
 from .security import redact
 
 log = logging.getLogger("ccd.notify")
@@ -957,8 +957,14 @@ class Notifier:
                     blocked = {}  # A newer block is a different Slack update.
                 # The same test as the work-mode line and `pipeline_cli tasks` (Pipeline.triage_needed), so the post
                 # never says a next step exists when the lead has been told to triage it.
-                if blocked.get("action") and blocked.get("owner"):
+                still = Pipeline.triage_needed("BLOCKED", blocked, work.get("handoff"), work.get("openQuestions", 0))
+                if not still and blocked.get("action") and blocked.get("owner"):
                     text = f"{text}\nNext: {str(blocked['action'])[:220]} (owner: {blocked['owner']})"
+                elif not still:
+                    h = work.get("handoff") or {}
+                    step = (f"{str(h['next'])[:220]} (owner: {h['owner']})" if h.get("next") and h.get("owner")
+                            else "Jay's answer to the open question")
+                    text = f"{text}\nNext: {step}"
                 else:
                     text = f"{text}\nNo next step or owner: the lead triages it today"
             else:

@@ -621,7 +621,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     async def task_work_op(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
         return await daemon.task_work_op_async(request.path_params["key"], request.path_params["op"], body,
-                                               request.state.actor, developer=dev)
+                                               request.state.actor, developer=dev,
+                                               actor_token=request.headers.get("x-ccd-actor-token"))
 
     async def task_answers(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
