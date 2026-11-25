@@ -85,6 +85,20 @@ describe("Messages", () => {
     expect(app.api.chatSeen).toHaveBeenCalledWith("samvision", 2);
   });
 
+  it("a budget alert from ccd is labelled CommandCenter, not the project's lead", async () => {
+    load();
+    vi.mocked(app.api.chatHistory).mockResolvedValue({ conversation: "samvision", lead: lead(), messages: [
+      { ...MSGS[0], id: 9, side: "lead", author: "ccd", via: "cli", seenAt: null, files: [],
+        text: "Estimate: SamVision used 80% of its weekly budget (about $42.50 of $50.00, week of 2026-11-23). Not your bill." }] });
+    const c = await show("#/messages?c=samvision");
+    const thread = within(c).getByRole("region", { name: "Conversation with the SamVision lead" });
+    const msg = thread.querySelector<HTMLElement>(".hq-msg")!;
+    expect(msg.getAttribute("aria-label")).toMatch(/^CommandCenter,/);
+    expect(msg.querySelector(".hq-msg-from")).toHaveTextContent("CommandCenter");
+    expect(msg).toHaveTextContent("Not your bill");
+    expect(msg).not.toHaveTextContent("lead,");
+  });
+
   it("the open conversation shows who it is with, and a line for each new day", async () => {
     load();
     // 2026-10-27 15:00 UTC is "now": one message two days before, two yesterday, two today

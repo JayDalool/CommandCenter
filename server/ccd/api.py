@@ -84,6 +84,10 @@
     PUT   /api/release/window        Jay AND Developer Unlock. {weekday 0=Sunday..6, time "HH:MM"} (Winnipeg time)
     PUT   /api/release/projects/{project}  Jay AND Developer Unlock. {live: true|false}
     GET   /api/work-mode             work mode per project: on/off, why nothing was sent, the tickets that move next
+    POST  /api/budgets/week         Jay AND Developer Unlock. {weekUsd, weekTokens?, shares {app: whole %}, week? {weekday
+                                     0=Sunday..6, hour 0..23, tz}}: the weekly estimated-dollar budget (US dollars, cents) and
+                                     each app's share (every app, summing to 100). Appends a budget_changes row. Holds nothing.
+                                     GET /api/usage then carries `budgetWeek`.
     PUT   /api/work-mode/projects/{project}  Jay AND Developer Unlock. {on: true|false}: ccd reminds the project's
                                      idle lead of tickets it can move without Jay (ccd/workmode.py)
     POST  /api/tasks/check           Jay AND Developer Unlock. the task check: a fixed message asks the project's
@@ -610,6 +614,10 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
         return daemon.release_set("project", body, request.state.actor, developer=dev,
                                   project=request.path_params["project"])
+
+    async def budget_settings(request, body):
+        dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
+        return daemon.budget_settings_set(body, request.state.actor, developer=dev)
 
     async def work_mode_state(request, _):
         return daemon.work_state()
@@ -1602,6 +1610,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/release/projects/{project}", guarded(release_live), methods=["PUT"]),
         Route("/api/work-mode", guarded(work_mode_state), methods=["GET"]),
         Route("/api/work-mode/projects/{project}", guarded(work_mode_set), methods=["PUT"]),
+        Route("/api/budgets/week", guarded(budget_settings), methods=["POST"]),
         Route("/api/tasks/{key}/work/{op}", guarded(task_work_op), methods=["POST"]),
         Route("/api/tasks/{key}/answers", guarded(task_answers), methods=["POST"]),
         Route("/api/tasks/{key}/record", guarded(task_record), methods=["GET"]),

@@ -562,6 +562,24 @@ Jay talks to the CTO and each project lead in HQ's Messages (docs/API.md, Messag
   --kind claude` in its root pane. It splits, moves, closes and stops nothing; a failed start leaves the workspace
   for Jay to see.
 
+## The weekly budget (CC-064 a, Jay 2026-11-23)
+
+- **Estimates only.** One weekly dollar amount for all apps, split into per-app shares. Every figure is a list-price
+  estimate of the usage ccd can see on this server, labelled "Estimate" and "Not your bill" in the API, the page and every
+  alert. No card data, no payment action, nothing bought or cancelled. Amounts are exact decimals in US dollars (cents,
+  half up); a share is a whole percent.
+- **No budget by default.** With no saved row there is no weekly line and no alert. A level (50, 80, 95, 100) holds and
+  stops nothing in this release; the holds are a later part behind their own switch.
+- **Who sets it.** `POST /api/budgets/week` is Jay with Developer Unlock; an agent actor is refused. Every save is one
+  row of the append-only `budget_changes` table (tasks.db v15: actor, route, time, body; triggers refuse update and delete;
+  rollback runbook `docs/runbooks/tasks-db-v15-rollback.md`). `ccd.db` events keep only 30 days and a body hash, so the table
+  is the durable record of who set the budget. `X-CCD-Actor` is self-asserted until Phase 2, like every Jay-only route; the
+  Developer Unlock secret is the real gate.
+- **Alerts** are Messages rows written by ccd (author `ccd`, shown as CommandCenter), one per line and level per week,
+  posted before they are recorded, so one is never lost and a failed record repeats it once. Nothing is posted while the
+  meter has not read the logs for 15 minutes. The event `budget.alert` carries the conversation and message ids and the
+  alert text (amounts and the app's name, no ticket content); Slack posts it as the app, never in a client project's channel.
+
 ## Audit trail, actor identity and metering (v2 Phase 1, PR 7)
 
 **Audit trail** (`ccd/audit.py`, tasks.db v9 `audit_events`). One row for every write (`POST/PATCH/PUT/DELETE`)

@@ -1,0 +1,27 @@
+/* The weekly budget panel on Budgets (CC-064 a). Scoped to :root[data-ui="hq"], no custom property declared here
+ * (parity.spec.ts). Lines reuse governance.css's .hq-bud-line, bar and pill. */
+:root[data-ui="hq"] .hq-bud-week { margin-bottom: 14px; }
+:root[data-ui="hq"] .hq-bud-week .hq-note { margin: 6px 0; }
+:root[data-ui="hq"] .hq-bud-form { display: grid; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--hq-line); }
+:root[data-ui="hq"] .hq-bud-fields { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: end; }
+:root[data-ui="hq"] .hq-bud-field { display: grid; gap: 4px; min-width: 0; font-size: var(--hq-fs-sm); color: var(--hq-text-2); }
+:root[data-ui="hq"] .hq-bud-field input, :root[data-ui="hq"] .hq-bud-field select {
+  min-height: 34px; padding: 0 10px; border: 1px solid var(--hq-line-2); border-radius: var(--hq-r-md);
+  background: var(--hq-panel-2); color: var(--hq-text); font: inherit;
+}
+:root[data-ui="hq"] .hq-bud-field input[aria-invalid="true"] { border-color: var(--hq-bad); }
+:root[data-ui="hq"] .hq-bud-shares { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+:root[data-ui="hq"] .hq-bud-shares legend { padding: 0; margin-bottom: 4px; color: var(--hq-muted); font: 600 var(--hq-fs-xs) var(--hq-font); letter-spacing: .06em; text-transform: uppercase; }
+:root[data-ui="hq"] .hq-bud-share {
+  display: grid; grid-template-columns: minmax(90px, .6fr) minmax(120px, 2fr) minmax(110px, auto); align-items: center; gap: 4px 14px;
+  font-size: var(--hq-fs-sm); color: var(--hq-text);
+}
+:root[data-ui="hq"] .hq-bud-share input[type="range"] { width: 100%; min-width: 0; accent-color: currentColor; }
+:root[data-ui="hq"] .hq-bud-share output { color: var(--hq-text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+:root[data-ui="hq"] .hq-bud-total { margin: 0; color: var(--hq-text-2); font-size: var(--hq-fs-sm); }
+:root[data-ui="hq"] .hq-bud-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+@media (max-width: 640px) {
+  :root[data-ui="hq"] .hq-bud-share { grid-template-columns: minmax(0, 1fr) auto; }
+  :root[data-ui="hq"] .hq-bud-share input[type="range"] { grid-column: 1 / -1; grid-row: 2; }
+  :root[data-ui="hq"] .hq-bud-field { flex: 1 1 100%; }
+}

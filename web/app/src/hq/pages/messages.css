@@ -90,6 +90,7 @@
 }
 :root[data-ui="hq"] .hq-msg.is-me .hq-msg-bubble { background: var(--hq-bubble-me-a); border-color: var(--hq-bubble-me-line); }
 :root[data-ui="hq"] .hq-msg-bubble p { white-space: pre-wrap; overflow-wrap: anywhere; }
+:root[data-ui="hq"] .hq-msg-from { color: var(--hq-text-2); font-size: var(--hq-fs-xs); font-weight: 600; }
 :root[data-ui="hq"] .hq-msg footer { color: var(--hq-faint); font-size: var(--hq-fs-xs); }
 :root[data-ui="hq"] .hq-msg-files { display: grid; gap: 6px; }
 :root[data-ui="hq"] .hq-msg-img { margin: 0; display: grid; gap: 4px; }

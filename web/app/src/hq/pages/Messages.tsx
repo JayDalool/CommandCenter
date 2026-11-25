@@ -265,10 +265,14 @@ export function dayLabel(at: number, now: number): string {
 function Bubble({ m, who, face }: { m: ChatMessage; who: string; face: string | null }) {
   const fun = useFun();
   const mine = m.side === "jay";
+  // ccd writes budget alerts itself (CC-064): no lead said it, so the row is CommandCenter's, not "<project> lead".
+  const system = m.side === "lead" && m.author === "ccd";
+  if (system) who = "CommandCenter";
   const at = new Date(m.at * 1000);
   return <article className={cx("hq-msg", mine ? "is-me" : "is-lead", fun && !mine && "has-face")} aria-label={`${mine ? "You" : who}, ${at.toLocaleString()}`}>
     {fun && !mine && <span className="hq-msg-face">{face && <Persona lead={face} size={26} />}</span>}
     <div className="hq-msg-bubble">
+      {system && <b className="hq-msg-from">CommandCenter</b>}
       {m.text && <p>{m.text}</p>}
       {m.files.length > 0 && <div className="hq-msg-files">{m.files.map((f) => <FileChip key={f.id} f={f} />)}</div>}
     </div>

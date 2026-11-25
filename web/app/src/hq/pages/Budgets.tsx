@@ -8,12 +8,15 @@ import { useEffect, useMemo, useState } from "react";
 import "./office.css";
 import "./decisions.css";
 import "./governance.css";
+import "./budgets.css";
 import { app } from "../../store/app";
 import { useSelector } from "../../lib/store";
 import { ApiError } from "../../api/client";
-import type { BudgetLine, BudgetsState, UsageState } from "../../api/types";
+import type { BudgetLine, BudgetsState, BudgetWeek, BudgetWeekLine, UsageState } from "../../api/types";
 import { tokens, usd } from "../../components/Usage";
+import { devOr, unlockDialogOpen, useDevActive } from "../../components/DevMode";
 import { Kpi, Pill, cx, plural } from "./ui";
+import { amountCents, centsText, evenShares, rebalance, shareCents } from "./budgetShares";
 
 /** on: the last good reading, with the error of a later read that failed, if one did. */
 type Shadow = { s: "loading" } | { s: "off" } | { s: "failed"; error: string } | { s: "on"; data: BudgetsState; error?: string };
@@ -41,7 +44,9 @@ function useBudgets() {
     const t = setInterval(load, 60_000);
     return () => { live = false; clearInterval(t); };
   }, []);
-  return { usage, usageErr, shadow };
+  /** A saved weekly budget replaces what was read, without waiting for the next minute. */
+  const setWeek = (budgetWeek: BudgetWeek) => setUsage((u) => ({ ...(u ?? { available: false }), budgetWeek }));
+  return { usage, usageErr, shadow, setWeek };
 }
 
 /** Spend as a share of a limit, with the alert levels marked. Past 100 % the bar stays full. */
@@ -77,7 +82,7 @@ const SCOPES: { k: BudgetLine["scope"]; title: string }[] = [
 ];
 
 export function Budgets() {
-  const { usage, usageErr, shadow } = useBudgets();
+  const { usage, usageErr, shadow, setWeek } = useBudgets();
   const names = useProjectNames();
   const limits = usage?.budgets ?? [];
   const over = limits.filter((b) => (b.monthlyUsd != null && b.spentUsd > b.monthlyUsd)
@@ -95,6 +100,8 @@ export function Budgets() {
       <Kpi label="Shadow budgets" value={shadow.s === "on" ? "On" : shadow.s === "off" ? "Not enabled" : shadow.s === "failed" ? "Unknown" : "—"}
         sub={shadow.s === "on" ? `${plural(shadow.data.wouldHold.length, "line")} would hold` : "company, project and agent limits"} />
     </section>
+
+    {usage?.budgetWeek && <WeeklyBudget week={usage.budgetWeek} onSaved={setWeek} />}
 
     <div className="hq-office-grid">
       <section className="hq-panel" aria-labelledby="hq-bud-shadow">
@@ -145,6 +152,96 @@ export function Budgets() {
       </div>
     </div>
   </div>;
+}
+
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const LEVEL_TONE: Record<number, string> = { 0: "ok", 50: "info", 80: "warn", 95: "warn", 100: "bad" };
+
+/** One weekly line: spend against its limit, the alert levels marked, and the level reached. */
+function WeekLine({ l, stale }: { l: BudgetWeekLine; stale: boolean }) {
+  const none = l.pct == null;
+  return <li className="hq-bud-line">
+    <span className="hq-bud-name"><b className="hq-ellip" title={l.name}>{l.name}</b>
+      <small>{l.scope === "account" ? "Whole budget" : `${l.share ?? 0}% share`}</small></span>
+    {none ? <span className="hq-bud-bar is-none" aria-hidden /> : <Bar pct={l.pct ?? 0} tone={LEVEL_TONE[l.level]} marks={[50, 80, 95]} />}
+    <span className="hq-bud-fig">{none ? "no budget (0% share)" : `${usd(l.spentUsd)} of ${usd(l.limitUsd)} · ${Math.round(l.pct ?? 0)}%`}</span>
+    <Pill tone={stale ? "idle" : LEVEL_TONE[l.level]}>{none ? "No budget" : stale ? "Meter not read" : l.level >= 100 ? "Reached 100%" : l.level ? `Alert ${l.level}%` : "Within budget"}</Pill>
+  </li>;
+}
+
+/** The weekly budget (CC-064 a): one estimated-dollar amount for all apps and a slider per app for its share. The
+ *  sliders always add up to 100: moving one moves the others in proportion, by keyboard too. Saving is Jay's and needs
+ *  Developer Unlock (ccd checks both). Nothing here holds or stops work; it sets the alerts at 50, 80, 95 and 100 %. */
+function WeeklyBudget({ week, onSaved }: { week: BudgetWeek; onSaved: (w: BudgetWeek) => void }) {
+  const active = useDevActive();
+  const apps = week.apps ?? [];
+  const keys = apps.map((a) => a.key);
+  const reset = week.settings?.week ?? week.defaultWeek ?? { weekday: 1, hour: 0, tz: "America/Winnipeg" };
+  const saved = week.settings;
+  // Every field starts from what is saved and follows a newer save (another tab, the CTO later), unless Jay is editing.
+  const base = useMemo(() => ({ amount: saved?.weekUsd ?? "", shares: { ...evenShares(keys), ...(saved?.shares ?? {}) },
+    weekday: reset.weekday, hour: reset.hour }), [week.changedAt, keys.join(",")]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const [form, setForm] = useState(base);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ tone: string; text: string } | null>(null);
+  useEffect(() => { if (!dirty) setForm(base); }, [base, dirty]);
+  const edit = (patch: Partial<typeof form>) => { setForm((f) => ({ ...f, ...patch })); setDirty(true); setNote(null); };
+  const cents = amountCents(form.amount);
+  const total = Object.values(form.shares).reduce((n, x) => n + x, 0);
+  const save = () => {
+    if (cents == null || total !== 100) return;
+    if (!devOr(save)) return;
+    setBusy(true); setNote(null);
+    app.api.saveBudgetWeek({ weekUsd: centsText(cents), shares: form.shares, week: { weekday: form.weekday, hour: form.hour, tz: reset.tz } })
+      .then((w) => { onSaved(w); setDirty(false); setNote({ tone: "ok", text: "Saved. Alerts follow this budget from the next meter reading." }); })
+      .catch((e: unknown) => setNote({ tone: "bad", text: e instanceof Error ? e.message : String(e) }))
+      .finally(() => setBusy(false));
+  };
+  const lines = week.lines;
+  return <section className="hq-panel hq-bud-week" aria-labelledby="hq-bud-week">
+    <header><h3 id="hq-bud-week">Weekly budget</h3><Pill tone="info" title="List-price estimate of the usage ccd can see on this server">Estimate · not your bill</Pill></header>
+    <p className="hq-note">{week.enabled
+      ? "One estimated amount for all apps, split by share. You get a Messages alert at 50, 80, 95 and 100 % of each line. Nothing is held or stopped."
+      : "No weekly budget is set, so there are no alerts. Set an amount and the shares below. Nothing is held or stopped."}</p>
+    {week.enabled && <>
+      <ul className="hq-bud-lines">{lines.map((l) => <WeekLine key={`${l.scope}:${l.key}`} l={l} stale={week.stale} />)}</ul>
+      {week.stale && <p className="hq-note t-warn">Meter not read in the last {Math.round(week.meter.staleAfterSeconds / 60)} minutes: spend is
+        not known, so no alert is sent until it is read.</p>}
+    </>}
+    <form className="hq-bud-form" onSubmit={(e) => { e.preventDefault(); save(); }} aria-label="Weekly budget settings">
+      <div className="hq-bud-fields">
+        <label className="hq-bud-field"><span>Weekly amount (US dollars, estimate)</span>
+          <input type="text" inputMode="decimal" autoComplete="off" value={form.amount} placeholder="for example 250.00"
+            aria-invalid={form.amount !== "" && cents == null} onChange={(e) => edit({ amount: e.target.value })} /></label>
+        <label className="hq-bud-field"><span>Week starts on</span>
+          <select value={form.weekday} onChange={(e) => edit({ weekday: Number(e.target.value) })}>
+            {DAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}</select></label>
+        <label className="hq-bud-field"><span>At</span>
+          <select value={form.hour} onChange={(e) => edit({ hour: Number(e.target.value) })}>
+            {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>)}</select></label>
+      </div>
+      <p className="hq-note">Set these to match when your Claude plan's week resets ({reset.tz.replace(/_/g, " ")} time).</p>
+      <fieldset className="hq-bud-shares"><legend>Each app's share of the week</legend>
+        {apps.map((a) => {
+          const pct = form.shares[a.key] ?? 0;
+          return <div key={a.key} className="hq-bud-share">
+            <label htmlFor={`bud-share-${a.key}`}>{a.name}</label>
+            <input id={`bud-share-${a.key}`} type="range" min={0} max={100} step={1} value={pct}
+              aria-valuetext={`${pct} percent`} onChange={(e) => edit({ shares: rebalance(form.shares, a.key, Number(e.target.value)) })} />
+            <output htmlFor={`bud-share-${a.key}`}>{pct}%{cents != null ? ` · about ${usd(shareCents(cents, pct) / 100)}` : ""}</output>
+          </div>;
+        })}
+        <p className={cx("hq-bud-total", total !== 100 && "t-bad")} role="status">Shares add up to {total}%.</p>
+      </fieldset>
+      <div className="hq-bud-actions">
+        <button type="submit" className="hq-btn" disabled={busy || cents == null || total !== 100 || !dirty}>{busy ? "Saving…" : "Save budget"}</button>
+        {!active && <span className="hq-note">Saving needs Developer Unlock. <button type="button" className="hq-link" onClick={unlockDialogOpen}>Unlock…</button></span>}
+        {form.amount !== "" && cents == null && <span className="hq-note t-bad">Enter dollars and cents, for example 250 or 250.50.</span>}
+        {note && <span className={cx("hq-note", `t-${note.tone}`)} role="status">{note.text}</span>}
+      </div>
+    </form>
+  </section>;
 }
 
 /** Project keys to names, from the live state and the task system. */

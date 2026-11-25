@@ -61,6 +61,8 @@ ALLOWED = {
     ("POST", "/api/action/prompt"), ("POST", "/api/action/key"),
     ("POST", "/api/coordinators/adopt"),
     ("GET", "/api/tasks/{key}/work"), ("POST", "/api/tasks/{key}/work/{op}"), ("GET", "/api/flow"), ("GET", "/api/release"), ("PUT", "/api/release/window"), ("PUT", "/api/release/projects/{project}"), ("GET", "/api/work-mode"), ("PUT", "/api/work-mode/projects/{project}"),
+    # CC-064 (a): Jay with Developer Unlock saves the weekly budget and the per-app shares; nothing is held
+    ("POST", "/api/budgets/week"),
     # Control room: Jay answers Claude's questions (resumes the same task session); the readable record
     ("POST", "/api/tasks/{key}/answers"), ("GET", "/api/tasks/{key}/record"),
     # SSH sign-in: cc-session (over Jay's SSH login) mints a one-time code; the page redeems it once
