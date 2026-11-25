@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 from . import __version__, autonomy, coordid, coordinators, github, ledger, merge_policy, model, profiles, registry, sources
+from . import chat as chat_mod
 from . import flow as flow_mod
 from . import release as release_mod
 from . import pipeline as pipeline_mod
@@ -2710,6 +2711,7 @@ class Daemon(LeadChat, HqDaemon):
                 self.meter_read_at = time.time()          # budgets treat spend as Unknown when this is old (D-024 cl. 17)
                 if n:
                     log.info(json.dumps({"msg": "usage metered", "rows": n}))
+                self.budget_tick()
             except Exception as e:  # noqa: BLE001 — metering is a record; it never affects anything else
                 log.warning(json.dumps({"msg": "usage scan failed", "error": repr(e)[:200]}))
             await asyncio.sleep(self.METER_EVERY)
@@ -2723,11 +2725,95 @@ class Daemon(LeadChat, HqDaemon):
                 budgets[key] = b
         return budgets
 
+    # ---------- the weekly budget (CC-064 a) ----------
+
+    def _budget_apps(self):
+        return {p["key"]: p.get("name") or p["key"] for p in self._projects()}
+
+    def _budget_settings(self):
+        """The newest saved weekly budget body, or None: with none there are no weekly lines and no alerts."""
+        db = getattr(self.tasks, "db", None)
+        row = self.tasks.latest_budget_change("settings") if db is not None else None
+        return row["body"] if row else None
+
+    def budget_week_state(self, now=None):
+        """The weekly budget for /api/usage: lines with levels, the settings, who last saved them. Works with the
+        onboarding groundwork off. Every dollar figure is an estimate and says so."""
+        now = time.time() if now is None else now
+        db = getattr(self.tasks, "db", None)
+        apps = self._budget_apps()
+        if db is None:
+            return {"enabled": False, "lines": [], "apps": [], "currency": "USD", "estimate": True,
+                    "note": budgets_mod.ESTIMATE}
+        row = self.tasks.latest_budget_change("settings")
+        settings = row["body"] if row else None
+        # An app added after the last save has no share yet (0); one that no longer exists drops out.
+        if settings is not None:
+            settings = dict(settings, shares={a: settings["shares"].get(a, 0) for a in apps})
+        out = budgets_mod.week_report(db, now, settings, apps, meter_at=self.meter_read_at, names=apps)
+        out["apps"] = [{"key": k, "name": n} for k, n in apps.items()]
+        out["defaultWeek"] = dict(budgets_mod.DEFAULT_WEEK)
+        out["changedAt"], out["changedBy"] = (row["at"], row["actor"]) if row else (None, None)
+        return out
+
+    def budget_settings_set(self, body, actor="jay", developer=False):
+        """POST /api/budgets/settings {weekUsd, weekTokens?, shares, week?}: Jay with Developer Unlock saves the
+        weekly estimated-dollar budget and each app's share (whole percent, summing to 100). Appends a
+        budget_changes row; changes no work and holds nothing."""
+        if actor != "jay" or not developer:
+            raise ActionError(403, "Developer Unlock required: the budget is Jay's")
+        try:
+            clean = budgets_mod.clean_settings(body, list(self._budget_apps()))
+        except budgets_mod.BudgetError as e:
+            raise ActionError(400, str(e))
+        self.tasks.add_budget_change(actor, "hq", "settings", clean)
+        self._event("action", "action.budget_settings", "weekly budget saved", data={"kind": "budget_settings"})
+        return self.budget_week_state()
+
+    def budget_tick(self, now=None):
+        """After each meter pass: post one Messages alert per line and level per week (50, 80, 95, 100). Nothing is
+        posted until the meter has read the logs lately (the spend is then unknown). Post first, then record: a
+        failed post is tried again next tick, a failed record repeats the alert once. Returns the alerts posted."""
+        now = time.time() if now is None else now
+        posted = []
+        try:
+            if self.chat is None or getattr(self.tasks, "db", None) is None or self._budget_settings() is None:
+                return posted
+            state = self.budget_week_state(now)
+            if state["stale"]:
+                return posted
+            for line in state["lines"]:
+                conv = chat_mod.CTO if line["scope"] == "account" else line["key"]
+                if conv not in self.chat_ids():
+                    continue
+                key = f"budget:alerts:{line['scope']}:{line['key']}:{state['weekKey']}"
+                level, rec = budgets_mod.alert_due(line, self.store.get(key)[0])
+                if level is None:
+                    continue
+                text = budgets_mod.alert_text(line, state["weekKey"])
+                try:
+                    msg = self.chat.add(conv, "lead", "ccd", text, via="cli")
+                except Exception as e:  # noqa: BLE001 — not recorded, so the next tick tries again
+                    log.warning(json.dumps({"msg": "budget alert not posted", "line": key, "error": repr(e)[:160]}))
+                    continue
+                posted.append({"line": key, "level": level, "conversation": conv, "messageId": msg["id"]})
+                # budget.alert, not chat.reply: no lead wrote it, and Slack posts it as the app (notify.py).
+                self._event("budget", "budget.alert", text, severity="warn" if level >= 95 else "info",
+                            project=None if conv == chat_mod.CTO else conv,
+                            data={"kind": "budget_alert", "conversation": conv, "messageId": msg["id"]})
+                try:
+                    self.store.put(key, rec)
+                except Exception as e:  # noqa: BLE001
+                    log.warning(json.dumps({"msg": "budget alert not recorded", "line": key, "error": repr(e)[:160]}))
+        except Exception as e:  # noqa: BLE001 — an alert is a notice; it never affects the meter loop
+            log.warning(json.dumps({"msg": "budget tick failed", "error": repr(e)[:200]}))
+        return posted
+
     def usage_state(self, days=14):
         if self.meter is None:
-            return {"available": False}
+            return {"available": False, "budgetWeek": self.budget_week_state()}
         budgets = self._profile_budgets()
-        return dict(self.meter.summary(days, budgets), available=True,
+        return dict(self.meter.summary(days, budgets), available=True, budgetWeek=self.budget_week_state(),
                     note="Estimate at Anthropic list prices; subscription plans are not billed per token. "
                          "Codex usage is counted in tokens only. Budgets are shown, not enforced.")
 

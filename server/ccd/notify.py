@@ -908,6 +908,9 @@ class Notifier:
         if kind == "chat.reply":
             await self.relay_reply(ev)
             return
+        if kind == "budget.alert":
+            await self.relay_budget_alert(ev)
+            return
         if kind == "alert.raised" and ev.get("source") == "alerts" and not ev.get("project"):
             await self.post(self.conf["cto_channel"], f":warning: {esc(ev.get('text'))}")
             return
@@ -927,6 +930,16 @@ class Notifier:
         text = self.alert_text(ev)
         if text:
             await self.post(chan, text)
+
+    async def relay_budget_alert(self, ev):
+        """A weekly budget alert (CC-064 a): the app's channel, or the CTO channel for the all-apps line, posted as the
+        app itself (not under a lead's name: no lead wrote it). A client project's channel is never used."""
+        proj = ev.get("project")
+        if proj and self.client(proj):
+            return
+        chan = self.conf["channels"].get(proj) if proj else self.conf["cto_channel"]
+        if chan:
+            await self.post(chan, f":bar_chart: {esc(ev.get('text'))}")
 
     async def team_step(self, ev, chan):
         """One step of a ticket, in the ticket's own thread in its project's channel, under the seat that recorded

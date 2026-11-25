@@ -3,7 +3,7 @@ import { getToken } from "./auth";
 import { askReenter, devExpired, devSession } from "./developer";
 import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
   Attachment, DevCommits, PtySession, ScmDiff, ScmStatus, SearchResult, FileList, FileRead, LauncherInfo, SaveResult, UploadResult, WorkspaceProject,
-  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, InboxState, WorkersState, WorkerNode, AuditState, ActorsState, ActorToken, UsageState, BudgetsState, NotifyState, NotifySettings,
+  Development, ImportPreview, State, Tail, TaskList, Ticket, TicketDetail, CcdEvent, PolicyState, AutonomyState, LedgerState, InboxState, WorkersState, WorkerNode, AuditState, ActorsState, ActorToken, UsageState, BudgetsState, BudgetWeek, BudgetWeekSave, NotifyState, NotifySettings,
   ChatOverview, ChatMessage, ChatLead, ChatSendResult, ChatStartResult, ChatFile,
   Briefing, MilestoneResult, MilestoneState, MilestoneTrack, MilestonesView, ProjectLogo, DevDevice } from "./types";
 
@@ -156,6 +156,8 @@ export class Api {
   setNotify(patch: Partial<NotifySettings>) { return this.req<NotifyState>("PUT", "/api/notify", patch); }
   /** One test DM and one test push. slack and ntfy are this test's own results (false for a channel that is off). */
   notifyTest() { return this.req<{ ok: true; slack: boolean; ntfy: boolean; status: NotifyState["status"] }>("POST", "/api/notify/test", {}); }
+  /** Jay with Developer Unlock: save the weekly estimated-dollar budget and each app's share. Answers the budgetWeek body. */
+  saveBudgetWeek(body: BudgetWeekSave) { return this.req<BudgetWeek>("POST", "/api/budgets/week", body); }
   /** Shadow budgets (D-033). Read-only; 404 while the onboarding groundwork is off. */
   budgets() {
     return this.req<BudgetsState>("GET", "/api/onboarding/budgets");

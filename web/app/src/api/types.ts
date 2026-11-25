@@ -652,7 +652,26 @@ export interface UsageState {
   total?: Omit<UsageRow, "key">; byProject?: UsageRow[]; byModel?: UsageRow[]; byDay?: UsageRow[]; byTicket?: UsageRow[];
   bySource?: UsageRow[];
   budgets?: { project: string; monthlyUsd: number | null; monthlyTokens: number | null; spentUsd: number; spentTokens: number }[];
+  /** The weekly budget (CC-064 a). Absent from an older ccd. */
+  budgetWeek?: BudgetWeek;
 }
+/** The reset of the budget week, in a time zone: weekday 0 = Sunday. */
+export interface BudgetWeekReset { weekday: number; hour: number; tz: string }
+/** One weekly line: the account ("*") or one app's share of it. Every dollar figure is an estimate. level is 0 while the
+ *  meter is stale; reached is what the spend alone has reached. */
+export interface BudgetWeekLine {
+  scope: "account" | "app"; key: string; name: string; share: number | null; limitUsd: number; limitTokens: number | null;
+  spentUsd: number; spentTokens: number; pct: number | null; level: 0 | 50 | 80 | 95 | 100; reached: 0 | 50 | 80 | 95 | 100;
+  currency: "USD"; estimate: true; weekKey: string;
+}
+export interface BudgetWeek {
+  enabled: boolean; currency: "USD"; estimate: true; note: string; stale: boolean; lines: BudgetWeekLine[];
+  weekStart: number; weekEnd: number; weekKey?: string; apps?: { key: string; name: string }[]; defaultWeek?: BudgetWeekReset;
+  settings?: { weekUsd: string; weekTokens: number | null; shares: Record<string, number>; week: BudgetWeekReset };
+  meter: { lastReadAt: number | null; stale: boolean; staleAfterSeconds: number };
+  changedAt?: number | null; changedBy?: string | null;
+}
+export interface BudgetWeekSave { weekUsd: string; shares: Record<string, number>; week: BudgetWeekReset }
 /** GET /api/onboarding/budgets (D-033 in shadow, ccd/budgets.py). 404 while the onboarding groundwork is off. */
 export interface BudgetLine {
   scope: "company" | "project" | "agent"; key: string; period: "day" | "month";

@@ -770,6 +770,27 @@ CREATE TABLE ticket_flow (
   updated_at   REAL NOT NULL
 );
 """),
+    # 15: the weekly budget (CC-064 a, Jay 2026-11-23). budget_changes is an append-only record of every change to
+    # the weekly budget: one row per save of the amount and the per-app shares ('settings'), and later of a temporary
+    # release ('release', part b). The newest row of a kind wins. ccd.db's events are pruned after 30 days and keep
+    # only a body hash, so who set the budget and through what needs its own durable record. A new table only, so the
+    # way back is to drop it.
+    (15, """
+CREATE TABLE budget_changes (
+  id             INTEGER PRIMARY KEY,
+  at             REAL NOT NULL,
+  actor          TEXT NOT NULL,
+  via            TEXT NOT NULL CHECK (via IN ('hq', 'cto')),
+  jay_message_id INTEGER,
+  kind           TEXT NOT NULL CHECK (kind IN ('settings', 'release')),
+  body           TEXT NOT NULL CHECK (json_valid(body))
+);
+CREATE INDEX budget_changes_kind ON budget_changes(kind, id);
+CREATE TRIGGER budget_changes_append_only_u BEFORE UPDATE ON budget_changes
+  BEGIN SELECT RAISE(ABORT, 'budget changes are append-only'); END;
+CREATE TRIGGER budget_changes_append_only_d BEFORE DELETE ON budget_changes
+  BEGIN SELECT RAISE(ABORT, 'budget changes are append-only'); END;
+"""),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
@@ -802,6 +823,7 @@ DOWNGRADES = {
     12: ("node_nonces", "node_observations", "node_keys"),
     13: ("broker_observations",),
     14: ("ticket_flow",),
+    15: ("budget_changes",),
 }
 
 
@@ -926,6 +948,22 @@ class TaskStore:
 
     def close(self):
         self.db.close()
+
+    # ---------- the weekly budget (CC-064 a): budget_changes is append-only; the newest row of a kind wins ----------
+
+    def add_budget_change(self, actor, via, kind, body, jay_message_id=None, at=None):
+        """Append one row and return it. There is no update or delete path (the table's triggers refuse both)."""
+        at = time.time() if at is None else at
+        cur = self.db.execute("INSERT INTO budget_changes(at, actor, via, jay_message_id, kind, body) VALUES (?,?,?,?,?,?)",
+                              (at, actor, via, jay_message_id, kind, json.dumps(body, sort_keys=True)))
+        return {"id": cur.lastrowid, "at": at, "actor": actor, "via": via, "jayMessageId": jay_message_id,
+                "kind": kind, "body": body}
+
+    def latest_budget_change(self, kind="settings"):
+        r = self.db.execute("SELECT id, at, actor, via, jay_message_id, kind, body FROM budget_changes "
+                            "WHERE kind = ? ORDER BY id DESC LIMIT 1", (kind,)).fetchone()
+        return None if r is None else {"id": r[0], "at": r[1], "actor": r[2], "via": r[3], "jayMessageId": r[4],
+                                       "kind": r[5], "body": json.loads(r[6])}
 
     # One transaction around several writes (the import): while a batch is open,
     # create/link/relate join it instead of opening their own, and any error
