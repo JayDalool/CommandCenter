@@ -353,9 +353,9 @@ means ready for input, and `agent.prompt` pastes and presses Enter, so before ea
 text (not stored or logged) and skips the reminder, uncounted, unless Claude's prompt line is plainly empty or
 shows its placeholder; a screen it cannot parse is skipped. The check reads the pane **with colour codes** (herdr
 `agent.read` `format: ansi`, the three automatic senders only; board tails and the agent read API stay
-colour-stripped): Claude Code's grey suggested prompt is drawn faint and counts as empty (CC-053), while any text
-that is not faint, a paste or image placeholder, or a colour sequence it cannot parse is a draft and nothing is
-sent. A plain read without codes behaves as before. This is a best-effort check on screen text: a draft
+colour-stripped): only a bare prompt or the exact shape herdr draws for Claude Code's grey suggested prompt
+(CC-053) counts as empty; anything else on the input line, including any other colour code, a paste or image
+placeholder, or a colour sequence it does not recognise, is a draft and nothing is sent. A plain read without codes behaves as before. This is a best-effort check on screen text: a draft
 it misreads, or typed between the read and the paste, can still be submitted. The hard limits bound that risk:
 it stops after 6 reminders in a shift, after the morning cutoff (07:00 local by default), when the report says
 complete, or after 3 reminders with no ticket or report change. The reminder text is a constant; no report or
@@ -534,7 +534,7 @@ Jay talks to the CTO and each project lead in HQ's Messages (docs/API.md, Messag
 
 - **Nothing Jay writes is typed into a terminal** (C2 b). The lead gets one fixed nudge through herdr's `agent.prompt`,
   only while idle and only when its input line reads as empty (the night-shift check, which treats Claude Code's grey
-  suggested prompt as empty: CC-053), so a half-typed draft is never
+  suggested prompt, matched by its exact shape, as empty: CC-053), so a half-typed draft is never
   submitted. The nudge names the conversation and the two commands; the lead reads the words with `cc-inbox`.
   The nudge's wording is neutral: it says a message is waiting and that the lead's usual rules, gates and approvals
   apply to anything it asks. A message is never an approval.

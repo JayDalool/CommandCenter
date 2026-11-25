@@ -364,13 +364,17 @@ class Reads(NoLiveData, ApiBase):
         reads = [p for m, p in self.fake.calls if m == "agent.read"]
         self.assertTrue(reads)
         self.assertTrue(all(p.get("strip_ansi") is True and "format" not in p for p in reads), reads)
+        # CC-053 Codex P2: the board's blocked-tail read goes through its real caller, Daemon.rederive
+        self.fake.tails["wE:p4"] = "PLAIN-BOARD-MARKER"
+        self.fake.tails_ansi["wE:p4"] = "\x1b[2mANSI-BOARD-MARKER\x1b[0m"
+        self.fake.run(self.fake.push_status, "wE:p4", "blocked")
+        wait_sync(lambda: any(a["id"] == "blocked:wE:p4" for a in self.daemon.alerts), what="alert raised")
         self.fake.calls.clear()
-        self.client.portal.call(lambda: self.daemon.herdr.read_tail("wE:p2", 8))          # the board's blocked-tail call
-        self.client.portal.call(lambda: self.daemon.herdr.read_tail("wE:p2", 8, ansi=True))
-        plain, coloured = [p for m, p in self.fake.calls if m == "agent.read"]
-        self.assertEqual((plain.get("strip_ansi"), plain.get("format")), (True, None))
-        self.assertEqual((coloured.get("format"), coloured.get("strip_ansi")), ("ansi", None))
-
+        self.client.portal.call(self.daemon.rederive)
+        reads = [p for m, p in self.fake.calls if m == "agent.read" and p.get("target") == "wE:p4"]
+        self.assertTrue(reads, self.fake.calls)
+        self.assertTrue(all(p.get("strip_ansi") is True and "format" not in p and p.get("lines") == 8 for p in reads), reads)
+        self.assertNotIn("ANSI-BOARD-MARKER", json.dumps(self.get("/api/state").json()))
 
     def test_tails_are_never_persisted(self):
         self.fake.tails["wE:p2"] = "UNIQUE-TAIL-MARKER-7731"

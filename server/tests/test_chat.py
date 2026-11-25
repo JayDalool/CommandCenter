@@ -271,6 +271,13 @@ class ChatApi(ApiBase):
         self.assertEqual(len(self.prompts()), 1)
 
 
+    def test_a_malformed_colour_reset_before_typed_words_stays_queued(self):
+        # CC-053 Codex round 2: ESC[00m after the hint made typed words look faint; only the exact shape is a suggestion
+        self.fake.tails_ansi["wE:p2"] = self.ansi_screen("hint\x1b[00m typed words", faint=True)
+        self.assertEqual(self.send("samvision", "one").json()["delivery"], "queued")
+        self.client.portal.call(self.daemon.chat_tick)
+        self.assertEqual(self.prompts(), [])
+
     def test_offline_and_paused_leads(self):
         self.assertEqual(self.send("gyst", "hello").json()["delivery"], "lead-offline")
         self.assertEqual(self.send("gauzemate", "hello").json()["delivery"], "lead-paused")
