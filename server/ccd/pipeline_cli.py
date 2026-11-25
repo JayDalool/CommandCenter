@@ -33,7 +33,8 @@ The delivery flow (docs/flow/FLOW.md). Each line runs as the seat named in brack
     python -m ccd.pipeline_cli plan-review SV-056 APPROVE|SEND_BACK --session <fresh> --note "…" [--blast "…" …] \
                                            [--test "…"] [--size risky]                                       [tech-reviewer]
     python -m ccd.pipeline_cli user-check  SV-056 pass|fail --head <sha> --session <fresh> --note "…" \
-                                           --criterion c1=pass [--criterion c2=fail …]                        [user-reviewer]
+                                           --criterion "c1=pass:what you did and saw" [--criterion c2=fail …] \
+                                           --proof after-1280.png [--proof after-375.png …]                    [user-reviewer]
     python -m ccd.pipeline_cli close       SV-056 --note "what was done, what to know next time"             [lead]
 
 `criteria` replaces the whole list: repeat every criterion you keep (as its text; an unchanged text keeps its state).
@@ -173,7 +174,10 @@ def build(argv):
     p.add_argument("--priority", choices=("URGENT", "HIGH", "MEDIUM", "LOW"), type=str.upper,
                    help="intake (required unless the ticket has one) and criteria")
     p.add_argument("--due", help="intake and criteria: YYYY-MM-DD (intake without it: 2/5/10 days by size)")
-    p.add_argument("--criterion", action="append", help="intake/criteria: a criterion's text; user-check: ID=pass|fail")
+    p.add_argument("--criterion", action="append",
+                   help="intake/criteria: a criterion's text; user-check: ID=pass|fail[:what you did and saw]")
+    p.add_argument("--proof", action="append",
+                   help="user-check: a screenshot, captured output file or link of the running change (repeatable)")
     p.add_argument("--requirement", action="append")
     p.add_argument("--parent")
     p.add_argument("--blast", action="append")
@@ -220,7 +224,7 @@ def build(argv):
                                 "blast": "; ".join(a.blast) if a.blast else None,
                                 "tests": a.test or [], **({"size": a.size} if a.size else {}), **meta},
         "user-check": lambda: {"result": a.decision or a.result, "head": a.head, "note": a.note,
-                               "criteria": a.criterion or [], **meta},
+                               "criteria": a.criterion or [], "proof": a.proof or [], **meta},
         "close": lambda: {"note": a.note},
     }
     if a.op == "work":

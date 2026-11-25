@@ -576,7 +576,8 @@ class PipelineApi(Automation):
         r = self.step("review", {"verdict": "APPROVE", "head": head, "session": "cr-1"}, "agent:reviewer")
         self.assertEqual(r.status_code, 409, r.text)                               # the user check comes first
         r = self.step("user-check", {"result": "pass", "head": head, "note": "tried it", "session": "ur-1",
-                                     "criteria": ["c1=pass"]}, "agent:user-reviewer")
+                                     "criteria": ["c1=pass:opened comps, five showed"],
+                                     "proof": ["after-comps.png"]}, "agent:user-reviewer")
         self.assertEqual(r.json()["flow"]["stage"], "codeReview", r.text)
         flow = self.get("/api/flow").json()["projects"]
         sv = next(p for p in flow if p["key"] == "samvision")
