@@ -696,7 +696,8 @@ class Notifier:
         """One test DM and one test push, each reported on its own. lastError is cleared first, so it holds only
         what failed in this test."""
         self.status["lastError"] = None
-        ts = await self.post("dm", "CommandCenter test: Slack works. Reply here to check that replies reach ccd.")
+        ts = await self.post("dm", "CommandCenter test: Slack works. Reply in this thread to check that your replies "
+                                   "reach CommandCenter.", item={"type": "test"})
         pushed = await self.push("CommandCenter test", self.link())
         return {"ok": True, "slack": bool(ts), "ntfy": pushed, "status": dict(self.status)}
 
@@ -1117,6 +1118,10 @@ class Notifier:
     async def handle_reply(self, cid, item, text):
         if not text:
             return {"did": "empty"}
+        if item and item.get("type") == "test":
+            # The test DM's own thread: say the reply arrived and pass it to no one (it used to reach the CTO).
+            return {"did": "test_reply", "say": "Got it: your Slack replies reach CommandCenter. This reply went to "
+                                                "no one else."}
         if item and item.get("type") == "ticket":
             return await self.to_lead(item.get("project"), text, item.get("ref"))
         if item and item.get("type") == "need":
