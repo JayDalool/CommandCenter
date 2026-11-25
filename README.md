@@ -126,7 +126,19 @@ scripts/reconcile-cc-ui.py         # dry run: what the control room does to the 
 scripts/reconcile-cc-ui.py --apply
 ```
 
-main is the reviewed release line. `go-live.sh` prints the exact rollback (previous commit + the tasks.db backup) when it finishes.
+main is the reviewed release line. `go-live.sh` prints the exact rollback when it finishes: the release `web/current`
+named before the deploy (its commit and UI directory, no guess from the checkout's HEAD; "no previous release is
+recorded" when there is none) and, only when the new release added a database migration, the `migration_safety
+rollback` step with its runbook. It never says to copy the tasks.db backup back: that loses rows written since.
+
+**Release check (CC-063).** After the restart `go-live.sh` runs `server/ccd/release_check.py` in the same pane for
+about 3 minutes (API answers, the new UI is served, ccd is the new process and has not crashed). It changes nothing
+and rolls nothing back. Healthy: one `release check: healthy` line and exit 0. Not healthy: one Messages line to Jay
+(as the project lead) and the same text in the pane, naming the failed check and the exact rollback steps; every run
+adds a line to `~/command-center/deploys/commandcenter/releases.jsonl`. If ccd is down, Messages is too: the alert is
+only in the pane and logged `notified: false`. Run go-live with the 10-minute Bash timeout (build 2-3 min + check).
+Exit codes: 0 healthy; 3 failed: record `deployed --result fail` and wait for Jay; 4 inconclusive, 2 could not run,
+1 stopped part-way (the pane says where): record nothing, wait for Jay. Never record a pass on a non-zero exit.
 
 ## Roll back
 

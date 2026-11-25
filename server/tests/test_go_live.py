@@ -27,7 +27,7 @@ def git(cwd, *args):
     return r.stdout.strip()
 
 
-class GoLiveTest(unittest.TestCase):
+class GoLiveBase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="go-live-test-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
@@ -61,6 +61,7 @@ class GoLiveTest(unittest.TestCase):
         git(self.repo, "push", "-q", "-u", "origin", "main")
         self.other = self.tmp / "other"
         git(self.tmp, "clone", "-q", str(self.origin), str(self.other))
+        self.release(self.head())   # a previous release is recorded unless a test removes it (CC-063)
 
     def push_main(self, subject):
         git(self.other, "checkout", "-q", "main")
@@ -83,6 +84,7 @@ class GoLiveTest(unittest.TestCase):
             "CCD_LAUNCHER_DIR": str(self.tmp / "launcher"),
         }
         env.update(GIT_ENV)
+        env.update(getattr(self, "extra_env", {}))
         return subprocess.run(["bash", str(SCRIPT), *args], env=env, cwd=self.tmp,
                               capture_output=True, text=True, timeout=60)
 
@@ -94,6 +96,20 @@ class GoLiveTest(unittest.TestCase):
         self.assertEqual(os.listdir(self.markers), [], "a deploy step or shim ran")
         self.assertFalse((self.home / "command-center").exists(), "go-live wrote under HOME")
 
+    def refs(self):
+        return git(self.repo, "for-each-ref"), git(self.origin, "for-each-ref")
+
+    def release(self, sha, suffix=""):
+        """Point the UI release ccd serves at <sha>, named the way deploy-web.sh names it, with its index.html."""
+        web = self.home / ".local" / "share" / "command-center" / "web"
+        name = f"20261012T000000Z-{sha[:7]}{suffix}"
+        (web / "releases" / name).mkdir(parents=True, exist_ok=True)
+        (web / "releases" / name / "index.html").write_text("<html></html>")
+        (web / "current").unlink(missing_ok=True)
+        (web / "current").symlink_to(f"releases/{name}")
+
+
+class GoLiveTest(GoLiveBase):
     def test_syntax(self):
         r = subprocess.run(["bash", "-n", str(SCRIPT)], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -148,20 +164,17 @@ class GoLiveTest(unittest.TestCase):
         self.assertIn("risky change", r.stdout)
         self.assert_untouched(before)
 
-    def test_e_rollback_text_from_main_and_detached(self):
+    def test_e_rollback_text_names_the_recorded_release_and_never_copies_the_backup(self):
         full = self.head()
         r = self.run_script("--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn(f"git switch --detach {full} && server/.venv/bin/pip install -q -r server/requirements.txt "
-                      "&& scripts/deploy-web.sh", r.stdout)
-        self.assertIn("Rollback (back to main @", r.stdout)
-        self.assertIn("(then git switch main once fixed)", r.stdout)
-        self.assertIn("cp ", r.stdout)  # the tasks.db restore line stays
-        git(self.repo, "switch", "-q", "--detach")
-        r = self.run_script("--dry-run")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn(f"git switch --detach {full} &&", r.stdout)
-        self.assertIn("Rollback (back to HEAD @", r.stdout)
+        self.assertIn(f"Rollback (back to release 20261012T000000Z-{full[:7]} @ {full[:12]}):", r.stdout)
+        self.assertIn(f"git switch --detach {full}", r.stdout)
+        self.assertIn("server/.venv/bin/pip install -q -r server/requirements.txt", r.stdout)
+        self.assertIn("ln -sfn releases/20261012T000000Z-", r.stdout)   # re-points web/current, no npm rebuild
+        self.assertIn("mv -T", r.stdout)
+        self.assertNotIn("deploy-web.sh", r.stdout.split("Rollback would be:")[1])
+        self.assertNotIn("cp ", r.stdout.split("Rollback would be:")[1])  # Q182: the backup is never copied back
         self.assert_untouched(full)
 
     def test_f_diverged_local_main_is_refused(self):
@@ -181,9 +194,6 @@ class GoLiveTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("uncommitted changes", r.stderr)
         self.assert_untouched(before)
-
-    def refs(self):
-        return git(self.repo, "for-each-ref"), git(self.origin, "for-each-ref")
 
     def test_h_refspec_branch_values_are_refused_and_change_no_refs(self):
         self.push_feature("feature work")
@@ -213,6 +223,7 @@ class GoLiveTest(unittest.TestCase):
         git(self.repo, "switch", "-q", "-c", "work")
         git(self.repo, "commit", "-q", "--allow-empty", "-m", "only on the live checkout")
         before = self.head()
+        self.release(before)
         new = self.push_main("arriving from main")
         r = self.run_script("--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -231,13 +242,6 @@ class GoLiveTest(unittest.TestCase):
         self.assertIn("leaving live:\n(none)\n", r.stdout)
         self.assert_untouched(before)
 
-    def release(self, sha, suffix=""):
-        """Point the UI release ccd serves at <sha>, named the way deploy-web.sh names it."""
-        web = self.home / ".local" / "share" / "command-center" / "web"
-        (web / "releases").mkdir(parents=True, exist_ok=True)
-        (web / "current").unlink(missing_ok=True)
-        (web / "current").symlink_to(f"releases/20261012T000000Z-{sha[:7]}{suffix}")
-
     def test_m_rollback_names_what_is_live_when_the_checkout_was_pulled_ahead(self):
         # CC-051: a git pull in the live checkout moved HEAD past what ccd serves; the rollback named HEAD
         live = self.head()
@@ -248,26 +252,40 @@ class GoLiveTest(unittest.TestCase):
         r = self.run_script("--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(f"note: the checkout is at {pulled[:12]} but live is {live[:12]}", r.stdout)
-        self.assertIn(f"Rollback (back to live @ {live[:12]}):", r.stdout)
-        self.assertIn(f"git switch --detach {live} &&", r.stdout)
+        self.assertIn(f"@ {live[:12]}):", r.stdout)
+        self.assertIn(f"git switch --detach {live}", r.stdout)
         arriving = r.stdout.split("leaving live:")[0]
         self.assertIn("merged and pulled, never deployed", arriving)  # not live yet, so it arrives
         self.assertIn("merged since", arriving)
         self.assertIn(f"== deploying main @ {new}", r.stdout)
         self.assert_untouched(pulled)
 
-    def test_n_live_release_matching_head_or_unknown_falls_back_quietly(self):
+    def test_n_no_previous_release_is_said_never_guessed_from_head(self):
+        # CC-063: web/current naming no commit used to fall back to HEAD, a guess that could roll back to the wrong code
+        before = self.head()
+        web = self.home / ".local" / "share" / "command-center" / "web"
+        for label, setup in (
+            ("no web/current", lambda: (web / "current").unlink()),
+            ("a rev this checkout does not have", lambda: self.release("0" * 40)),
+            ("a release with no index.html", lambda: (self.release(before), (web / "current").resolve().joinpath("index.html").unlink())),
+            ("a name with no commit in it", lambda: ((web / "current").unlink(), (web / "current").symlink_to("releases/odd"))),
+        ):
+            with self.subTest(label):
+                self.release(before)
+                setup()
+                r = self.run_script("--dry-run")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn("no previous release is recorded", r.stdout)
+                self.assertNotIn("git switch --detach", r.stdout)
+        self.assert_untouched(before)
+
+    def test_n_dirty_release_of_head_is_the_previous_release(self):
         before = self.head()
         self.release(before, "-dirty")
         r = self.run_script("--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("note:", r.stdout)
-        self.assertIn("Rollback (back to main @", r.stdout)
-        self.release("0" * 40)  # a rev this checkout does not have
-        r = self.run_script("--dry-run")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn(f"note: cannot tell the live version", r.stdout)
-        self.assertIn(f"git switch --detach {before} &&", r.stdout)
+        self.assertIn(f"git switch --detach {before}", r.stdout)
         self.assert_untouched(before)
 
     def test_l_feature_branch_fetch_updates_only_its_tracking_ref(self):
@@ -279,6 +297,179 @@ class GoLiveTest(unittest.TestCase):
         self.assertEqual(git(self.repo, "rev-parse", "refs/remotes/origin/feature"), feat)
         self.assertEqual(git(self.repo, "rev-parse", "refs/remotes/origin/main"), main_ref)
         self.assert_untouched(before)
+
+
+class GoLiveRunTest(GoLiveBase):
+    """A REAL go-live run (CC-063) in a throw-away clone, HOME and PATH of shims: systemctl, curl and the venv's
+    pip and python record what they are asked and change nothing. The release check itself is a stub committed into
+    the clone's server/ccd/, so these tests are about go-live's wiring (steps, exit codes, what it never does);
+    test_release_check.py covers the check."""
+
+    def setUp(self):
+        super().setUp()
+        t = self.tmp
+        for name in ("systemctl", "curl", "go"):
+            (self.shims / name).unlink()
+        write(self.shims / "systemctl", f"""#!/bin/sh
+echo "$@" >> "{self.markers}/systemctl"
+case "$*" in
+  *show*) cat "{t}/oldpid" 2>/dev/null; exit 0 ;;
+  *restart*) exit "$(cat "{t}/restart_rc" 2>/dev/null || echo 0)" ;;
+esac
+exit 0
+""")
+        write(self.shims / "curl", f"""#!/bin/sh
+echo "$@" >> "{self.markers}/curl"
+cat "{t}/health.json" 2>/dev/null || exit 22
+""")
+        # committed into the clone, so "git switch" to a new main brings them along
+        web = "$HOME/.local/share/command-center/web"
+        write(self.repo / "scripts" / "deploy-web.sh", f"""#!/bin/sh
+echo ran >> "{self.markers}/deploy-web.sh"
+d="releases/20261101T000000Z-$(git rev-parse --short=7 HEAD)"
+mkdir -p "{web}/$d" && echo '<html>new</html>' > "{web}/$d/index.html"
+ln -sfn "$d" "{web}/current"
+""")
+        (self.repo / "server" / "ccd").mkdir(parents=True)
+        write(self.repo / "server" / "ccd" / "release_check.py", """import os, sys
+args = sys.argv[1:]
+with open(os.environ["STUB_MARKER"], "a") as f:
+    f.write(" ".join(args) + "\\n")
+with open(os.environ["STUB_MARKER"] + ".steps", "w") as f:
+    f.write(open(args[args.index("--steps-file") + 1]).read())
+print(os.environ.get("STUB_OUT", "release check: healthy"))
+sys.exit(int(os.environ.get("STUB_EXIT", "0")))
+""")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "deploy stubs")
+        git(self.repo, "push", "-q", "origin", "main")
+        git(self.other, "pull", "-q", "origin", "main")
+        self.release(self.head())          # the live release is this commit
+        # untracked venv shims
+        venv = self.repo / "server" / ".venv" / "bin"
+        venv.mkdir(parents=True)
+        write(venv / "pip", f'#!/bin/sh\necho "$@" >> "{self.markers}/pip"\nexit "$(cat "{t}/pip_rc" 2>/dev/null || echo 0)"\n')
+        write(venv / "python", f'#!/bin/sh\ncat "{t}/new_schema" 2>/dev/null; exit 0\n')
+        (t / "oldpid").write_text("400\n")
+        (t / "new_schema").write_text("15\n")
+        (t / "health.json").write_text('{"tasks": {"schemaVersion": 14}, "herdr": {"ok": true}}')
+        self.stub_marker = self.markers.parent / "stub-args"
+        self.extra_env = {"STUB_MARKER": str(self.stub_marker)}
+
+    def go(self, **env):
+        self.extra_env.update({k: str(v) for k, v in env.items()})
+        new = self.push_main("a new reviewed change")
+        return new, self.run_script()
+
+    def restarts(self):
+        return [l for l in (self.markers / "systemctl").read_text().splitlines() if "restart" in l]
+
+    def check_args(self):
+        return self.stub_marker.read_text()
+
+    def steps(self):
+        return Path(str(self.stub_marker) + ".steps").read_text()
+
+    def test_c1_healthy_deploys_as_before_and_runs_the_check_once(self):
+        live = self.head()
+        new, r = self.go()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("release check: healthy", r.stdout)
+        self.assertIn(f"Live is on main ({new[:7]})", r.stdout)
+        self.assertEqual(self.head(), new)
+        self.assertEqual(len(self.restarts()), 1)
+        args = self.check_args()
+        self.assertEqual(len(args.splitlines()), 1)
+        self.assertIn("--old-pid 400", args)
+        self.assertIn("--herdr-ok true", args)
+        self.assertIn(f"--from {live}", args)
+        self.assertIn(f"--to {new}", args)
+        self.assertNotIn("do not record", r.stdout + r.stderr)
+
+    def test_c8_failed_check_alerts_and_changes_nothing(self):
+        live = self.head()
+        new, r = self.go(STUB_EXIT=3, STUB_OUT="Release check FAILED: api")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("do not record deployed as pass", r.stderr)
+        self.assertNotIn("Live is on", r.stdout)
+        # nothing was rolled back: the checkout is the target, web/current is the new release, one restart only
+        self.assertEqual(self.head(), new)
+        web = self.home / ".local" / "share" / "command-center" / "web"
+        self.assertIn(new[:7], os.readlink(web / "current"))
+        self.assertEqual(len(self.restarts()), 1)
+        # the steps the check shows name this release's previous commit and release, and never copy the backup
+        steps = self.steps()
+        self.assertIn(f"git switch --detach {live}", steps)
+        self.assertIn(f"ln -sfn releases/20261012T000000Z-{live[:7]}", steps)
+        self.assertIn("migration_safety rollback", steps)
+        self.assertIn("--to 14", steps)
+        self.assertNotIn("cp ", steps)
+        self.assertIn("docs/runbooks/tasks-db-v15-rollback.md", steps)
+
+    def test_exit_4_and_2_pass_through_with_the_same_warning(self):
+        for code in (4, 2):
+            with self.subTest(code=code):
+                self.setUp()
+                _, r = self.go(STUB_EXIT=code)
+                self.assertEqual(r.returncode, code, r.stdout + r.stderr)
+                self.assertIn("do not record deployed as pass", r.stderr)
+
+    def test_no_migration_step_when_the_schema_did_not_change(self):
+        (self.tmp / "new_schema").write_text("14\n")
+        self.go()
+        self.assertNotIn("migration_safety", self.steps())
+        self.assertIn("no database change", self.steps())
+
+    def test_old_ccd_down_before_the_restart_says_schema_unknown_and_does_not_judge_herdr(self):
+        (self.tmp / "health.json").unlink()
+        self.go()
+        steps = self.steps()
+        self.assertNotIn("migration_safety rollback --db", steps)   # no guessed --to
+        self.assertIn("not known: do not guess", steps)
+        args = self.check_args()
+        self.assertIn("--herdr-ok unknown", args)
+        self.assertIn("--old-pid 400", args)        # still taken from systemctl's MainPID
+
+    def test_c9_no_previous_release_is_said_in_the_steps_and_never_a_head_guess(self):
+        web = self.home / ".local" / "share" / "command-center" / "web"
+        (web / "current").unlink()
+        _, r = self.go()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("no previous release is recorded", self.steps())
+        self.assertNotIn("git switch --detach", self.steps())
+        self.assertIn("--from  --to", self.check_args())
+
+    def test_a_failing_restart_still_runs_the_check(self):
+        (self.tmp / "restart_rc").write_text("1\n")
+        _, r = self.go(STUB_EXIT=3)
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertTrue(self.stub_marker.exists())
+        self.assertIn("systemctl restart ccd failed", r.stderr)
+
+    def test_a_failing_step_after_the_switch_prints_where_and_the_steps(self):
+        live = self.head()
+        (self.tmp / "pip_rc").write_text("1\n")
+        new, r = self.go()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("go-live stopped at: server requirements", r.stderr)
+        self.assertIn(f"git switch --detach {live}", r.stderr)
+        self.assertIn("do not record deployed as pass", r.stderr)
+        self.assertFalse(self.stub_marker.exists())     # the check never ran
+        self.assertEqual(self.restarts(), [])
+
+    def test_c9_the_check_is_a_stdlib_file_run_isolated(self):
+        script = SCRIPT.read_text()
+        self.assertIn('python3 -I "$REPO/server/ccd/release_check.py"', script)
+        # the live script never rolls back itself: no stop/start of ccd and no git switch outside the printed steps
+        deploy_part = script.split('echo "== restart ccd"')[1].split("cat <<EOF")[0]
+        self.assertNotIn("stop ccd", deploy_part)
+        self.assertNotIn("switch --detach", deploy_part)
+
+
+def write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    path.chmod(0o755)
 
 
 if __name__ == "__main__":

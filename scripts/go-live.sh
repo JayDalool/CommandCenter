@@ -23,9 +23,13 @@
 #      Windows launcher offered under Settings → Desktop app
 #   7. links Claude's /night-shift and /ui-test skills into ~/.claude/skills and sets the AskUserQuestion hook in
 #      ~/.claude/settings.json (scripts/install-claude-commands.sh)
-#   8. restarts ccd (which applies any additive tasks.db migration) and waits for it to answer
+#   8. restarts ccd (which applies any additive tasks.db migration)
+#   9. runs the release check (server/ccd/release_check.py) for about 3 minutes in this pane (CC-063): it changes
+#      nothing. Healthy: one line, exit 0. Not healthy: it alerts Jay in Messages and here with the exact rollback
+#      steps and go-live exits non-zero (3 failed, 4 inconclusive, 2 cannot run, 1 stopped part-way): do NOT
+#      record the deploy as a pass. There is no automatic rollback; Jay decides (Q197).
 # and prints the exact rollback. It never deletes anything and never touches herdr or any agent.
-set -euo pipefail
+set -Eeuo pipefail
 
 usage() {
   echo "usage: go-live.sh [--dry-run] [--branch <name> --i-know]   (default branch: main, the reviewed release line)" >&2
@@ -69,36 +73,61 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   git status --short --untracked-files=no >&2
   exit 1
 fi
-PREV_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-PREV_SHA="$(git rev-parse HEAD)"
+HEAD_SHA="$(git rev-parse HEAD)"
 # What is live is what ccd serves: deploy-web.sh names each UI release <stamp>-<rev>[-dirty] from the commit it
-# was built at, and ccd was restarted on that same commit. The checkout's HEAD can be ahead of it (a git pull
-# after a merge), so the release name decides the rollback; HEAD is only the fallback.
+# was built at, and ccd was restarted on that same commit. The previous release is therefore the exact release
+# web/current names (it must hold index.html and its commit must exist here). There is NO fallback to the checkout's
+# HEAD: that was a guess, and a wrong rollback target is worse than an honest "no previous release" (CC-063).
 WEB="${CCD_WEB_DIR:-$HOME/.local/share/command-center/web}"
-live_rev="$(basename "$(readlink "$WEB/current" 2>/dev/null || true)" | cut -s -d- -f2)"
-LIVE_SHA=""
-if [ -n "$live_rev" ]; then
-  LIVE_SHA="$(git rev-parse -q --verify "$live_rev^{commit}" 2>/dev/null || true)"
+PREV_LINK="$(readlink "$WEB/current" 2>/dev/null || true)"
+PREV_SHA=""
+PREV_WEB_NAME=""
+if [ -n "$PREV_LINK" ]; then
+  case "$PREV_LINK" in /*) prev_dir="$PREV_LINK" ;; *) prev_dir="$WEB/$PREV_LINK" ;; esac
+  prev_rev="$(basename "$PREV_LINK" | cut -s -d- -f2)"
+  if [ -n "$prev_rev" ] && [ -f "$prev_dir/index.html" ]; then
+    PREV_SHA="$(git rev-parse -q --verify "$prev_rev^{commit}" 2>/dev/null || true)"
+    [ -z "$PREV_SHA" ] || PREV_WEB_NAME="$(basename "$PREV_LINK")"
+  fi
 fi
-if [ -z "$LIVE_SHA" ]; then
-  echo "note: cannot tell the live version from $WEB/current; using the checkout's HEAD ${PREV_SHA:0:12}"
-elif [ "$LIVE_SHA" != "$PREV_SHA" ]; then
-  echo "note: the checkout is at ${PREV_SHA:0:12} but live is ${LIVE_SHA:0:12}; rollback and commit lists use live"
-  PREV_BRANCH=live
-  PREV_SHA="$LIVE_SHA"
+if [ -z "$PREV_SHA" ]; then
+  echo "note: no previous release is recorded ($WEB/current names no commit this checkout has, or no index.html)"
+elif [ "$PREV_SHA" != "$HEAD_SHA" ]; then
+  echo "note: the checkout is at ${HEAD_SHA:0:12} but live is ${PREV_SHA:0:12}; rollback and commit lists use live"
 fi
 safe="$(echo "$BRANCH" | tr '/' '-')"
 backup="$BACKUPS/tasks.db.pre-$safe-<stamp>"
+# Known only in a real run (the old ccd's /api/health, the new checkout's tasks.SCHEMA_VERSION); empty = unknown.
+PREV_SCHEMA=""
+NEW_SCHEMA=""
 
-# Printed by --dry-run and at the end of a real run. "git switch --detach <sha>" is right from main and from
-# a detached HEAD alike; the sha is the full one.
+# Printed by --dry-run, written to the steps file the release check shows, and printed at the end of a real run.
+# Never "cp <backup> tasks.db": it loses every row written since go-live (Jay, Q182). The schema step uses the NEW
+# checkout's migration_safety (it knows the new tables), so it runs before git switches back.
 rollback_text() {
-  cat <<EOF
-Rollback (back to $PREV_BRANCH @ ${PREV_SHA:0:12}):
-  cd $REPO && git switch --detach $PREV_SHA && server/.venv/bin/pip install -q -r server/requirements.txt && scripts/deploy-web.sh
-  (then git switch main once fixed)
-  systemctl --user stop ccd && cp "$backup" "$DB" && systemctl --user start ccd
-EOF
+  if [ -z "$PREV_SHA" ]; then
+    echo "Rollback: no previous release is recorded, so there is no release to go back to by these steps."
+    echo "  Decide by hand. The tasks.db backup is $backup; never copy it over tasks.db (it loses rows written since go-live)."
+    return
+  fi
+  local n=2
+  echo "Rollback (back to release $PREV_WEB_NAME @ ${PREV_SHA:0:12}):"
+  echo "  1. systemctl --user stop ccd"
+  if [ -n "$NEW_SCHEMA" ] && [ -n "$PREV_SCHEMA" ] && [ "$NEW_SCHEMA" -gt "$PREV_SCHEMA" ]; then
+    echo "  $n. cd $REPO/server && .venv/bin/python -m ccd.migration_safety rollback --db $DB --to $PREV_SCHEMA --backup-dir $BACKUPS"
+    echo "     If it refuses (the new tables hold rows): stop here, do not copy the backup over tasks.db; start ccd again"
+    echo "     on the new release (systemctl --user start ccd) and follow docs/runbooks/tasks-db-v$NEW_SCHEMA-rollback.md."
+    n=$((n + 1))
+  elif [ -n "$NEW_SCHEMA" ] && [ -n "$PREV_SCHEMA" ]; then
+    echo "  (this release has no database change: nothing to undo in tasks.db)"
+  else
+    echo "  (the database schema before/after is not known: do not guess. If this release added a migration, follow its"
+    echo "   docs/runbooks/tasks-db-vN-rollback.md; never copy the backup over tasks.db)"
+  fi
+  echo "  $n. cd $REPO && git switch --detach $PREV_SHA"
+  echo "  $((n + 1)). server/.venv/bin/pip install -q -r server/requirements.txt"
+  echo "  $((n + 2)). ln -sfn $PREV_LINK $WEB/current.rollback && mv -T $WEB/current.rollback $WEB/current"
+  echo "  $((n + 3)). systemctl --user start ccd      (then git switch main once fixed)"
 }
 
 echo "== fetch $BRANCH"
@@ -108,9 +137,14 @@ echo "== deploying $BRANCH @ $TARGET"
 if [ "$BRANCH" != main ]; then
   echo "!! NOT main: $BRANCH has not been reviewed for release (--i-know given)"
 fi
-log="$(git log --oneline "$PREV_SHA..origin/$BRANCH")"
-echo "${log:-(already at target)}"
-leaving="$(git log --oneline "origin/$BRANCH..$PREV_SHA")"
+if [ -n "$PREV_SHA" ]; then
+  log="$(git log --oneline "$PREV_SHA..origin/$BRANCH")"
+  echo "${log:-(already at target)}"
+  leaving="$(git log --oneline "origin/$BRANCH..$PREV_SHA")"
+else
+  echo "(no previous release is recorded: cannot list the new commits)"
+  leaving=""
+fi
 echo "leaving live:"
 echo "${leaving:-(none)}"
 
@@ -152,6 +186,41 @@ if [ -n "$other" ]; then
   git -C "$other" switch -q --detach
 fi
 
+# What the old ccd reports now (read only). Unknown stays unknown: the steps say so instead of guessing (CC-063).
+jget() {
+  python3 -I -c 'import json, sys
+try:
+    d = json.load(sys.stdin)
+    for k in sys.argv[1:]:
+        d = d[k]
+    print(str(d).lower() if isinstance(d, bool) else d)
+except Exception:
+    pass' "$@"
+}
+OLD_HEALTH="$(curl -fsS --max-time 5 -H "Host: 127.0.0.1:$PORT" "http://127.0.0.1:$PORT/api/health" 2>/dev/null || true)"
+PREV_SCHEMA="$(printf '%s' "$OLD_HEALTH" | jget tasks schemaVersion)"
+case "$PREV_SCHEMA" in ""|*[!0-9]*) PREV_SCHEMA="" ;; esac
+OLD_HERDR="$(printf '%s' "$OLD_HEALTH" | jget herdr ok)"
+case "$OLD_HERDR" in true|false) ;; *) OLD_HERDR=unknown ;; esac
+OLD_PID="$(systemctl --user show ccd -p MainPID --value 2>/dev/null || true)"
+case "$OLD_PID" in ""|*[!0-9]*) OLD_PID=0 ;; esac
+
+# From here on the checkout, the UI or ccd may be half changed. A failing step must say where it stopped and print
+# the rollback steps, not just exit (before CC-063 set -e left no text at all). Nothing is rolled back for you.
+STEPS="$(mktemp)"
+trap 'rm -f "$STEPS"' EXIT
+STEP="switch to $BRANCH"
+rollback_text > "$STEPS"
+on_err() {
+  local rc=$?
+  trap - ERR
+  echo "go-live stopped at: $STEP (exit $rc). Nothing was rolled back." >&2
+  cat "$STEPS" >&2
+  echo "go-live: do not record deployed as pass" >&2
+  exit 1
+}
+trap on_err ERR
+
 echo "== switch to $BRANCH"
 if git show-ref -q --verify "refs/heads/$BRANCH"; then
   git switch -q "$BRANCH"
@@ -160,13 +229,21 @@ else
   git switch -q -c "$BRANCH" --track "origin/$BRANCH"
 fi
 echo "   now at $(git rev-parse --short HEAD)"
+NEW_SCHEMA="$( (cd "$REPO/server" && .venv/bin/python -c 'from ccd import tasks; print(tasks.SCHEMA_VERSION)') 2>/dev/null || true)"
+case "$NEW_SCHEMA" in ""|*[!0-9]*) NEW_SCHEMA="" ;; esac
+rollback_text > "$STEPS"
 
+STEP="server requirements"
 echo "== server requirements"
 server/.venv/bin/pip install -q -r server/requirements.txt
 
+STEP="UI release"
 echo "== UI release"
 scripts/deploy-web.sh
+NEW_LINK="$(readlink "$WEB/current" 2>/dev/null || true)"
+case "$NEW_LINK" in /*) NEW_DIR="$NEW_LINK" ;; *) NEW_DIR="$WEB/$NEW_LINK" ;; esac
 
+STEP="Windows launcher"
 echo "== Windows launcher (Settings → Desktop app download)"
 LAUNCHER_VERSION=""
 if command -v go >/dev/null 2>&1 || [ -x "$HOME/.local/go/bin/go" ]; then
@@ -181,22 +258,34 @@ else
   echo "   Go is not installed here; the Desktop app page keeps the old exe"
 fi
 
+STEP="Claude skills"
 echo "== Claude skills (/night-shift, /ui-test) and the AskUserQuestion hook"
 scripts/install-claude-commands.sh | sed 's/^/   /'
 
+STEP="restart ccd"
 echo "== restart ccd"
-systemctl --user restart ccd
-for i in $(seq 1 30); do
-  if curl -fsS -H "Host: 127.0.0.1:$PORT" "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
-    echo "   ccd answers on 127.0.0.1:$PORT"
-    break
-  fi
-  sleep 1
-  if [ "$i" = 30 ]; then
-    echo "go-live: ccd did not answer in 30 s — see: journalctl --user -u ccd -n 50" >&2
-    echo "Rollback: see below." >&2
-  fi
-done
+# A failing restart no longer aborts: the release check below sees an inactive unit and reports it with the steps.
+systemctl --user restart ccd || echo "go-live: systemctl restart ccd failed; the release check will report it" >&2
+
+# The release check watches ~3 minutes and changes nothing (CC-063). Run go-live under the 10-minute Bash limit.
+STEP="release check"
+echo "== release check (about 3 minutes; it changes nothing)"
+check_rc=0
+if [ -z "$NEW_LINK" ] || [ ! -f "$NEW_DIR/index.html" ]; then
+  echo "go-live: the release check cannot run: $WEB/current names no UI release with an index.html" >&2
+  check_rc=2
+else
+  python3 -I "$REPO/server/ccd/release_check.py" --port "$PORT" --new-dir "$NEW_DIR" --steps-file "$STEPS" \
+    --log-file "$HOME/command-center/deploys/commandcenter/releases.jsonl" \
+    --token-file "${CCD_TOKEN_FILE:-$HOME/.config/command-center/ccd.token}" \
+    --from "$PREV_SHA" --to "$(git rev-parse HEAD)" --web "$(basename "$NEW_LINK")" --prev-web "$PREV_WEB_NAME" \
+    --old-pid "$OLD_PID" --herdr-ok "$OLD_HERDR" || check_rc=$?
+fi
+trap - ERR
+if [ "$check_rc" -ne 0 ]; then
+  echo "go-live: release check exit $check_rc (3 failed, 4 inconclusive, 2 could not run): do not record deployed as pass" >&2
+  exit "$check_rc"
+fi
 
 cat <<EOF
 
