@@ -991,6 +991,9 @@ class Daemon(LeadChat, HqDaemon):
             elif n["kind"] == "ci":
                 out.append({"id": f"ci:{n['project']}", "severity": "warn", "source": "github",
                             "project": n["project"], "text": f"{n['project']} main checks failing"})
+        notifier = getattr(self, "notifier", None)
+        if notifier is not None and getattr(notifier, "mail", None) is not None and notifier.settings.get("releaseMail"):
+            out.extend(notifier.mail.alerts())      # a failed release email stays visible until a later one is sent
         problems = self.policy.problems()
         if problems:
             out.append({"id": "policy:problems", "severity": "warn", "source": "policy", "project": None,

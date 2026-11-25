@@ -268,8 +268,9 @@ function SlackAndPhone() {
       // slack and ntfy are this test's own results. ccd clears lastError when a test starts, so an error shown here is
       // this test's; it is shown only when a channel failed.
       const said = [v.slack && (r.slack ? "Slack message sent." : "Slack message failed."),
-        v.ntfy && (r.ntfy ? "Phone push sent." : "Phone push failed.")];
-      const failed = (v.slack && !r.slack) || (v.ntfy && !r.ntfy);
+        v.ntfy && (r.ntfy ? "Phone push sent." : "Phone push failed."),
+        v.releaseMail && (r.mail ? "Test email sent." : "Test email failed.")];
+      const failed = (v.slack && !r.slack) || (v.ntfy && !r.ntfy) || (v.releaseMail && !r.mail);
       const err = failed ? r.status.lastError : null;
       setNote({ tone: failed ? "bad" : "ok", text: [...said, err && `Error: ${err}`].filter(Boolean).join(" ") });
     }).catch((e: unknown) => setNote({ tone: "bad", text: e instanceof Error ? e.message : String(e) }))
@@ -289,6 +290,11 @@ function SlackAndPhone() {
   const clientRule = clients.length ? ` ${clients.join(" and ")} ${clients.length > 1 ? "are client projects" : "is a client project"}: replies there are passed on as text and never answer or approve.` : "";
   const slackWhy = !c.slackTokens ? (c.slackTokensError ?? "Tokens not set up on jay-server (slack.env)")
     : !c.jayMemberId ? "Your Slack member ID is not in config.json" : `Connection: ${status.slack}`;
+  // Release email (CC-078): what is missing, or the newest digest. ccd never sends the address or the password here.
+  const mail = st.d.mail;
+  const mailHint = !mail ? "Not available on this ccd" : !mail.configured ? (mail.error ?? "No mail settings on jay-server (mail.env)")
+    : mail.last ? `Last digest: ${mail.last.state} (${nameOf(mail.last.project)}, ${new Date(mail.last.at * 1000).toLocaleString()})`
+      : "One digest per live app, a day before its release window";
   return <Group id="slack" title="Slack and phone" foot={active ? undefined
     : <>Changing these needs Developer Unlock. <button type="button" className="hq-link" onClick={unlockDialogOpen}>Unlock…</button></>}>
     <Row label="Slack" hint={slackWhy}>
@@ -297,6 +303,9 @@ function SlackAndPhone() {
     <Row label="Phone alerts (ntfy)" hint={c.ntfy ? `Connection: ${status.ntfy}` : "No ntfy topic in config.json"}>
       <Seg label="Phone alerts" value={v.ntfy ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]} disabled={busy}
         onChange={(x) => x === (v.ntfy ? "on" : "off") || void save({ ntfy: x === "on" })} /></Row>
+    <Row label="Release email" hint={mailHint}>
+      <Seg label="Release email" value={v.releaseMail ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]} disabled={busy}
+        onChange={(x) => x === (v.releaseMail ? "on" : "off") || void save({ releaseMail: x === "on" })} /></Row>
     <Row label="Your Slack replies" hint={(v.replyScope === "answers"
       ? (plans ? "Answer agents' questions and approve plans. Other approvals open Command Center." : "Answer agents' questions. Approvals open Command Center.")
       : v.replyScope === "all"
@@ -315,7 +324,7 @@ function SlackAndPhone() {
       <TimeBox label="Daily summaries at" value={v.summaryAt} onSave={(t) => save({ summaryAt: t })} /></Row>
     <Row label="Test" hint={status.lastError ? `Last error: ${status.lastError}`
       : status.lastSentAt ? `Last sent ${new Date(status.lastSentAt * 1000).toLocaleString()}` : "Nothing sent yet"}>
-      <button type="button" className="hq-btn" disabled={busy || !(v.slack || v.ntfy)} onClick={test}>Send a test</button></Row>
+      <button type="button" className="hq-btn" disabled={busy || !(v.slack || v.ntfy || v.releaseMail)} onClick={test}>Send a test</button></Row>
     {note && <p className={cx("hq-note", note.tone === "ok" ? "t-ok" : "t-bad")} role="status">{note.text}</p>}
   </Group>;
 }

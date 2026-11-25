@@ -1422,3 +1422,18 @@ class OverHttp(unittest.TestCase):
         r = self.c.put("/api/notify", content='{"slack": true, "quietStart": "23:00"}', headers=dev)
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual((r.json()["settings"]["slack"], r.json()["settings"]["quietStart"]), (True, "23:00"))
+
+    def test_release_email_needs_developer_unlock_and_the_test_reports_mail(self):
+        # CC-078: the switch is Jay's, behind Developer Unlock, like every notify setting; no new route.
+        self.assertFalse(self.c.get("/api/notify", headers=self.h).json()["settings"]["releaseMail"])
+        self.assertEqual(self.c.put("/api/notify", content='{"releaseMail": true}', headers=self.h).status_code, 403)
+        sid = self.c.post("/api/developer/unlock", content=json.dumps({"token": self.DEV}), headers=self.h).json()["session"]
+        dev = dict(self.h, **{"x-ccd-developer": sid})
+        self.assertEqual(self.c.put("/api/notify", content='{"releaseMail": "on"}', headers=dev).status_code, 400)
+        self.assertEqual(self.c.post("/api/notify/test", content="{}", headers=dev).status_code, 409)
+        r = self.c.put("/api/notify", content='{"releaseMail": true}', headers=dev)
+        self.assertTrue(r.json()["settings"]["releaseMail"])
+        mail = r.json()["mail"]
+        self.assertEqual((mail["configured"], mail["last"]), (False, None))
+        t = self.c.post("/api/notify/test", content="{}", headers=dev)
+        self.assertEqual((t.status_code, t.json()["mail"], t.json()["slack"], t.json()["ntfy"]), (200, False, False, False))
