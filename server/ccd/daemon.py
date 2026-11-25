@@ -139,10 +139,37 @@ GATE_DEPLOY_TEMPLATE = (
     "--env live --result pass|fail --evidence \"…\""
 )
 
+# A live-deploy gate Jay approved from Slack (ccd/notify.py): the same PREPARE, but the plan goes back to his Slack
+# DM through `deploy-plan`, and his "deploy" reply there is the confirmation (SLACK_DEPLOY_GO_TEMPLATE). ccd refuses
+# `deployed --result pass` on a Slack approval until that reply is recorded (pipeline.deploy_go).
+SLACK_DEPLOY_TEMPLATE = (
+    "Jay approved the live-deploy gate of {key} from Slack: PREPARE its deploy. Do not deploy yet.\n"
+    "Use this repository's deploy runbook (docs/deployment.md, or the runbook AGENTS.md / CLAUDE.md names). If there "
+    "is none, stop and tell Jay. Write, in 10 lines or fewer: the steps, the migrations (or none), the pre-deploy "
+    "checks that touch nothing in production, the post-deploy checks, and the rollback plan (the version live now "
+    "and what failure triggers a rollback).\n"
+    "Record it so it reaches Jay in Slack: python -m ccd.pipeline_cli deploy-plan {key} --role coordinator "
+    "--summary \"<those lines>\"\n"
+    "Then stop and wait. Jay confirms by replying deploy in Slack, and ccd tells you here; nothing else is a "
+    "confirmation, and `deployed --result pass` is refused until it arrives."
+)
+ASK_BACK_TEMPLATE = (
+    "Jay replied from Slack to your open questions on {key} with a question of his own (his words are below). Answer "
+    "him with:\npython -m ccd.pipeline_cli reply {key} --role coordinator --text \"<your answer>\"\n"
+    "That goes to his Slack thread. Then stop and wait: his answers to your questions still come here.\n\nJay: {text}"
+)
+SLACK_DEPLOY_GO_TEMPLATE = (
+    "Jay confirmed the live deploy of {key} from Slack, on the plan you recorded with deploy-plan. Deploy it now by "
+    "that plan and the runbook, verify it live, and roll back by the runbook right away if a check fails. Then record "
+    "it: python -m ccd.pipeline_cli deployed {key} --role coordinator --env live --result pass|fail --evidence \"…\"\n"
+    "Not authorized by this message: anything outside that plan, any other ticket or project, changing secrets or "
+    "infrastructure config."
+)
+
 # Merge: Jay's one press to merge a project's Ready-to-Merge PRs. ccd merges nothing itself; it approves exactly
 # the reviewed, green heads listed and the coordinator merges them one at a time in that order.
 MERGE_TEMPLATE = (
-    "Merge from Jay via command-center: merge {project}'s ready PRs now, one at a time, in this order:\n"
+    "Merge from Jay via {via}: merge {project}'s ready PRs now, one at a time, in this order:\n"
     "{items}\n"
     "Jay approved exactly these PRs at exactly these heads. For each one, in order:\n"
     "1. Check: the PR is open, its head is still the approved head above, CI is green on that head, and GitHub "
@@ -1571,7 +1598,7 @@ class Daemon(LeadChat, HqDaemon):
 
     PIPELINE_OPS = ("plan", "start", "review", "verify", "confirm", "handoff", "block", "role", "finding",
                     "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
-                    "intake", "criteria", "plan-review", "user-check", "close")
+                    "intake", "criteria", "plan-review", "user-check", "close", "deploy-plan", "reply")
 
     def task_work(self, key):
         self._need_tasks()
@@ -1672,6 +1699,10 @@ class Daemon(LeadChat, HqDaemon):
                            body.get("criteria"), pr=self._pr_state(t), open_prs=self._open_prs(t), **meta)
         elif op == "close":
             r = self._wrap(pl.close, key, body.get("note"), actor)
+        elif op == "deploy-plan":
+            r = self._wrap(pl.deploy_plan, key, body.get("summary"), actor)
+        elif op == "reply":
+            r = self._wrap(pl.reply, key, body.get("text"), actor)
         elif op == "deploy-request":
             self._broker_ticket("deploy.request", key, body.get("env"))
             r = self._wrap(pl.deploy_request, key, body.get("env"), body.get("what"), body.get("verification"), actor)
@@ -1691,6 +1722,8 @@ class Daemon(LeadChat, HqDaemon):
             return (f"Jay moved {key} back to planning: {body.get('reason')}. Re-plan with Opus, record the revised plan "
                     f"and acceptance criteria (python -m ccd.pipeline_cli plan {key} …), and continue only after it is accepted.")
         if op == "confirm" and body.get("gate") == "deploy" and (work.get("deploy") or {}).get("approvedAt"):
+            if str((work.get("deploy") or {}).get("approvedBy") or "").endswith(":slack"):
+                return SLACK_DEPLOY_TEMPLATE.format(key=key)
             return GATE_DEPLOY_TEMPLATE.format(key=key)
         if op == "confirm" and body.get("gate") == "failure":
             return f"Jay cleared the blocker on {key}. Continue from {work.get('stage') or 'the blocked stage'}."
@@ -1705,6 +1738,16 @@ class Daemon(LeadChat, HqDaemon):
 
     async def task_work_op_async(self, key, op, body, actor="jay", developer=False):
         work = self.task_work_op(key, op, body, actor, developer)
+        if op == "reply":
+            # The agent's answer to Jay's question from Slack goes back to the thread he asked in.
+            posted = False
+            if self.notifier is not None:
+                try:
+                    posted = await self.notifier.agent_reply(work["key"], self.tasks.get(work["key"])["project"],
+                                                             body.get("text"))
+                except Exception:  # noqa: BLE001 — the reply is recorded; Slack being down must not lose it
+                    log.exception("notify: agent reply")
+            return dict(work, posted=posted)
         # Jay's steps reach Claude only with Developer Unlock (typing into Claude is a developer action). The one
         # agent-initiated delivery is a writer handover WITH a checkpoint: one fixed sentence (no free text), to
         # the task session only.
@@ -1912,19 +1955,31 @@ class Daemon(LeadChat, HqDaemon):
         why = {"lead-offline": "the lead is not running", "lead-paused": "the project is paused"}.get(d, d or "not delivered")
         return False, f"saved in Messages for the {project} lead, but {why}; it reads them when it runs", "lead"
 
-    async def slack_confirm(self, key, gate, plan_hash=None):
-        """Jay approves a gate by replying in Slack (ccd/notify.py): a plan, or a Low-risk gate. Only the gates in
-        notify.SLACK_GATES, never in a client project, and recorded with via "slack". Merges and deploys are refused
-        here as well as in the notifier, so no caller can widen it. A plan needs `plan_hash`, the plan the DM showed
-        (pipeline.plan_digest); pipeline.confirm checks it in the same transaction that closes the gate."""
+    def _slack_ticket(self, key, gate):
+        """The checks every Slack approval repeats here, whatever the notifier checked: a gate Slack may close at
+        all (notify.SLACK_GATES, fixed in code), a merge or deploy only while Jay's reply setting is "all" (changed
+        only in CommandCenter with Developer Unlock), and never a client project. Returns the ticket."""
         from . import notify as notify_mod
         if gate not in notify_mod.SLACK_GATES:
             raise ActionError(403, f"a {gate} gate is approved in CommandCenter, not from Slack")
+        if gate in notify_mod.SHIP_GATES and (self.notifier is None or self.notifier.settings["replyScope"] != "all"):
+            raise ActionError(403, f"a {gate} from Slack needs your Slack replies set to Everything in CommandCenter")
+        t = self._wrap(self._need_tasks().get, key)
+        if self.notifier is None or self.notifier.client(t["project"]):
+            raise ActionError(403, "client projects are approved in CommandCenter")
+        return t
+
+    async def slack_confirm(self, key, gate, plan_hash=None):
+        """Jay approves a gate by replying in Slack (ccd/notify.py), recorded with via "slack": a plan, a Low-risk
+        gate, or a live deploy (which only asks for a plan: SLACK_DEPLOY_TEMPLATE, then slack_deploy). A merge goes
+        through slack_merge. A plan needs `plan_hash`, the plan the DM showed (pipeline.plan_digest);
+        pipeline.confirm checks it in the same transaction that closes the gate."""
+        from . import notify as notify_mod
+        if gate == "merge":
+            raise ActionError(403, "a merge from Slack goes through the Merge path, not a bare gate approval")
         if gate in notify_mod.PLAN_GATES and not plan_hash:
             raise ActionError(403, "a plan is approved from Slack only as the DM showed it")
-        t = self._wrap(self._need_tasks().get, key)
-        if self.notifier is not None and self.notifier.client(t["project"]):
-            raise ActionError(403, "client projects are approved in CommandCenter")
+        self._slack_ticket(key, gate)
         self._pipeline_result(*self._wrap(self.pipeline.confirm, key, gate, "jay", "slack",
                                           plan_digest_seen=plan_hash if gate in notify_mod.PLAN_GATES else None),
                               actor="jay")
@@ -1933,6 +1988,111 @@ class Daemon(LeadChat, HqDaemon):
         if not text:
             return {"work": work, "delivered": True}
         delivered, reason = await self._nudge_task(work["key"], text)
+        return {"work": work, "delivered": delivered, "reason": reason}
+
+    async def slack_ask_back(self, key, text):
+        """Jay's question back, from Slack, about a ticket's open questions: his words typed into the ticket's task
+        session (like his answers), which answers with `pipeline_cli reply` into his thread. Never a client project
+        (its details stay in CommandCenter). Returns {delivered, reason}, and noSession when herdr says no task
+        session is running (the notifier then sends it to the project's lead)."""
+        t = self._wrap(self._need_tasks().get, key)
+        if self.notifier is None or self.notifier.client(t["project"]):
+            raise ActionError(403, "client projects are answered in CommandCenter")
+        if not isinstance(text, str) or not ANSWER_RE.match(" ".join(text.split())):
+            raise ActionError(400, "a question is 1–2000 printable characters")
+        # Only when herdr answers: with herdr down every session looks absent (as in task_answers).
+        if self.herdr_state.get("ok") and self.task_session(t["key"])["state"] == "none":
+            return {"delivered": False, "noSession": True, "reason": f"no task Claude session is running for {t['key']}"}
+        delivered, reason = await self._nudge_task(t["key"], ASK_BACK_TEMPLATE.format(key=t["key"], text=text.strip()))
+        if delivered:
+            self._event("tasks", "task.pipeline", f"{t['key']} Jay asked the task session a question from Slack",
+                        project=t["project"], ref=t["key"], data={"kind": "pipeline.jay_asked", "count": len(text)})
+        return {"delivered": delivered, "reason": reason}
+
+    HOOK_SESSION_RE = re.compile(r"^[\w:.-]{4,80}$")
+
+    def ask_from_session(self, body):
+        """POST /api/hooks/ask (scripts/cc-ask-hook): Claude's own question tool, from the session herdr knows by
+        `sessionId`. A ticket's task session asks through the ticket (Slack and CommandCenter); a project's lead or
+        the CTO through its Messages conversation (ccd/ask_hook.py). {routed: None} otherwise, and Claude shows its
+        own prompt. Only herdr's own record of the session counts, never what the caller says it is."""
+        from . import ask_hook
+        body = body if isinstance(body, dict) else {}
+        sid = str(body.get("sessionId") or "")
+        questions = ask_hook.questions_of(body.get("questions"))
+        if not self.HOOK_SESSION_RE.match(sid) or not questions or not self.herdr_state.get("ok"):
+            return {"routed": None}
+        hits = [c for c in map(coordid.normalize, self.panes or [])
+                if c["live"] and c["agent"] == "claude" and c["sessionId"] == sid]
+        if len(hits) != 1:
+            return {"routed": None}
+        pane = hits[0]
+        conv = self._lead_conversation(pane["paneId"])
+        if conv:
+            return {"routed": "lead", "conversation": conv, "text": ask_hook.lead_text(questions)}
+        key = self._task_key_of(pane)
+        if not key:
+            return {"routed": None}
+        try:
+            # The pipeline step an agent's `pipeline_cli ask` takes, with its checks (a paused project refuses it).
+            self.task_work_op(key, "ask", {"questions": questions}, "agent:coordinator")
+        except ActionError as e:
+            return {"routed": None, "error": e.message}
+        return {"routed": "ticket", "key": key,
+                "say": (f"Not shown here: CommandCenter sent these questions to Jay as {key}'s questions, in Slack and on "
+                        f"the ticket. End your turn now and wait. His answers will be typed into this session; do not "
+                        f"ask them again or decide them yourself.")}
+
+    async def ask_from_session_async(self, body):
+        """ask_from_session, then a lead's questions sent as its Messages reply (which reaches Slack)."""
+        r = self.ask_from_session(body)
+        if r.get("routed") != "lead":
+            return r
+        conv = r["conversation"]
+        try:
+            await self.chat_send(conv, {"text": r["text"]}, self.lead_actor(conv))
+        except ActionError as e:
+            return {"routed": None, "error": e.message}
+        return {"routed": "lead", "conversation": conv,
+                "say": (f"Not shown here: CommandCenter sent these questions to Jay in Messages ({conv}), which reaches "
+                        f"his Slack. End your turn now. His reply comes as the usual Messages nudge: read it with "
+                        f"cc-inbox {conv} and answer with cc-reply.")}
+
+    def _lead_conversation(self, pane_id):
+        """The Messages conversation whose lead runs in this pane, or None (Messages off, herdr unsure, not a lead)."""
+        if getattr(self, "chat", None) is None or not pane_id:
+            return None
+        for conv in self.chat_ids():
+            lead = self.chat_lead(conv)
+            if lead["state"] == "ready" and lead["paneId"] == pane_id:
+                return conv
+        return None
+
+    def _task_key_of(self, pane):
+        """The open ticket whose task session is this pane (coordid.task_session: herdr's name or label), or None."""
+        if self.tasks is None:
+            return None
+        for name in {pane["name"], pane["label"]} - {""}:
+            key = name.upper()
+            if tasks_mod.KEY_RE.match(key) and self.tasks.exists(key):
+                r = self.task_session(key)
+                if r["state"] == "ready" and r["paneId"] == pane["paneId"]:
+                    return key
+        return None
+
+    async def slack_merge(self, key, head):
+        """Jay's "merge" reply to a Ready-to-merge DM: exactly what the Merge button does for that one ticket, at the
+        head the DM showed (act_merge refuses it if the head, the review, CI or another gate moved)."""
+        t = self._slack_ticket(key, "merge")
+        return await self.act_merge(t["project"], [{"key": t["key"], "head": head}], actor="jay", via="slack")
+
+    async def slack_deploy(self, key, plan_hash):
+        """Jay's "deploy" reply to a deploy plan in his DM: the confirmation a Slack-approved deploy waits for. Bound to
+        the plan that DM showed; the task session is told to deploy by it (SLACK_DEPLOY_GO_TEMPLATE)."""
+        t = self._slack_ticket(key, "deploy")
+        self._pipeline_result(*self._wrap(self.pipeline.deploy_go, t["key"], "jay", "slack", plan_hash), actor="jay")
+        work = self.task_work(t["key"])
+        delivered, reason = await self._nudge_task(work["key"], SLACK_DEPLOY_GO_TEMPLATE.format(key=work["key"]))
         return {"work": work, "delivered": delivered, "reason": reason}
 
     def task_record(self, key):
@@ -3359,15 +3519,17 @@ class Daemon(LeadChat, HqDaemon):
             place(r)
         return [{k: v for k, v in r.items() if k != "blockedBy"} for r in ordered], skipped
 
-    async def act_merge(self, project, items=None, actor="jay", developer=False):
+    async def act_merge(self, project, items=None, actor="jay", developer=False, via=None):
         """Merge: Jay approves exactly the (ticket, head) pairs the confirm box listed (`items`) that are still
         mergeable at those very heads (merge_batch), and asks the project's idle coordinator to merge them one at a
         time in that order (MERGE_TEMPLATE). ccd merges nothing itself.
 
         Like Go Live: every check that can refuse (403/404/409/400) runs before the message; after it, a ticket that
         cannot be approved (its head or gate moved during the send) is reported in `errors` and never undoes the
-        others. A ticket whose head or readiness changed since the box was shown is skipped, never approved."""
-        if actor != "jay" or not developer:
+        others. A ticket whose head or readiness changed since the box was shown is skipped, never approved.
+        `via="slack"`: Jay's reply in his Slack DM (Daemon.slack_merge) instead of Developer Unlock; never from the
+        API."""
+        if actor != "jay" or not (developer or via == "slack"):
             raise ActionError(403, "Developer Unlock required: Merge approves and merges pull requests")
         self._need_tasks()
         if self._project(project) is None:
@@ -3387,7 +3549,8 @@ class Daemon(LeadChat, HqDaemon):
             raise ActionError(409, f"{project} has nothing ready to merge" + (f" ({why})" if why else ""))
         lines = "\n".join(f"{i}. {r['key']} — {r['pr']} — head {r['head'][:12]} — {r['title']}"
                            for i, r in enumerate(ready, 1))
-        text = MERGE_TEMPLATE.format(project=project, items=lines)
+        text = MERGE_TEMPLATE.format(project=project, items=lines,
+                                     via="Slack (his own reply in his DM)" if via == "slack" else "command-center")
         for r in ready:
             self._broker("pr.merge", project, f"{r['pr']} @ {r['head'][:12]} ({r['key']}; Merge, by the coordinator)")
         name = await self._to_coordinator(project, "merge", text, {"keys": [r["key"] for r in ready]})
@@ -3401,7 +3564,8 @@ class Daemon(LeadChat, HqDaemon):
                                                         "not approved"})
                 continue
             try:
-                self._pipeline_result(*self._wrap(self.pipeline.confirm, r["key"], "merge", actor), actor=actor)
+                self._pipeline_result(*self._wrap(self.pipeline.confirm, r["key"], "merge", actor, via),
+                                      actor=actor)
             except ActionError as e:
                 errors.append({"key": r["key"], "error": e.message})
         return {"ok": True, "project": project, "coordinator": name,

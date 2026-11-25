@@ -137,6 +137,21 @@ class InThePipeline(unittest.TestCase):
             self.pl.deploy_request(k2, "live", "x", "ok", "agent:coordinator")
             self.pl.confirm(k2, "deploy", "jay", urgent=True)
 
+    def test_a_slack_deploy_go_waits_for_the_window(self):
+        k = self.verifying("small")
+        self.pl.deploy_request(k, "live", "the fix", "ok", "agent:coordinator")
+        self.pl.confirm(k, "deploy", "jay", "slack")
+        self.pl.deploy_plan(k, "1. restart", "agent:coordinator")
+        seen = pipeline.plan_digest(self.pl.work(k)["deploy"]["plan"])
+        with self.assertRaises(TaskError) as e:
+            self.pl.deploy_go(k, "jay", "slack", seen)
+        self.assertIn("release window", e.exception.message)
+        self.assertIsNone(self.pl.work(k)["deploy"].get("goAt"))
+        with mock.patch.object(pipeline, "_now", return_value=at(2026, 11, 18, 22, 30)):    # in the window
+            self.pl.deploy_go(k, "jay", "slack", seen)
+            self.pl.deployed(k, "live", "pass", "health ok", "agent:coordinator")
+        self.assertEqual(self.pl.work(k)["deploy"]["result"], "pass")
+
     def test_jay_approves_a_risky_deploy_as_urgent(self):
         k = self.verifying("risky")
         self.pl.deploy_request(k, "live", "the fix", "ok", "agent:coordinator")

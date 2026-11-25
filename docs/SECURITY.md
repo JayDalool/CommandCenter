@@ -286,12 +286,25 @@ nothing: it records that the sessions were left running.
 
 **Approvals from Slack (Jay, 2026-11-16): the one approval without Developer Unlock.** A reply in Jay's Slack DM
 (`ccd/notify.py`, `Daemon.slack_confirm`) is proven by his Slack member ID (and the workspace, when `team_id` is set),
-not by a click at a screen. It closes a plan gate always, and a blocker or a UI review only with `replyScope`
-`answers_low_risk`. Merges, deploys, every other gate and client projects are refused in both places. A plan is
-approved only as the DM showed it: its digest (`pipeline.plan_digest`) is checked by the notifier and again inside
-the transaction that closes the gate. The task session then gets the fixed "Jay approved the plan" sentence. Jay
-accepted the risk: a stolen Slack login can approve a plan, never merge or deploy. Runbook:
+not by a click at a screen. It closes a plan gate always; a blocker or a UI review with `replyScope`
+`answers_low_risk` or `all`; and only with `all`, a merge (`Daemon.slack_merge`: the Merge button's own checks, for
+the one head the DM showed) and a live deploy. A Slack deploy takes two replies: the approval only asks the agent for
+a plan (`pipeline.deploy_plan`, shown whole in the DM), and `deployed --result pass` is refused until Jay's
+"deploy" reply on that plan's digest is recorded (`pipeline.deploy_go`, which also holds to the release window). Only
+the words "merge" and "deploy" merge or deploy; a casual "ok" does neither. The scope changes only in CommandCenter with Developer Unlock, so a stolen
+Slack login cannot widen it; the daemon checks the gate list, the scope and client projects again whatever the
+notifier did. A plan is approved only as the DM showed it: its digest (`pipeline.plan_digest`) is checked by the
+notifier and again inside the transaction that closes the gate. Jay accepted the risk (2026-11-16): with `all`, a
+stolen Slack login can merge reviewed PRs and deploy a plan the agent prepared. Runbook:
 docs/runbooks/slack-and-ntfy.md.
+
+**Files to Slack (Jay, 2026-11-17).** A lead's Messages files are uploaded to Slack only for projects Jay switches on
+(`slackFiles`, Developer Unlock); everywhere else Slack gets each file's name and size. SamVision (licensed WRREB data),
+the CTO (cross-project) and client projects are never uploaded: `notify.NO_SLACK_FILES` and `client_projects`, fixed
+in code, refused when the setting is saved and checked again on every send. SamVision and the CTO show a count of files,
+never their names. Only a file the lead itself sent in that conversation is read, and a text file that `redact()`
+would change is not uploaded. The upload sends the file's bytes to the signed URL Slack returns (only an https
+`*.slack.com` host, no token) and needs the bot scope `files:write`.
 
 **Worktree removal (CC-024).** ccd deletes a directory on its own in exactly one
 case: a DONE ticket's recorded worktree, at the end of ccd's git poll, and only when

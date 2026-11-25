@@ -31,7 +31,8 @@ Read your seat's page, not all of them: [seats/](seats/).
 
 The ways back: technical review sends a plan back to Investigate; a failed user check sends the build back to Build;
 a code review asking for changes sends it back to Build. Two rounds at most at each of those three stages: the second send-back
-blocks the ticket for the lead (and Jay) to decide.
+blocks the ticket for the lead (and Jay) to decide. For the user check and code review send-backs, round 1 is run by the lead alone: record rework (code review only; a failed user check
+already moves the ticket back), send the findings to the same developer, then a fresh user check (where the route has one) and code review on the new head; Jay hears only at ready to merge or blocked after round 2.
 
 ## Three sizes
 

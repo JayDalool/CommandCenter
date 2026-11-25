@@ -13,7 +13,7 @@ from ccd import notify, security
 from ccd.daemon import ActionError, Daemon
 from ccd.pipeline import plan_digest
 from ccd.store import Store
-from ccd.tasks import TaskStore
+from ccd.tasks import TaskError, TaskStore
 
 from .helpers import cfg
 
@@ -28,6 +28,8 @@ def at(hh, mm=0, day=12):
 class FakeSlack:
     def __init__(self):
         self.posts = []
+        self.uploads = []
+        self.upload_error = None
         self.n = 0
         self.scopes = None          # as SlackWeb before its first call: the token's scopes are not known yet
 
@@ -36,6 +38,12 @@ class FakeSlack:
         self.posts.append({"channel": channel, "text": text, "thread": thread_ts, "ts": f"{self.n}.0", "as": as_,
                            "broadcast": broadcast})
         return {"ok": True, "ts": f"{self.n}.0"}
+
+    def upload(self, channel, thread_ts, name, data):
+        if self.upload_error:
+            raise notify.SlackError(self.upload_error)
+        self.uploads.append({"channel": channel, "thread": thread_ts, "name": name, "data": data})
+        return {"ok": True}
 
     def channels(self):
         return {"cto": "CCTO", "commandcenter": "CCC", "samvision": "CSV", "gyst": "CGY", "mfe": "CMF"}
@@ -101,6 +109,43 @@ class SlackWebRequests(unittest.TestCase):
                                                          "reply_broadcast": True, "username": "Investigator",
                                                          "icon_emoji": ":mag:"})
 
+    def test_a_file_goes_by_slacks_external_upload_and_its_bytes_never_carry_the_token(self):
+        answers = {"files.getUploadURLExternal": {"ok": True, "upload_url": "https://files.slack.com/upload/v1/ABC",
+                                                  "file_id": "F123"},
+                   "files.completeUploadExternal": {"ok": True, "files": [{"id": "F123"}]}}
+        sent = self.sent
+
+        class Resp:
+            def __init__(self, body):
+                self.body, self.headers = body, {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps(self.body).encode()
+
+        def opener(req, timeout=None):
+            sent.append(req)
+            return Resp(answers.get(req.full_url.rsplit("/", 1)[-1], {"ok": True}))
+        self.web.open = opener
+        self.web.upload("CCC", "9.0", "report.md", b"# Report\n")
+        ask, put, done = self.sent
+        self.assertEqual(urllib.parse.parse_qs(ask.data.decode()), {"filename": ["report.md"], "length": ["9"]})
+        self.assertEqual((put.full_url, put.data, put.get_header("Authorization")),
+                         ("https://files.slack.com/upload/v1/ABC", b"# Report\n", None))
+        self.assertEqual(urllib.parse.parse_qs(done.data.decode()), {
+            "files": ['[{"id": "F123", "title": "report.md"}]'], "channel_id": ["CCC"], "thread_ts": ["9.0"]})
+        self.assertEqual(done.get_header("Authorization"), "Bearer xoxb-test")
+        self.sent.clear()
+        answers["files.getUploadURLExternal"]["upload_url"] = "https://files.example.com/upload"
+        with self.assertRaises(notify.SlackError):
+            self.web.upload("CCC", "9.0", "report.md", b"# Report\n")
+        self.assertEqual(len(self.sent), 1)                     # the bytes went nowhere
+
     def test_a_post_is_still_json(self):
         self.web.post("CCC", "hello", thread_ts="9.0")
         req = self.sent[0]
@@ -123,6 +168,9 @@ class FakeDaemon:
         self.delivered = []
         self.plans = {}
         self.reviews = {}
+        self.work = {}
+        self.merged = []
+        self.deploys = []
         self._stopping = False
         self.tasks = None
 
@@ -140,8 +188,8 @@ class FakeDaemon:
                 "byProject": [{"key": "gyst", "costUsd": 3.0}]}
 
     def task_work(self, key):
-        return {"questions": self.questions.get(key, []), "plan": self.plans.get(key) or {},
-                "planReview": self.reviews.get(key)}
+        return dict({"questions": self.questions.get(key, []), "plan": self.plans.get(key) or {},
+                     "planReview": self.reviews.get(key)}, **self.work.get(key, {}))
 
     async def task_answers(self, key, body, actor="jay", developer=False, via=None):
         self.answered.append((key, body, actor, developer, via))
@@ -154,7 +202,19 @@ class FakeDaemon:
     async def slack_confirm(self, key, gate, plan_hash=None):
         self.confirmed.append((key, gate))
         self.plan_hash = plan_hash
+        return {"delivered": True, "work": self.work.get(key, {})}
+
+    async def slack_merge(self, key, head):
+        self.merged.append((key, head))
+        return {"merging": [{"key": key, "head": head}], "skipped": []}
+
+    async def slack_deploy(self, key, plan_hash):
+        self.deploys.append((key, plan_hash))
         return {"delivered": True}
+
+    async def slack_ask_back(self, key, text):
+        self.asked_back = getattr(self, "asked_back", []) + [(key, text)]
+        return getattr(self, "ask_back_result", {"delivered": True, "reason": None})
 
     async def deliver_to_lead(self, conversation, text, *, via="slack", ref=None, author="jay"):
         self.delivered.append((conversation, text, via, ref, author))
@@ -196,7 +256,7 @@ class Settings(unittest.TestCase):
 
     def test_settings_are_validated_and_survive_a_restart(self):
         n, d, _, _ = make()
-        for bad in ({"slack": "yes"}, {"quietStart": "25:00"}, {"timezone": "Mars/Base"}, {"replyScope": "all"},
+        for bad in ({"slack": "yes"}, {"quietStart": "25:00"}, {"timezone": "Mars/Base"}, {"replyScope": "everything"},
                     {"token": "x"}):
             with self.assertRaises(ValueError):
                 n.update_settings(bad)
@@ -419,14 +479,67 @@ class Replies(ReplyBase):
         self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 31, "answer": "XLSX"},
                                                              {"id": 32, "answer": "only the pilot group"}])
 
+    def test_several_options_by_number_or_letter(self):
+        q = {"id": 51, "text": "Which exports? (pick one or more)", "kind": "choice", "options": ["CSV", "XLSX", "PDF"],
+             "answer": None}
+        ts = self.send(need("SV-51", "questions", None), [q])
+        self.assertEqual(self.reply("1, 3", ts)["did"], "answered")
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 51, "answer": "CSV; PDF"}])
+        q2 = [dict(q, id=52, answer=None), {"id": 53, "text": "Who?", "kind": "text", "answer": None}]
+        ts = self.send(need("SV-52", "questions", None), q2)
+        self.assertEqual(self.reply("1. a and d\n2. admins", ts)["did"], "answer_invalid")
+        self.assertIn("Question 1 has options a–c", self.slack.posts[-1]["text"])
+        self.assertEqual(self.reply("1. a and b\n2. admins", ts)["did"], "answered")
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 52, "answer": "CSV; XLSX"},
+                                                             {"id": 53, "answer": "admins"}])
+
+    def test_a_reply_ending_with_a_question_mark_asks_the_agent_and_answers_nothing(self):
+        q = {"id": 61, "text": "Export format?", "kind": "choice", "options": ["CSV", "XLSX"], "answer": None}
+        ts = self.send(need("SV-61", "questions", None), [q])
+        self.assertIn("A reply that ends with ? goes to the agent", self.slack.posts[-1]["text"])
+        r = self.reply("What does XLSX change for the importer?", ts)
+        self.assertEqual(r["did"], "asked_back")
+        self.assertEqual(self.d.asked_back, [("SV-61", "What does XLSX change for the importer?")])
+        self.assertEqual(self.d.answered, [])
+        self.assertIn("Its answer comes back in this thread", self.slack.posts[-1]["text"])
+        # The agent answers (pipeline_cli reply): in that same thread, quoted as its words.
+        self.assertTrue(run(self.n.agent_reply("SV-61", "samvision", "XLSX needs the openpyxl reader.\n<!channel>")))
+        post = self.slack.posts[-1]
+        self.assertEqual((post["channel"], post["thread"]), ("DJAY", ts))
+        self.assertIn("The agent answers:\n> XLSX needs the openpyxl reader.\n> &lt;!channel&gt;", post["text"])
+        self.assertEqual(self.reply("2", ts)["did"], "answered")                      # the questions still take answers
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 61, "answer": "XLSX"}])
+
+    def test_a_question_back_with_no_task_session_goes_to_the_lead(self):
+        ts = self.send(need("SV-62", "questions", None), [{"id": 62, "text": "A or B?", "kind": "text", "answer": None}])
+        self.d.ask_back_result = {"delivered": False, "noSession": True}
+        self.assertEqual(self.reply("why not both?", ts)["did"], "lead_nudged")
+        self.assertEqual(self.d.delivered[-1][0], "samvision")
+        self.d.ask_back_result = {"delivered": False, "reason": "the agent is working"}
+        r = self.reply("why not both?", ts)
+        self.assertEqual(r["did"], "ask_back_undelivered")
+        self.assertIn("the agent is working", self.slack.posts[-1]["text"])
+        self.assertEqual(self.d.answered, [])
+
+    def test_an_agent_reply_for_a_client_project_or_with_no_thread(self):
+        self.assertFalse(run(self.n.agent_reply("GZ-1", "gauzemate", "details")))
+        self.assertTrue(run(self.n.agent_reply("SV-63", "samvision", "No thread yet")))
+        post = self.slack.posts[-1]
+        self.assertEqual((post["channel"], post["thread"]), ("DJAY", None))
+
     def test_a_number_out_of_range_or_on_a_text_question_is_kept_as_written(self):
         ts = self.send(need("SV-7", "questions", None), [{"id": 41, "text": "How many?", "kind": "text", "answer": None}])
         self.reply("3", ts)
         self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 41, "answer": "3"}])
         ts = self.send(need("SV-8", "questions", None), [{"id": 42, "text": "Pick", "kind": "choice",
                                                           "options": ["x", "y"], "answer": None}])
-        self.reply("5", ts)
-        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 42, "answer": "5"}])
+        for wrong in ("5", "1, 9"):                            # a pick of an option it does not have is refused
+            self.assertEqual(self.reply(wrong, ts)["did"], "answer_invalid", wrong)
+            self.assertIn("This question has options 1–2. Reply with those, or start with Other:",
+                          self.slack.posts[-1]["text"])
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 41, "answer": "3"}])
+        self.reply("Other: 5", ts)
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 42, "answer": "Other: 5"}])
         ts = self.send(need("SV-9", "questions", None), [{"id": 43, "text": "Replicas?", "kind": "choice",
                                                           "options": ["2", "4", "8"], "answer": None}])
         self.reply("2", ts)                                    # the option "2", not the second option
@@ -442,6 +555,171 @@ class Replies(ReplyBase):
             r = self.reply("approve", ts)
             self.assertEqual(r["did"], "approval_refused", gate)
         self.assertEqual(self.d.confirmed, [("SV-failure", "failure"), ("SV-ui", "ui")])
+
+    HEAD = "a" * 40
+
+    def test_with_everything_a_merge_reply_merges_the_head_the_dm_showed(self):
+        self.n.update_settings({"replyScope": "all"})
+        self.d.work["SV-40"] = {"review": {"verdict": "APPROVE", "head": self.HEAD, "pr": "o/r#5"}}
+        ts = self.send(need("SV-40", "gate", "merge", text="Ready to merge: PR o/r#5 approved and green"))
+        dm = self.slack.posts[-1]["text"]
+        self.assertIn("*PR:* o/r#5 · head `aaaaaaaaaaaa` · review APPROVE", dm)
+        self.assertIn("Reply *merge*", dm)
+        r = self.reply("merge", ts)
+        self.assertEqual(r["did"], "approved_merge")
+        self.assertEqual(self.d.merged, [("SV-40", self.HEAD)])
+        self.assertEqual(self.d.confirmed, [])                    # never a bare gate approval
+
+    def test_only_the_word_merge_merges(self):
+        self.n.update_settings({"replyScope": "all"})
+        self.d.work["SV-39"] = {"review": {"verdict": "APPROVE", "head": self.HEAD, "pr": "o/r#4"}}
+        ts = self.send(need("SV-39", "gate", "merge", text="Ready to merge: PR o/r#4 approved and green"))
+        for casual in ("ok", "yes", "👍", "approve"):
+            r = self.reply(casual, ts)
+            self.assertEqual(r["did"], "merge_word_needed", casual)
+            self.assertIn("Nothing was merged", self.slack.posts[-1]["text"])
+        self.assertEqual((self.d.merged, self.d.confirmed), ([], []))
+        self.assertEqual(self.reply("Merge it.", ts)["did"], "approved_merge")
+        self.assertEqual(self.d.merged, [("SV-39", self.HEAD)])
+
+    def test_a_merge_reply_after_a_new_head_merges_nothing(self):
+        self.n.update_settings({"replyScope": "all"})
+        self.d.work["SV-41"] = {"review": {"verdict": "APPROVE", "head": self.HEAD, "pr": "o/r#6"}}
+        ts = self.send(need("SV-41", "gate", "merge", text="Ready to merge: PR o/r#6 approved and green"))
+        self.d.work["SV-41"] = {"review": {"verdict": "APPROVE", "head": "b" * 40, "pr": "o/r#6"}}
+        self.assertEqual(self.reply("merge", ts)["did"], "approval_stale")
+        self.assertEqual(self.d.merged, [])
+
+    def test_merges_and_deploys_need_everything(self):
+        self.n.update_settings({"replyScope": "answers_low_risk"})
+        self.d.work["SV-42"] = {"review": {"verdict": "APPROVE", "head": self.HEAD, "pr": "o/r#7"}}
+        ts = self.send(need("SV-42", "gate", "merge"))
+        self.assertNotIn("Reply *merge*", self.slack.posts[-1]["text"])
+        self.assertEqual(self.reply("merge", ts)["did"], "approval_refused")
+        ts = self.send(need("SV-43", "gate", "deploy", text="Deploy approval: Ready for live deployment"))
+        self.assertEqual(self.reply("deploy", ts)["did"], "approval_refused")
+        self.assertEqual((self.d.merged, self.d.confirmed), ([], []))
+
+    def deploy_ready(self, key, plan):
+        self.d.work[key] = {"deploy": {"env": "live", "approvedAt": 5.0, "approvedBy": "jay:slack", "result": None,
+                                       "plan": plan}}
+        run(self.n.on_event({"kind": "task.pipeline", "project": "samvision", "ref": key, "text": f"{key} deploy plan",
+                             "data": {"kind": "pipeline.deploy_prepared"}}))
+        return [p for p in self.slack.posts if p["channel"] == "DJAY"][-1]
+
+    def test_a_deploy_takes_an_approve_then_a_deploy_on_the_plan(self):
+        self.n.update_settings({"replyScope": "all"})
+        self.d.work["SV-44"] = {"deploy": {"env": "live", "approvedAt": 5.0, "approvedBy": "jay:slack", "result": None}}
+        ts = self.send(need("SV-44", "gate", "deploy", text="Deploy approval: Ready for live deployment"))
+        self.assertIn("nothing deploys until you reply *deploy*", self.slack.posts[-1]["text"])
+        r = self.reply("approve", ts)
+        self.assertEqual(r["did"], "approved_deploy")
+        self.assertIn("Approved to prepare", self.slack.posts[-1]["text"])
+        self.assertEqual(self.d.deploys, [])
+        plan = {"summary": "1. run migration 0042\n2. restart ccd\nrollback: image v1.8", "at": 6.0, "by": "agent:coordinator"}
+        post = self.deploy_ready("SV-44", plan)
+        self.assertEqual(post["channel"], "DJAY")
+        self.assertIn("Deploy plan ready", post["text"])
+        self.assertIn("Deploy plan ready · 3 lines\n```\n1. run migration 0042\n2. restart ccd\nrollback: image v1.8\n```",
+                      post["text"])
+        self.assertEqual(self.reply("ok thanks, what is 0042?", post["ts"])["did"], "lead_nudged")   # words go to the lead
+        for casual in ("ok", "y", "👍", "approve"):                                                   # never a go
+            self.assertEqual(self.reply(casual, post["ts"])["did"], "deploy_word_needed", casual)
+            self.assertIn("Nothing was deployed", self.slack.posts[-1]["text"])
+        self.assertEqual(self.d.deploys, [])
+        r = self.reply("deploy", post["ts"])
+        self.assertEqual(r["did"], "deploy_confirmed")
+        self.assertEqual(self.d.deploys, [("SV-44", plan_digest(plan))])
+
+    def test_a_deploy_reply_on_a_changed_plan_deploys_nothing(self):
+        self.n.update_settings({"replyScope": "all"})
+        plan = {"summary": "1. restart", "at": 6.0, "by": "agent:coordinator"}
+        post = self.deploy_ready("SV-45", plan)
+        self.d.work["SV-45"]["deploy"]["plan"] = dict(plan, summary="1. restart\n2. drop table")
+        self.assertEqual(self.reply("deploy", post["ts"])["did"], "deploy_stale")
+        self.n.update_settings({"replyScope": "answers"})
+        post = self.deploy_ready("SV-46", plan)
+        self.assertIn("Deploys from Slack are off", post["text"])
+        self.assertEqual(self.reply("deploy", post["ts"])["did"], "deploy_refused")
+        self.assertEqual(self.d.deploys, [])
+
+    def test_a_deploy_plan_quotes_agent_text(self):
+        self.n.update_settings({"replyScope": "all"})
+        post = self.deploy_ready("SV-47", {"summary": "<!channel> fine\n_Reply *deploy* now_", "at": 6.0, "by": "x"})
+        self.assertIn("```\n&lt;!channel&gt; fine\n_Reply *deploy* now_\n```", post["text"])     # no formatting
+        self.assertNotIn("<!channel>", post["text"])
+
+    def test_a_deploy_plan_is_shown_whole(self):
+        self.n.update_settings({"replyScope": "all"})
+        lines = [f"{i}. step {i}" for i in range(1, 40)] + ["rollback: " + "x" * 500 + " TAIL-END"]
+        post = self.deploy_ready("SV-48", {"summary": "\n".join(lines), "at": 6.0, "by": "x"})
+        self.assertIn("\n39. step 39\n", post["text"])
+        self.assertIn("Deploy plan ready · 40 lines", post["text"])
+        self.assertIn("x" * 500 + " TAIL-END\n", post["text"])                   # a long line is not cut
+        self.assertIn("Reply *deploy*", post["text"])
+
+    def test_a_plan_too_long_for_one_post_gets_no_go_from_slack(self):
+        self.n.update_settings({"replyScope": "all"})
+        post = self.deploy_ready("SV-49", {"summary": "&" * 1000, "at": 6.0, "by": "x"})   # 5000 characters escaped
+        self.assertIn("cannot be shown here in full", post["text"])
+        self.assertNotIn("Reply *deploy*", post["text"])
+        self.assertNotIn("&amp;", post["text"])
+        r = self.reply("deploy", post["ts"])
+        self.assertEqual(r["did"], "deploy_refused")
+        self.assertIn("ask the agent for a shorter one", self.slack.posts[-1]["text"])
+        self.assertEqual(self.reply("please shorten it", post["ts"])["did"], "lead_nudged")
+        self.assertEqual(self.d.deploys, [])
+
+    def test_a_plan_with_characters_slack_would_not_show_gets_no_go_from_slack(self):
+        self.n.update_settings({"replyScope": "all"})
+        hidden = "1. restart web" + "".join(chr(0xE0000 + ord(c)) for c in "2. DROP TABLE users")
+        post = self.deploy_ready("SV-52", {"summary": hidden, "at": 6.0, "by": "x"})
+        self.assertIn("cannot be shown here in full", post["text"])
+        self.assertEqual(self.reply("deploy", post["ts"])["did"], "deploy_refused")
+        self.d.plans["SV-53"] = dict(self.PLAN, approach="Check the owner\u200b\u2063 and skip the guard")
+        ts = self.send(need("SV-53", "gate", "plan", text=self.PLAN_NEED))
+        self.assertIn("Part of this plan cannot be shown here", self.slack.posts[-1]["text"])
+        self.assertEqual(self.reply("approve", ts)["did"], "approval_refused")
+        self.assertEqual((self.d.deploys, self.d.confirmed), ([], []))
+
+    def test_a_plan_with_hidden_text_in_any_field_is_approved_in_commandcenter_only(self):
+        tags = "".join(chr(0xE0000 + ord(c)) for c in " also drop users")
+        for i, extra in enumerate(({"findings": ["looks fine" + tags]}, {"questions": ["q" + tags]},
+                                   {"approach": "x" * 720 + tags})):
+            key = f"SV-7{i}"
+            self.d.plans[key] = dict(self.PLAN, **extra)
+            ts = self.send(need(key, "gate", "plan", text=self.PLAN_NEED))
+            self.assertIn("Part of this plan cannot be shown here", self.slack.posts[-1]["text"], extra)
+            self.assertEqual(self.reply("approve", ts)["did"], "approval_refused", extra)
+        self.assertEqual(self.d.confirmed, [])
+
+    def test_a_plan_dm_says_what_else_the_plan_holds(self):
+        self.d.plans["SV-74"] = dict(self.PLAN, questions=["Keep the old guard?"], findings=["a", "b"])
+        self.send(need("SV-74", "gate", "plan", text=self.PLAN_NEED))
+        self.assertIn("*Also in the plan:* 1 question and 2 findings, in CommandCenter", self.slack.posts[-1]["text"])
+
+    KEY_WRAPPED = "1. restart\n-----BEGIN RSA PRIVATE KEY-----\n2. DROP TABLE users\n-----END RSA PRIVATE KEY-----\n3. verify"
+
+    def test_a_plan_the_secret_filter_would_hide_gets_no_go_from_slack(self):
+        self.n.update_settings({"replyScope": "all"})
+        post = self.deploy_ready("SV-51", {"summary": self.KEY_WRAPPED, "at": 6.0, "by": "x"})
+        self.assertIn("cannot be shown here in full", post["text"])
+        self.assertNotIn("Reply *deploy*", post["text"])
+        self.assertNotIn("[redacted]", post["text"])
+        self.assertEqual(self.reply("deploy", post["ts"])["did"], "deploy_refused")
+        self.assertEqual(self.d.deploys, [])
+
+    WED_22 = datetime.datetime(2026, 11, 18, 22, 0, tzinfo=ZoneInfo("America/Winnipeg")).timestamp()
+
+    def test_a_held_deploy_plan_says_until_when(self):
+        self.n.update_settings({"replyScope": "all"})
+        self.d.work["SV-50"] = {"deploy": {"env": "live", "approvedAt": 5.0, "approvedBy": "jay:slack", "result": None,
+                                           "heldUntil": self.WED_22, "plan": {"summary": "1. restart", "at": 6.0,
+                                                                               "by": "x"}}}
+        run(self.n.on_event({"kind": "task.pipeline", "project": "samvision", "ref": "SV-50", "text": "SV-50 plan",
+                             "data": {"kind": "pipeline.deploy_prepared"}}))
+        post = [p for p in self.slack.posts if p["channel"] == "DJAY"][-1]
+        self.assertIn("Held for the release window until Wed 2026-11-18 22:00 ", post["text"])
 
     def test_answers_only_is_the_default_and_approves_no_low_risk_gate(self):
         self.assertEqual(self.n.settings["replyScope"], "answers")
@@ -498,7 +776,19 @@ class Replies(ReplyBase):
         ts = self.send(need("SV-32", "gate", "plan", text=self.PLAN_NEED))
         self.assertIn("could not be read here", self.slack.posts[-1]["text"])
         self.d.plans["SV-32"] = dict(self.PLAN)                                     # readable now, but not what Jay saw
-        self.assertEqual(self.reply("approve", ts)["did"], "approval_stale")
+        self.assertEqual(self.reply("approve", ts)["did"], "approval_refused")
+        self.assertEqual(self.d.confirmed, [])
+
+    def test_a_plan_the_secret_filter_would_hide_is_approved_in_commandcenter_only(self):
+        self.d.plans["SV-34"] = dict(self.PLAN, approach="-----BEGIN RSA PRIVATE KEY-----\nskip the owner check\n"
+                                                         "-----END RSA PRIVATE KEY-----")
+        ts = self.send(need("SV-34", "gate", "plan", text=self.PLAN_NEED))
+        dm = self.slack.posts[-1]["text"]
+        self.assertIn("Part of this plan cannot be shown here, so it is approved in CommandCenter only", dm)
+        self.assertNotIn("Reply *approve*", dm)
+        r = self.reply("approve", ts)
+        self.assertEqual(r["did"], "approval_refused")
+        self.assertIn("approved in CommandCenter only", self.slack.posts[-1]["text"])
         self.assertEqual(self.d.confirmed, [])
 
     def test_a_plan_dm_shows_agent_text_as_plain_text(self):
@@ -753,6 +1043,140 @@ class TeamThreads(ReplyBase):
                          (("SamVision lead", ":compass:"), "It touches the importer."))
 
 
+class LeadFiles(unittest.TestCase):
+    """Files a lead sends in Messages (Jay, 2026-11-17: "Upload, chosen projects only"): uploaded for the projects
+    Jay switched on, listed by name and size everywhere else, never uploaded for SamVision, the CTO or a client."""
+
+    def setUp(self):
+        from ccd import chat as chat_mod
+        base = tempfile.mkdtemp()
+        self.chat = chat_mod.Chat(os.path.join(base, "chat.db"), os.path.join(base, "files"), 1 << 20)
+        self.addCleanup(self.chat.close)
+        self.n, self.d, self.slack, _ = make(settings={"slack": True})
+        self.d.chat = self.chat
+
+    def lead_sends(self, conv, text, files=(("notes.md", b"# Notes\nThe importer is slow.\n"),)):
+        async def chunks(data):
+            yield data
+        ids = [asyncio.run(self.chat.upload(conv, "lead", f"agent:lead-{conv}", name, chunks(data)))["id"]
+               for name, data in files]
+        msg = self.chat.add(conv, "lead", f"agent:lead-{conv}", text, via="cli", file_ids=ids)
+        run(self.n.on_event({"source": "chat", "kind": "chat.reply", "data": {"messageId": msg["id"]}}))
+        return msg
+
+    def test_files_are_listed_by_name_and_size_until_jay_switches_the_project_on(self):
+        self.lead_sends("commandcenter", "Here is the report.")
+        post = self.slack.posts[-1]
+        self.assertEqual(post["channel"], "CCC")
+        self.assertEqual(post["text"].split("\n"), [
+            ":compass: *Command Center lead*: Here is the report.", ":paperclip: notes.md · 30 bytes",
+            "_In CommandCenter → Messages. To get Command Center's files here, switch it on in Settings → Slack and "
+            "phone._"])
+        self.assertEqual(self.slack.uploads, [])
+
+    def test_a_switched_on_project_gets_each_file_in_the_thread_of_the_leads_words(self):
+        self.n.update_settings({"slackFiles": ["commandcenter", "gyst"]})
+        self.lead_sends("commandcenter", "Two files.", files=(("a.md", b"alpha"), ("b.txt", b"bravo")))
+        post = self.slack.posts[-1]
+        self.assertEqual(post["text"], ":compass: *Command Center lead*: Two files.")
+        self.assertEqual([(u["channel"], u["thread"], u["name"], u["data"]) for u in self.slack.uploads],
+                         [("CCC", post["ts"], "a.md", b"alpha"), ("CCC", post["ts"], "b.txt", b"bravo")])
+        self.assertEqual([(t, kw["data"]["conversation"], kw["data"]["size"]) for k, t, kw in self.d.events
+                          if k == "notify.file_uploaded"],
+                         [("commandcenter: uploaded a.md to Slack", "commandcenter", 5),
+                          ("commandcenter: uploaded b.txt to Slack", "commandcenter", 5)])
+        self.lead_sends("gyst", "")                                       # a file and no words
+        self.assertEqual(self.slack.posts[-1]["text"], ":compass: *GYST / LifeOps lead*: sent 1 file.")
+        self.assertEqual(self.slack.uploads[-1]["thread"], self.slack.posts[-1]["ts"])
+
+    def test_an_answer_in_a_slack_thread_brings_its_files_into_that_thread(self):
+        self.n.update_settings({"slackFiles": ["commandcenter"]})
+        jay = self.chat.add("commandcenter", "jay", "jay", "can you send the log?", via="slack")
+        self.n.threads[f"msg:{jay['id']}"] = {"type": "origin", "channel": "DJAY", "ts": "42.0",
+                                              "conversation": "commandcenter", "at": self.n.clock()}
+        self.lead_sends("commandcenter", "Attached.")
+        self.assertEqual((self.slack.posts[-1]["channel"], self.slack.posts[-1]["thread"]), ("DJAY", "42.0"))
+        self.assertEqual((self.slack.uploads[-1]["channel"], self.slack.uploads[-1]["thread"]), ("DJAY", "42.0"))
+
+    def test_samvision_the_cto_and_client_projects_never_upload(self):
+        for bad in (["samvision"], ["cto"], ["gauzemate"], ["nope"], "commandcenter", [1]):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                self.n.update_settings({"slackFiles": bad})
+        self.assertNotIn("samvision", self.n.public()["slackFiles"]["choices"])
+        self.n.settings["slackFiles"] = ["samvision", "cto", "commandcenter"]     # however it got there
+        self.lead_sends("samvision", "The comps export.", files=(("12 Main St comps.md", b"comps"), ("b.md", b"b")))
+        self.assertEqual(self.slack.posts[-1]["text"].split("\n")[1:], [
+            "_:paperclip: 2 files in CommandCenter → Messages. SamVision files and their names never go to Slack._"])
+        self.assertNotIn("Main St", json.dumps(self.slack.posts))            # a name can carry an address
+        self.lead_sends("cto", "Cross-project notes.")
+        self.assertIn("1 file in CommandCenter → Messages. The CTO's files and their names never go to Slack.",
+                      self.slack.posts[-1]["text"])
+        self.assertEqual(self.slack.uploads, [])
+
+    def test_only_a_file_this_lead_sent_in_this_conversation_is_read_for_upload(self):
+        async def chunks(data):
+            yield data
+        theirs = asyncio.run(self.chat.upload("samvision", "lead", "agent:lead-samvision", "comps.md", chunks(b"comps")))
+        self.chat.add("samvision", "lead", "agent:lead-samvision", "comps", via="cli", file_ids=[theirs["id"]])
+        jays = asyncio.run(self.chat.upload("commandcenter", "jay", "jay", "mine.md", chunks(b"mine")))
+        self.chat.add("commandcenter", "jay", "jay", "mine", file_ids=[jays["id"]])
+        unsent = asyncio.run(self.chat.upload("commandcenter", "lead", "agent:lead-commandcenter", "draft.md",
+                                              chunks(b"draft")))
+        for fid in (theirs["id"], jays["id"], unsent["id"]):
+            with self.assertRaises(notify.SlackError):
+                self.n._lead_file(fid, "commandcenter")
+
+    def test_a_text_file_the_secret_filter_would_change_stays_here(self):
+        self.n.update_settings({"slackFiles": ["commandcenter"]})
+        jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLXZhbHVl"
+        self.lead_sends("commandcenter", "The env.", files=(("env.md", f"TOKEN {jwt}\n".encode()), ("ok.md", b"fine")))
+        self.assertEqual([u["name"] for u in self.slack.uploads], ["ok.md"])
+        self.assertIn("_In CommandCenter → Messages: it looks like it holds a password, token or key._",
+                      self.slack.posts[-1]["text"])
+        self.assertNotIn(jwt, json.dumps(self.slack.posts))
+
+    def test_a_client_projects_files_are_not_even_named(self):
+        n, d, slack, _ = make(settings={"slack": True}, conf={"channels": {"gauzemate": "gauzemate"}})
+        d.chat = self.chat
+        n.settings["slackFiles"] = ["gauzemate"]
+        self.n, self.slack = n, slack
+        self.lead_sends("gauzemate", "Intake form.", files=(("patient-intake.md", b"secret"),))
+        self.assertEqual(slack.posts[-1]["text"], ":compass: *GauzeMate lead*: replied. Client project: read it in "
+                                                   "CommandCenter.")
+        self.assertNotIn("patient-intake", json.dumps(slack.posts))
+        self.assertEqual(slack.uploads, [])
+
+    def test_a_file_that_does_not_upload_is_listed_with_the_reason(self):
+        self.n.update_settings({"slackFiles": ["commandcenter"]})
+        self.slack.upload_error = "files.getUploadURLExternal: missing_scope"
+        self.lead_sends("commandcenter", "The log.")
+        words, listed = self.slack.posts[-2:]
+        self.assertEqual(listed["thread"], words["ts"])
+        self.assertEqual(listed["text"].split("\n"), [
+            ":paperclip: notes.md · 30 bytes",
+            "_In CommandCenter → Messages: Slack has not granted the bot files:write yet "
+            "(docs/runbooks/slack-and-ntfy.md)._"])
+        self.assertIn("slack file", self.n.status["lastError"])
+        self.assertNotIn("notify.file_uploaded", [k for k, _, _ in self.d.events])
+
+    def test_the_bot_tokens_files_scope_shows_in_settings(self):
+        self.assertIsNone(self.n.public()["slackFiles"]["scope"])
+        self.slack.scopes = {"chat:write"}
+        self.assertFalse(self.n.public()["slackFiles"]["scope"])
+        self.slack.scopes = {"chat:write", notify.FILES_SCOPE}
+        self.assertTrue(self.n.public()["slackFiles"]["scope"])
+        self.assertEqual(self.n.public()["slackFiles"]["choices"], ["commandcenter", "gyst", "mfe"])
+
+    def test_the_choice_survives_a_restart(self):
+        self.n.update_settings({"slackFiles": ["mfe", "commandcenter", "mfe"]})
+        again = notify.Notifier(self.d, {"notify": {}}, slack=FakeSlack())
+        self.assertEqual(again.settings["slackFiles"], ["commandcenter", "mfe"])
+
+    def test_sizes_read_as_people_say_them(self):
+        self.assertEqual([notify.size_text(n) for n in (0, 820, 14 * 1024, int(3.2 * 1024 * 1024), None)],
+                         ["0 bytes", "820 bytes", "14 KB", "3.2 MB", "0 bytes"])
+
+
 class LeadRepliesWithoutReplyTo(unittest.TestCase):
     def test_an_unthreaded_reply_goes_under_jays_latest_slack_message_to_that_lead(self):
         n, d, slack, _ = make(settings={"slack": True})
@@ -872,6 +1296,75 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(e.exception.status, 409)
         w = self.d.task_work(t["key"])
         self.assertEqual((w["gate"], w["plan"]["summary"]), ("plan", "second"))
+
+    async def test_merges_and_deploys_need_everything_in_the_daemon_too(self):
+        t, _ = self.ts.create("samvision", "Valuation")
+        self.d.notifier.update_settings({"replyScope": "answers_low_risk"})
+        with self.assertRaises(ActionError) as e:
+            await self.d.slack_merge(t["key"], "a" * 40)
+        self.assertEqual(e.exception.status, 403)
+        with self.assertRaises(ActionError) as e:
+            await self.d.slack_confirm(t["key"], "deploy")
+        self.assertEqual(e.exception.status, 403)
+        self.d.notifier.update_settings({"replyScope": "all"})
+        with self.assertRaises(ActionError) as e:
+            await self.d.slack_confirm(t["key"], "merge")              # a merge is never a bare gate approval
+        self.assertEqual(e.exception.status, 403)
+        with self.assertRaises(ActionError) as e:
+            await self.d.slack_merge(t["key"], "a" * 40)               # Merge's own checks: nothing is ready
+        self.assertEqual(e.exception.status, 409)
+        with self.assertRaises(ActionError) as e:
+            await self.d.act_merge("samvision", [{"key": t["key"], "head": "a" * 40}], actor="jay")
+        self.assertEqual(e.exception.status, 403)                      # the API path still needs Developer Unlock
+
+    async def test_a_deploy_from_slack_waits_for_its_plan_and_jays_second_reply(self):
+        self.d.notifier.update_settings({"replyScope": "all"})
+        t, _ = self.ts.create("samvision", "Valuation")
+        k = t["key"]
+        self.ts.update(k, {"status": "VERIFYING"}, "system:automation")
+        self.d.pipeline.deploy_request(k, "live", "valuation v2", "verifier pass", "agent:coordinator")
+        r = await self.d.slack_confirm(k, "deploy")
+        self.assertEqual(r["work"]["deploy"]["approvedBy"], "jay:slack")
+        with self.assertRaises(TaskError):                             # approved from Slack: no pass before the go
+            self.d.pipeline.deployed(k, "live", "pass", "health 200", "agent:coordinator")
+        with self.assertRaises(ActionError):                           # no plan recorded yet
+            await self.d.slack_deploy(k, "0" * 16)
+        for unshowable in ("\n".join(f"{i}. step" for i in range(41)),                 # more than Slack shows whole
+                           "1. restart\n-----BEGIN RSA PRIVATE KEY-----\n2. drop\n-----END RSA PRIVATE KEY-----",
+                           "1. set token = abcdef123456",                                # the secret filter hides it
+                           "1. restart \u202e2. drop",                                   # reads in another order
+                           "1. restart web" + "".join(chr(0xE0000 + ord(c)) for c in "2. DROP TABLE users"),  # tags
+                           "1. restart\u200b web", "1. restart web\ufe0f", "1. restart\u3164web",
+                           "1. restart\rweb",
+                           "1. restart web\u00a02. drop",                                # only plain spaces
+                           "1. restart web" + " " * 20 + "2. drop",                      # pushed out of sight
+                           "1. restart\n```\n~2. drop~"):                               # ends the code block
+            with self.assertRaises(TaskError) as e:
+                self.d.pipeline.deploy_plan(k, unshowable, "agent:coordinator")
+            self.assertEqual(e.exception.status, 400)
+        self.d.pipeline.deploy_plan(k, "1. migrate\n2. restart", "agent:coordinator")
+        plan = self.d.task_work(k)["deploy"]["plan"]
+        with self.assertRaises(ActionError):                           # not the plan Jay saw
+            await self.d.slack_deploy(k, "f" * 16)
+        r = await self.d.slack_deploy(k, plan_digest(plan))
+        self.assertTrue(r["work"]["deploy"]["goAt"])
+        self.assertFalse(r["delivered"])                               # no task session in this test
+        with self.assertRaises(TaskError):                             # the plan is fixed once Jay said go
+            self.d.pipeline.deploy_plan(k, "something else", "agent:coordinator")
+        self.d.pipeline.deployed(k, "live", "pass", "health 200", "agent:coordinator")
+        (data,) = self.ts.db.execute("SELECT data FROM ticket_events WHERE kind='pipeline.deploy_confirmed'").fetchone()
+        self.assertEqual(json.loads(data).get("via"), "slack")
+
+    async def test_a_deploy_approved_in_commandcenter_is_unchanged(self):
+        t, _ = self.ts.create("samvision", "Valuation")
+        k = t["key"]
+        self.ts.update(k, {"status": "VERIFYING"}, "system:automation")
+        self.d.pipeline.deploy_request(k, "live", "valuation v2", "verifier pass", "agent:coordinator")
+        self.d.pipeline.confirm(k, "deploy", "jay", "gate")
+        with self.assertRaises(TaskError) as e:                        # no Slack go for a CommandCenter approval
+            self.d.pipeline.deploy_plan(k, "1. restart", "agent:coordinator")
+        self.assertIn("approved in CommandCenter", e.exception.message)
+        self.d.pipeline.deployed(k, "live", "pass", "health 200", "agent:coordinator")   # Jay confirmed in the pane
 
     async def test_slack_answers_are_recorded_as_slack(self):
         t, _ = self.ts.create("samvision", "Valuation")

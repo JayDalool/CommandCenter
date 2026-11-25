@@ -322,6 +322,11 @@ export interface DeployState {
   heldUntil?: number | null;
   /** Jay approved it as urgent, so it does not wait for a window. Only a risky ticket's deploy can be. */
   urgent?: boolean;
+  /** Approved from Slack (approvedBy "jay:slack"): the agent's prepared plan (pipeline_cli deploy-plan), sent to Jay's
+   *  Slack DM, and when Jay confirmed it there with "deploy" (goAt). Nothing deploys before goAt. */
+  plan?: { summary: string; at: number; by: string } | null;
+  goAt?: number | null;
+  goBy?: string | null;
 }
 export interface TaskSession { state: "ready" | "multiple" | "none"; paneId: string | null; sessionId: string | null; status: string }
 export interface AnswersResult { work: TicketWork; complete: boolean; delivered: boolean; reason: string | null; replanned?: boolean;
@@ -665,7 +670,9 @@ export interface BudgetsState {
 /** GET /api/notify: Slack and ntfy. Never a token or the ntfy URL, only whether each is configured. */
 export interface NotifySettings {
   slack: boolean; ntfy: boolean; quietStart: string; quietEnd: string; summaryAt: string; timezone: string;
-  replyScope: "answers" | "answers_low_risk";
+  replyScope: "answers" | "answers_low_risk" | "all";
+  /** Projects whose leads' Messages files are uploaded to Slack; elsewhere Slack gets each file's name and size. */
+  slackFiles?: string[];
 }
 export interface NotifyState {
   settings: NotifySettings;
@@ -674,6 +681,9 @@ export interface NotifyState {
   channels: Record<string, string>; clientProjects: string[]; slackGates: string[]; quietNow: boolean; held: number;
   /** A plan waiting for Jay can be approved by his reply in the Slack DM, whatever replyScope says (ccd/notify.py PLAN_GATES). */
   slackPlans: boolean;
+  /** Which projects may upload files (never SamVision, the CTO or a client), and whether the bot token has files:write
+   *  (null until Slack has answered once). Missing from an older ccd. */
+  slackFiles?: { choices: string[]; never: string[]; scope: boolean | null };
 }
 
 /** Messages (ccd/chat.py, ccd/leadchat.py): Jay's conversations with the CTO and each project lead. */

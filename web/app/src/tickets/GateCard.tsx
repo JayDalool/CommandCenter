@@ -68,6 +68,16 @@ export function GateCard({ ticketKey, work, onDone }: { ticketKey: string; work:
       </div>}
     </section>;
   }
+  if (deploying && work.deploy!.approvedBy?.endsWith(":slack")) {
+    const d = work.deploy!;
+    return <section className="gate is-deploy" aria-label="Deploying" id="gate">
+      <h3>{d.goAt ? "Confirmed from Slack — deploying" : "Approved from Slack — confirm the deploy in Slack"}</h3>
+      <p className="muted">{d.goAt ? <>You confirmed it from Slack <Ago at={d.goAt} />. Claude deploys by its plan, verifies and records it.</>
+        : d.plan ? <>Claude's plan is in your Slack DM (<Ago at={d.plan.at} />). Reply <b>deploy</b> there to deploy it; nothing deploys before that.</>
+        : <>You approved it from Slack <Ago at={d.approvedAt} />. Claude prepares the deploy (steps, checks, rollback) and sends the plan to your Slack DM; reply <b>deploy</b> there to deploy it.</>}</p>
+      {d.heldUntil != null && <p className="muted">Held for the weekly release: it can go out from {releaseAt(d.heldUntil)}. ccd does not record it as deployed before then.</p>}
+    </section>;
+  }
   if (deploying) {
     return <section className="gate is-deploy" aria-label="Deploying" id="gate">
       <h3>Approved — confirm the deploy in Claude's pane</h3>

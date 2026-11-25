@@ -21,6 +21,13 @@ What is sent where:
 Client projects (`client_projects`, GauzeMate today) carry only IDs and a risk summary: no titles, no reasons, no
 question text, no technical summary. Their replies go to the lead as text and never answer or approve anything.
 
+Files a lead sends with a message in Messages (cc-reply --file) go with its words (Jay, 2026-11-17, "Upload, chosen
+projects only"): uploaded into the same Slack thread for the projects Jay switches on (`slackFiles`, Settings, off
+for all by default), as each file's name and size everywhere else. Never uploaded: SamVision (its licensed WRREB
+data never leaves the server), the CTO (it works across projects, SamVision's among them) and client projects
+(NO_SLACK_FILES, fixed in code); those get a count of files only, not their names. A text file that redact() would
+change stays here too. An upload needs the bot scope files:write; without it the file is listed instead.
+
 Quiet hours (22:00 to 07:00 America/Winnipeg by default, changeable in Settings) hold the DM and ntfy; held items
 are sent when quiet hours end. Channel posts still go out: Slack's own default only notifies a phone for direct
 messages and mentions.
@@ -32,11 +39,13 @@ with the bot or a channel the bot is in, are read; everything else is ignored. A
                 Answer button does, and the answers go to the task's own session (or, with none running, to the
                 project's lead). A choice question's options are listed numbered (lettered when there are several
                 questions) with the recommended one marked; a reply of just "2" (or "1. b") picks that option.
-    gate        "approve" (or yes / ok / go / lgtm) closes only the gates in SLACK_GATES. A plan (PLAN_GATES): always,
-                and only the plan that DM showed (its summary, approach, risk and technical review are in it). The
-                Low-risk gates (LOW_RISK_GATES): only while `replyScope` is "answers_low_risk" (default "answers": off
-                until Jay decides). Merges, deploys and anything else open CommandCenter from the link: a stolen Slack
-                login can approve a plan but never merge or deploy.
+    gate        "approve" (or yes / ok / go / lgtm) closes only the gates in SLACK_GATES, each only as its DM showed
+                it. A plan (PLAN_GATES): always (its summary, approach, risk and technical review are in the DM). The
+                Low-risk gates (LOW_RISK_GATES): with `replyScope` "answers_low_risk" or "all". A merge or a live
+                deploy (SHIP_GATES): only with "all", which Jay sets in CommandCenter with Developer Unlock (default
+                "answers"). "merge" merges that one PR at the head the DM showed, as the Merge button does. A
+                deploy takes two replies: "approve" (or "deploy") asks the agent to PREPARE; its plan comes back as
+                a new DM (deploy_go), and only "deploy" there tells it to deploy.
     otherwise   the text goes to the project's lead (Daemon.deliver_to_lead, the in-app chat's store), and the
                 lead's reply comes back in the same thread.
 
@@ -59,7 +68,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from . import registry
-from .pipeline import plan_digest
+from .pipeline import plan_digest, unshown
 from .security import redact
 
 log = logging.getLogger("ccd.notify")
@@ -67,18 +76,32 @@ log = logging.getLogger("ccd.notify")
 SLACK_ENV = Path(os.environ.get("CCD_SLACK_ENV", Path.home() / ".config" / "command-center" / "slack.env"))
 SLACK_API = "https://slack.com/api/"
 
-# The gates a Slack reply may close. Fixed in code on purpose: no setting widens it to merges or deploys.
+# The gates a Slack reply may close, fixed in code; replyScope (Jay's setting, changed only in CommandCenter with
+# Developer Unlock) says which of them a reply closes now.
 # failure = clear a blocker so the task resumes; ui = accept a UI review. Both are reversible and neither merges,
-# deploys, changes a plan, a credential or a permission. They need replyScope "answers_low_risk".
+# deploys, changes a plan, a credential or a permission. They need replyScope "answers_low_risk" or "all".
 LOW_RISK_GATES = frozenset({"failure", "ui"})
 # plan = approve a plan Jay must approve (a risky one, after the technical review), whatever replyScope says: Jay's
 # decision of 2026-11-16, so a risky ticket does not wait for him to open CommandCenter. Only the plan the DM
-# showed. It starts implementation; the PR still needs its review, Jay's merge and his deploy approval in
-# CommandCenter, so a stolen Slack login can approve a plan but never merge or deploy.
+# showed. It starts implementation; the PR still needs its review and Jay's merge.
 PLAN_GATES = frozenset({"plan"})
-SLACK_GATES = LOW_RISK_GATES | PLAN_GATES
-REPLY_SCOPES = ("answers", "answers_low_risk")
+# merge = merge one reviewed, green PR at the head the DM showed (Daemon.slack_merge, the Merge button's path);
+# deploy = approve a live deploy, which only asks for a plan, then confirm that plan with a second reply. Jay's
+# decision of 2026-11-16 ("Slack should be able to do everything … only deploy if asked to"). Only with replyScope
+# "all": a stolen Slack login alone cannot turn it on.
+SHIP_GATES = frozenset({"merge", "deploy"})
+SLACK_GATES = LOW_RISK_GATES | PLAN_GATES | SHIP_GATES
+REPLY_SCOPES = ("answers", "answers_low_risk", "all")
 APPROVE_RE = re.compile(r"^\s*(approve|approved|yes|y|ok|okay|go|go ahead|lgtm|:\+1:|👍|✅)\s*[.!]*\s*$", re.I)
+# Only these words merge or deploy: an "ok" or 👍 on a merge DM or a deploy plan does neither (handle_reply).
+MERGE_RE = re.compile(r"^\s*(merge|merge it|merge now)\s*[.!]*\s*$", re.I)
+DEPLOY_RE = re.compile(r"^\s*(deploy|deploy it|deploy now|go live|ship it)\s*[.!]*\s*$", re.I)
+POST_LIMIT = 3900   # characters of one Slack post ccd sends; longer text is cut
+# Projects whose Messages files are never uploaded to Slack, whatever slackFiles says (client projects too).
+NO_SLACK_FILES = frozenset({"samvision", "cto"})
+FILES_SCOPE = "files:write"     # the scope Slack needs before the bot may upload a file
+SECRET_FILE = "this file looks like it holds a password, token or key"
+UPLOAD_MAX = 50 * 1024 * 1024   # bytes of one uploaded file; Messages takes 20 MB by default (chat_file_max_mb)
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 SETTINGS_DEFAULTS = {
@@ -88,10 +111,12 @@ SETTINGS_DEFAULTS = {
     "quietEnd": "07:00",
     "summaryAt": "07:00",           # owner's and technical summaries, daily
     "timezone": "America/Winnipeg",
-    # "answers": approvals other than a plan open CommandCenter (D-024 clause 12, with Jay's 2026-11-16 decision that
-    # plans are approvable from the DM: PLAN_GATES). "answers_low_risk" also lets a Slack reply clear a blocker or
-    # accept a UI review; it waits on Jay's decision and is never the default.
+    # "answers": answers and plans (PLAN_GATES, Jay's 2026-11-16 decision); other approvals open CommandCenter.
+    # "answers_low_risk" also clears a blocker or accepts a UI review. "all" also merges and deploys (SHIP_GATES).
+    # Changed only in CommandCenter with Developer Unlock; never the default beyond "answers".
     "replyScope": "answers",
+    # Projects whose leads' Messages files are uploaded to Slack (Jay, 2026-11-17). Never NO_SLACK_FILES or a client.
+    "slackFiles": [],
 }
 CONFIG_DEFAULTS = {
     "jay_member_id": "",            # Jay's Slack member ID: the only author whose messages are read
@@ -124,6 +149,7 @@ TEAM_KINDS = frozenset({
     "pipeline.rework", "pipeline.blocked", "pipeline.questions", "pipeline.answered", "pipeline.gate_opened",
     "pipeline.gate_confirmed", "pipeline.ready_to_merge", "pipeline.unreviewed_merge", "pipeline.verified",
     "pipeline.released", "pipeline.deploy_requested", "pipeline.deploy_approved", "pipeline.closed_note",
+    "pipeline.deploy_prepared", "pipeline.deploy_confirmed",
     *PIPELINE_ALERTS})
 CUSTOMIZE = "chat:write.customize"     # the scope Slack needs before a bot may post under another name and icon
 TICKETS_MAX = 500
@@ -159,6 +185,14 @@ def clean_settings(raw, base=None):
                 raise ValueError("unknown time zone") from None
         elif k == "replyScope" and v not in REPLY_SCOPES:
             raise ValueError(f"replyScope must be one of {', '.join(REPLY_SCOPES)}")
+        elif k == "slackFiles":
+            if not isinstance(v, list) or len(v) > 20 or not all(isinstance(x, str) and x for x in v):
+                raise ValueError("slackFiles must be a list of project keys")
+            never = sorted(set(v) & NO_SLACK_FILES)
+            if never:
+                raise ValueError(f"files from {', '.join(registry.name_of(x) if x != 'cto' else 'the CTO' for x in never)}"
+                                 " are never uploaded to Slack")
+            v = sorted(set(v))
         out[k] = v
     return out
 
@@ -177,6 +211,11 @@ def in_quiet(settings, now=None):
     if a == b:
         return False
     return a <= m < b if a < b else (m >= a or m < b)
+
+
+def local_time(settings, ts):
+    """A unix time as Jay reads it: his timezone, to the minute."""
+    return datetime.datetime.fromtimestamp(ts, ZoneInfo(settings["timezone"])).strftime("%a %Y-%m-%d %H:%M %Z")
 
 
 def local_day(settings, now):
@@ -265,6 +304,27 @@ class SlackWeb:
             body["username"], body["icon_emoji"] = as_
         return self.call("chat.postMessage", body)
 
+    def upload(self, channel, thread_ts, name, data):
+        """Upload one file into a thread (needs files:write): Slack's external upload, the only one it still
+        offers. Ask for an upload URL, send the bytes there (no token: the URL is signed), then share the file."""
+        r = self.call("files.getUploadURLExternal", {"filename": name, "length": len(data)}, form=True)
+        url, fid = r.get("upload_url") or "", r.get("file_id")
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme != "https" or not (parts.hostname or "").endswith(".slack.com") or not fid:
+            raise SlackError("files.getUploadURLExternal: no Slack upload URL")
+        req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/octet-stream"})
+        try:
+            with self.open(req, timeout=120) as resp:
+                resp.read()
+        except urllib.error.HTTPError as e:
+            raise SlackError(f"file upload: HTTP {e.code}") from None
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise SlackError(f"file upload: {type(e).__name__}") from None
+        body = {"files": json.dumps([{"id": fid, "title": name}]), "channel_id": channel}
+        if thread_ts:
+            body["thread_ts"] = thread_ts
+        return self.call("files.completeUploadExternal", body, form=True)
+
     def channels(self):
         out, cursor = {}, None
         while True:
@@ -296,6 +356,24 @@ def ntfy_send(url, title, link=None, priority="default", opener=None):
 
 
 # ---------- formatting ----------
+
+def plural(n, word):
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def cut(text, n):
+    return text if len(text) <= n else text[:n - 1] + "…"
+
+
+def size_text(n):
+    """A file size as people read it: 820 bytes, 14 KB, 3.2 MB."""
+    n = n if isinstance(n, int) and n >= 0 else 0
+    if n < 1024:
+        return f"{n} bytes"
+    if n < 1024 * 1024:
+        return f"{round(n / 1024)} KB"
+    return f"{n / (1024 * 1024):.1f} MB"
+
 
 def esc(text):
     """Untrusted text (agent-set reasons, question text, lead replies, PR titles) as plain Slack text: no
@@ -337,17 +415,46 @@ def option_lines(q, letters=False):
 
 
 def pick_option(q, text):
-    """A reply of just an option's number or letter ("2", "b", "2.") answers with that option's text. Anything else
-    is Jay's own answer, as written."""
+    """A reply of just an option's number or letter ("2", "b", "2.") answers with that option's text, and several
+    ("1, 3", "a and c") with those options' texts. Anything else is Jay's own answer, as written."""
     opts = q.get("options") or []
     if any(str(o).strip().lower() == (text or "").strip().lower() for o in opts):
         return text            # the option's own text ("2" when the options are 2 / 4 / 8)
-    m = re.fullmatch(r"\s*([1-8]|[a-hA-H])[.)]?\s*", text or "")
-    if q.get("kind") != "choice" or not opts or not m:
+    if q.get("kind") != "choice" or not opts:
         return text
-    t = m.group(1).lower()
-    j = int(t) - 1 if t.isdigit() else LETTERS.index(t)
-    return opts[j] if 0 <= j < len(opts) else text
+    marks = _marks(text)
+    if not marks or any(not 0 <= j < len(opts) for j in marks):
+        return text
+    picked = []
+    for j in marks:
+        if opts[j] not in picked:
+            picked.append(opts[j])
+    return "; ".join(picked)
+
+
+def _marks(text):
+    """The option indexes a reply made only of option numbers or letters names ("2", "b.", "1, 3", "a and c"), or
+    None for anything else. A number past 8 or a letter past h still counts, so a wrong pick can be refused."""
+    if not re.fullmatch(r"\s*(\d{1,2}|[a-zA-Z])[.)]?(?:\s*(?:,|&|\band\b|\s)\s*(\d{1,2}|[a-zA-Z])[.)]?)*\s*",
+                        text or ""):
+        return None
+    out = []
+    for t in re.findall(r"(?<![A-Za-z0-9])(\d{1,2}|[a-zA-Z])(?![A-Za-z0-9])", re.sub(r"\band\b", " ", text)):
+        t = t.lower()
+        out.append(int(t) - 1 if t.isdigit() else ord(t) - ord("a"))
+    return out
+
+
+def bad_pick(q, text):
+    """A reply that only picks options of a choice question and names one it does not have ("4" of three, "1, 9").
+    Not when an option's own text is a number: then "5" may be Jay's own value ("2 / 4 / 8 replicas")."""
+    opts = q.get("options") or []
+    if q.get("kind") != "choice" or not opts or any(re.fullmatch(r"\s*\d+\s*", str(o)) for o in opts):
+        return False
+    if any(str(o).strip().lower() == (text or "").strip().lower() for o in opts):
+        return False
+    marks = _marks(text)
+    return bool(marks) and any(not 0 <= j < len(opts) for j in marks)
 
 
 def _cut(text, n):
@@ -381,9 +488,24 @@ def plan_lines(plan, review):
             out.append(f"*Blast radius:* {esc(_cut(review['blast'], 300))}")
     else:
         out.append("*Technical review:* none on this route")
+    more = [f"{len(plan[k])} {k if len(plan[k]) != 1 else k[:-1]}" for k in ("questions", "findings") if plan.get(k)]
+    if more:
+        out.append(f"*Also in the plan:* {' and '.join(more)}, in CommandCenter")
     if any(line.endswith("…") for line in out):
         out.append("_Some of it is cut short here; the full plan is in CommandCenter._")
     return out
+
+
+def plan_unshown(value):
+    """Whether any text anywhere in a plan (every field, shown in the DM or not) has a character Slack would not
+    show (pipeline.unshown). An approval covers the whole plan, so such a plan is approved in CommandCenter only."""
+    if isinstance(value, str):
+        return unshown(value) is not None
+    if isinstance(value, dict):
+        return any(plan_unshown(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(plan_unshown(v) for v in value)
+    return False
 
 
 def need_label(n):
@@ -446,11 +568,19 @@ class Notifier:
                                "ntfy": bool(self.ntfy_url)},
                 "channels": {"cto": self.conf["cto_channel"], **self.conf["channels"]},
                 "clientProjects": list(self.conf["client_projects"]), "slackGates": sorted(LOW_RISK_GATES),
+                "slackFiles": {"choices": self.file_choices(), "never": sorted(NO_SLACK_FILES),
+                               "scope": self.files_scope()},
                 "slackPlans": bool(PLAN_GATES),
                 "quietNow": in_quiet(self.settings, self.clock()), "held": len(self.held)}
 
     def update_settings(self, body):
-        self.settings = clean_settings(body, self.settings)
+        settings = clean_settings(body, self.settings)
+        if isinstance(body, dict) and "slackFiles" in body:
+            other = [k for k in settings["slackFiles"] if k not in self.file_choices()]
+            if other:
+                raise ValueError(f"files from {', '.join(other)} cannot be uploaded to Slack: only "
+                                 f"{', '.join(self.file_choices()) or 'no project'}")
+        self.settings = settings
         self.store.put("notify:settings", self.settings)
         self.d._event("notify", "notify.settings", "notification settings changed",
                       data={"kind": "notify.settings"})
@@ -460,6 +590,20 @@ class Notifier:
 
     def client(self, project):
         return project in self.conf["client_projects"]
+
+    def file_choices(self):
+        """The projects whose Messages files Jay may have uploaded to Slack: those with a channel, never
+        NO_SLACK_FILES or a client project."""
+        return [k for k in self.conf["channels"] if k not in NO_SLACK_FILES and not self.client(k)]
+
+    def files_upload(self, conv):
+        """Whether a lead's files in this conversation are uploaded to Slack now. Checked again on every send."""
+        return conv in self.settings["slackFiles"] and conv in self.file_choices()
+
+    def files_scope(self):
+        """Whether the bot token has files:write: True or False from Slack's last answer, None before one."""
+        scopes = getattr(self._slack, "scopes", None)
+        return None if scopes is None else FILES_SCOPE in scopes
 
     def name(self, project):
         return registry.name_of(project) if registry.project(project) else (project or "CommandCenter")
@@ -521,7 +665,7 @@ class Notifier:
         try:
             cid = await (self.dm_id() if where == "dm" else self.channel_id(where))
             as_, prefix = self._as(who)
-            r = await self._call(self.slack().post, cid, redact(prefix + text)[0][:3900], thread_ts, as_, broadcast)
+            r = await self._call(self.slack().post, cid, redact(prefix + text)[0][:POST_LIMIT], thread_ts, as_, broadcast)
         except SlackError as e:
             self._fail(f"slack {where}", e)
             return None
@@ -569,9 +713,10 @@ class Notifier:
                           "text": f"{b.get('name') or 'an agent'} is waiting for you"})
         return items
 
-    def need_text(self, n, plan=None):
+    def need_text(self, n, plan=None, review=None):
         """The DM for one item. A client project's carries its ID and a risk line only. `plan` is a plan gate's
-        plan as send_need read it (so the DM shows exactly what its planHash covers)."""
+        plan as send_need read it (so the DM shows exactly what its planHash covers); `review` likewise is a merge
+        gate's review, whose head the item records."""
         proj = n.get("project")
         label = need_label(n)
         link = self.link(n)
@@ -594,20 +739,88 @@ class Notifier:
             else:
                 lines.append("_Reply in this thread with " + ("an option's number, or your own answer" if choice
                                                               else "your answer") + "._")
+            lines.append("_A reply that ends with ? goes to the agent as your question; its answer comes back here._")
         elif n.get("kind") == "gate" and n.get("gate") in PLAN_GATES:
             p = plan
             if p is None:
                 lines.append("_The plan could not be read here: approve it in CommandCenter. A reply here goes to the lead._")
             else:
                 lines += plan_lines(p["plan"], p["review"])
-                lines.append("_Reply *approve* to approve this plan and start implementation, or write to the lead. "
-                             "The merge and the deploy stay in CommandCenter._")
-        elif n.get("kind") == "gate" and n.get("gate") in LOW_RISK_GATES and self.settings["replyScope"] == "answers_low_risk":
+                if redact("\n".join(lines))[1] or unshown("\n".join(lines)) or plan_unshown(p["plan"]):
+                    # Part of it would not show (post() redacts; Slack draws no invisible character): no planHash.
+                    lines.append("_Part of this plan cannot be shown here, so it is approved in CommandCenter only. A "
+                                 "reply here goes to the lead._")
+                else:
+                    lines.append("_Reply *approve* to approve this plan and start implementation, or write to the "
+                                 "lead._")
+        elif n.get("kind") == "gate" and n.get("gate") == "merge" and self.allows("merge"):
+            rv = review if review is not None else self._review(n.get("ref"))
+            if rv.get("head"):
+                lines.append(f"*PR:* {esc(rv.get('pr') or 'linked PR')} · head `{esc(str(rv['head'])[:12])}` · review "
+                             f"{esc(rv.get('verdict'))}")
+                lines.append("_Reply *merge* to merge this PR at this head, as the Merge button does, or write to the "
+                             "lead._")
+            else:
+                lines.append("_Merge this in CommandCenter. A reply here goes to the lead._")
+        elif n.get("kind") == "gate" and n.get("gate") == "deploy" and self.allows("deploy"):
+            lines.append("_Reply *approve* and the agent prepares it: its deploy plan comes to you as a new message, "
+                         "and nothing deploys until you reply *deploy* to that one._")
+        elif n.get("kind") == "gate" and n.get("gate") in LOW_RISK_GATES and self.allows(n.get("gate")):
             lines.append("_Reply *approve* to " + ("clear the blocker" if n["gate"] == "failure" else "accept the UI")
                          + ", or write to the lead._")
         elif n.get("kind") == "gate":
             lines.append("_Approve this in CommandCenter. A reply here goes to the lead._")
         return "\n".join(lines) + open_
+
+    def _work(self, key):
+        try:
+            return self.d.task_work(key) or {}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _review(self, key):
+        return self._work(key).get("review") or {}
+
+    def _deploy(self, key):
+        return self._work(key).get("deploy") or {}
+
+    async def send_deploy_plan(self, key, project):
+        """The plan an agent recorded for a deploy Jay approved (pipeline.deploy_plan): a new DM, its own item, whose
+        "deploy" reply is the go (deploy_go). The agent's lines are in a code block, so they read as its text, not ccd's.
+        Every line is shown whole, since the go approves the whole plan; one that will not fit in a post gets no go
+        from Slack. Sent at any hour, like a Slack approval's own reply: Jay asked for this plan, so quiet hours do
+        not hold it."""
+        d = self._deploy(key)
+        if self.client(project) or not d.get("plan") or d.get("goAt") or d.get("result"):
+            return
+        text = str(d["plan"].get("summary") or "")
+        shown_lines = [esc(line) for line in text.splitlines() if line.strip()]
+        # A code block: no Slack formatting applies inside it (a struck-through or bold step reads as written), and
+        # pipeline.deploy_plan refuses the ``` that would end it early.
+        quoted = ["```", *shown_lines, "```"]
+        head = f"*{self.name(project)}* · {esc(key)} · Deploy plan ready · {len(shown_lines)} lines"
+        link = self.link({"ref": key})
+        open_ = f"\n<{link}|Open in CommandCenter>" if link else ""
+        plan_hash = plan_digest(d["plan"])
+        if not self.allows("deploy"):
+            # A Slack approval is confirmed only from Slack (pipeline.deployed): say how to turn it back on.
+            hint = ("_Deploys from Slack are off now: set Your Slack replies to Everything in CommandCenter, then "
+                    "reply *deploy* here._")
+        else:
+            hint = "_Reply *deploy* to deploy it by this plan. Nothing deploys until you do._"
+            if d.get("heldUntil"):
+                hint += (f"\n_Held for the release window until {local_time(self.settings, d['heldUntil'])}: "
+                         "a *deploy* reply before then is refused._")
+        body = "\n".join([head, *quoted, hint]) + open_
+        shown, hidden = redact(body)
+        if hidden or unshown(body) or len(shown) > POST_LIMIT:
+            # post() would hide part of it or cut it, so Jay would not see all of what "deploy" approves.
+            # (pipeline.deploy_plan refuses such a plan; this holds for one recorded before that check.)
+            plan_hash = None
+            body = "\n".join([head, "_This plan cannot be shown here in full, so it cannot be confirmed from Slack. "
+                                     "Reply here to ask the agent for a shorter one with no secrets in it._"]) + open_
+        await self.post("dm", body, item={"type": "deploy_go", "project": project, "ref": key, "planHash": plan_hash})
+        await self.push(f"{self.name(project)}: deploy plan ready · {key}", link)
 
     def _plan(self, key):
         """The ticket's plan and its technical review as ccd has them now; None when there is no plan to show."""
@@ -628,12 +841,20 @@ class Notifier:
         item = {"type": "need", "project": n.get("project"), "kind": n.get("kind"), "gate": n.get("gate"),
                 "ref": n.get("ref"), "stale": bool(n.get("stale")), "qids": list(n.get("qids") or []),
                 "textHash": _digest(n.get("text")), "since": n.get("since")}
-        p = None
+        p = rv = None
+        if n.get("kind") == "gate" and n.get("gate") == "merge" and not self.client(n.get("project")):
+            # The head this DM shows, read once: a merge reply merges exactly it (approve()).
+            rv = self._review(n.get("ref"))
+            item["head"] = rv.get("head")
         if n.get("kind") == "gate" and n.get("gate") in PLAN_GATES and not self.client(n.get("project")):
             # The plan this DM shows, read once. An approve applies to this plan only (approve()).
             p = self._plan(n.get("ref"))
             item["planHash"] = plan_digest(p["plan"]) if p else None
-        await self.post("dm", self.need_text(n, plan=p), item=item)
+        text = self.need_text(n, plan=p, review=rv)
+        if p is not None and (redact(text)[1] or unshown(text) or plan_unshown(p["plan"])):
+            # Part of what an approve approves would not show: CommandCenter only.
+            item["planHash"] = None
+        await self.post("dm", text, item=item)
         await self.push(self.push_title(n), self.link(n))
 
     async def check_needs(self):
@@ -693,6 +914,9 @@ class Notifier:
         if kind not in ALERT_KINDS:
             return
         proj = ev.get("project")
+        if kind == "task.pipeline" and (ev.get("data") or {}).get("kind") == "pipeline.deploy_prepared" \
+                and is_ticket(ev.get("ref")):
+            await self.send_deploy_plan(ev["ref"], proj)
         chan = self.conf["channels"].get(proj)
         if not chan or self.client(proj):
             return
@@ -879,13 +1103,16 @@ class Notifier:
         return result
 
     async def _reply(self, cid, ts, text, who=None):
+        """Post in a thread. True when Slack took it."""
         if not self.settings["slack"]:
-            return
+            return False
         try:
             as_, prefix = self._as(who)
-            await self._call(self.slack().post, cid, redact(prefix + text)[0][:3900], ts, as_)
+            await self._call(self.slack().post, cid, redact(prefix + text)[0][:POST_LIMIT], ts, as_)
         except SlackError as e:
             self._fail("slack reply", e)
+            return False
+        return True
 
     async def handle_reply(self, cid, item, text):
         if not text:
@@ -895,12 +1122,30 @@ class Notifier:
         if item and item.get("type") == "need":
             proj, ref = item.get("project"), item.get("ref")
             if not self.client(proj):
+                if item.get("kind") == "questions" and not item.get("stale") and text.rstrip().endswith("?"):
+                    # Jay asks the agent back instead of answering (Jay, 2026-11-16): nothing is recorded as an answer.
+                    return dict(await self.ask_back(ref, text, proj), project=proj)
                 if item.get("kind") == "questions" and not item.get("stale"):
                     r = await self.answer(ref, text, item.get("qids") or [])
                     if r:
                         return dict(r, project=proj)
-                if (item.get("kind") == "gate" and APPROVE_RE.match(text)):
-                    return dict(await self.approve(ref, item.get("gate"), item), project=proj)
+                gate = item.get("gate")
+                if item.get("kind") == "gate" and gate == "merge" and self.allows("merge") \
+                        and APPROVE_RE.match(text) and not MERGE_RE.match(text):
+                    # A merge ships: an "ok" or 👍 is not one. (A deploy approval only asks for a plan, so it may.)
+                    return {"did": "merge_word_needed", "project": proj,
+                            "say": "Nothing was merged: reply *merge* to merge this PR."}
+                word = {"merge": MERGE_RE, "deploy": DEPLOY_RE}.get(gate)
+                if item.get("kind") == "gate" and (APPROVE_RE.match(text) or (word and word.match(text))):
+                    return dict(await self.approve(ref, gate, item), project=proj)
+            return await self.to_lead(proj, text, ref)
+        if item and item.get("type") == "deploy_go":
+            proj, ref = item.get("project"), item.get("ref")
+            if not self.client(proj) and DEPLOY_RE.match(text):
+                return dict(await self.deploy_go(ref, item), project=proj)
+            if not self.client(proj) and APPROVE_RE.match(text):
+                return {"did": "deploy_word_needed", "project": proj,
+                        "say": "Nothing was deployed: reply *deploy* to deploy by this plan."}
             return await self.to_lead(proj, text, ref)
         to = self._route(cid)
         if to is None and cid not in self._ids.values() and await self._reread_channels(cid):
@@ -932,6 +1177,49 @@ class Notifier:
             return False
         return True
 
+    async def ask_back(self, key, text, project):
+        """Jay's question about a ticket's open questions: typed into its task session (Daemon.slack_ask_back), which
+        answers into this thread (agent_reply). With no task session it goes to the project's lead instead."""
+        try:
+            r = await self.d.slack_ask_back(key, text)
+        except Exception as e:  # noqa: BLE001
+            return {"did": "ask_back_failed", "say": f"Could not send that: {esc(getattr(e, 'message', None) or e)}"}
+        if r.get("delivered"):
+            return {"did": "asked_back",
+                    "say": "Sent to the agent. Its answer comes back in this thread; your answers still go here too."}
+        if r.get("noSession"):
+            return await self.to_lead(project, text, key)
+        return {"did": "ask_back_undelivered",
+                "say": "Not delivered: " + esc(str(r.get("reason") or "the task session was not reached"))
+                + ". Try again in a minute."}
+
+    def _questions_thread(self, key):
+        """(channel id, ts) of the latest questions DM for this ticket, or None."""
+        found = [(item.get("at") or 0, k) for k, item in self.threads.items()
+                 if item.get("type") == "need" and item.get("kind") == "questions" and item.get("ref") == key]
+        if not found:
+            return None
+        cid, _, ts = max(found)[1].partition(":")
+        return (cid, ts) if cid and ts else None
+
+    async def agent_reply(self, key, project, text):
+        """The task session's answer to Jay's question (pipeline_cli reply), in the thread of the ticket's latest
+        questions DM, quoted so it reads as the agent's words; a new DM when there is no such thread. Never a client
+        project's. Returns whether it was posted."""
+        if not self.settings["slack"] or self.client(project) or not str(text or "").strip():
+            return False
+        quoted = "\n".join(f"> {esc(line)}" for line in str(text).splitlines() if line.strip())
+        body = f"*{self.name(project)}* · {esc(key)} · The agent answers:\n{quoted}"
+        where = self._questions_thread(key)
+        if where is None:
+            return bool(await self.post("dm", body, item={"type": "ticket", "project": project, "ref": key}))
+        try:
+            await self._call(self.slack().post, where[0], redact(body)[0][:POST_LIMIT], where[1], None)
+        except SlackError as e:
+            self._fail("slack agent reply", e)
+            return False
+        return True
+
     async def answer(self, key, text, qids):
         """Answers exactly the questions that message showed. If any of them was answered since, or there are
         newer ones, nothing is recorded: a late reply never answers a question Jay did not see in Slack."""
@@ -950,6 +1238,13 @@ class Notifier:
             if not all(parts):
                 return {"did": "answer_incomplete",
                         "say": f"There are {len(qs)} questions. Reply with numbered lines (1. …, 2. …), one per question."}
+        for i, (q, a) in enumerate(zip(qs, parts), 1):
+            if bad_pick(q, a):
+                which = f"Question {i} has" if len(qs) > 1 else "This question has"
+                n = len(q["options"])
+                return {"did": "answer_invalid",
+                        "say": f"{which} options " + (f"a–{LETTERS[n - 1]}" if len(qs) > 1 else f"1–{n}")
+                               + ". Reply with those, or start with Other: for your own answer."}
         parts = [pick_option(q, a) for q, a in zip(qs, parts)]
         for q, a in zip(qs, parts):
             if q.get("kind") == "yesno" and a.strip().lower() not in ("yes", "no") and not a.lower().startswith("other:"):
@@ -973,9 +1268,15 @@ class Notifier:
                 said = "Answered. Not delivered yet: " + esc(str(r.get("reason") or "no session was reached")) + "."
         return {"did": "answered", "say": said}
 
+    def allows(self, gate):
+        """Whether a Slack reply closes this gate now: fixed in code (SLACK_GATES), then Jay's replyScope."""
+        scope = self.settings["replyScope"]
+        return (gate in PLAN_GATES or (gate in LOW_RISK_GATES and scope in ("answers_low_risk", "all"))
+                or (gate in SHIP_GATES and scope == "all"))
+
     async def approve(self, key, gate, item=None):
         link = self.link({"ref": key})
-        if not (gate in PLAN_GATES or (gate in LOW_RISK_GATES and self.settings["replyScope"] == "answers_low_risk")):
+        if not self.allows(gate):
             return {"did": "approval_refused",
                     "say": "That one is approved in CommandCenter, not from Slack." + (f" <{link}|Open it>" if link else "")}
         # Only the gate that message showed: same ticket, gate, reason and time, and for a plan the same plan.
@@ -983,23 +1284,68 @@ class Notifier:
         now = [n for n in self.needs() if n.get("kind") == "gate" and n.get("ref") == key and n.get("gate") == gate]
         same = bool(item) and any(_digest(n.get("text")) == item.get("textHash") and n.get("since") == item.get("since")
                                   for n in now)
+        if gate in PLAN_GATES and item and not item.get("planHash"):
+            return {"did": "approval_refused",
+                    "say": "This plan could not be shown here in full, so it is approved in CommandCenter only."
+                    + (f" <{link}|Open it>" if link else "")}
         if same and gate in PLAN_GATES:
             p = self._plan(key)
             same = p is not None and bool(item.get("planHash")) and plan_digest(p["plan"]) == item["planHash"]
+        if same and gate == "merge":
+            same = bool(item.get("head")) and self._review(key).get("head") == item["head"]
         if not same:
             return {"did": "approval_stale",
                     "say": "This has changed since this message, so nothing was approved." + (f" <{link}|Open it>" if link else "")}
         try:
+            if gate == "merge":
+                # The Merge button's own path, for this one PR at the head the DM showed.
+                m = await self.d.slack_merge(key, item["head"])
+                if not m.get("merging"):
+                    why = "; ".join(esc(s.get("reason")) for s in m.get("skipped") or []) or "it is no longer ready"
+                    return {"did": "merge_skipped", "say": f"Not merged: {why}."}
+                return {"did": "approved_merge", "say": "Merging: the lead merges this PR at that head and reports "
+                                                       "in the ticket's thread."}
             # A plan: the daemon checks the hash again as it closes the gate, so a plan replaced after the check
             # above is not approved either.
             r = await (self.d.slack_confirm(key, gate, plan_hash=item.get("planHash")) if gate in PLAN_GATES
                        else self.d.slack_confirm(key, gate))
         except Exception as e:  # noqa: BLE001
             return {"did": "approve_failed", "say": f"Could not approve: {esc(getattr(e, 'message', None) or e)}"}
+        said = {"failure": "Blocker cleared; the task resumes.", "ui": "UI accepted.",
+                "plan": "Plan approved; implementation starts."}.get(gate, "Approved.")
+        d = ((r or {}).get("work") or {}).get("deploy") or {}
+        if gate == "deploy" and d.get("approvedAt") and not d.get("result"):
+            said = ("Approved to prepare. The agent writes the deploy plan and it comes to you here as a new message; "
+                    "nothing deploys until you reply *deploy* to that one.")
+        elif gate == "deploy":
+            said = "Release approved."
         return {"did": f"approved_{gate}",
-                "say": {"failure": "Blocker cleared; the task resumes.", "ui": "UI accepted.",
-                        "plan": "Plan approved; implementation starts."}.get(gate, "Approved.")
-                + ("" if (r or {}).get("delivered", True) else " The task session was not running to hear it.")}
+                "say": said + ("" if (r or {}).get("delivered", True) else " The task session was not running to hear it.")}
+
+    async def deploy_go(self, key, item):
+        """Jay's "deploy" reply to a deploy plan DM: the go for exactly that plan (Daemon.slack_deploy checks it again
+        in the transaction that records it)."""
+        link = self.link({"ref": key})
+        if not self.allows("deploy"):
+            return {"did": "deploy_refused",
+                    "say": "Deploys from Slack are off now: set Your Slack replies to Everything in CommandCenter, then "
+                           "reply *deploy* here." + (f" <{link}|Open it>" if link else "")}
+        if not item.get("planHash"):
+            return {"did": "deploy_refused",
+                    "say": "Nothing was deployed: this plan could not be shown here in full. Reply here to ask the "
+                           "agent for a shorter one with no secrets in it."}
+        d = self._deploy(key)
+        if not d.get("plan") or plan_digest(d["plan"]) != item["planHash"] or d.get("goAt") or d.get("result"):
+            return {"did": "deploy_stale",
+                    "say": "This plan changed or was already handled, so nothing was deployed." + (f" <{link}|Open it>" if link else "")}
+        try:
+            r = await self.d.slack_deploy(key, item["planHash"])
+        except Exception as e:  # noqa: BLE001
+            return {"did": "deploy_failed", "say": f"Could not confirm: {esc(getattr(e, 'message', None) or e)}"}
+        return {"did": "deploy_confirmed",
+                "say": "Deploying by this plan. The result comes in the ticket's thread."
+                + ("" if (r or {}).get("delivered", True) else " The task session was not running to hear it: open "
+                   "CommandCenter to start it.")}
 
     async def to_lead(self, conversation, text, ref):
         deliver = getattr(self.d, "deliver_to_lead", None)
@@ -1041,19 +1387,79 @@ class Notifier:
                       and (v.get("at") or 0) > self.clock() - 86400]
             origin = max(recent, key=lambda v: v.get("at") or 0) if recent else None
         who = "CTO" if conv == "cto" else f"{self.name(conv)} lead"
+        files = [f for f in msg.get("files") or [] if isinstance(f, dict) and f.get("id")]
+        upload = bool(files) and self.files_upload(conv)
         if self.client(conv):
             body = "replied. Client project: read it in CommandCenter."
+        elif upload:
+            body = esc(str(msg.get('text') or '')[:3000]) or f"sent {plural(len(files), 'file')}."
         else:
-            body = esc(str(msg.get('text') or '')[:3000])
+            body = esc(str(msg.get('text') or '')[:2800 if files else 3000])
+            if files:
+                body = f"{body}\n{self.file_list(files, conv)}" if body else self.file_list(files, conv)
         as_ = (who, CTO_ICON if conv == "cto" else LEAD_ICON)
         if origin:
-            await self._reply(origin["channel"], origin["ts"], body, as_)
-        elif conv == "cto":
-            await self.post(self.conf["cto_channel"], body, who=as_)
-        elif self.conf["channels"].get(conv) and not self.client(conv):
-            await self.post(self.conf["channels"][conv], body, who=as_)
+            cid, thread = origin["channel"], origin["ts"]
+            posted = await self._reply(cid, thread, body, as_)
         else:
-            await self.post("dm", body, who=as_)
+            where = self.conf["cto_channel"] if conv == "cto" else self.conf["channels"][conv] \
+                if self.conf["channels"].get(conv) and not self.client(conv) else "dm"
+            thread = posted = await self.post(where, body, who=as_)
+            cid = (await (self.dm_id() if where == "dm" else self.channel_id(where))) if posted else None
+        if upload and posted:
+            await self.upload_files(cid, thread, files, conv)
+
+    def file_list(self, files, conv, failed=None):
+        """Files that stay in CommandCenter, for Slack: one line each (name and size) and why they are not here.
+        SamVision's and the CTO's get a count only: a file name can carry an address or an MLS number."""
+        if conv in NO_SLACK_FILES:
+            whose = "The CTO's" if conv == "cto" else self.name(conv)
+            return (f"_:paperclip: {plural(len(files), 'file')} in CommandCenter → Messages. {whose} files and their "
+                    "names never go to Slack._")
+        lines = [f":paperclip: {esc(cut(str(f.get('name') or 'file'), 80))} · {size_text(f.get('size'))}" for f in files]
+        if failed:
+            why = ("Slack has not granted the bot files:write yet (docs/runbooks/slack-and-ntfy.md)"
+                   if "missing_scope" in failed or "not_allowed_token_type" in failed
+                   else "it looks like it holds a password, token or key" if SECRET_FILE in failed
+                   else "the upload to Slack failed")
+            lines.append(f"_In CommandCenter → Messages: {why}._")
+        else:
+            lines.append(f"_In CommandCenter → Messages. To get {self.name(conv)}'s files here, switch it on in "
+                         "Settings → Slack and phone._")
+        return "\n".join(lines)
+
+    async def upload_files(self, cid, thread, files, conv):
+        """Upload a lead's files into the thread its words went to. A file that does not upload is listed instead."""
+        failed, reason = [], None
+        for f in files:
+            try:
+                data = await self._call(self._lead_file, f["id"], conv)
+                await self._call(self.slack().upload, cid, thread, str(f.get("name") or "file"), data)
+            except Exception as e:  # noqa: BLE001 — a file that cannot go is listed; the words already went
+                self._fail("slack file", e)
+                failed.append(f)
+                reason = reason or str(e)
+                continue
+            # What left the server, on the record: which conversation's file, its name, size and digest.
+            self.d._event("notify", "notify.file_uploaded", f"{conv}: uploaded {cut(str(f.get('name')), 120)} to Slack",
+                          data={"conversation": conv, "fileId": f["id"], "size": len(data), "sha256": f.get("sha256")})
+        if failed:
+            await self._reply(cid, thread, self.file_list(failed, conv, failed=reason))
+
+    def _lead_file(self, fid, conv):
+        """The bytes of a file the lead of `conv` sent in Messages, at most UPLOAD_MAX."""
+        fd, row = self.d.chat.open(fid)
+        with os.fdopen(fd, "rb") as fh:
+            if row.get("conversation") != conv or row.get("side") != "lead" or row.get("messageId") is None:
+                raise SlackError("not a file this lead sent")
+            data = fh.read(UPLOAD_MAX + 1)
+        if len(data) > UPLOAD_MAX:
+            raise SlackError("file too large to upload")
+        # Words to Slack go through redact(); a text file is checked the same way and stays here if it would change.
+        # (Messages already refused one that matched onboarding.SECRET_RE when the lead sent it.)
+        if str(row.get("mime") or "").startswith("text/") and redact(data.decode("utf-8", "replace"))[1]:
+            raise SlackError(SECRET_FILE)
+        return data
 
     # ----- loops -----
 

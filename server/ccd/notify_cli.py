@@ -4,7 +4,7 @@
     python -m ccd.notify_cli on  slack|ntfy|both
     python -m ccd.notify_cli off slack|ntfy|both
     python -m ccd.notify_cli quiet 22:00 07:00
-    python -m ccd.notify_cli scope answers|answers_low_risk
+    python -m ccd.notify_cli scope answers|answers_low_risk|all
     python -m ccd.notify_cli test        one test DM and one test push
     python -m ccd.notify_cli summary     post the owner's and technical summaries now
 

@@ -66,7 +66,15 @@ test("Slack and phone show what is not set up yet, fit a phone, and ask for Deve
   await expect(group.getByRole("button", { name: "Send a test" })).toBeDisabled();
   await expect(group.getByRole("group", { name: "Your Slack replies" }).getByRole("button", { name: "Answers only" }))
     .toHaveAttribute("aria-pressed", "true");
+  const files = group.getByRole("group", { name: "Files in Slack" });
+  await expect(files.getByRole("button")).toHaveCount(3);
+  await expect(files.getByRole("button", { name: /SamVision/ })).toHaveCount(0);
+  await expect(files.getByRole("button", { pressed: true })).toHaveCount(0);
+  await expect(group.getByText(/SamVision, the CTO and client projects are never uploaded/)).toBeVisible();
   expect(await page.evaluate(wide)).toBe(true);
+  await files.getByRole("button").first().click();
+  await expect(page.getByRole("dialog", { name: "Developer Unlock" })).toBeVisible();
+  await page.keyboard.press("Escape");
   await group.getByRole("group", { name: "Slack", exact: true }).getByRole("button", { name: "On" }).click();
   await expect(page.getByRole("dialog", { name: "Developer Unlock" })).toBeVisible();
   await page.keyboard.press("Escape");

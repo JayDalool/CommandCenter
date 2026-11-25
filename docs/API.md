@@ -110,7 +110,7 @@ session re-opens them.
 | | |
 |---|---|
 | `GET /api/workspace/projects` | `{projects[{key,name,prefix,root,exists,branch,github{owner,repo,slug,url},coordinator,coordinatorState{state,how,candidates[{paneId,sessionId,status}]}}]}`. Roots come from `ccd/registry.py` only. `state` is `ready`, `found` (one unnamed Claude at the root: adopt it), `multiple` (pick one) or `none`, from the one resolver `ccd/coordid.py` |
-| `GET /api/tasks/{key}/work` | The ticket's durable pipeline state in one object: `stage`, `stages[]`, `plan`, `planState`, `policy`, `gate`, `roles`, `branch`, `worktree`, `prs`, `review{verdict,head,cycles}`, `verification`, `merge`, `handoff`, `blocked`, `findings[]` (plans/TICKET-PIPELINE-V1.md), and the delivery flow's `size`, `requirements`, `criteria`, `planReview`, `userCheck`, `closing`, `flow`, `handoffs` (see **Delivery flow** below) |
+| `GET /api/tasks/{key}/work` | The ticket's durable pipeline state in one object: `stage`, `stages[]`, `plan`, `planState`, `policy`, `gate`, `roles`, `branch`, `worktree`, `prs`, `review{verdict,head,cycles}`, `verification`, `merge`, `handoff`, `blocked`, `findings[]` (plans/TICKET-PIPELINE-V1.md), and the delivery flow's `size`, `requirements`, `criteria`, `planReview`, `planReviews`, `userCheck`, `closing`, `flow`, `handoffs` (see **Delivery flow** below) |
 | `POST /api/tasks/{key}/work/{op}` | One pipeline step, recorded as `X-CCD-Actor` (`agent:<role>`): `plan {plan}`, `start {branch, worktree}`, `review {verdict, head, findings}`, `verify {result, evidence}`, `handoff`, `block {reason}`, `role`, `finding`. `confirm {gate}` closes an owner gate and needs Jay AND Developer Unlock. Agents use `python -m ccd.pipeline_cli` |
 | `POST /api/coordinators/adopt` | DEVELOPER. `{project, sessionId}` binds that EXISTING Claude (a live one at the project root) as the coordinator; recorded by session id in `state/coordinator-bindings.json`, so a title change or a new pane id never breaks it. Never starts, resumes, renames or types into Claude |
 | `GET /api/files/list?project=&path=&git=1` | one folder: `{entries[{name,kind,size,mtime,protected,link,git?}], crumbs, truncated}`; `.git` never listed |
@@ -209,7 +209,9 @@ New pipeline steps on `POST /api/tasks/{key}/work/{op}` (agents: `python -m ccd.
 | `evidence` | `{kind: screenshot\|image\|link\|file\|test\|pr\|ci\|deploy\|note, ref, note?, stage?}` | append-only evidence |
 | `writer` | `{owner: claude\|codex\|jay\|none, checkpoint?}` | one writer per worktree; taking it from another writer needs a checkpoint `{reason, branch, worktree, commit, dirty, changed[], tests, decisions, blocker, remaining}`; a handover to Claude sends the task session one fixed sentence: read the checkpoint with `pipeline_cli work <KEY>` |
 | `deploy-request` | `{env: live\|preview\|dev, what, verification}` | after the merge (VERIFYING), before `verify pass` (which closes a ticket that owes no deploy). `live` opens the deploy gate — **Ready for live deployment** — and waits for Jay; preview/dev follow automation; a pending live request cannot be replaced by a preview one |
-| `deployed` | `{env, result: pass\|fail, evidence}` | records the deployment; `live` is refused (409) until Jay approved it; pass + verified → DONE; fail → BLOCKED, and the next try needs a fresh request (and approval). Jay's **Approve live deploy** on a `needs:deploy` gate is an approval, never a close: the ticket waits for `deployed`. It is a real live-deploy approval, marked `approvedBy: "jay:gate"` (`confirm deploy` from the ticket gate), and the message typed into the task session (`daemon.GATE_DEPLOY_TEMPLATE`) asks Claude to prepare the deploy and wait for Jay to confirm in the pane; that wait rests on the message text only |
+| `deploy-plan` | `{summary}` (≤2000 characters, ≤40 lines, nothing Slack's secret filter would hide, no character Slack would not show (zero-width, bidirectional, tag, variation selector and similar), only plain spaces and never 20 in a row, no ```` ``` ````: Jay sees all of it, in a code block) | a live deploy Jay approved from Slack (`approvedBy: "jay:slack"`; any other approval is refused): the agent's prepared plan (steps, migrations, checks, rollback). ccd sends all of it to Jay's Slack DM; his **deploy** reply there records `deploy.goAt` (`pipeline.deploy_confirmed`, bound to this plan's digest, refused before the release window unless the deploy is urgent) and tells the task session to deploy (`daemon.SLACK_DEPLOY_GO_TEMPLATE`). Refused once confirmed |
+| `reply` | `{text}` (≤2000) | the task session's answer to a question Jay asked back from Slack about its open questions (`notify.ask_back`). Recorded on the ticket (`pipeline.replied`); ccd posts it, quoted, in the thread of the ticket's latest questions DM. Changes nothing else; `posted` says whether Slack took it |
+| `deployed` | `{env, result: pass\|fail, evidence}` | records the deployment; `live` is refused (409) until Jay approved it, and a `pass` on a Slack approval until Jay confirmed its plan from Slack (`deploy-plan`); pass + verified → DONE; fail → BLOCKED, and the next try needs a fresh request (and approval). Jay's **Approve live deploy** on a `needs:deploy` gate is an approval, never a close: the ticket waits for `deployed`. It is a real live-deploy approval, marked `approvedBy: "jay:gate"` (`confirm deploy` from the ticket gate), and the message typed into the task session (`daemon.GATE_DEPLOY_TEMPLATE`) asks Claude to prepare the deploy and wait for Jay to confirm in the pane; that wait rests on the message text only |
 | `block` | `{reason, what?, why?, action?, impact?, technical?}` | as before, plus the manager explanation the UI shows first |
 
 Review: an `APPROVE` from `agent:implementer`, or with the implementer's session or the task session's name (`sv-071`), is refused (409); every `APPROVE` must name its (fresh) reviewer session, and `start` records the implementer's session (default: the task session, `sv-071`). `rework` and `replan` drop any verification, live-deploy approval and UI/deploy acceptance, and close open UI/deploy gates.
@@ -377,7 +379,9 @@ A sized ticket is in the pipeline from the moment it is sized (even in INBOX): l
 `GET /api/tasks/{key}/work` adds:
 
     size: "small"|"standard"|"risky"|null, requirements: string[], criteria: [{id, text, state: open|pass|fail, by, at, head}],
-    planReview: {verdict, by, session, at, note, blast, tests} | null,
+    planReview: {verdict, by, session, at, note, blast, tests} | null,   // the latest review; null once a new plan is recorded
+    planReviews: [{verdict, by, session, at, note, blast, tests}],        // every review, oldest first (CC-066); reviews
+                                                                          // from before CC-066 have note/blast/tests null
     userCheck: {result, head, pr, by, session, at, note} | null,
     closing: {note, by, at} | null,
     flow: {size, stage, route: string[], openChildren: number,
@@ -401,7 +405,7 @@ Every seat appears at least once per project; a seat with several holders (two d
 row each, oldest first; an empty seat has `session: null`. The lead's session is the coordinator's pane from the
 coordinator resolver; the others come from the `roles` of tickets in flight (open, past intake).
 
-Events (ticket timeline and `/api/activity` `task.pipeline` with `data.kind`; ids only): `pipeline.intake`,
+Events (ticket timeline and `/api/activity` `task.pipeline` with `data.kind`; mostly ids, but `pipeline.plan_reviewed` data in the timeline also carries the review's `session`, `note`, `blast` and `tests`, kept for good because events are append-only, so plan-review refuses text the secret filter would hide): `pipeline.intake`,
 `pipeline.criteria`, `pipeline.plan_reviewed`, `pipeline.user_checked`, `pipeline.user_check_stale`,
 `pipeline.closed_note`, `pipeline.flow_stale`.
 

@@ -17,6 +17,8 @@
     python -m ccd.pipeline_cli evidence SV-056 --role verifier --kind screenshot --ref mobile-375.png [--note …]
     python -m ccd.pipeline_cli writer   SV-056 --role coordinator --owner claude [--checkpoint-file cp.json]
     python -m ccd.pipeline_cli deploy-request SV-056 --role coordinator --env live --what "…" --verification "…"
+    python -m ccd.pipeline_cli deploy-plan SV-056 --role coordinator --summary "…"   (a deploy Jay approved from Slack)
+    python -m ccd.pipeline_cli reply    SV-056 --role coordinator --text "…"   (answer Jay's question from Slack)
     python -m ccd.pipeline_cli deployed SV-056 --role coordinator --env live --result pass --evidence "…"
     python -m ccd.pipeline_cli stale    SV-056 --role coordinator --reason "superseded by SV-071 (plans/x.md)"
     python -m ccd.pipeline_cli tasks    samvision                  the project's open tasks (the task check)
@@ -28,7 +30,7 @@ The delivery flow (docs/flow/FLOW.md). Each line runs as the seat named in brack
                                            [--requirement "keep the CSV export"] [--parent SV-050]            [lead]
     python -m ccd.pipeline_cli criteria    SV-056 --criterion "…" [--criterion …] [--requirement …] [--size risky]  [lead]
     python -m ccd.pipeline_cli criteria    SV-056 --priority URGENT --due 2026-11-18     (any stage while open)  [lead]
-    python -m ccd.pipeline_cli plan-review SV-056 APPROVE|SEND_BACK --session <fresh> --note "…" [--blast "…"] \
+    python -m ccd.pipeline_cli plan-review SV-056 APPROVE|SEND_BACK --session <fresh> --note "…" [--blast "…" …] \
                                            [--test "…"] [--size risky]                                       [tech-reviewer]
     python -m ccd.pipeline_cli user-check  SV-056 pass|fail --head <sha> --session <fresh> --note "…" \
                                            --criterion c1=pass [--criterion c2=fail …]                        [user-reviewer]
@@ -131,7 +133,8 @@ def build(argv):
     p = argparse.ArgumentParser(prog="ccd.pipeline_cli", description="Record a ticket pipeline step in Command Center.")
     p.add_argument("op", choices=("work", "plan", "start", "review", "verify", "handoff", "block", "role", "finding",
                                   "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
-                                  "tasks", "add", "intake", "criteria", "plan-review", "user-check", "close"))
+                                  "tasks", "add", "intake", "criteria", "plan-review", "user-check", "close",
+                                  "deploy-plan", "reply"))
     p.add_argument("key")
     p.add_argument("decision", nargs="?", help="plan-review: APPROVE or SEND_BACK; user-check: pass or fail")
     p.add_argument("--role", choices=ROLES)
@@ -145,7 +148,7 @@ def build(argv):
     p.add_argument("--findings-file")
     p.add_argument("--result", choices=("pass", "fail"))
     p.add_argument("--evidence")
-    for f in ("done", "decisions", "next", "blockers", "reason", "summary", "category"):
+    for f in ("done", "decisions", "next", "blockers", "reason", "summary", "category", "text"):
         p.add_argument(f"--{f}")
     p.add_argument("--question", action="append")
     p.add_argument("--questions-file")
@@ -173,7 +176,7 @@ def build(argv):
     p.add_argument("--criterion", action="append", help="intake/criteria: a criterion's text; user-check: ID=pass|fail")
     p.add_argument("--requirement", action="append")
     p.add_argument("--parent")
-    p.add_argument("--blast")
+    p.add_argument("--blast", action="append")
     p.add_argument("--test", action="append")
     a = p.parse_args(argv)
     if a.decision is not None and a.op not in ("plan-review", "user-check"):
@@ -203,6 +206,8 @@ def build(argv):
         "writer": lambda: {"owner": a.owner, "checkpoint": _json_file(a.checkpoint_file) if a.checkpoint_file else None},
         "deploy-request": lambda: {"env": a.env, "what": a.what, "verification": a.verification},
         "deployed": lambda: {"env": a.env, "result": a.result, "evidence": a.evidence},
+        "deploy-plan": lambda: {"summary": a.summary},
+        "reply": lambda: {"text": a.text},
         "stale": lambda: {"reason": a.reason},
         "intake": lambda: {"size": a.size, "criteria": a.criterion or [], "requirements": a.requirement or [],
                            **({"parent": a.parent} if a.parent else {}),
@@ -210,7 +215,9 @@ def build(argv):
         "criteria": lambda: {k: v for k, v in (("criteria", a.criterion), ("requirements", a.requirement),
                                                ("size", a.size), ("priority", a.priority), ("due", a.due))
                              if v is not None},
-        "plan-review": lambda: {"verdict": a.decision or a.verdict, "note": a.note, "blast": a.blast,
+        "plan-review": lambda: {"verdict": a.decision or a.verdict, "note": a.note,
+                                # CC-055: --blast repeats; the ticket keeps one text, so a single value is unchanged.
+                                "blast": "; ".join(a.blast) if a.blast else None,
                                 "tests": a.test or [], **({"size": a.size} if a.size else {}), **meta},
         "user-check": lambda: {"result": a.decision or a.result, "head": a.head, "note": a.note,
                                "criteria": a.criterion or [], **meta},

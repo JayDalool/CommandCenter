@@ -24,10 +24,12 @@ import hashlib
 import json
 import re
 import time
+import unicodedata
 import zoneinfo
 
 from . import flow as flow_mod
 from . import registry
+from .security import redact
 from .tasks import TaskError, _printable
 
 STAGES = ("PLAN", "BUILD", "REVIEW", "MERGE", "VERIFY", "DONE")
@@ -172,6 +174,24 @@ def needs_acceptance(t, w):
     pol = policy(t)
     flags = {f.replace(":", "_").replace("-", "_") for f in t.get("flags") or []}
     return pol["merge"] == "owner" or pol["ui"] or "needs_jay" in flags or "owner:accept" in (w.get("confirmed") or [])
+
+
+# Letters and symbols that Slack (like most fonts) draws as nothing: Hangul fillers, the braille blank, Khmer vowels.
+BLANK_CHARS = frozenset("\u115f\u1160\u3164\uffa0\u2800\u180e\u17b4\u17b5")
+UNSHOWN_CATEGORIES = ("Cc", "Cf", "Co", "Cn", "Cs", "Zl", "Zp", "Mn", "Me")
+
+
+def unshown(text):
+    """The first character of `text` that a reader may not see, or None: control and format characters (zero-width,
+    bidirectional controls, tag characters), private-use, unassigned and surrogate code points, line and paragraph
+    separators, combining marks (variation selectors among them) and the blank letters above. Line breaks and tabs
+    are shown. Text Jay approves from Slack must have none: the approval covers what he could read."""
+    for ch in unicodedata.normalize("NFC", str(text or "")):   # an accent typed as a combining mark is shown
+        if ch in "\n\t":
+            continue
+        if ch in BLANK_CHARS or unicodedata.category(ch) in UNSHOWN_CATEGORIES:
+            return ch
+    return None
 
 
 def _text(v, limit, field, multiline=True):
@@ -414,8 +434,27 @@ class Pipeline:
         f = self._flow(tid)
         out.update(size=flow_mod.shown_size(f["size"], out["policy"]), requirements=f["requirements"],
                    criteria=f["criteria"], planReview=f["planReview"], userCheck=f["userCheck"], closing=f["closing"])
-        out["flow"], out["handoffs"] = flow_mod.view(t, out, f, self._events(tid), out["policy"],
+        events = self._events(tid)
+        out["planReviews"] = self._plan_reviews(events)
+        out["flow"], out["handoffs"] = flow_mod.view(t, out, f, events, out["policy"],
                                                      len(self._children(tid)["open"]))
+        return out
+
+    @staticmethod
+    def _plan_reviews(events):
+        """CC-066: every technical plan review, oldest first. planReview holds only the latest (a new plan clears it),
+        so earlier notes, blast radius and tests are read back from the events. Events written before the fix carry
+        only the verdict: their text fields are None."""
+        out = []
+        for at, actor, kind, _field, _frm, _to, data in events:
+            if kind != "pipeline.plan_reviewed":
+                continue
+            try:
+                d = json.loads(data or "{}") if isinstance(data, str) else (data or {})
+            except ValueError:
+                d = {}
+            out.append({"verdict": d.get("verdict"), "by": actor, "session": d.get("session"), "at": at,
+                        "note": d.get("note"), "blast": d.get("blast"), "tests": d.get("tests")})
         return out
 
     def questions(self, tid):
@@ -723,6 +762,11 @@ class Pipeline:
     @staticmethod
     def _role(w, role, model=None, session=None, at=None):
         roles = dict(w["roles"])
+        # CC-067: the same session writing again (role --model, then review) keeps its model; a different
+        # session taking the seat must not inherit the previous session's model.
+        old = roles.get(role) or {}
+        if model is None and session and old.get("session") == session:
+            model = old.get("model")
         roles[role] = {"model": _meta(model, "model"), "session": _meta(session, "session"), "at": at}
         return roles
 
@@ -1048,7 +1092,9 @@ class Pipeline:
         """Jay closes an owner gate. Only `jay` (and the API also requires Developer Unlock). `via` marks a
         live-deploy approval whose message only asks Claude to PREPARE: "go-live" (Go Live) gives approvedBy
         "jay:go-live", "gate" (the ticket's deploy gate) gives "jay:gate". Either way the event says the deploy was
-        approved for a PREPARED deploy that Jay confirms in the pane. The record is still a full live-deploy approval
+        approved for a PREPARED deploy that Jay confirms in the pane. "slack" (his reply in the Slack DM) gives
+        "jay:slack": the agent records its plan (deploy_plan) and Jay confirms it from Slack (deploy_go), which
+        `deployed --result pass` requires. The record is still a full live-deploy approval
         and permits `deployed` (it checks only approvedAt; the pane confirmation is Jay's, and nothing here can
         check it). `plan_digest_seen` (a plan approved from a Slack DM): the plan gate closes only if the plan is still
         the one Jay saw, checked in this transaction."""
@@ -1058,6 +1104,7 @@ class Pipeline:
             raise TaskError(400, f"gate must be one of {', '.join(GATES)}")
         by = f"{actor}:{via}" if via else actor
         said = ("approved for a prepared deploy (Jay confirms in the pane)" if via in ("go-live", "gate")
+                else "approved for a prepared deploy (Jay confirms it from Slack)" if via == "slack"
                 else "Jay approved the live deployment")
 
         def fn(tid, t, w, at):
@@ -1195,6 +1242,7 @@ class Pipeline:
     EVIDENCE_KINDS = ("screenshot", "image", "link", "file", "test", "pr", "ci", "deploy", "note")
     WRITERS = ("claude", "codex", "jay", "none")
     DEPLOY_ENVS = ("live", "preview", "dev")
+    DEPLOY_PLAN_LINES = 40   # a deploy plan Jay confirms from Slack is shown whole there
     MAX_QUESTIONS = 10
 
     def _open(self, t, op):
@@ -1451,6 +1499,80 @@ class Pipeline:
                               ("pipeline.gate_opened", "deploy gate", {"gate": "deploy"})]
         return self._tx(key, actor, fn)
 
+    def reply(self, key, text, actor):
+        """The task session answers a question Jay asked back from Slack about its open questions (notify.ask_back).
+        Recorded on the ticket; ccd posts it in his Slack thread (Daemon.task_work_op_async). Changes nothing else."""
+        text = _text(text, 2000, "text")
+        if not text:
+            raise TaskError(400, "say what to tell Jay (--text)")
+
+        def fn(tid, t, w, at):
+            self._open(t, "a reply")
+            return {}, {}, [("pipeline.replied", f"answered Jay: {text[:200]}", {"count": len(text)})]
+        return self._tx(key, actor, fn)
+
+    def deploy_plan(self, key, summary, actor):
+        """A live deploy Jay approved from Slack was PREPARED: the agent records its plan (steps, migrations, checks,
+        rollback) and ccd sends it to Jay's Slack DM. Nothing deploys until he confirms it there (deploy_go)."""
+        summary = _text(summary, 2000, "summary")
+        if not summary:
+            raise TaskError(400, "say what the deploy will do (--summary)")
+        # Jay's "deploy" approves the whole plan, so the DM must show all of it (notify.send_deploy_plan): no more lines
+        # than it shows, nothing Slack's secret filter would hide, no character Slack would not draw.
+        if len(summary.splitlines()) > self.DEPLOY_PLAN_LINES:
+            raise TaskError(400, f"keep the deploy plan to {self.DEPLOY_PLAN_LINES} lines: Jay reads all of it in Slack")
+        if redact(summary)[1]:
+            raise TaskError(400, "the deploy plan has text Slack's secret filter would hide (a key, token, password or "
+                                 "connection string, or a word like token or secret followed by a value): reword it so "
+                                 "Jay can read all of it")
+        ch = unshown(summary) or next((c for c in summary if c != " " and unicodedata.category(c) == "Zs"), None)
+        if ch:
+            raise TaskError(400, f"the deploy plan has a character Slack would not show plainly (U+{ord(ch):04X}): use "
+                                 "plain text, so Jay can read all of it")
+        if "```" in summary or re.search(r" {20,}", summary):
+            # The DM shows the plan in a code block (notify.send_deploy_plan); ``` would end it, and a long run of
+            # spaces pushes the rest of a line out of sight.
+            raise TaskError(400, "the deploy plan cannot contain ``` or 20 spaces in a row")
+
+        def fn(tid, t, w, at):
+            self._need(t, ("VERIFYING",), "a deploy plan")
+            d = w.get("deploy") or {}
+            if d.get("env") != "live" or not d.get("approvedAt") or d.get("result"):
+                raise TaskError(409, f"{t['key']} has no approved live deployment waiting")
+            if not str(d.get("approvedBy") or "").endswith(":slack"):
+                raise TaskError(409, f"{t['key']}'s deploy was approved in CommandCenter: Jay confirms it in the pane, "
+                                     "not from Slack")
+            if d.get("goAt"):
+                raise TaskError(409, f"Jay already confirmed {t['key']}'s deploy; deploy it as planned")
+            d = dict(d, plan={"summary": summary, "at": at, "by": actor})
+            return {}, {"deploy": d}, [("pipeline.deploy_prepared", "deploy plan ready for Jay", {})]
+        return self._tx(key, actor, fn)
+
+    def deploy_go(self, key, actor, via, plan_digest_seen):
+        """Jay confirms a prepared live deploy from Slack: the plan he saw (its digest), approved and not yet done.
+        `deployed --result pass` is refused for a Slack-approved deploy until this is recorded."""
+        if actor != "jay":
+            raise TaskError(403, "only Jay confirms a deploy")
+
+        def fn(tid, t, w, at):
+            d = w.get("deploy") or {}
+            if d.get("env") != "live" or not d.get("approvedAt") or d.get("result"):
+                raise TaskError(409, f"{t['key']} has no approved live deployment waiting")
+            if d.get("goAt"):
+                raise TaskError(409, f"{t['key']}'s deploy was already confirmed")
+            if not d.get("plan") or plan_digest(d["plan"]) != plan_digest_seen:
+                raise TaskError(409, f"{t['key']}'s deploy plan changed since Jay saw it; nothing was confirmed")
+            if not d.get("urgent"):
+                # The same release window `deployed` holds a pass to: a go before it opens is refused, not queued.
+                held = self._held(t, w, at)
+                if held:
+                    when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(held))
+                    raise TaskError(409, f"{t['project']} is live: this deploy waits for the release window ({when}); "
+                                         "nothing was confirmed")
+            d = dict(d, goAt=at, goBy=f"{actor}:{via}")
+            return {}, {"deploy": d}, [("pipeline.deploy_confirmed", "Jay confirmed the deploy", {"via": via})]
+        return self._tx(key, actor, fn)
+
     def deployed(self, key, env, result, evidence, actor):
         """The deployment happened. A live one only after Jay approved it; then verify live, then close."""
         if result not in ("pass", "fail"):
@@ -1466,6 +1588,10 @@ class Pipeline:
                 raise TaskError(409, f"no {env} deployment was requested for {t['key']}")
             if not d.get("approvedAt"):
                 raise TaskError(409, "Jay has not approved this live deployment")
+            if result == "pass" and str(d.get("approvedBy") or "").endswith(":slack") and not d.get("goAt"):
+                # Approved from Slack: that approval only asked for a plan; Jay's "deploy" reply is the go.
+                raise TaskError(409, "Jay approved this from Slack and has not confirmed the deploy yet: record the "
+                                     "plan with deploy-plan and wait for his reply")
             if env == "live" and not d.get("urgent") and result == "pass":
                 # A failure is always recorded (it happened); a pass before the window is refused.
                 held = self._held(t, w, at)
@@ -1627,6 +1753,12 @@ class Pipeline:
         if not session:
             raise TaskError(400, "say which reviewer session reviews the plan (--session)")
         _meta(session, "session")
+        # CC-066: the review text now goes into ticket_events, which is append-only, so a secret could never be
+        # removed again (ticket_flow.plan_review is overwritten by the next review). Refuse before anything is written.
+        for field, val in (("session", session), ("note", note), ("blast", blast), *[("tests", x) for x in tests]):
+            if val and redact(val)[1]:
+                raise TaskError(400, f"the {field} has text the secret filter would hide (a key, token, password or "
+                                     "connection string): reword it, plan reviews are kept for good")
 
         def fn(tid, t, w, at):
             self._need(t, ("RESEARCHING",), "a plan review")
@@ -1648,6 +1780,9 @@ class Pipeline:
                 new = size
             review = {"verdict": verdict, "by": actor, "session": session, "at": at, "note": note, "blast": blast,
                       "tests": tests}
+            # CC-066: every verdict's text also rides on its event, so work().planReviews keeps reviews that
+            # ticket_flow.plan_review loses when a new plan clears it.
+            kept = {"session": session, "note": note, "blast": blast, "tests": tests}
             work = {"roles": self._role(w, "tech-reviewer", model, session, at)}
             cols = {"plan_review": review}
             if new != f["size"]:
@@ -1663,10 +1798,10 @@ class Pipeline:
                                 blocked={"stage": "PLAN", "flowStage": "techReview", "reason": reason, "at": at})
                     return {"status": "BLOCKED"}, work, [
                         ("pipeline.plan_reviewed", f"plan sent back (round {rounds['techReview']})",
-                         {"verdict": verdict, "rounds": rounds["techReview"], "blocked": True}),
+                         dict(kept, verdict=verdict, rounds=rounds["techReview"], blocked=True)),
                         ("pipeline.blocked", reason, {"stage": "PLAN"})]
                 return {}, work, [("pipeline.plan_reviewed", f"plan sent back (round {rounds['techReview']})",
-                                   {"verdict": verdict, "rounds": rounds["techReview"]})]
+                                   dict(kept, verdict=verdict, rounds=rounds["techReview"]))]
             if new == "risky":
                 # The existing plan gate: Jay approves a risky plan after the technical review.
                 self._flow_set(tid, at, **cols)
@@ -1674,13 +1809,13 @@ class Pipeline:
                 work.update(gate="plan", gate_reason=reason[:300], plan_state="proposed",
                             confirmed=sorted(set(w["confirmed"]) | {"owner:plan"}))
                 return {}, work, [("pipeline.plan_reviewed", "plan approved; Jay approves risky plans",
-                                   {"verdict": verdict, "gate": True}),
+                                   dict(kept, verdict=verdict, gate=True)),
                                   ("pipeline.gate_opened", "plan gate: " + reason[:200], {"gate": "plan"})]
             cols["review_due"] = None
             self._flow_set(tid, at, **cols)
             work.update(plan_state="accepted", gate=None, gate_reason=None)
             return {"status": "READY_TO_IMPLEMENT"}, work, [("pipeline.plan_reviewed", "plan approved",
-                                                             {"verdict": verdict, "gate": False})]
+                                                             dict(kept, verdict=verdict, gate=False))]
         return self._tx(key, actor, fn)
 
     @staticmethod

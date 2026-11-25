@@ -21,7 +21,8 @@
 #   5. switches to the branch and fast-forwards it to origin
 #   6. installs the server requirements, builds and installs the UI as an atomic release, and rebuilds the
 #      Windows launcher offered under Settings → Desktop app
-#   7. links Claude's /night-shift and /ui-test skills into ~/.claude/skills (scripts/install-claude-commands.sh)
+#   7. links Claude's /night-shift and /ui-test skills into ~/.claude/skills and sets the AskUserQuestion hook in
+#      ~/.claude/settings.json (scripts/install-claude-commands.sh)
 #   8. restarts ccd (which applies any additive tasks.db migration) and waits for it to answer
 # and prints the exact rollback. It never deletes anything and never touches herdr or any agent.
 set -euo pipefail
@@ -180,7 +181,7 @@ else
   echo "   Go is not installed here; the Desktop app page keeps the old exe"
 fi
 
-echo "== Claude skills (/night-shift, /ui-test)"
+echo "== Claude skills (/night-shift, /ui-test) and the AskUserQuestion hook"
 scripts/install-claude-commands.sh | sed 's/^/   /'
 
 echo "== restart ccd"

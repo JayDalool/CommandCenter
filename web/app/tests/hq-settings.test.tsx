@@ -182,6 +182,35 @@ describe("HQ Settings", () => {
     } finally { act(() => setDevSession(null)); }
   });
 
+  it("Files in Slack: one switch per project ccd offers, never SamVision, and a missing Slack permission is said", async () => {
+    load();
+    developer.set({ active: true, expiresAt: null, error: null });
+    const withFiles: NotifyState = { ...NOTIFY, settings: { ...NOTIFY.settings, slackFiles: ["gyst"] },
+      slackFiles: { choices: ["commandcenter", "gyst"], never: ["cto", "samvision"], scope: false } };
+    vi.spyOn(app.api, "notify").mockResolvedValue(withFiles);
+    const put = vi.spyOn(app.api, "setNotify").mockResolvedValue(withFiles);
+    try {
+      const page = await show("#/settings?tab=notifications");
+      const group = within(within(page).getByRole("group", { name: "Files in Slack" }));
+      expect(group.getAllByRole("button").map((b) => [b.textContent, b.getAttribute("aria-pressed")]))
+        .toEqual([[expect.stringMatching(/command ?center/i), "false"], [expect.stringMatching(/gyst/i), "true"]]);
+      expect(within(page).getByText(/Slack has not granted the app files:write yet/)).toBeInTheDocument();
+      expect(within(page).getByText(/SamVision, the CTO and client projects are never uploaded/)).toBeInTheDocument();
+      await act(async () => { fireEvent.click(group.getAllByRole("button")[0]); });
+      expect(put).toHaveBeenLastCalledWith({ slackFiles: ["gyst", "commandcenter"] });
+      await act(async () => { fireEvent.click(group.getAllByRole("button")[1]); });
+      expect(put).toHaveBeenLastCalledWith({ slackFiles: [] });
+    } finally { developer.set({ active: false, expiresAt: null, error: null }); }
+  });
+
+  it("Files in Slack is not shown by a ccd that does not offer it", async () => {
+    load();
+    vi.spyOn(app.api, "notify").mockResolvedValue(NOTIFY);
+    const page = await show("#/settings?tab=notifications");
+    expect(within(page).getByRole("group", { name: "Your Slack replies" })).toBeInTheDocument();
+    expect(within(page).queryByRole("group", { name: "Files in Slack" })).toBeNull();
+  });
+
   it("Slack and phone save one change at a time once unlocked", async () => {
     load();
     developer.set({ active: true, expiresAt: null, error: null });
@@ -259,6 +288,14 @@ describe("HQ Settings", () => {
     const page = await show("#/settings?tab=notifications");
     const gauze = app.store.get().state!.projectsConfig.find((p) => p.key === "gauzemate")?.name ?? "gauzemate";
     expect(within(page).getByText(`Answers and plans, plus clearing a blocker or accepting a UI review. Never a merge or deploy. ${gauze} is a client project: replies there are passed on as text and never answer or approve.`)).toBeInTheDocument();
+  });
+
+  it("with Everything, the reply rule names merges and the two-reply deploy", async () => {
+    load();
+    vi.spyOn(app.api, "notify").mockResolvedValue({ ...NOTIFY, settings: { ...NOTIFY.settings, replyScope: "all" } });
+    const page = await show("#/settings?tab=notifications");
+    expect(within(page).getByText(/^Answers, plans, clearing a blocker or accepting a UI review, merges and deploys\. A merge is one reply; a deploy takes two: approve, then deploy once its plan is back\./)).toBeInTheDocument();
+    expect(within(within(page).getByRole("group", { name: "Your Slack replies" })).getByRole("button", { name: "Everything" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("with answers only, the reply rule still says plans are approved from Slack", async () => {
