@@ -170,6 +170,7 @@ class FakeDaemon:
         self.reviews = {}
         self.work = {}
         self.merged = []
+        self.ready = {}         # project -> merge_batch's ready rows, in the production shape
         self.deploys = []
         self._stopping = False
         self.tasks = None
@@ -182,6 +183,9 @@ class FakeDaemon:
 
     def _projects(self):
         return [{"key": k} for k in ("commandcenter", "samvision", "gyst", "mfe", "gauzemate")]
+
+    def merge_batch(self, project, keys=None):
+        return list(self.ready.get(project, [])), []
 
     def usage_state(self):
         return {"available": True, "budgets": [{"project": "samvision", "monthlyUsd": 200, "spentUsd": 41.2}],
@@ -408,6 +412,11 @@ class Summaries(unittest.TestCase):
         self.assertEqual(len(slack.posts), 5)
 
 
+def ready_row(key="CC-1", title="Evening list", pr="JayDalool/CommandCenter#141"):
+    """merge_batch's production row: the ticket's real title, not the merge-gate reason."""
+    return {"key": key, "title": title, "pr": pr, "head": "a" * 40, "gate": "merge"}
+
+
 class MergeList(unittest.TestCase):
     """CC-084: one DM at 18:00 Winnipeg listing the PRs ready to merge."""
 
@@ -416,10 +425,11 @@ class MergeList(unittest.TestCase):
         self.n, self.d, self.slack, _ = make(clock=lambda: self.now[0], settings={"slack": True})
         self.n.daily = {"summary": notify.local_day(self.n.settings, self.now[0])}
         self.n.seen = set()     # the first tick's baseline is not what this test is about
-        self.d.needs_list = [need("CC-1", text="Ready to merge: Evening list"),
+        # Needs Jay carries the gate reason as its text and swaps a gate for an open question; neither may leak in.
+        self.d.needs_list = [need("CC-1", text="Ready to merge: PR approved and green"),
                              need("CC-2", "questions", None, text="Claude needs 1 answer: x"),
                              need("CC-3", kind="gate", gate="plan", text="Plan needs approval: y")]
-        self.d.work["CC-1"] = {"review": {"pr": "JayDalool/CommandCenter#141", "head": "a" * 40, "verdict": "APPROVE"}}
+        self.d.ready = {"commandcenter": [ready_row()]}
 
     def lists(self):
         return [p for p in self.slack.posts if "ready to merge:" in p["text"]]
@@ -433,9 +443,47 @@ class MergeList(unittest.TestCase):
         self.assertIn("https://github.com/JayDalool/CommandCenter/pull/141", text)
         self.assertNotIn("CC-2", text)
         self.assertNotIn("CC-3", text)
+        self.assertNotIn("approved and green", text)
+
+    def test_a_ready_ticket_with_no_merge_gate_in_needs_jay_is_listed(self):
+        self.d.needs_list = []      # e.g. an open question replaced its gate
+        run(self.n.merge_list())
+        self.assertIn("CC-1 Evening list", self.lists()[0]["text"])
+
+    def test_a_client_project_keeps_its_details_out(self):
+        self.d.ready = {"gauzemate": [ready_row("GM-1", "Secret client work", "JayDalool/GM#5")]}
+        run(self.n.merge_list())
+        text = self.lists()[0]["text"]
+        self.assertIn("GM-1 (client project: details in CommandCenter)", text)
+        self.assertNotIn("Secret", text)
+        self.assertNotIn("github.com", text)
+
+    def test_it_runs_at_18_winnipeg_whatever_the_notification_timezone(self):
+        self.n.update_settings({"timezone": "Asia/Tokyo"})
+        self.n.daily = {}
+        self.now[0] = at(17, 59)
+        run(self.n.merge_list())
+        self.assertEqual(self.lists(), [])
+        self.now[0] = at(18, 1)
+        run(self.n.merge_list())
+        run(self.n.merge_list())
+        self.assertEqual(len(self.lists()), 1)
+        self.assertEqual(self.n.daily["mergeList"], "2026-11-12")
+
+    def test_a_long_queue_is_one_dm_of_whole_lines_that_counts_the_rest(self):
+        self.d.ready = {"commandcenter": [ready_row(f"CC-{i}", "T" * 90, f"JayDalool/CommandCenter#{i}")
+                                          for i in range(100, 160)]}
+        run(self.n.merge_list())
+        self.assertEqual(len(self.lists()), 1)
+        text = self.lists()[0]["text"]
+        self.assertTrue(text.startswith("60 PRs ready to merge:"))
+        self.assertLess(len(text), notify.POST_LIMIT)
+        shown = [x for x in text.split("\n") if x.startswith("- ")]
+        self.assertTrue(all(x.count("<") == x.count(">") == 1 for x in shown))
+        self.assertIn(f"+{60 - len(shown)} more", text)
 
     def test_nothing_ready_sends_nothing(self):
-        self.d.needs_list = [need("CC-3", kind="gate", gate="plan", text="Plan needs approval: y")]
+        self.d.ready = {}
         run(self.n.merge_list())
         self.assertEqual(self.slack.posts, [])
 

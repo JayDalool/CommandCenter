@@ -1050,37 +1050,54 @@ class Notifier:
 
     # ----- evening merge list (CC-084) -----
 
-    MERGE_LIST_AT = "18:00"     # Winnipeg (settings["timezone"]); fixed, not a setting, so it adds no API surface
+    MERGE_LIST_AT = "18:00"
+    # c1 fixes the evening at America/Winnipeg, not at the configurable notification timezone: with another
+    # setting the schedule and the once-a-day key would otherwise move (CC-084 review).
+    MERGE_LIST_SETTINGS = {"timezone": "America/Winnipeg"}
+    MERGE_LIST_MAX = 3500       # under POST_LIMIT, so post() never cuts a line or a link in half
 
     def merge_list_text(self):
-        """One line per ticket whose merge gate is open, or None when none is. Read-only: it names the PR and
-        links it, and never merges, approves or touches a ticket (Jay merges)."""
-        lines = []
-        for n in self.needs():
-            if n.get("kind") != "gate" or n.get("gate") != "merge" or not is_ticket(n.get("ref")):
+        """One line per PR Jay can merge now, or None when there is none. Uses the daemon's own merge_batch (the
+        Ready to merge press), not the Needs Jay queue: that queue swaps a gate for an open question and carries
+        the gate reason, not the title. Read-only: it never merges, approves or touches a ticket (Jay merges)."""
+        rows = []
+        for p in self.d._projects():
+            try:
+                ready, _ = self.d.merge_batch(p["key"])
+            except Exception as e:  # noqa: BLE001 — one project's failure must not hide the others
+                self._fail("merge list " + str(p.get("key")), repr(e))
                 continue
-            ref = esc(n["ref"])
-            if self.client(n.get("project")):
-                # A client project's details stay in CommandCenter, as in need_text().
-                lines.append(f"- {ref} (client project: details in CommandCenter)")
-                continue
-            title = str(n.get("text") or "")
-            title = title.split(": ", 1)[1] if title.startswith(NEED_LABEL["merge"] + ": ") else title
-            pr = self._review(n["ref"]).get("pr")
-            url = github.pr_ref_url(pr) if pr else None
-            tail = f" <{url}|{esc(pr)}>" if url else (f" {esc(pr)}" if pr else "")
-            lines.append(f"- {ref} {esc(title[:120])}{tail}")
-        if not lines:
+            for r in ready:
+                if self.client(p["key"]):
+                    # A client project's details stay in CommandCenter, as in need_text().
+                    rows.append(f"- {esc(r['key'])} (client project: details in CommandCenter)")
+                    continue
+                pr = r.get("pr")
+                url = github.pr_ref_url(pr) if pr else None
+                tail = f" <{url}|{esc(pr)}>" if url else (f" {esc(pr)}" if pr else "")
+                rows.append(f"- {esc(r['key'])} {esc(str(r.get('title') or '')[:90])}{tail}")
+        if not rows:
             return None
-        return f"{len(lines)} PR{'s' if len(lines) != 1 else ''} ready to merge:\n" + "\n".join(lines)
+        head = f"{len(rows)} PR{'s' if len(rows) != 1 else ''} ready to merge:\n"
+        if len(head) + sum(len(x) + 1 for x in rows) <= self.MERGE_LIST_MAX:
+            return head + "\n".join(rows)
+        # One DM, whole lines only; the rest is named by count and points at the full list in CommandCenter.
+        kept, size = [], len(head) + 90
+        for line in rows:
+            if size + len(line) + 1 > self.MERGE_LIST_MAX:
+                break
+            kept.append(line)
+            size += len(line) + 1
+        return (head + "\n".join(kept) + f"\n+{len(rows) - len(kept)} more: the full list is under Merge ready "
+                "in CommandCenter")
 
     async def merge_list(self):
-        """The 18:00 DM. Marked sent for the day before it is posted, so a restart or a second tick that evening
-        never sends it again; nothing ready (or quiet hours) sends nothing."""
+        """The 18:00 Winnipeg DM. Marked sent for the day before it is posted, so a restart or a second tick that
+        evening never sends it again; nothing ready (or quiet hours) sends nothing."""
         now = self.clock()
-        if not due(self.settings, self.MERGE_LIST_AT, self.daily.get("mergeList"), now):
+        if not due(self.MERGE_LIST_SETTINGS, self.MERGE_LIST_AT, self.daily.get("mergeList"), now):
             return False
-        self.daily["mergeList"] = local_day(self.settings, now)
+        self.daily["mergeList"] = local_day(self.MERGE_LIST_SETTINGS, now)
         self.store.put("notify:daily", self.daily)
         text = self.merge_list_text()
         if text is None or in_quiet(self.settings, now):
