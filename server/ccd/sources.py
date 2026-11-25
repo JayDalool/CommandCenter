@@ -454,6 +454,13 @@ def worktree_paths(path):
     return found or [path]
 
 
+def container_status(name):
+    """`docker ps` status text of one container ("Up 22 hours (healthy)"), or None when it is not running or docker
+    does not answer. Read-only; the fleet report (CC-079) needs GYST's health and GYST has no counts endpoint."""
+    code, out, _ = _run(["docker", "ps", "--filter", f"name=^{name}$", "--format", "{{.Status}}"], timeout=8)
+    return out.strip() or None if code == 0 else None
+
+
 # ---------- server ----------
 
 def server(cfg):

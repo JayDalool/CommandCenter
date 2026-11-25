@@ -29,6 +29,7 @@ AUTH = dict(HOST, **{"x-ccd-token": TOKEN})
 JSON = dict(AUTH, **{"content-type": "application/json"})
 
 ALLOWED = {
+    ("GET", "/api/fleet"),
     ("GET", "/api/health"), ("GET", "/api/state"), ("GET", "/api/activity"),
     ("GET", "/api/agents/{agent_id}/tail"), ("WS", "/api/events"),
     ("POST", "/api/action/answer"), ("POST", "/api/action/focus"),
@@ -230,6 +231,18 @@ class Surface(NoLiveData, ApiBase):
                 continue
             for word in FORBIDDEN_WORDS:
                 self.assertNotIn(word, path.lower(), f"{path} mentions {word}")
+
+    def test_fleet_report_is_for_jay_and_the_cto_only(self):
+        # CC-079: counts of production accounts. Other agents get 403; the answer carries the written definition.
+        from unittest import mock
+        self.assertEqual(self.client.get("/api/fleet").status_code, 401)
+        self.assertEqual(self.get("/api/fleet", headers={**AUTH, "X-CCD-Actor": "agent:developer"}).status_code, 403)
+        with mock.patch("ccd.fleet.build", return_value={"total": {"accounts": 0}}), \
+                mock.patch("ccd.fleet._cache", {"at": 0.0, "report": None}):
+            for who in ("jay", "agent:cto"):
+                r = self.get("/api/fleet", headers={**AUTH, "X-CCD-Actor": who})
+                self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.post("/api/fleet", {}).status_code, 405)
 
     def test_profiles_are_read_only_and_token_gated(self):
         # v2 Phase 1: GET /api/profiles shows policy; nothing changes it over HTTP.

@@ -42,6 +42,9 @@ PROJECTS = {
                       "root": "/srv/server/apps/samvisionai",       "github": "JayDalool/SamVisionAI",
                       # SamVision's own rule: its merges need Jay (docs/jay/MORNING.md, SV-064).
                       "pipeline": {"merge": "owner"},
+                      # Fleet report (CC-079, docs/fleet-contract.md): the app's own read-only counts endpoint.
+                      "fleet": {"url": "http://127.0.0.1:8502/api/internal/fleet/v1/accounts",
+                                "token_file": "~/.config/command-center/fleet/samvision.token"},
                       # Jay (2026-10-09): a lot of research, very careful — the night shift's careful mode.
                       "night": "careful"},
     "gauzemate":     {"name": "GauzeMate",        "prefix": "GZ",   "legacy": ("GM",),
@@ -55,14 +58,18 @@ PROJECTS = {
                       "paused": "Jay paused GauzeMate until he adds designs and files"},
     "mfe":           {"name": "MyFamilyExpenses", "prefix": "MFE",  "legacy": (),
                       "root": "/srv/server/repos/MyFamilyExpenses", "github": "JayDalool/MyFamilyExpenses",
-                      "pipeline": {"merge": "owner"}},   # Jay accepts every MFE merge (2026-10-09)
+                      "pipeline": {"merge": "owner"},    # Jay accepts every MFE merge (2026-10-09)
+                      "fleet": {"url": "http://127.0.0.1:3002/api/internal/fleet/v1/accounts",
+                                "token_file": "~/.config/command-center/fleet/mfe.token"}},
     "commandcenter": {"name": "Command Center",   "prefix": "CC",   "legacy": (),
                       "root": "/srv/server/repos/CommandCenter",    "github": "JayDalool/CommandCenter",
                       # The only project that may auto-merge, and only its tests and docs (merge_policy.ALLOW).
                       "pipeline": {"merge": "low-risk"}},
     "gyst":          {"name": "GYST / LifeOps",   "prefix": "GYST", "legacy": (),
                       "root": "/srv/server/repos/gyst-lifeops",     "github": "JayDalool/gyst-lifeops",
-                      "pipeline": {"merge": "owner"}},   # Jay accepts every GYST merge (2026-10-09)
+                      "pipeline": {"merge": "owner"},    # Jay accepts every GYST merge (2026-10-09)
+                      # One user by design: no counts endpoint; shown separately, health from its container.
+                      "fleet": {"single_user": True, "container": "gyst-lifeops"}},
 }
 
 # Ticket pipeline defaults (plans/TICKET-PIPELINE-V1.md), the one place they live.
@@ -78,6 +85,11 @@ PROJECTS = {
 # project may set "max_lanes" in its pipeline dict.
 # A project overrides with a "pipeline" dict in PROJECTS above.
 PIPELINE_DEFAULTS = {"merge": "owner", "ui_review": False, "jay_first": True}
+
+
+def fleet_apps():
+    """project key → its fleet-report entry, for the projects that have one (CC-079)."""
+    return {k: dict(v["fleet"]) for k, v in PROJECTS.items() if v.get("fleet")}
 
 
 def paused(key):

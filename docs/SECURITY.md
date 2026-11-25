@@ -668,3 +668,13 @@ the use to a project and ticket); **message text is never stored**. A work step 
 object; it is shown separately and never added to the totals (it is usually the same replies again). Costs are estimates at Anthropic list prices (a subscription is not billed per token; Codex is counted in
 tokens only). Profile budgets (`target.budget`) are displayed against month-to-date use; nothing is stopped when one
 is passed. Set `"meter": {"enabled": false}` in config to turn reading the logs off.
+
+## Fleet report (CC-079)
+
+`GET /api/fleet` lets Jay or the CTO ask how many accounts each app has. Only counts cross the wire, and the report never
+touches an app's database: `ccd/fleet.py` makes one loopback HTTP call per app to that app's own read-only counts
+endpoint (`docs/fleet-contract.md`) with a bearer token from a file Jay creates (mode 0600; a looser file is refused).
+It imports no subprocess, sqlite3 or database driver (a test asserts it), follows no redirect, reads at most 4 KB and
+accepts only the exact reply schema; an app that breaks the contract is listed as did-not-respond with a fixed phrase,
+never its reply. The route answers only `jay` and `agent:cto`; `X-CCD-Actor` is self-asserted, so that is an honesty
+guard against another agent asking by accident, not authentication.
