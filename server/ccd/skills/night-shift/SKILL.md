@@ -6,7 +6,7 @@ disable-model-invocation: true
 Night shift from Jay via command-center. Jay is away. Keep working this repository's open tasks in Command Center
 until nothing is left that can move without him, then leave a morning report he can approve as one release batch.
 
-Project key: <project> is this repo's Command Center project — samvision, gauzemate, commandcenter, gyst or mfe.
+Project key: <project> is this repo's Command Center project — samvision, gauzemate, commandcenter, gyst, mfe or zaylolabs.
 Tasks: python -m ccd.pipeline_cli tasks <project>      One task's state: python -m ccd.pipeline_cli work <KEY>
 
 First: if `pipeline_cli tasks <project>` prints PAUSED, Jay has paused this project — do no work on it at all;

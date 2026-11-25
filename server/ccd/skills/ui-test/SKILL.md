@@ -6,7 +6,7 @@ disable-model-invocation: true
 UI test run from Jay via command-center for <project>. Test the user-visible features merged since this project's
 last UI test run, keep the tests as a regression suite, and report what you find. Jay decides what gets fixed.
 
-Project key: <project> is this repo's Command Center project — samvision, gauzemate, commandcenter, gyst or mfe.
+Project key: <project> is this repo's Command Center project — samvision, gauzemate, commandcenter, gyst, mfe or zaylolabs.
 First: if `python -m ccd.pipeline_cli tasks <project>` prints PAUSED, do nothing; say so in one line and stop.
 This repo's AGENTS.md / CLAUDE.md win over anything here (for SamVision: careful mode, licensed data rules).
 

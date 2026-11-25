@@ -33,11 +33,12 @@ class RepoPolicy(unittest.TestCase):
         p = {k: self.policy.profile(k) for k in registry.PROJECTS}
         self.assertEqual({k: v["mode"] for k, v in p.items()}, {
             "commandcenter": "experimental_autonomy", "gyst": "autonomous_product",
-            "samvision": "controlled_production", "mfe": "controlled_production", "gauzemate": "paused"})
+            "samvision": "controlled_production", "mfe": "controlled_production", "gauzemate": "paused",
+            "zaylolabs": "autonomous_product"})
         # D-008: nothing auto-merges or deploys beyond today; enforced merge is unchanged.
         self.assertEqual({k: v["enforced"]["merge"] for k, v in p.items()},
                          {"commandcenter": "low-risk", "gyst": "owner", "samvision": "owner", "mfe": "owner",
-                          "gauzemate": "owner"})
+                          "gauzemate": "owner", "zaylolabs": "owner"})
         # D-004: unattended SamVision deploys need capabilities that do not exist yet.
         rel = p["samvision"]["target"]["release"]
         self.assertEqual(rel["windows"], ["Thu 01:00 America/Winnipeg", "Sat 01:00 America/Winnipeg"])
