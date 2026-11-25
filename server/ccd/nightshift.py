@@ -127,6 +127,10 @@ def input_is_empty(text):
             return False
         return _under_prompt_ok(lines, at)
     clean = [_CSI_RE.sub("", ln) for ln in lines]   # only to locate the prompt and read the lines under it
+    # Tech review (CC-053): a non-CSI escape (ESC(B, an OSC, a truncated CSI) left anywhere could hide the real prompt
+    # line from the locate step so an earlier bare prompt reads empty over a typed draft. Uncertain: send nothing.
+    if any("\x1b" in ln for ln in clean):
+        return None
     at = _last_prompt(clean)
     if at is None:
         return None
