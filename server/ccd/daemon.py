@@ -44,6 +44,7 @@ from .leadchat import LeadChat
 TICKET_PATH_RE = re.compile(r"/api/tasks/([A-Za-z][A-Za-z0-9-]{0,20}-\d{1,6})(?:/|$)")
 from . import nightshift as nightshift_mod
 from . import workmode as workmode_mod
+from . import merge_switch as merge_switch_mod
 from . import uitests as uitests_mod
 from . import records as records_mod
 from . import tasks as tasks_mod
@@ -334,10 +335,12 @@ class Daemon(LeadChat, HqDaemon):
         # only way ccd writes to GitHub; tests give it a fake. The stop file is checked before every merge.
         # CC-057: `auto_merge` is a list of project keys; anything else reads as [] (config.auto_merge_projects) and
         # says so as a security event at start, so a typo never switches a project on.
-        self.auto_merge_list, self._auto_merge_problem = auto_merge_projects(cfg.get("auto_merge"))
-        self.auto_merge_on = bool(self.auto_merge_list)
-        if self.pipeline is not None:
-            self.pipeline.auto_merge = self.auto_merge_list
+        self._auto_merge_config, self._auto_merge_problem = auto_merge_projects(cfg.get("auto_merge"))
+        # Jay's per-repository switch in Settings › Auto-merge (ccd/merge_switch.py): where he has pressed it, it wins
+        # over config.json and takes effect at once, without a restart.
+        self.merge_switch = merge_switch_mod.MergeSwitch(cfg.get("auto_merge_switch_path")
+                                                         or STATE_DIR / "auto-merge.json")
+        self._apply_auto_merge()
         self.gh_cli = gh_cli or sources._run
         # CC-057: the security-sign-off probe reads GitHub for tickets with a merge gate. It runs only when the caller
         # gave a real gh runner (ccd's own start does), so a test daemon never shells out to gh by accident.
@@ -2945,6 +2948,74 @@ class Daemon(LeadChat, HqDaemon):
     AUTO_MERGE_FIELDS = ("state,isDraft,mergeable,baseRefName,headRefOid,isCrossRepository,files,additions,deletions,"
                          "statusCheckRollup")
 
+    def _apply_auto_merge(self):
+        """The projects ccd may merge for right now: config.json `auto_merge`, overridden per project by Jay's Settings
+        switch. Recomputed at start and on every switch, and handed to the pipeline so a switched-off project's
+        ready PR gets its merge question for Jay (Pipeline._gate_due)."""
+        self.auto_merge_list = [k for k in registry.PROJECTS if self.merge_switch.effective(k, self._auto_merge_config)
+                                and not self._auto_merge_why_not(k)]
+        self.auto_merge_on = bool(self.auto_merge_list)
+        if self.pipeline is not None:
+            self.pipeline.auto_merge = self.auto_merge_list
+
+    @staticmethod
+    def _auto_merge_why_not(project):
+        """Why ccd can never merge this project's PRs by itself, whatever the switch says, or None. The same refusals
+        as config.auto_merge_projects plus the registry's: a hand-edited auto-merge.json cannot switch these on."""
+        if registry.paused(project):
+            return "the project is paused"
+        if registry.class_of(project) != "own":
+            return "a client's repository: Jay merges every PR (D-024)"
+        if pipeline_mod.policy({"project": project}, project)["merge"] != "low-risk":
+            return "Jay accepts every merge in this repository (merge: owner)"
+        if not merge_policy.ALLOW.get(project):
+            return "this repository has no low-risk rules yet"
+        return None
+
+    def auto_merge_state(self):
+        """GET /api/auto-merge: per project, whether ccd merges its small low-risk PRs by itself, where that comes from
+        (Jay's Settings switch or config.json), why it cannot be switched on, and the stop files."""
+        out = {}
+        for proj in self._projects():
+            key = proj["key"]
+            if key not in registry.PROJECTS:
+                continue
+            row = self.merge_switch.get(key)
+            why = self._auto_merge_why_not(key)
+            out[key] = {"on": key in self.auto_merge_list, "source": "settings" if row else "config",
+                        "at": (row or {}).get("at"), "by": (row or {}).get("by"),
+                        "available": why is None, "why": why,
+                        "stopped": self._auto_merge_stopped(key) and not self._auto_merge_stopped()}
+        return {"projects": out, "stopped": self._auto_merge_stopped(), "problem": self.merge_switch.problem,
+                "limits": {"files": merge_policy.MAX_FILES, "lines": merge_policy.MAX_LINES}}
+
+    def auto_merge_set(self, project, body, actor="jay", developer=False):
+        """PUT /api/auto-merge/projects/{project} {on}: Jay's switch. On needs Developer Unlock (it lets ccd merge
+        without him); off needs only Jay, because it only takes authority away. Agents are refused either way."""
+        if actor != "jay":
+            raise ActionError(403, "auto-merge is Jay's switch")
+        if not isinstance(body, dict) or not isinstance(body.get("on"), bool):
+            raise ActionError(400, "body must be {on: true|false}")
+        on = body["on"]
+        if on and not developer:
+            raise ActionError(403, "Developer Unlock required: switching auto-merge on is Jay's")
+        if project not in registry.PROJECTS or self._project(project) is None:
+            raise ActionError(404, f"unknown project {project}")
+        why = self._auto_merge_why_not(project)
+        if on and why:
+            raise ActionError(409, f"{project} cannot auto-merge: {why}")
+        try:
+            self.merge_switch.set(project, on, by=actor, known=list(registry.PROJECTS))
+        except merge_switch_mod.MergeSwitchError as e:
+            raise ActionError(e.status, e.message)
+        except OSError as e:
+            raise ActionError(500, f"could not save the switch: {e.strerror or e}")
+        self._apply_auto_merge()
+        # A security event, like merge.policy: it changes what ccd may write to GitHub.
+        self._event("security", "merge.switch", f"Jay switched auto-merge {'on' if on else 'off'} for {project}",
+                    severity="action", project=project, data={"status": "on" if on else "off"})
+        return self.auto_merge_state()
+
     def _auto_merge_projects(self):
         """Registry projects whose merge policy is low-risk, that have an allowlist AND are in config `auto_merge`:
         the only ones ccd merges for by itself (CC-057: the switch is per project)."""
@@ -2960,6 +3031,8 @@ class Daemon(LeadChat, HqDaemon):
         if self._auto_merge_problem:
             self._event("security", "merge.config", f"auto_merge ignored: {self._auto_merge_problem}", severity="warn",
                         data={"status": "invalid"})
+        if self.merge_switch.problem:
+            self._event("security", "merge.config", self.merge_switch.problem, severity="warn", data={"status": "invalid"})
 
     def _log_policy(self):
         """Startup: which policy files ccd read (their combined SHA-256) and whether any is broken or drifts."""
@@ -2975,7 +3048,7 @@ class Daemon(LeadChat, HqDaemon):
     def _merge_policy_text(self):
         projects = ", ".join(self._auto_merge_projects()) or "none"
         stopped = " (stop file present)" if self._auto_merge_stopped() else ""
-        return (f"auto-merge {'ON' if self.auto_merge_on else 'OFF'} (config auto_merge); "
+        return (f"auto-merge {'ON' if self.auto_merge_on else 'OFF'} (config auto_merge and Settings); "
                 f"low-risk projects in the registry: {projects}{stopped}")
 
     def _auto_merge_stopped(self, project=None):

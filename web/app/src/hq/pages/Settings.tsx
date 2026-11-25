@@ -35,7 +35,7 @@ import { canPickScreen, focusView, forgetPlaces, isPopView, listScreens, popOut,
 import { usePageNav } from "./route";
 import { Pill, cx, plural } from "./ui";
 import { ApiError } from "../../api/client";
-import type { DevDevice, NotifySettings, NotifyState, WorkModeProject, WorkModeState } from "../../api/types";
+import type { AutoMergeProject, AutoMergeState, DevDevice, NotifySettings, NotifyState, WorkModeProject, WorkModeState } from "../../api/types";
 
 // ---------- building blocks ----------
 
@@ -630,8 +630,66 @@ function WorkModeSwitches() {
   </Group>;
 }
 
+export function autoMergeHint(p: AutoMergeProject): string {
+  if (!p.available) return `Off. ${p.why ? `${p.why[0].toUpperCase()}${p.why.slice(1)}.` : "This repository cannot auto-merge."}`;
+  if (!p.on) return "Off. Every ready PR waits for you to merge it.";
+  return p.stopped ? "On, but this repository's stop file is there, so nothing merges."
+    : "On. Small low-risk PRs merge once reviewed and green; the rest wait for you.";
+}
+
+/** Auto-merge (ccd/merge_switch.py, GET and PUT /api/auto-merge): per repository, Jay's switch for ccd merging small
+ *  low-risk PRs by itself (Jay, 2026-11-25). It takes effect at once. Switching on needs Developer Unlock; switching off
+ *  does not, since it only takes authority away. A repository that can never auto-merge shows its switch disabled with
+ *  the reason. An older ccd has no such route, and then the group is not shown. */
+function AutoMergeSwitches() {
+  const active = useDevActive();
+  const configured = useSelector(app.store, (d) => d.state?.projectsConfig);
+  const tracked = useSelector(app.store, (d) => d.taskProjects);
+  const [st, setSt] = useState<{ state: "loading" | "ok" | "none" | "error"; data?: AutoMergeState; error?: string }>({ state: "loading" });
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    app.api.autoMerge().then((data) => { if (live) setSt({ state: "ok", data }); })
+      .catch((e: unknown) => {
+        if (live) setSt((s) => s.data ? s : e instanceof ApiError && e.status === 404 ? { state: "none" }
+          : { state: "error", error: e instanceof Error ? e.message : String(e) });
+      });
+    return () => { live = false; };
+  }, []);
+  if (st.state === "none") return null;
+  if (!st.data) {
+    return <Group id="auto-merge" title="Auto-merge">
+      <Row label={st.state === "error" ? `Could not read auto-merge: ${st.error}` : "Reading auto-merge…"} /></Group>;
+  }
+  const save = (key: string, on: boolean) => {
+    // Off needs no unlock: it only takes authority away. On opens the Unlock dialog and goes out once Jay has unlocked.
+    if (on && !devOr(() => save(key, on))) return;
+    setBusy(true); setNote(null);
+    app.api.setAutoMerge(key, on).then((data) => setSt({ state: "ok", data }))
+      .catch((e: unknown) => setNote(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false));
+  };
+  const name = (key: string) => configured?.find((p) => p.key === key)?.name ?? tracked.find((p) => p.key === key)?.name ?? key;
+  const L = st.data.limits;
+  return <Group id="auto-merge" title="Auto-merge" foot={<>With auto-merge on, Command Center merges a repository's PR by
+    itself only when it is small (at most {L.files} files and {L.lines} lines), touches only that repository's low-risk
+    files and nothing protected, the code review approved that exact version, and its checks are green. Everything else
+    still waits for you. It never deploys. It takes effect at once.
+    {!active && <> Switching on needs Developer Unlock. <button type="button" className="hq-link" onClick={unlockDialogOpen}>Unlock…</button></>}</>}>
+    {st.data.stopped && <p className="hq-note t-bad" role="status">The stop file is there, so nothing merges by itself in any repository.</p>}
+    {st.data.problem && <p className="hq-note t-bad" role="status">The saved switches could not be read, so auto-merge is off everywhere until you switch a repository on again.</p>}
+    {Object.entries(st.data.projects).map(([key, p]) => <Row key={key} label={<span className="hq-with-logo"><ProjectLogo project={key} />{name(key)}</span>}
+      hint={autoMergeHint(p)}>
+      <Seg label={`Auto-merge for ${name(key)}`} value={p.on ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]}
+        disabled={busy || (!p.available && !p.on)}
+        onChange={(v) => { if ((v === "on") !== p.on) save(key, v === "on"); }} /></Row>)}
+    {note && <p className="hq-note t-bad" role="alert">{note}</p>}
+  </Group>;
+}
+
 function Profiles() {
-  return <><ReleaseDay /><WorkModeSwitches /><Classic id="policies"><Policies /></Classic><Classic id="decisions"><DecisionRecords /></Classic></>;
+  return <><ReleaseDay /><WorkModeSwitches /><AutoMergeSwitches /><Classic id="policies"><Policies /></Classic><Classic id="decisions"><DecisionRecords /></Classic></>;
 }
 
 function Workers() {

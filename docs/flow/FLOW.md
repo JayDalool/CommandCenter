@@ -25,7 +25,7 @@ Read your seat's page, not all of them: [seats/](seats/).
 | 4 | Build | [developer](seats/developer.md) | a PR with the change, its tests, and why-comments; handoff written |
 | 5 | User check | [user-reviewer](seats/user-reviewer.md) (+ [design-reviewer](seats/design-reviewer.md) when a screen changes) | every criterion pass/fail on the PR's exact head, "after" screenshots |
 | 6 | Code review | [code-reviewer](seats/code-reviewer.md) | APPROVE or REQUEST_CHANGES on the exact head, findings |
-| 7 | Merge | Jay, or ccd alone for a small low-risk PR in a project whose `auto_merge` switch is on (off today; D-010) | merged to main |
+| 7 | Merge | Jay, or ccd alone for a small low-risk PR in a project whose auto-merge switch Jay turned on in Settings (off today; D-010) | merged to main |
 | 8 | Release | [verifier](seats/verifier.md) | deployed (or release-ready) and checked, with evidence |
 | 9 | Done | [lead](seats/lead.md) | closing note: what changed, why, how it was checked, docs updated |
 

@@ -118,8 +118,10 @@ events `pipeline.auto_merged / auto_merge_held / auto_merge_failed` (actor `syst
 
 How strong that is, plainly: agents run as the same user as Jay, so they can write `config.json` and the state
 folder, and their `gh` is logged in as Jay. "Agents never merge" and "Jay switches it on" are written rules plus
-review, not technical blocks; ccd reads `auto_merge` only at start, so a config edit does nothing until ccd is
-restarted. The reviewer's "fresh review" is self-reported: ccd checks the recorded APPROVE, its session name and
+review, not technical blocks; ccd reads `auto_merge` and `auto-merge.json` only at start, so a file edit does nothing
+until ccd is restarted. Jay's live switch is `PUT /api/auto-merge/projects/{project}` (Settings › Auto-merge): switching
+a project on needs Developer Unlock, which an agent does not hold; switching off needs only Jay's sign-in and is safe in
+any hands. Each press is a `merge.switch` security event. The reviewer's "fresh review" is self-reported: ccd checks the recorded APPROVE, its session name and
 the exact head, not who really read the diff. Details and the missing separation (a second GitHub identity or
 branch protection): ADR 0007.
 

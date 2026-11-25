@@ -1,4 +1,4 @@
-import type { ReleaseState, WorkModeState } from "./types";
+import type { AutoMergeState, ReleaseState, WorkModeState } from "./types";
 import { getToken } from "./auth";
 import { askReenter, devExpired, devSession } from "./developer";
 import type { AnswersResult, CoordinatorState, GoLiveResult, MergeReady, MergeResult, NightShiftState, UiTestsState, TaskCheckResult, TaskRecord, TicketWork,
@@ -400,6 +400,11 @@ export class Api {
   workMode() { return this.req<WorkModeState>("GET", "/api/work-mode"); }
   /** Jay with Developer Unlock. ccd answers with the whole state, as GET does. */
   setWorkMode(project: string, on: boolean) { return this.req<WorkModeState>("PUT", `/api/work-mode/projects/${encodeURIComponent(project)}`, { on }); }
+
+  // ---------- Auto-merge: per repository, ccd merges its small low-risk PRs by itself (ccd/merge_switch.py) ----------
+  autoMerge() { return this.req<AutoMergeState>("GET", "/api/auto-merge"); }
+  /** Jay. On needs Developer Unlock as well; off does not. ccd answers with the whole state, as GET does. */
+  setAutoMerge(project: string, on: boolean) { return this.req<AutoMergeState>("PUT", `/api/auto-merge/projects/${encodeURIComponent(project)}`, { on }); }
 
   /** GET a file with the token header and hand it to the browser as a download. */
   async download(path: string, fallbackName: string) {

@@ -754,6 +754,18 @@ export interface WorkModeState {
   projects: Record<string, WorkModeProject>;
   limits: { idleS: number; gapS: number; restAfter: number; restS: number; dayMax: number };
 }
+/** Auto-merge for one project (GET /api/auto-merge, ccd/merge_switch.py). `source`: Jay's Settings switch, or config.json
+ *  when he never pressed it. `available` false: ccd can never merge this repository by itself, and `why` says why.
+ *  `stopped`: the project's own stop file exists. */
+export interface AutoMergeProject {
+  on: boolean; source: "settings" | "config"; at: number | null; by: string | null; available: boolean; why: string | null;
+  stopped: boolean;
+}
+/** `stopped`: the global stop file exists, so nothing merges. `problem`: the stored switches could not be read, so every
+ *  project is off until Jay presses one. */
+export interface AutoMergeState {
+  projects: Record<string, AutoMergeProject>; stopped: boolean; problem: string | null; limits: { files: number; lines: number };
+}
 /** A project's logo as ccd lists it (GET /api/projects/logos). The bytes are fetched apart and shown from a blob:. */
 export interface ProjectLogo { mime: string; sha256: string; updatedAt: number }
 /** A device holding a Developer session (GET /api/developer/devices), in epoch seconds. ccd never sends the session

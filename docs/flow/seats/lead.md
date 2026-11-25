@@ -54,7 +54,7 @@ Tell Jay only when the ticket is ready to merge, or blocked after round 2. Not a
 ## Merge rule (D-010)
 
 Only ccd merges, and only two ways. It merges by itself a small, low-risk PR (tests, docs, small app code outside the
-protected and sensitive areas) in a project listed in `config.json` `auto_merge` (empty by default), once CI is green and
+protected and sensitive areas) in a project Jay switched on in Settings › Auto-merge (or listed in `config.json` `auto_merge`; off by default), once CI is green and
 a fresh code review approved that exact head. Everything else waits for Jay's "merge it" for that PR and head. A change
 touching sign-in, data or permissions needs a security sign-off at its head before you ask Jay. Risky tickets, D-007
 rails, GauzeMate, paused projects and client or employer projects never auto-merge. Merging never deploys. You never

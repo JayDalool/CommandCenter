@@ -101,3 +101,14 @@ or "stopped". It is switched on by Jay, per machine, and one file stops it at on
 - A PR test workflow (CC-033), then widen the allowlist deliberately, one folder at a time.
 - A UI toggle (deliberately not built: the switch is a config file and a stop file).
 - Per-project allowlists for other repositories, only after Jay asks for them.
+
+## Addendum (2026-11-25): a per-repository switch in Settings
+
+Jay asked to turn auto-merge on and off per repository "very simply from the settings". CC-057 had already made
+`config.json` `auto_merge` a list of projects; the UI toggle this ADR left out is now built (`ccd/merge_switch.py`,
+`GET/PUT /api/auto-merge`, Settings › Operating profiles › Auto-merge). Where Jay presses it, it wins over `config.json`
+and takes effect without a restart; a project he never pressed follows `config.json`. Switching on needs Jay with
+Developer Unlock, switching off only Jay. A repository that cannot auto-merge (merge `owner`, no allowlist, paused, a
+client's) cannot be switched on, by the route or by editing the file. The file is `<CCD_STATE_DIR>/auto-merge.json`
+(0600), read at start; a damaged file means off everywhere. Nothing else in this ADR or D-010 changes: what may merge is
+still decided by `merge_policy`, the stop files still win, and ccd still never deploys.
