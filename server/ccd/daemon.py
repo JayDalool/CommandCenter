@@ -1543,9 +1543,13 @@ class Daemon(LeadChat, HqDaemon):
                 ctx["brief"] += "\n\n" + "\n".join(extra)
             ctx["session"] = self.task_session(t["key"])
             # So the Task Room's Claude pane can attach (coordid.task_session matches the herdr name only).
-            ctx["brief"] += (f"\n\nTask session: work {t['key']} in its own Claude session whose herdr pane is named "
-                             f"{t['key'].lower()} (e.g. herdr pane rename to {t['key'].lower()}); Command Center's Task "
-                             f"Room attaches to that name. Ask Jay questions with python -m ccd.pipeline_cli ask "
+            # The old wording ("e.g. herdr pane rename to sv-064") can be read by a lead as about its own pane: on
+            # 2026-11-24 herdr listed a Claude in SamVision's main checkout, titled with the lead's inbox, as sv-064,
+            # and the lead was gone from Messages and Slack.
+            ctx["brief"] += (f"\n\nTask session: work {t['key']} in its own Claude session, in a new herdr pane named "
+                             f"{t['key'].lower()} (herdr agent rename <that new pane> {t['key'].lower()}); Command "
+                             f"Center's Task Room attaches to that name. A project lead never renames its own pane: its "
+                             f"name is how Messages and Slack reach it. Ask Jay questions with python -m ccd.pipeline_cli ask "
                              f"{t['key']} --role coordinator --question \"…\" — his answers come back into that session. For a "
                                  f"decision, give 2 or 3 --option values and recommend one: --recommend N --why \"…\".")
             held = self.pipeline.held(t["key"])
