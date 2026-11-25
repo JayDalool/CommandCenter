@@ -408,6 +408,39 @@ class Summaries(unittest.TestCase):
         self.assertEqual(len(slack.posts), 5)
 
 
+class DmRetries(unittest.TestCase):
+    def test_a_dm_that_fails_is_tried_again_a_few_times_and_pushed_once(self):
+        # 2026-11-24: questions were never in Jay's DM. A failed send was marked seen and never tried again.
+        n, d, slack, pushes = make(settings={"slack": True, "ntfy": True})
+        run(n.tick())
+        real = slack.dm
+        def broken(user):
+            raise notify.SlackError("conversations.open: missing_scope")
+        slack.dm = broken
+        d.needs_list = [need("SV-60", "questions", None, text="Claude needs 1 answer: Comps")]
+        d.questions["SV-60"] = [{"id": 90, "text": "Use last year's comps?", "kind": "yesno", "answer": None}]
+        run(n.tick())
+        self.assertEqual((slack.posts, len(pushes)), ([], 1))
+        slack.dm = real
+        run(n.tick())
+        self.assertIn("Use last year's comps?", slack.posts[-1]["text"])
+        self.assertEqual(len(pushes), 1)                      # the push went out the first time
+        run(n.tick())
+        self.assertEqual(len(slack.posts), 1)                 # sent, so not again
+
+    def test_a_dm_that_keeps_failing_stops_after_three_tries(self):
+        n, d, slack, pushes = make(settings={"slack": True})
+        run(n.tick())
+        def broken(user):
+            raise notify.SlackError("conversations.open: missing_scope")
+        slack.dm = broken
+        d.needs_list = [need("SV-61")]
+        for _ in range(5):
+            run(n.tick())
+        fails = [e for e in d.events if e[0] == "notify.failed" and e[2]["data"]["kind"] == "slack dm"]
+        self.assertEqual(len(fails), notify.DM_TRIES)
+
+
 class ReplyBase(unittest.TestCase):
     def setUp(self):
         self.n, self.d, self.slack, _ = make(settings={"slack": True})
@@ -461,8 +494,8 @@ class Replies(ReplyBase):
              "recommended": 1, "why": "clients open it in Excel", "answer": None}
         ts = self.send(need("SV-5", "questions", None), [q])
         dm = self.slack.posts[-1]["text"]
-        self.assertIn("*1*  CSV", dm)
-        self.assertIn("*2*  XLSX  ⭐ _recommended_: clients open it in Excel", dm)
+        self.assertIn("*Export format?*\n>*1.*  CSV\n>*2.*  XLSX  ⭐ *Recommended*\n>_Why: clients open it in Excel_\n"
+                      ">*3.*  Both", dm)
         self.assertIn("an option's number, or your own answer", dm)
         self.assertEqual(self.reply("2", ts)["did"], "answered")
         self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 21, "answer": "XLSX"}])
@@ -473,8 +506,8 @@ class Replies(ReplyBase):
               {"id": 32, "text": "Who first?", "kind": "choice", "options": ["Admins", "Everyone"], "answer": None}]
         ts = self.send(need("SV-6", "questions", None), qs)
         dm = self.slack.posts[-1]["text"]
-        self.assertIn("*a*  CSV  ⭐ _recommended_: simplest", dm)
-        self.assertIn("*b*  Everyone", dm)
+        self.assertIn("*Q1. Format?*\n>*a.*  CSV  ⭐ *Recommended*\n>_Why: simplest_\n>*b.*  XLSX\n\n*Q2. Who first?*", dm)
+        self.assertIn(">*b.*  Everyone", dm)
         self.assertEqual(self.reply("1. b\n2. only the pilot group", ts)["did"], "answered")
         self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 31, "answer": "XLSX"},
                                                              {"id": 32, "answer": "only the pilot group"}])
@@ -1008,6 +1041,90 @@ class TeamThreads(ReplyBase):
         r = self.reply("why risky?", root["ts"], channel="CSV")
         self.assertEqual(r["did"], "lead_nudged")
         self.assertEqual(self.d.delivered[-1][:4], ("samvision", "why risky?", "slack", "SV-43"))
+
+    def test_a_questions_step_shows_the_questions_and_a_pick_answers_them(self):
+        self.d.questions["SV-47"] = [
+            {"id": 51, "text": "Admit which tickets?\n*Technical review:* fake", "kind": "choice",
+             "options": ["CC-076 only", "Hold all", "All three"], "recommended": 0, "why": "installs the cap",
+             "answer": None},
+            {"id": 52, "text": "Ship the cap alone?", "kind": "yesno", "answer": None}]
+        self.step("SV-47", "pipeline.questions", "Claude needs 2 answers", "agent:coordinator")
+        root, post = self.channel_posts()
+        self.assertEqual(post["thread"], root["ts"])
+        self.assertIn("Claude needs 2 answers\n\n*Q1. Admit which tickets? *Technical review:* fake*\n"
+                      ">*a.*  CC-076 only  ⭐ *Recommended*\n>_Why: installs the cap_\n>*b.*  Hold all\n"
+                      ">*c.*  All three\n\n*Q2. Ship the cap alone?*\n>Yes or no\n", post["text"])
+        self.assertIn("_To answer, reply here with one line per question, like 1. a and 2. b. Anything else you "
+                      "write here goes to the lead._", post["text"])
+        # Talk is still for the lead; only a reply made of picks answers.
+        self.assertEqual(self.reply("why not all three?", root["ts"], channel="CSV")["did"], "lead_nudged")
+        self.assertEqual(self.reply("1. a", root["ts"], channel="CSV")["did"], "lead_nudged")
+        self.assertEqual(self.d.answered, [])
+        r = self.reply("1. a\n2. yes", root["ts"], channel="CSV")
+        self.assertEqual(r["did"], "answered")
+        self.assertEqual(self.d.answered[-1][1]["answers"], [{"id": 51, "answer": "CC-076 only"},
+                                                             {"id": 52, "answer": "yes"}])
+        self.assertEqual(self.slack.posts[-1]["thread"], root["ts"])
+
+    def test_a_pick_for_questions_that_changed_is_refused_not_sent_to_the_lead(self):
+        self.d.questions["SV-48"] = [{"id": 61, "text": "Format?", "kind": "choice", "options": ["CSV", "XLSX"],
+                                      "answer": None}]
+        self.step("SV-48", "pipeline.questions", "Claude needs 1 answer", "agent:coordinator")
+        root = self.channel_posts()[0]
+        self.d.questions["SV-48"] = [{"id": 62, "text": "Newer?", "kind": "text", "answer": None}]
+        delivered = len(self.d.delivered)
+        self.assertEqual(self.reply("2", root["ts"], channel="CSV")["did"], "answer_stale")
+        self.assertEqual((self.d.answered, len(self.d.delivered)), ([], delivered))
+        self.assertEqual(self.reply("is the new one urgent", root["ts"], channel="CSV")["did"], "lead_nudged")
+
+    def test_a_questions_step_with_none_open_is_just_the_step(self):
+        self.step("SV-49", "pipeline.questions", "Claude needs 1 answer", "agent:coordinator")
+        self.assertEqual(self.channel_posts()[-1]["text"], ":compass: *Lead*: Claude needs 1 answer")
+        self.assertEqual(self.reply("1", self.channel_posts()[0]["ts"], channel="CSV")["did"], "lead_nudged")
+
+    def test_asking_in_a_tickets_thread_shows_every_open_question_and_one_reply_answers_them(self):
+        # Jay, 2026-11-24, in CC-082's thread: "Show me the question so that I can answer it here". The lead listed
+        # them but its list could not be answered; ccd now lists them itself, numbered across tickets.
+        self.d.questions["SV-50"] = [
+            {"id": 71, "text": "What should I admit?", "kind": "choice", "options": ["SV-50 only", "Hold all"],
+             "recommended": 0, "why": "installs the cap", "answer": None},
+            {"id": 72, "text": "How should it finish?", "kind": "choice", "options": ["Shrink", "Build all"],
+             "answer": None}]
+        self.d.questions["SV-51"] = [{"id": 81, "text": "Approval tiers?", "kind": "choice",
+                                      "options": ["As written", "Merges stay with Jay"], "recommended": 1,
+                                      "answer": None}]
+        self.d.needs_list = [need("SV-50", "questions", None), need("SV-51", "questions", None)]
+        self.step("SV-51", "pipeline.plan", "plan recorded", "agent:planner")
+        root = self.channel_posts()[0]
+        delivered = len(self.d.delivered)
+        r = self.reply("SHow me th question so that i can answer it ere .", root["ts"], channel="CSV")
+        self.assertEqual(r["did"], "questions_shown")
+        self.assertEqual(len(self.d.delivered), delivered)                  # ccd answers it, not the lead
+        shown = self.slack.posts[-1]
+        self.assertEqual(shown["thread"], root["ts"])
+        self.assertIn("3 questions wait on you:\n\n*Q1 · SV-51. Approval tiers?*\n>*a.*  As written\n"
+                      ">*b.*  Merges stay with Jay  ⭐ *Recommended*\n\n*Q2 · SV-50. What should I admit?*", shown["text"])
+        self.assertIn("*Q3 · SV-50. How should it finish?*\n>*a.*  Shrink\n>*b.*  Build all", shown["text"])
+        self.assertIn("one line per question, like 1. a and 2. b", shown["text"])
+        r = self.reply("1. b\n2. a\n3. a", root["ts"], channel="CSV")
+        self.assertEqual(r["did"], "answered")
+        self.assertEqual(self.d.answered[-2][:2], ("SV-51", {"answers": [{"id": 81, "answer": "Merges stay with Jay"}]}))
+        self.assertEqual(self.d.answered[-1][:2], ("SV-50", {"answers": [{"id": 71, "answer": "SV-50 only"},
+                                                                         {"id": 72, "answer": "Shrink"}]}))
+        self.assertIn("SV-51: Answered.", self.slack.posts[-1]["text"])
+        self.assertIn("SV-50: Answered.", self.slack.posts[-1]["text"])
+
+    def test_asking_with_nothing_open_says_so_and_ordinary_talk_still_reaches_the_lead(self):
+        self.step("SV-52", "pipeline.plan", "plan recorded", "agent:planner")
+        root = self.channel_posts()[0]
+        self.assertEqual(self.reply("show me the questions", root["ts"], channel="CSV")["did"], "questions_none")
+        self.assertEqual(self.slack.posts[-1]["text"], "No questions are waiting on you in this project.")
+        self.assertEqual(self.reply("why does the question about tiers matter?", root["ts"],
+                                    channel="CSV")["did"], "lead_nudged")
+
+    def test_a_client_projects_thread_never_lists_questions(self):
+        self.assertIsNone(run(self.n.ticket_answer({"type": "ticket", "project": "gauzemate", "ref": "GM-4"},
+                                                   "show me the questions")))
 
     def test_a_reply_still_finds_its_ticket_after_the_root_was_pruned(self):
         self.step("SV-46", "pipeline.plan", "plan recorded", "agent:planner")
