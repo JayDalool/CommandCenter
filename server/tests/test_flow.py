@@ -51,8 +51,9 @@ class Base(unittest.TestCase):
 
     def passed(self, k, head=HEAD):
         ids = [c["id"] for c in self.pl.work(k)["criteria"]]
-        return self.pl.user_check(k, "pass", head, "agent:user-reviewer", "tried both", {i: "pass" for i in ids},
-                                  pr=self.pr(head), session="ur-1")
+        return self.pl.user_check(k, "pass", head, "agent:user-reviewer", "tried both",
+                                  [f"{i}=pass:opened the page and saw it work" for i in ids],
+                                  pr=self.pr(head), session="ur-1", proof=["after-1280.png", "after-375.png"])
 
     def status(self, k):
         return self.ts.get(k)["status"]
@@ -82,8 +83,9 @@ class Intake(Base):
         self.assertEqual([c["id"] for c in w["criteria"]], ["c1", "c2"])
         self.assertEqual({c["state"] for c in w["criteria"]}, {"open"})
         st = {x["stage"]: x["state"] for x in w["flow"]["stages"]}
+        # Jay, 2026-11-25: a small ticket keeps its user check; only investigation and technical review are skipped.
         self.assertEqual((st["investigate"], st["techReview"], st["userCheck"], st["intake"]),
-                         ("skipped", "skipped", "skipped", "done"))
+                         ("skipped", "skipped", "todo", "done"))
         # small starts with no plan at all
         self.assertEqual(self.pl.start(s, f"{s}-x", WT + s, "agent:coordinator")[0]["status"], "IN_PROGRESS")
         k = self.sized("standard")
@@ -390,10 +392,87 @@ class UserCheck(Base):
         self.assertEqual((t["status"], self.pl.work(k)["gate"]), ("BLOCKED", "failure"))
         self.assertEqual(self.pl.work(k)["flow"]["stage"], "userCheck")
 
-    def test_a_route_without_a_user_check_refuses_one(self):
+    def test_a_pass_needs_what_was_seen_for_every_criterion(self):
+        # Jay, 2026-11-25: a pass must come from using the change, not from reading code that should work.
+        k = self.approved()
+        self.in_review(k)
+        msg = self.refused(409, self.pl.user_check, k, "pass", HEAD, "agent:user-reviewer", "ok",
+                           ["c1=pass:clicked Export and got 3 rows", "c2=pass"], pr=self.pr(), session="ur-1",
+                           proof=["after.png"])
+        self.assertIn("c2", msg)
+        self.assertNotIn("c1", msg)
+        self.refused(409, self.pl.user_check, k, "pass", HEAD, "agent:user-reviewer", "ok",
+                     ["c1=pass:clicked Export and got 3 rows", "c2=pass:looks fine"], pr=self.pr(), session="ur-1",
+                     proof=["after.png"])                                     # too short to say what was done
+        self.passed(k)
+        crit = self.pl.work(k)["criteria"]
+        self.assertEqual({c["seen"] for c in crit}, {"opened the page and saw it work"})
+
+    def test_a_pass_needs_proof_of_the_running_change_and_tests_are_not_proof(self):
+        k = self.approved()
+        self.in_review(k)
+        marks = ["c1=pass:clicked Export and got 3 rows", "c2=pass:opened the CSV, columns match"]
+        self.assertIn("proof", self.refused(409, self.pl.user_check, k, "pass", HEAD, "agent:user-reviewer", "ok",
+                                            marks, pr=self.pr(), session="ur-1"))
+        self.assertIn("test results", self.refused(400, self.pl.user_check, k, "pass", HEAD, "agent:user-reviewer",
+                                                   "ok", marks, pr=self.pr(), session="ur-1",
+                                                   proof=[{"kind": "test", "ref": "test_export"}]))
+        self.pl.user_check(k, "pass", HEAD, "agent:user-reviewer", "ok", marks, pr=self.pr(), session="ur-1",
+                           proof=["export-output.txt"])
+        w = self.pl.work(k)
+        self.assertEqual(w["userCheck"]["proof"], ["export-output.txt"])
+        ev = [(e["actor"], e["kind"], e["ref"], e["note"]) for e in w["evidence"]]
+        self.assertIn(("agent:user-reviewer", "file", "export-output.txt", f"user check at {HEAD[:7]}"), ev)
+
+    def test_a_ui_ticket_pass_needs_desktop_and_phone_screenshots(self):
+        k = self.approved(labels=["ui"])
+        self.in_review(k)
+        marks = ["c1=pass:clicked Export and got 3 rows", "c2=pass:opened the CSV, columns match"]
+        self.assertIn("two screenshots", self.refused(409, self.pl.user_check, k, "pass", HEAD,
+                                                      "agent:user-reviewer", "ok", marks, pr=self.pr(),
+                                                      session="ur-1", proof=["after-1280.png", "notes.txt"]))
+        self.pl.user_check(k, "pass", HEAD, "agent:user-reviewer", "ok", marks, pr=self.pr(), session="ur-1",
+                           proof=["after-1280.png", "after-375.png"])
+        self.assertEqual(self.pl.work(k)["flow"]["stage"], "codeReview")
+
+    def test_a_new_mark_at_a_new_head_drops_the_old_observation(self):
+        k = self.approved()
+        self.in_review(k)
+        self.pl.user_check(k, "fail", HEAD, "agent:user-reviewer", "c2 broken",
+                           ["c1=pass:clicked Export and got 3 rows", "c2=fail:the CSV has no header row"],
+                           pr=self.pr(), open_prs=[self.pr()], session="ur-1")
+        self.ts.update(k, {"status": "IN_REVIEW"}, "system:automation", trigger="new head")
+        msg = self.refused(409, self.pl.user_check, k, "pass", HEAD2, "agent:user-reviewer", "ok",
+                           ["c1=pass", "c2=pass:opened the CSV, header row is there"], pr=self.pr(HEAD2),
+                           session="ur-1", proof=["after.png"])
+        self.assertIn("c1", msg)
+
+    def test_a_small_ticket_has_a_user_check_unless_it_is_docs_or_tests_only(self):
+        # Jay, 2026-11-25: small backend work is run too; only docs/tests-only tickets skip the user check.
         k = self.sized("small")
         self.in_review(k)
+        self.assertEqual(self.pl.work(k)["flow"]["stage"], "userCheck")
+        self.assertIn("user check", self.refused(409, self.pl.review, k, "APPROVE", HEAD, "agent:reviewer",
+                                                 session="cr-1", pr=self.pr()))
+        self.passed(k)
+        self.assertEqual(self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="cr-1",
+                                        pr=self.pr())[0]["status"], "READY_TO_MERGE")
+
+    def test_a_docs_only_small_ticket_has_no_user_check(self):
+        k = self.sized("small", labels=["docs"])
+        self.in_review(k)
+        self.assertEqual(self.pl.work(k)["flow"]["stage"], "codeReview")
         self.refused(409, self.pl.user_check, k, "pass", HEAD, "agent:user-reviewer", "ok", pr=self.pr(), session="u")
+        self.assertEqual(self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="cr-1",
+                                        pr=self.pr())[0]["status"], "READY_TO_MERGE")
+
+    def test_a_docs_label_on_a_ui_or_standard_ticket_keeps_the_user_check(self):
+        k = self.sized("small", labels=["docs", "ui"])
+        self.in_review(k)
+        self.assertEqual(self.pl.work(k)["flow"]["stage"], "userCheck")
+        k2 = self.approved(labels=["docs"])
+        self.in_review(k2)
+        self.assertEqual(self.pl.work(k2)["flow"]["stage"], "userCheck")
 
 
 class Closing(Base):
@@ -430,6 +509,7 @@ class Closing(Base):
         k = self.sized("small")
         self.pl.start(k, f"{k}-x", WT + k, "agent:coordinator")
         self.ts.update(k, {"status": "IN_REVIEW"}, "system:automation", trigger="PR")
+        self.passed(k)
         self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="cr-1", pr=self.pr())
         t, _, _ = self.verified(k)
         self.assertEqual(t["status"], "DONE")
@@ -591,8 +671,10 @@ class Cli(unittest.TestCase):
         self.assertEqual(pipeline_cli.build(base + ["--blast", "one view"])[2]["blast"], "one view")
         self.assertEqual(pipeline_cli.build(base + ["--blast", "api", "--blast", "cli"])[2]["blast"], "api; cli")
         m, path, body, actor = pipeline_cli.build(["user-check", "SV-1", "pass", "--head", HEAD, "--session", "u",
-                                                   "--note", "ok", "--criterion", "c1=pass"])
-        self.assertEqual((actor, body["result"], body["criteria"]), ("agent:user-reviewer", "pass", ["c1=pass"]))
+                                                   "--note", "ok", "--criterion", "c1=pass:saw it",
+                                                   "--proof", "a.png", "--proof", "b.png"])
+        self.assertEqual((actor, body["result"], body["criteria"], body["proof"]),
+                         ("agent:user-reviewer", "pass", ["c1=pass:saw it"], ["a.png", "b.png"]))
         self.assertEqual(pipeline_cli.build(["close", "SV-1", "--note", "done"])[2:],
                          ({"note": "done"}, "agent:coordinator"))
         self.assertEqual(pipeline_cli.build(["user-check", "SV-1", "pass", "--role", "design-reviewer", "--head", HEAD,

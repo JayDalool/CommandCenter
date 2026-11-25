@@ -345,7 +345,8 @@ Seats are pipeline roles: lead = `coordinator`, investigator = `planner`, techRe
 verifier = `verifier`. An agent takes a seat with `role KEY --role <role> --session <id>`; it holds the ticket from then
 until the ticket leaves the stage.
 
-Routes: `small` = intake, build, (userCheck when `policy.ui`), codeReview, merge, release, done; `standard` = all
+Routes: `small` = intake, build, userCheck, codeReview, merge, release, done (userCheck dropped when
+`policy.noBehaviour`, i.e. a `docs`/`documentation`/`tests`/`chore` label and no `ui` label); `standard` = all
 nine; `risky` = all nine, Jay approves the plan after the technical review (the plan gate) and the release (the deploy
 gate). A ticket whose labels/flags/type open the plan gate (`PLAN_GATE_LABELS`, needs:jay, SECURITY, LEGAL) is risky
 whatever was typed. **A ticket nobody has sized** (`size: null`, "Not sized") keeps the steps it had before the flow:
@@ -360,7 +361,7 @@ order and state, 403 for the wrong seat, 400 for a bad body):
 | `criteria` | `agent:coordinator` (intake / investigate only; `priority` and `due` at any stage while open), `jay` (any time) | `{criteria?: [text \| {id, text}], requirements?: [text], size?, priority?, due?}` | replaces the list: an item with its `id` keeps its state unless its text changed (then `open`); one without an id is new; one left out is removed. A size goes up freely; only Jay lowers `risky` (or any size after investigation). `priority` and `due` as for `intake`; they change no scope, so the lead sets them on older tickets too |
 | `plan` | `agent:planner` | as before, + `plan.reproduced: yes\|no\|na`, `plan.findings: [text]` | on a sized standard/risky ticket the plan waits in `techReview` (RESEARCHING); it is not accepted by being recorded. Refused on a small ticket |
 | `plan-review` | `agent:tech-reviewer` | `{verdict: APPROVE\|SEND_BACK, note, blast?, tests?: [text], size?, session, model?}` | `session` must not be the planner's. SEND_BACK → investigate, round +1; the 2nd → BLOCKED (gate `failure`). APPROVE → READY_TO_IMPLEMENT, or on a risky ticket the plan gate for Jay. `size` only raises |
-| `user-check` | `agent:user-reviewer`, `agent:design-reviewer` | `{result: pass\|fail, head, note, criteria?: {id: pass\|fail} \| ["c1=pass"], session, model?}` | IN_REVIEW on a route with a user check; `head` must be the linked PR's current head; never the developer's session. `pass` needs every criterion passed at that head. `fail` → IN_PROGRESS (a rework, lane limit applies); the 2nd fail → BLOCKED. A new head after a pass clears it (`pipeline.user_check_stale`) |
+| `user-check` | `agent:user-reviewer`, `agent:design-reviewer` | `{result: pass\|fail, head, note, criteria?: {id: pass\|fail\|{state, seen}} \| ["c1=pass:what was seen"], proof?: [ref \| {kind, ref}], session, model?}` | IN_REVIEW on a route with a user check; `head` must be the linked PR's current head; never the developer's session. `pass` needs every criterion passed at that head, each with `seen` (what the reviewer did and saw, 15+ characters), and at least one `proof` ref (screenshot, image, file or link; kind inferred from the ref; `test` and `note` refused); a UI ticket or a design reviewer needs two screenshots. Each proof ref is stored as ticket evidence with note `user check at <head>`. `fail` → IN_PROGRESS (a rework, lane limit applies); the 2nd fail → BLOCKED. A new head after a pass clears it (`pipeline.user_check_stale`) |
 | `review` | `agent:reviewer` | as before | `APPROVE` is refused until the user check passed on the same head, when the route has one |
 | `close` | `agent:coordinator`, `jay` | `{note}` (≤4000) | the closing note. On standard/risky, `verify pass` waits in VERIFYING (`flow.waitingOn: "lead"`) until it; then DONE. Also allowed on a DONE ticket |
 
@@ -382,7 +383,7 @@ A sized ticket is in the pipeline from the moment it is sized (even in INBOX): l
     planReview: {verdict, by, session, at, note, blast, tests} | null,   // the latest review; null once a new plan is recorded
     planReviews: [{verdict, by, session, at, note, blast, tests}],        // every review, oldest first (CC-066); reviews
                                                                           // from before CC-066 have note/blast/tests null
-    userCheck: {result, head, pr, by, session, at, note} | null,
+    userCheck: {result, head, pr, by, session, at, note, proof: [ref]} | null,
     closing: {note, by, at} | null,
     flow: {size, stage, route: string[], openChildren: number,
            stages: [{stage, state: done|active|todo|skipped|blocked, seat, by, session, at}]   // always nine, in order

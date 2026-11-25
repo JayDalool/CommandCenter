@@ -1705,7 +1705,8 @@ class Daemon(LeadChat, HqDaemon):
             if len(self._open_prs(t)) > 1:
                 raise ActionError(409, f"{t['key']} has several open PRs linked; one PR per user check")
             r = self._wrap(pl.user_check, key, body.get("result"), body.get("head"), actor, body.get("note"),
-                           body.get("criteria"), pr=self._pr_state(t), open_prs=self._open_prs(t), **meta)
+                           body.get("criteria"), pr=self._pr_state(t), open_prs=self._open_prs(t),
+                           proof=body.get("proof"), **meta)
         elif op == "close":
             r = self._wrap(pl.close, key, body.get("note"), actor)
         elif op == "deploy-plan":

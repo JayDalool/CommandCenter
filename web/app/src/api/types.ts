@@ -375,7 +375,7 @@ export interface TicketWork {
   stages: { stage: PipelineStage; state: "done" | "active" | "blocked" | "todo" }[];
   plan: { summary?: string; requirements?: string[]; approach?: string; affected?: string[]; risk?: string; tests?: string[]; questions?: string[] };
   planState: "none" | "proposed" | "accepted";
-  policy: { plan: "auto" | "owner"; planReasons: string[]; merge: string; ui: boolean; deploy: boolean };
+  policy: { plan: "auto" | "owner"; planReasons: string[]; merge: string; ui: boolean; noBehaviour?: boolean; deploy: boolean };
   gate: PipelineGate | null; gateReason: string | null; confirmed: string[];
   branch: string | null; worktree: string | null; prs: string[];
   roles: Record<string, { model: string | null; session: string | null; at: number }>;

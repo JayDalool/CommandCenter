@@ -41,6 +41,9 @@ RESUME_STATUS = {"PLAN": "RESEARCHING", "BUILD": "IN_PROGRESS", "REVIEW": "IN_RE
                  "VERIFY": "VERIFYING"}
 PLAN_GATE_LABELS = {"security", "migration", "destructive", "architecture", "product-decision", "ambiguous",
                     "financial", "legal", "gate:plan"}
+# Jay, 2026-11-25: a small ticket gets a real user check too, unless it changes only docs or tests. These labels
+# say "nothing a person can use changed"; anything else small is still run by the user reviewer.
+NO_BEHAVIOUR_LABELS = {"docs", "docs-only", "documentation", "tests", "tests-only", "test-only", "chore"}
 MERGE_POLICIES = ("owner", "low-risk")   # registry pipeline "merge"; "owner" is the default
 AUTO_MERGE_KINDS = ("pipeline.auto_merge_held", "pipeline.auto_merged", "pipeline.auto_merge_failed")
 GATES = ("plan", "merge", "ui", "deploy", "failure")
@@ -122,6 +125,8 @@ def policy(ticket, project_key=None):
         "planReasons": reasons,
         "merge": merge,
         "ui": "needs_ui_review" in flags or ticket.get("type") == "DESIGN" or "ui" in labels,
+        # Only on a small ticket does this skip the user check (flow.route); a standard or risky ticket keeps it.
+        "noBehaviour": bool(labels & NO_BEHAVIOUR_LABELS) and not (labels & {"ui"}),
         "deploy": "needs_deploy" in flags,
     }
 
@@ -1853,32 +1858,68 @@ class Pipeline:
 
     @staticmethod
     def _marks(raw):
-        """{criterion id: "pass" | "fail"} from a dict, a list of {id, state} or a list of "ID=state"."""
+        """{criterion id: (state, seen)} from a dict, a list of {id, state, seen} or a list of "ID=state[:seen]".
+        `seen` is what the user reviewer did and saw for that criterion; a pass needs it (see user_check)."""
         if raw is None:
             return {}
         if isinstance(raw, dict):
-            items = list(raw.items())
+            items = [(k, *(((v.get("state"), v.get("seen")) if isinstance(v, dict) else (v, None))))
+                     for k, v in raw.items()]
         elif isinstance(raw, list):
             items = []
             for m in raw:
                 if isinstance(m, str) and "=" in m:
-                    items.append(tuple(m.split("=", 1)))
+                    cid, rest = m.split("=", 1)
+                    state, _, seen = rest.partition(":")
+                    items.append((cid, state.strip(), seen))
                 elif isinstance(m, dict):
-                    items.append((m.get("id"), m.get("state")))
+                    items.append((m.get("id"), m.get("state"), m.get("seen")))
                 else:
                     raise TaskError(400, "mark a criterion as ID=pass or ID=fail")
         else:
             raise TaskError(400, "criteria marks are {id: pass|fail}")
         out = {}
-        for cid, state in items:
+        for cid, state, seen in items:
             if not isinstance(cid, str) or not CRITERION_ID_RE.match(cid.strip()) or state not in ("pass", "fail"):
                 raise TaskError(400, "mark a criterion as ID=pass or ID=fail (ids look like c1)")
-            out[cid.strip()] = state
+            out[cid.strip()] = (state, _text(seen, 300, "seen", multiline=False) or None)
         return out
 
-    def user_check(self, key, result, head, actor, note, marks=None, pr=None, open_prs=(), model=None, session=None):
+    # A user check passes only on what the reviewer saw happen, not on what the code or its tests say should happen
+    # (Jay, 2026-11-25: merged PRs were "working because theoretically it should work"). So a pass needs proof of
+    # the running change, and test results or bare notes do not count as that proof.
+    USER_PROOF_KINDS = ("screenshot", "image", "file", "link")
+    SEEN_MIN = 15          # long enough to say what was done and what happened, e.g. "Clicked Export; 3 rows"
+    IMAGE_RE = re.compile(r"\.(png|jpe?g|webp|gif)$", re.IGNORECASE)
+
+    def _proof(self, raw):
+        """[(kind, ref)] from a list of refs or {kind, ref}: a screenshot, a captured output file or a link."""
+        if raw is None:
+            return []
+        if isinstance(raw, (str, dict)):
+            raw = [raw]
+        if not isinstance(raw, list) or len(raw) > 20:
+            raise TaskError(400, "proof must be a list of at most 20 refs")
+        out = []
+        for x in raw:
+            kind, ref = (x.get("kind"), x.get("ref")) if isinstance(x, dict) else (None, x)
+            ref = _text(ref, 500, "proof", multiline=False)
+            if not ref:
+                continue
+            if kind is None:
+                kind = ("screenshot" if self.IMAGE_RE.search(ref) else
+                        "link" if ref.lower().startswith(("http://", "https://")) else "file")
+            if kind not in self.USER_PROOF_KINDS:
+                raise TaskError(400, f"user check proof is a {', '.join(self.USER_PROOF_KINDS)}; "
+                                     f"test results are the code reviewer's, not proof the change works")
+            out.append((kind, ref))
+        return out
+
+    def user_check(self, key, result, head, actor, note, marks=None, pr=None, open_prs=(), model=None, session=None,
+                   proof=None):
         """The user reviewer tries the change on the PR's current head against the acceptance criteria. pass needs
-        every criterion passed on that head; fail sends it back to build (a rework)."""
+        every criterion passed on that head, each with what the reviewer did and saw, and proof of the running
+        change (two screenshots on a UI ticket: desktop and phone); fail sends it back to build (a rework)."""
         if actor not in USER_REVIEWERS:
             raise TaskError(403, "a user check is the user reviewer's (--role user-reviewer or design-reviewer)")
         if result not in ("pass", "fail"):
@@ -1892,6 +1933,7 @@ class Pipeline:
             raise TaskError(400, "say which session ran the user check (--session)")
         _meta(session, "session")
         marks = self._marks(marks)
+        proof = self._proof(proof)
         prs = [{"ref": str(p.get("ref")), "head": str(p.get("head") or "")} for p in open_prs or ()
                if isinstance(p, dict) and p.get("ref")]
 
@@ -1915,14 +1957,31 @@ class Pipeline:
                 raise TaskError(400, f"no criterion {unknown[0]} on {t['key']}")
             for c in crit:
                 if c["id"] in marks:
-                    c.update(state=marks[c["id"]], by=actor, at=at, head=head)
+                    state, seen = marks[c["id"]]
+                    c.pop("seen", None)        # an observation belongs to the head it was made on
+                    c.update(state=state, by=actor, at=at, head=head, **({"seen": seen} if seen else {}))
             if result == "pass":
                 left = [c["id"] for c in crit if c["state"] != "pass" or c.get("head") != head]
                 if left:
                     raise TaskError(409, f"pass needs every criterion passed at {head[:7]}: "
                                          f"{', '.join(left[:10])} not yet")
+                unseen = [c["id"] for c in crit if len(c.get("seen") or "") < self.SEEN_MIN]
+                if unseen:
+                    raise TaskError(409, f"pass needs what you did and saw for each criterion "
+                                         f"(ID=pass:what you did and saw): {', '.join(unseen[:10])} has none")
+                if not proof:
+                    raise TaskError(409, "pass needs proof of the running change at this head (--proof: a "
+                                         "screenshot, a captured output file or a link); tests do not count")
+                shots = sum(1 for k, _ in proof if k in ("screenshot", "image"))
+                if (policy(t).get("ui") or actor == "agent:design-reviewer") and shots < 2:
+                    raise TaskError(409, "a UI ticket's pass needs at least two screenshots at this head "
+                                         "(desktop 1280 and phone 375 wide)")
+            for kind, ref in proof:
+                self.db.execute("INSERT INTO ticket_evidence(ticket_id, at, actor, stage, kind, ref, note) "
+                                "VALUES (?,?,?,?,?,?,?)", (tid, at, actor, stage_of(t["status"]), kind, ref,
+                                                           f"user check at {head[:7]}"))
             check = {"result": result, "head": head, "pr": pr.get("ref"), "by": actor, "session": session, "at": at,
-                     "note": note}
+                     "note": note, "proof": [ref for _, ref in proof]}
             seat = "design-reviewer" if actor == "agent:design-reviewer" else "user-reviewer"
             work = {"roles": self._role(w, seat, model, session, at)}
             if result == "pass":
