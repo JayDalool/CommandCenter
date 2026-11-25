@@ -61,10 +61,9 @@ DEFAULTS = {
     # Remove a DONE ticket's clean, fully pushed worktree after ccd's git poll (ccd/worktree_cleanup.py).
     # false = never remove anything.
     "worktree_cleanup": True,
-    # Projects whose small low-risk reviewed PRs ccd may merge itself (CC-025, CC-057): a list of project keys, e.g.
-    # ["commandcenter"]. Empty (the default) = none. Read at start. A project must also say pipeline merge
-    # "low-risk" in ccd/registry.py. Anything that is not a list of known keys reads as empty (auto_merge_projects).
-    "auto_merge": [],
+    # ccd may merge low-risk reviewed PRs itself (CC-025). Off until Jay sets it true; read at start.
+    # A project must also say pipeline merge "low-risk" in ccd/registry.py.
+    "auto_merge": False,
     # Onboarding groundwork (ccd/onboarding.py; D-024 proposed): agent registration records, drafts, validation,
     # read-only APIs and the shadow budget report. Off until Jay sets it true; read at start. Records only: it grants
     # nothing, issues no credential and starts no agent.
@@ -98,20 +97,8 @@ PUBLIC_PROJECT_FIELDS = ("key", "name", "repo", "path", "branch", "model", "effo
 def load(path=None):
     cfg = json.loads(json.dumps(DEFAULTS))  # never hand out the module's own lists
     p = Path(path) if path else CONFIG_PATH
-    try:
-        if p.exists():
-            raw = json.loads(p.read_text())
-            # CC-057 round 3: only an object is a configuration. null or a scalar would raise in update(), and a list
-            # of key/value pairs would be accepted by it, switching auto_merge on from something that is not config.
-            if not isinstance(raw, dict):
-                cfg["_config_problem"] = ("config.json is not a JSON object; defaults apply and auto_merge is empty")
-            else:
-                cfg.update(raw)
-    except (OSError, ValueError):
-        # CC-057: a config file that cannot be read or parsed must not switch anything on. Defaults apply (auto_merge
-        # is []), and the daemon says so as a security event. The file's text is never put in the message.
-        cfg = json.loads(json.dumps(DEFAULTS))
-        cfg["_config_problem"] = "config.json could not be read or parsed; defaults apply and auto_merge is empty"
+    if p.exists():
+        cfg.update(json.loads(p.read_text()))
     for proj in cfg["projects"] + list(cfg.get("task_projects") or []):
         # Identity — display name, ticket prefix, retired prefixes — comes from
         # the one project registry, so the config file cannot drift from it. A
@@ -141,23 +128,6 @@ def load(path=None):
         proj.setdefault("path", "")
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     return cfg
-
-
-def auto_merge_projects(raw):
-    """(projects, problem) from config.json `auto_merge`. Fails closed (CC-057): a string, dict, number, null, a list
-    with a non-string or an unknown key, or a project that is paused or a client's, gives [] and says why. The old
-    `true` means ["commandcenter"] (what it switched on before), `false` means none."""
-    if raw is True:
-        return ["commandcenter"], None
-    if raw is False or raw == []:
-        return [], None
-    if not isinstance(raw, list) or any(not isinstance(k, str) or k not in registry.PROJECTS for k in raw):
-        # The rejected value is never copied into the message: it is arbitrary config text (CC-057 review).
-        return [], f"auto_merge must be a list of known project keys (got a {type(raw).__name__})"
-    bad = [k for k in raw if registry.paused(k) or registry.class_of(k) != "own"]
-    if bad:
-        return [], f"auto_merge names a paused or client project: {', '.join(bad)}"
-    return sorted(set(raw)), None
 
 
 def task_projects(cfg):

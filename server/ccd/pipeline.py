@@ -297,21 +297,11 @@ class Pipeline:
         self.ts = store
         self.db = store.db
         self.max_lanes = max_lanes
-        # The projects ccd's auto-merge is switched on for (config.json `auto_merge`, set by the daemon). For a project
-        # not in it a "low-risk" project behaves like "owner": a ready PR opens a merge gate for Jay.
-        self._auto_merge = ()
+        # Whether ccd's auto-merge is switched on (config.json `auto_merge`, set by the daemon). While it is off,
+        # a "low-risk" project behaves like "owner": a ready PR opens a merge gate for Jay.
+        self.auto_merge = False
         # The release window (ccd/release.py, set by the daemon): a live project's live deploys wait for it.
         self.releases = None
-
-    @property
-    def auto_merge(self):
-        return self._auto_merge
-
-    @auto_merge.setter
-    def auto_merge(self, value):
-        """A list of project keys. The old boolean still reads: True is Command Center alone (what it switched on
-        before CC-057), False is none; anything else is none (fails closed)."""
-        self._auto_merge = ("commandcenter",) if value is True else tuple(value) if isinstance(value, (list, tuple, set)) else ()
 
     # ---------- reading ----------
 
@@ -917,8 +907,7 @@ class Pipeline:
     def _gate_due(self, t, w, head):
         """Jay must accept this merge and has not: the project is `owner`, or the ticket needs acceptance, or the
         project is `low-risk` while ccd's auto-merge is switched off; and no `merge:<head>` approval is recorded."""
-        # CC-057: list membership, not a bool: a project outside the list gets its merge question like an "owner" one.
-        low_risk_off = policy(t)["merge"] == "low-risk" and t.get("project") not in self.auto_merge
+        low_risk_off = policy(t)["merge"] == "low-risk" and not self.auto_merge
         return (needs_acceptance(t, w) or low_risk_off) and not _merge_ok(w["confirmed"], head)
 
     def _ready(self, t, w, pr):
@@ -1035,22 +1024,53 @@ class Pipeline:
             {}, {}, [("pipeline.auto_merged", f"{pr_ref} merged by ccd at {str(head)[:7]} ({checks})",
                       {"head": head, "pr": pr_ref, "ci": ci})]))
 
-    def merged(self, key, pr_ref, sha=None):
-        """A linked PR merged (the GitHub poll moved the ticket to VERIFYING): record it, close the merge gate."""
+    def merged(self, key, pr_ref, sha=None, head=None):
+        """A linked PR merged (the GitHub poll moved the ticket to VERIFYING): record it, close the merge gate.
+
+        CC-057 (c4): also record who allowed it. `head` is the PR head that GitHub merged. ccd does not run the merge
+        for Jay's "merge it" (the lead does, under Jay's gh login), so it cannot stop an agent merging; it records
+        `allowedBy` and flags a merge with no matching `merge:<head>` approval after the fact."""
         def fn(tid, t, w, at):
-            work = {"merge": {"pr": pr_ref, "sha": sha, "at": at}}
+            allowed, flag = self._merge_allowed_by(tid, w, head)
+            work = {"merge": {"pr": pr_ref, "sha": sha, "at": at, "head": head, "allowedBy": allowed}}
             if w["gate"] == "merge":
                 work.update(gate=None, gate_reason=None)
-            events = [("pipeline.merged", f"{pr_ref} merged", {"pr": pr_ref, "sha": sha})]
+            events = [("pipeline.merged", f"{pr_ref} merged", {"pr": pr_ref, "sha": sha, "head": head,
+                                                              "allowedBy": allowed})]
             rv = w["review"]
             if rv["verdict"] != "APPROVE":
                 events.append(("pipeline.unreviewed_merge", f"{pr_ref} merged without a recorded approval", {}))
+            if flag:
+                events.append(("pipeline.merged_without_approval",
+                               f"{pr_ref} merged at {str(head)[:7]} with no matching 'merge it' for that head",
+                               {"pr": pr_ref, "head": head}))
             return {}, work, events
         t = self.ts.get(key)
         tid = self.ts._id_of(key)
         if t["status"] != "VERIFYING" or ((self._row(tid) or {}).get("merge") or {}).get("pr") == pr_ref:
             return t, [], []
         return self._tx(key, "system:automation", fn)
+
+    def _merge_allowed_by(self, tid, w, head):
+        """(allowedBy, flag) for a merge at `head`: 'jay:<via>' when Jay's merge:<head> is confirmed (via from the
+        newest merge gate_confirmed event), 'ccd:low-risk' when ccd's own auto-merge recorded that head, else
+        'nobody' (flagged). A merge whose head GitHub did not report is 'unknown' and not flagged: nothing to compare."""
+        if not head:
+            return "unknown", False
+        if _merge_ok(w["confirmed"], head):
+            via = "ui"
+            for (data,) in self.db.execute("SELECT data FROM ticket_events WHERE ticket_id=? AND "
+                                           "kind='pipeline.gate_confirmed' ORDER BY id DESC", (tid,)).fetchall():
+                d = json.loads(data or "{}")
+                if d.get("gate") == "merge":
+                    via = d.get("via") or "ui"
+                    break
+            return f"jay:{via}", False
+        for (data,) in self.db.execute("SELECT data FROM ticket_events WHERE ticket_id=? AND "
+                                       "kind='pipeline.auto_merged'", (tid,)).fetchall():
+            if json.loads(data or "{}").get("head") == head:
+                return "ccd:low-risk", False
+        return "nobody", True
 
     def verify(self, key, result, evidence, actor, model=None, session=None):
         if result not in ("pass", "fail"):
@@ -1795,9 +1815,6 @@ class Pipeline:
             # CC-066: every verdict's text also rides on its event, so work().planReviews keeps reviews that
             # ticket_flow.plan_review loses when a new plan clears it.
             kept = {"session": session, "note": note, "blast": blast, "tests": tests}
-            if new != f["size"]:
-                # CC-057: "raised by the technical reviewer" is read back from this event by merge_size_facts.
-                kept.update(sizeFrom=f["size"], sizeTo=new)
             work = {"roles": self._role(w, "tech-reviewer", model, session, at)}
             cols = {"plan_review": review}
             if new != f["size"]:
@@ -1895,31 +1912,6 @@ class Pipeline:
             if d.get("head") == head:
                 return d.get("result") == "pass"
         return False
-
-    def merge_size_facts(self, key):
-        """What merge_policy.size_reasons needs (CC-057): the stored and effective size, whether the ticket was ever
-        sized risky or raised by the technical reviewer (read from its events), and whether any ancestor is risky."""
-        tid = self.ts._id_of(key)
-        t = self.ts.get(key)
-        stored = self._flow(tid)["size"]
-        ever = raised = False
-        for (kind, data) in self.db.execute("SELECT kind, data FROM ticket_events WHERE ticket_id=? AND kind IN "
-                                            "('pipeline.intake','pipeline.criteria','pipeline.plan_reviewed')",
-                                            (tid,)).fetchall():
-            d = json.loads(data or "{}")
-            ever = ever or d.get("size") == "risky" or d.get("sizeTo") == "risky" or d.get("asked") == "risky"
-            raised = raised or (kind == "pipeline.plan_reviewed" and bool(d.get("sizeTo")))
-        row = self.db.execute("SELECT parent_id FROM tickets WHERE id=?", (tid,)).fetchone()
-        parent_risky, seen, cur = False, {tid}, row[0] if row else None
-        while cur and cur not in seen and not parent_risky:
-            seen.add(cur)
-            pk = self.ts._key_of(cur)
-            pt = self.ts.get(pk)
-            parent_risky = self._flow(cur)["size"] == "risky" or policy(pt)["plan"] == "owner"
-            row = self.db.execute("SELECT parent_id FROM tickets WHERE id=?", (cur,)).fetchone()
-            cur = row[0] if row else None
-        return {"stored": stored, "effective": flow_mod.effective_size(stored, policy(t)) if stored else None,
-                "everRisky": ever, "raised": raised, "parentRisky": parent_risky}
 
     def user_check(self, key, result, head, actor, note, marks=None, pr=None, open_prs=(), model=None, session=None):
         """The user reviewer tries the change on the PR's current head against the acceptance criteria. pass needs

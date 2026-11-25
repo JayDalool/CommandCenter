@@ -34,10 +34,9 @@ class RepoPolicy(unittest.TestCase):
         self.assertEqual({k: v["mode"] for k, v in p.items()}, {
             "commandcenter": "experimental_autonomy", "gyst": "autonomous_product",
             "samvision": "controlled_production", "mfe": "controlled_production", "gauzemate": "paused"})
-        # D-008: nothing auto-merges or deploys beyond today. D-010 (CC-057): the four live projects are low-risk in the
-        # registry, so the per-project config list is the only switch; GauzeMate stays owner.
+        # D-008: nothing auto-merges or deploys beyond today; enforced merge is unchanged.
         self.assertEqual({k: v["enforced"]["merge"] for k, v in p.items()},
-                         {"commandcenter": "low-risk", "gyst": "low-risk", "samvision": "low-risk", "mfe": "low-risk",
+                         {"commandcenter": "low-risk", "gyst": "owner", "samvision": "owner", "mfe": "owner",
                           "gauzemate": "owner"})
         # D-004: unattended SamVision deploys need capabilities that do not exist yet.
         rel = p["samvision"]["target"]["release"]
@@ -63,36 +62,6 @@ class RepoPolicy(unittest.TestCase):
         # D-007: no agent may expand its own authority. A PR touching policy/ is never low-risk.
         for f in ("policy/projects/commandcenter.toml", "policy/decisions/D-001.toml", "policy/README.md"):
             self.assertTrue(merge_policy.denied(f), f)
-
-    def test_every_protected_and_personal_data_path_is_denied_by_the_merge_rules(self):
-        """CC-057: merge_policy and the profiles must not drift. A path a profile says needs Jay (self_protection) or
-        raises a personal-data approval (trigger_paths) can never be auto-merged in that project."""
-        def sample(pat):
-            return pat.replace("**/", "a/").replace("**", "a/b").replace("*", "x")
-        seen = 0
-        for key in ("commandcenter", "mfe", "gyst", "samvision"):
-            target = self.policy.profile(key)["target"]
-            paths = list((target.get("self_protection") or {}).get("require_jay_for_paths") or [])
-            paths += list((target.get("personal_data") or {}).get("trigger_paths") or [])
-            for pat in paths:
-                seen += 1
-                self.assertTrue(merge_policy.denied(sample(pat), key), (key, pat))
-        self.assertGreaterEqual(seen, 14)       # commandcenter's nine and gyst's five
-
-    def test_the_sensitive_areas_of_mfe_and_samvision_are_denied_though_their_profiles_list_none(self):
-        # Their tomls carry no path lists, so the areas come from each repo's AGENTS.md (the investigator's list).
-        mfe = ("app/auth/x.tsx", "app/api/auth/route.ts", "lib/auth/session.ts", "components/login-form.tsx",
-               "components/signup-form.tsx", "components/password-field.tsx", "app/household/x.tsx", "app/invite/x.tsx",
-               "components/accountant-panel.tsx", "lib/uploads.ts", "lib/storage.ts", "lib/expense-files.ts", "lib/ocr/x.ts",
-               "services/paddle-ocr/x.py", "prisma/migrations/1/migration.sql", "proxy.ts")
-        sv = ("samvision/cma/x.py", "samvision/comparables/x.py", "samvision/calibration/x.py", "samvision/evaluation/x.py",
-              "samvision/backtesting/x.py", "samvision/market/x.py", "samvision/ingestion/x.py", "samvision/storage/x.py",
-              "samvision/geo/x.py", "samvision/api/auth.py", "samvision/api/access.py", "samvision/api/tenancy.py",
-              "samvision/api/registration.py", "samvision/api/uploads.py", "samvision/api/web.py", "pdf_uploads/a.pdf")
-        for path in mfe:
-            self.assertTrue(merge_policy.denied(path, "mfe"), path)
-        for path in sv:
-            self.assertTrue(merge_policy.denied(path, "samvision"), path)
 
 
 class Validator(unittest.TestCase):
@@ -246,7 +215,7 @@ class Loading(unittest.TestCase):
         with unittest.mock.patch.object(registry, "pipeline_of",
                                         lambda k: dict(real(k), merge="auto") if k == "gyst" else real(k)):
             d = profiles.drift("gyst", profiles.load().profiles["gyst"]["profile"])
-        self.assertEqual(d, [{"field": "merge", "profile": "low-risk", "registry": "auto"}])
+        self.assertEqual(d, [{"field": "merge", "profile": "owner", "registry": "auto"}])
 
     def test_a_policy_problem_is_an_alert(self):
         from ccd.daemon import Daemon

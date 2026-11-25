@@ -23,7 +23,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import __version__, autonomy, coordid, coordinators, github, ledger, merge_facts, merge_policy, model, profiles, registry, sources
+from . import __version__, autonomy, coordid, coordinators, github, ledger, merge_policy, model, profiles, registry, sources
 from . import flow as flow_mod
 from . import release as release_mod
 from . import pipeline as pipeline_mod
@@ -49,7 +49,7 @@ from . import records as records_mod
 from . import tasks as tasks_mod
 from . import worktree_cleanup
 from . import config as config_mod
-from .config import AUTO_MERGE_STOP, STATE_DIR, auto_merge_projects, public_project
+from .config import AUTO_MERGE_STOP, STATE_DIR, public_project
 
 log = logging.getLogger("ccd")
 
@@ -332,17 +332,10 @@ class Daemon(LeadChat, HqDaemon):
         self.work = workmode_mod.WorkMode(cfg.get("work_mode_path") or STATE_DIR / "work-mode.json")
         # Auto-merge (CC-025): the config switch is read once, here. `gh_cli(args) -> (code, stdout, stderr)` is the
         # only way ccd writes to GitHub; tests give it a fake. The stop file is checked before every merge.
-        # CC-057: `auto_merge` is a list of project keys; anything else reads as [] (config.auto_merge_projects) and
-        # says so as a security event at start, so a typo never switches a project on.
-        self.auto_merge_list, self._auto_merge_problem = auto_merge_projects(cfg.get("auto_merge"))
-        self.auto_merge_on = bool(self.auto_merge_list)
+        self.auto_merge_on = cfg.get("auto_merge") is True
         if self.pipeline is not None:
-            self.pipeline.auto_merge = self.auto_merge_list
+            self.pipeline.auto_merge = self.auto_merge_on
         self.gh_cli = gh_cli or sources._run
-        # CC-057: the security-sign-off probe reads GitHub for tickets with a merge gate. It runs only when the caller
-        # gave a real gh runner (ccd's own start does), so a test daemon never shells out to gh by accident.
-        self.security_probe_on = gh_cli is not None
-        self._sec = {}        # ticket key → (reviewed head, sign-off required at it, time.monotonic() of the read)
         self.auto_merge_stop = AUTO_MERGE_STOP
         self._am_busy = False
         self._am_next = {}    # ticket key → time.monotonic() before which it is not looked at again
@@ -858,7 +851,6 @@ class Daemon(LeadChat, HqDaemon):
         self._diff_and_alert(snap)    # synchronous: what it logs IS this snapshot
         self._ticket_automation()
         await self._auto_merge()
-        await self._security_probes_safe()
         self._workers_beat()
         snap["seq"] = self.seq if quiet else snap_seq
         self.snap = snap
@@ -2235,7 +2227,8 @@ class Daemon(LeadChat, HqDaemon):
             self._event("tasks", "task.pipeline", f"{ticket['key']} {text}"[:300], project=ticket["project"],
                         ref=ticket["key"], data={"kind": kind, **({"actor": actor} if actor else {})},
                         severity="action" if kind in ("pipeline.gate_opened", "pipeline.blocked",
-                                                      "pipeline.unreviewed_merge", "pipeline.questions",
+                                                      "pipeline.unreviewed_merge", "pipeline.merged_without_approval",
+                                                      "pipeline.questions",
                                                       "pipeline.deploy_requested", "pipeline.replan",
                                                       "pipeline.auto_merge_held", "pipeline.auto_merged",
                                                       "pipeline.auto_merge_failed") else "info")
@@ -2934,7 +2927,13 @@ class Daemon(LeadChat, HqDaemon):
                             continue
                         self._auto(k, ("IN_REVIEW", "READY_TO_MERGE"), "VERIFYING", why)
                         if self.pipeline.participating(k):
-                            self._pipeline_result(*self.pipeline.merged(k, ref, ((m.get("mergeCommit") or {}).get("oid"))))
+                            res = self.pipeline.merged(k, ref, ((m.get("mergeCommit") or {}).get("oid")), m.get("headRefOid"))
+                            self._pipeline_result(*res)
+                            if any(e[0] == "pipeline.merged_without_approval" for e in res[2]):
+                                # CC-057 c4: ccd cannot stop a merge outside Jay's "merge it"; it says so at once.
+                                self._event("security", "merge.outside",
+                                            f"{k}: {ref} merged without a matching 'merge it' for its head; check who merged it",
+                                            severity="action", project=res[0]["project"], ref=k)
                 except Exception as e:  # noqa: BLE001
                     log.warning(json.dumps({"msg": "ticket automation skipped a merge", "error": repr(e)[:200]}))
 
@@ -2946,20 +2945,13 @@ class Daemon(LeadChat, HqDaemon):
                          "statusCheckRollup")
 
     def _auto_merge_projects(self):
-        """Registry projects whose merge policy is low-risk, that have an allowlist AND are in config `auto_merge`:
-        the only ones ccd merges for by itself (CC-057: the switch is per project)."""
-        return [k for k in registry.PROJECTS if k in self.auto_merge_list
+        """Registry projects whose merge policy is low-risk AND that have an allowlist: the only ones ccd merges for."""
+        return [k for k in registry.PROJECTS
                 if pipeline_mod.policy({"project": k}, k)["merge"] == "low-risk" and merge_policy.ALLOW.get(k)]
 
     def _log_merge_policy(self):
         """Startup: whether ccd may merge anything, as a security event (the audit trail of the first GitHub write)."""
         self._event("security", "merge.policy", self._merge_policy_text(), data={"status": self._merge_policy_state()})
-        if self.cfg.get("_config_problem"):
-            self._event("security", "merge.config", self.cfg["_config_problem"], severity="warn",
-                        data={"status": "invalid"})
-        if self._auto_merge_problem:
-            self._event("security", "merge.config", f"auto_merge ignored: {self._auto_merge_problem}", severity="warn",
-                        data={"status": "invalid"})
 
     def _log_policy(self):
         """Startup: which policy files ccd read (their combined SHA-256) and whether any is broken or drifts."""
@@ -2978,132 +2970,12 @@ class Daemon(LeadChat, HqDaemon):
         return (f"auto-merge {'ON' if self.auto_merge_on else 'OFF'} (config auto_merge); "
                 f"low-risk projects in the registry: {projects}{stopped}")
 
-    def _auto_merge_stopped(self, project=None):
-        """The kill switches: the global stop file, and with `project` that project's own
-        (`auto-merge.<project>.stop` beside it; CC-057). Anything but "does not exist" counts as stopped, so an
-        unreadable file or folder stops the merge instead of allowing it."""
-        names = [Path(self.auto_merge_stop)]
-        if project:
-            names.append(Path(self.auto_merge_stop).with_name(f"auto-merge.{project}.stop"))
-        for p in names:
-            try:
-                os.stat(p)
-                return True
-            except FileNotFoundError:
-                continue
-            except OSError:
-                return True
-        return False
-
-    # CC-057 round 3: labels, Issue links and the base commit change without a new head, so a probe answer is only
-    # as good as its age. The derive pass reads a ticket again after SEC_REFRESH seconds; a "not required" older than
-    # SEC_TTL is not believed (security_wait holds instead), and Jay's merge press reads fresh (act_merge).
-    SEC_REFRESH = 120
-    SEC_TTL = 300
-
-    def _security_facts(self, key, project, ticket, head, facts):
-        """Whether this change needs the security engineer's sign-off at `head`, and whether it has one (CC-057, Jay
-        #187). Read fresh by the executor and remembered per head for the sync readers (merge_batch, the Slack
-        question). Unreadable facts mean required: never "no". The files are the pinned comparison's.
-        """
-        if facts.get("errors"):
-            required = True
-        else:
-            required = merge_policy.security_required(project, ticket, facts.get("files"), facts.get("labels"), facts)
-        facts["securityRequired"] = required
-        facts["securitySignoff"] = self.pipeline.security_signoff(key, head)
-        self._sec[key] = (head, required, time.monotonic())
-
-    def security_wait(self, key):
-        """Why this READY_TO_MERGE ticket may not be offered to Jay yet (a required security sign-off is missing at
-        its reviewed head), else None. A ticket the probe has not read yet, or read too long ago to trust a "not
-        required" (SEC_TTL), is waiting too, once probing is on."""
-        t = self.tasks.get(key)
-        head = self.pipeline.review_head(key)
-        if not head:
-            return None
-        known = self._sec.get(key)
-        trigger = merge_policy.security_required(t["project"], t, [], [], None)    # type and labels of the ticket
-        if known and known[0] == head and (known[1] or time.monotonic() - known[2] <= self.SEC_TTL):
-            required = trigger or known[1]
-        elif self.security_probe_on:
-            required = True
-        else:
-            required = trigger
-        return "needs a security sign-off at this head" if required and not self.pipeline.security_signoff(key, head) \
-            else None
-
-    async def _security_refresh(self, project, key, head):
-        """Read the ticket's PR facts now (CC-057 round 3): Jay's merge press and Slack reply authorise on a fresh read,
-        never on a cached one. Any failure records "required" for the head, so the ticket is skipped, not offered."""
-        if not self.security_probe_on:
-            return
+    def _auto_merge_stopped(self):
+        """The kill switch: the stop file exists. Anything but "does not exist" counts as stopped."""
         try:
-            t = self.tasks.get(key)
-            if t["project"] != project or t["status"] != "READY_TO_MERGE" or self.pipeline.review_head(t["key"]) != head:
-                return      # merge_batch skips it for that reason; nothing to authorise
-            await self._security_probe(t["key"], t["project"], head)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:  # noqa: BLE001 — fail closed: required, so merge_batch skips it
-            self._sec[str(key).upper()] = (head, True, time.monotonic())
-            log.warning(json.dumps({"msg": "security refresh failed", "key": key, "error": repr(e)[:200]}))
-
-    async def _security_probes_safe(self):
-        """The derive pass's probe run: a probe never breaks derive, and the merge reads stay closed (CC-057)."""
-        try:
-            await self._security_probes()
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            # CC-057 round 3: a failed pass forgets every earlier answer, so an old "no sign-off needed" cannot outlive
-            # it; security_wait then holds each ticket until a probe reads it again.
-            self._sec.clear()
-            log.warning(json.dumps({"msg": "security probes failed", "error": repr(e)[:200]}))
-
-    async def _security_probes(self):
-        """Read, for every ticket that has a merge gate open, what its PR touches (files, labels, history), so the
-        sync readers know whether a sign-off is required. Runs with the switch empty too: Jay's own merges need the
-        sign-off exactly as ccd's do."""
-        if self.tasks is None or not self.security_probe_on:
-            return
-        for project in registry.PROJECTS:
-            if registry.paused(project) or registry.class_of(project) != "own":
-                continue
-            try:
-                rows = self.tasks.list(project=project)
-            except Exception as e:  # noqa: BLE001 — one project's store trouble must not stop the others
-                log.warning(json.dumps({"msg": "security probe list failed", "project": project, "error": repr(e)[:200]}))
-                continue
-            for row in rows:
-                if row["status"] != "READY_TO_MERGE":
-                    continue
-                key = row["key"]
-                head = self.pipeline.review_head(key)
-                known = self._sec.get(key)
-                if not head or (known and known[0] == head and time.monotonic() - known[2] < self.SEC_REFRESH):
-                    continue
-                try:
-                    await self._security_probe(key, project, head)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:  # noqa: BLE001 — one ticket must not stop the others
-                    self._sec[key] = (head, True, time.monotonic())
-                    log.warning(json.dumps({"msg": "security probe failed", "key": key, "error": repr(e)[:200]}))
-
-    async def _security_probe(self, key, project, head):
-        t = self.tasks.get(key)
-        w = self.pipeline.work(key)
-        repo = registry.github_of(project)
-        pr_ref = w["review"].get("pr") or ""
-        number = pr_ref.rpartition("#")[2]
-        if not number.isdigit() or pr_ref.rpartition("#")[0] != repo:
-            self._sec[key] = (head, True, time.monotonic())
-            return
-        issue_refs = [l["ref"] for l in t.get("links") or [] if l.get("provider") == "github" and l.get("kind") == "issue"]
-        # merge_facts.fetch never raises: a failed read lands in facts["errors"], which _security_facts reads as required.
-        facts = await asyncio.to_thread(merge_facts.fetch, self._gh_json, repo, int(number), head, project, issue_refs)
-        self._security_facts(key, project, t, head, facts)
+            return Path(self.auto_merge_stop).exists()
+        except OSError:
+            return True
 
     def _gh_json(self, args):
         code, out, err = self.gh_cli(args)
@@ -3134,8 +3006,6 @@ class Daemon(LeadChat, HqDaemon):
                 for key in keys:
                     if self._auto_merge_stopped() or self._stopping:
                         return
-                    if self._auto_merge_stopped(project):
-                        break       # this project is stopped; the others carry on
                     try:
                         await self._auto_merge_one(project, key)
                     except asyncio.CancelledError:
@@ -3173,16 +3043,7 @@ class Daemon(LeadChat, HqDaemon):
             self._am_next[key] = time.monotonic() + 60
             return
         self._shadow_pr[key] = pr    # shadow mode only: the engine reads the changed files of the reviewed head from it
-        # CC-057: modes, file text and labels are read fresh, pinned to the reviewed head, in a worker thread; the size
-        # history comes from the ticket. A failed read refuses the merge (facts["errors"]); it never reads as empty.
-        issue_refs = [l["ref"] for l in t.get("links") or [] if l.get("provider") == "github" and l.get("kind") == "issue"]
-        facts = await asyncio.to_thread(merge_facts.fetch, self._gh_json, repo, int(number), head, project, issue_refs)
-        facts["size"] = self.pipeline.merge_size_facts(key)
-        self._security_facts(key, project, t, head, facts)
-        if not facts["errors"]:
-            # CC-057 round 3: the files and counts are the pinned comparison's (classify reads them from facts too).
-            pr = dict(pr, files=facts["files"], additions=facts["additions"], deletions=facts["deletions"])
-        d = merge_policy.classify(project, t, w, pr, pr_ref, open_prs, pipeline_mod.policy(t, project)["merge"], facts)
+        d = merge_policy.classify(project, t, w, pr, pr_ref, open_prs, pipeline_mod.policy(t, project)["merge"])
         if d.wait:
             stamp = self._review_stamp(w)
             since = self._am_waiting.setdefault(key, (stamp, time.monotonic()))
@@ -3199,30 +3060,18 @@ class Daemon(LeadChat, HqDaemon):
         if not d.ok:
             self._auto_merge_hold(t, head, "; ".join(d.reasons[:3]))
             return
-        # CC-057: a base retarget with the same head is not stopped by --match-head-commit, so the evaluated base
-        # branch and commit are read once more; any change waits for the next pass to judge the new pair. This is
-        # the LAST await before the write (CC-057 round 3): every local guard below runs after it.
-        moved = await asyncio.to_thread(merge_facts.verify, self._gh_json, repo, int(number), facts)
-        if moved:
-            self._am_next[key] = time.monotonic() + 60
-            self._event("tasks", "task.pipeline", f"{key} auto-merge waits: {moved}", severity="warn", project=project,
-                        ref=key, data={"kind": "pipeline.auto_merge_unreadable"})
-            return
-        # Everything above awaited: re-read the ticket, re-check it, the sign-off and the kill switches, then merge,
-        # with no await between. A label, flag, stop file or withdrawn sign-off that arrived while any GitHub read ran
-        # (gh pr view, the facts, the verify re-read) holds or stops the merge here.
+        # Everything above awaited: re-read the ticket, re-check it, then the kill switch, then merge, with no await
+        # between. A label or flag added while `gh pr view` ran (a `ui` label, needs:jay) holds the merge here.
         t2 = self.tasks.get(key)
         w2 = self.pipeline.work(key)
         if t2["status"] != "READY_TO_MERGE" or w2["gate"] or w2["review"]["head"] != head \
                 or w2["review"]["verdict"] != "APPROVE":
             return
         late = merge_policy.ticket_reasons(t2, w2)
-        if facts["securityRequired"] is not False and not self.pipeline.security_signoff(key, head):
-            late.append("the change needs a security sign-off at this head")
         if late:
             self._auto_merge_hold(t2, head, "; ".join(late[:3]))
             return
-        if self._auto_merge_stopped(project) or self._stopping:
+        if self._auto_merge_stopped():
             return
         self._broker("pr.merge", project, f"{pr_ref} @ {head[:12]} ({key})",
                      {"engine": self._broker_engine_merge(project, t2, w2, pr)})
@@ -3235,13 +3084,6 @@ class Daemon(LeadChat, HqDaemon):
         self._event("security", "merge.auto", f"ccd merged {pr_ref} for {key} at {head[:7]} ({'no CI checks' if d.ci == 'none' else 'CI green'})",
                     project=project, ref=key, data={"number": int(number), "ci": d.ci})
         self._pipeline_result(*self.pipeline.auto_merged(key, head, pr_ref, d.ci))
-        # CC-057 round 3: GitHub's merge takes a head precondition but no base one, so a retarget in the instant after
-        # verify() cannot be refused. It is detected here and put in front of Jay as an action, never left silent.
-        wrong = await asyncio.to_thread(merge_facts.landed, self._gh_json, repo, int(number), facts)
-        if wrong:
-            self._event("security", "merge.base_mismatch", f"{key}: check {pr_ref} by hand: {wrong}"[:300],
-                        severity="action", project=project, ref=key,
-                        data={"number": int(number), "base": (facts.get("base") or {}).get("ref")})
 
     @staticmethod
     def _review_stamp(w):
@@ -3634,6 +3476,38 @@ class Daemon(LeadChat, HqDaemon):
                     project=project, ref=ticket, data={"kind": "ui_finding", "run": run, "decision": decision})
         return {"ok": True, "finding": finding, **d}
 
+    def security_state(self, key):
+        """'not required', 'required, present' or 'required, missing' for a READY_TO_MERGE ticket's reviewed head
+        (CC-057, Jay #187): required means ticket type SECURITY or a security/migration label. Read from local ticket
+        facts in the same call that decides, so no GitHub-read cache can authorise a merge (the shrunk CC-057 dropped
+        the probe whose cache raced, Codex Medium 3). Sensitive files do not trigger it; the merge DM lists them."""
+        t = self.tasks.get(key)
+        labels = {str(x).lower() for x in (t.get("labels") or [])}
+        if not (str(t.get("type") or "").upper() == "SECURITY" or labels & {"security", "migration"}):
+            return "not required"
+        head = self.pipeline.review_head(key)
+        return "required, present" if head and self.pipeline.security_signoff(key, head) else "required, missing"
+
+    def security_wait(self, key):
+        """Why this ticket may not be offered to Jay yet (a required security sign-off is missing), else None."""
+        if not self.pipeline.review_head(key):
+            return None
+        return "needs a security sign-off at this head" if self.security_state(key) == "required, missing" else None
+
+    def merge_facts_for_dm(self, project, pr_ref):
+        """Files and line counts of the PR, one display-only `gh pr view` (CC-057 c8). Blocks and authorises nothing;
+        the caller compares `head` with the DM's head. Raises on any failure; the notifier says so in the DM."""
+        repo, _, number = str(pr_ref).partition("#")
+        pr = self._gh_json(["gh", "pr", "view", number, "--repo", repo, "--json", "title,files,additions,deletions,headRefOid"])
+        return {"title": str(pr.get("title") or "")[:120], "files": [f["path"] for f in pr["files"]], "additions": int(pr["additions"]),
+                "deletions": int(pr["deletions"]), "head": pr.get("headRefOid")}
+
+    def sensitive_patterns(self, project):
+        """The project profile's protected-path and personal-data globs (CC-057 c8); [] without a valid profile."""
+        prof = self.policy.profile(project) or {}
+        return list((prof.get("self_protection") or {}).get("require_jay_for_paths") or []) + \
+            list((prof.get("personal_data") or {}).get("trigger_paths") or [])
+
     def merge_batch(self, project, keys=None):
         """The project's Ready-to-Merge tickets Jay can merge now, in merge order, and the ones that cannot.
 
@@ -3713,10 +3587,6 @@ class Daemon(LeadChat, HqDaemon):
                 and isinstance(i.get("head"), str) and pipeline_mod.SHA_RE.match(i["head"]) for i in items):
             raise ActionError(400, "items must be the [{key, head}] pairs the confirm box listed")
         shown = {i["key"].upper(): i["head"] for i in items}
-        # CC-057 round 3: whether a security sign-off is required is read fresh from GitHub for every listed ticket
-        # before merge_batch decides, so a label or Issue link added at the same head since the last probe counts.
-        for key, head in shown.items():
-            await self._security_refresh(project, key, head)
         listed, skipped = self.merge_batch(project, list(shown))
         ready = [r for r in listed if r["head"] == shown.get(r["key"])]
         skipped += [{"key": r["key"], "reason": "its PR head changed since you looked; open Merge ready again"}

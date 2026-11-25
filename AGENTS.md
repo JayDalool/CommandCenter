@@ -52,9 +52,9 @@ CI configuration is never changed without Jay's explicit approval.
 
 - One ticket, one branch, one worktree, one PR. Branch names start with the ticket key (`CC-123-short-name`).
 - PR title starts with the ticket key; the body lists each acceptance criterion and how it is met.
-- Never force-push a shared branch, rewrite main's history, merge, tag or release. Jay merges, except that ccd merges a
-  small low-risk PR by itself in a project Jay switched on in `config.json` `auto_merge` (D-010; empty today, so off).
-  Anything else needs Jay's "merge it" for that exact PR and head.
+- Never force-push a shared branch, rewrite main's history, merge, tag or release. Jay merges (ADR 0007's low-risk
+  policy is the only exception, and it is off). An agent merges only after Jay's "merge it" for that exact PR and head
+  (CC-057); ccd records who allowed each merge and flags any merge without one.
 - Feature flags stay off unless Jay turns them on: `auto_merge`, `onboarding_groundwork`, `phase2_*`, `chat_start_leads`.
 
 ## Who decides

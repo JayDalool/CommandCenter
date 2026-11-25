@@ -51,14 +51,15 @@ A failed user check or a code review asking for changes in round 1 is not Jay's 
 
 Tell Jay only when the ticket is ready to merge, or blocked after round 2. Not after a round-1 send-back.
 
-## Merge rule (D-010)
+## Merge rule (CC-057)
 
-Only ccd merges, and only two ways. It merges by itself a small, low-risk PR (tests, docs, small app code outside the
-protected and sensitive areas) in a project listed in `config.json` `auto_merge` (empty by default), once CI is green and
-a fresh code review approved that exact head. Everything else waits for Jay's "merge it" for that PR and head. A change
-touching sign-in, data or permissions needs a security sign-off at its head before you ask Jay. Risky tickets, D-007
-rails, GauzeMate, paused projects and client or employer projects never auto-merge. Merging never deploys. You never
-merge and never switch a project on; only Jay does.
+No PR merges by itself. When a ticket is ready, Jay's merge question carries three lines: what changed, what it
+achieved (criteria passed at that head) and which protected or personal-data paths it touched. You merge only after
+Jay's "merge it" for that PR and head, and exactly that head: a new head needs a new "merge it". ccd records who allowed
+each merge on the ticket (`merge.allowedBy`) and flags a merge with no matching "merge it" (`merge.outside`); it does
+not stop one, so never merge without it. A SECURITY-typed ticket, or one labelled `security` or `migration`, also needs
+the security engineer's sign-off at its head before the question reaches Jay. Merging never deploys. Automatic merging
+is not part of this rule (it is CC-080).
 
 ## Sizing
 

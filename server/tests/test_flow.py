@@ -593,10 +593,6 @@ class Cli(unittest.TestCase):
         m, path, body, actor = pipeline_cli.build(["user-check", "SV-1", "pass", "--head", HEAD, "--session", "u",
                                                    "--note", "ok", "--criterion", "c1=pass"])
         self.assertEqual((actor, body["result"], body["criteria"]), ("agent:user-reviewer", "pass", ["c1=pass"]))
-        m, path, body, actor = pipeline_cli.build(["security-check", "SV-1", "pass", "--head", HEAD, "--session", "s",
-                                                   "--note", "no auth change"])
-        self.assertEqual((m, path, actor, body["result"], body["head"]),
-                         ("POST", "/api/tasks/SV-1/work/security-check", "agent:security-engineer", "pass", HEAD))
         self.assertEqual(pipeline_cli.build(["close", "SV-1", "--note", "done"])[2:],
                          ({"note": "done"}, "agent:coordinator"))
         self.assertEqual(pipeline_cli.build(["user-check", "SV-1", "pass", "--role", "design-reviewer", "--head", HEAD,
