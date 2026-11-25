@@ -88,6 +88,10 @@ ALLOWED = {
     ("GET", "/api/projects/{project}/logo"), ("DELETE", "/api/projects/{project}/logo"),
 }
 JAY_PRESSES = {"/api/jay/merge", "/api/jay/go-live"}
+# Jay's per-repository auto-merge switch (2026-11-25): it names "merge" but merges nothing. It only turns ccd's
+# existing D-010 auto-merge on or off per project; on needs Jay with Developer Unlock (tests/test_merge_switch.py).
+# Listed by exact path so no other route can use the word.
+JAY_SWITCHES = {"/api/auto-merge", "/api/auto-merge/projects/{project}"}
 FORBIDDEN_WORDS = ("merge", "deploy", "prod", "docker", "secret", "config", "rule", "git", "apply", "exec", "push",
                    "reset", "force", "sudo",
                    "shell", "run", "kill", "restart", "delete", "worktree", "settings")
@@ -229,6 +233,8 @@ class Surface(NoLiveData, ApiBase):
             if path in JAY_PRESSES:
                 continue
             for word in FORBIDDEN_WORDS:
+                if path in JAY_SWITCHES and word == "merge":
+                    continue
                 self.assertNotIn(word, path.lower(), f"{path} mentions {word}")
 
     def test_profiles_are_read_only_and_token_gated(self):
