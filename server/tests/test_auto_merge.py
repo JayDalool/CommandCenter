@@ -42,6 +42,7 @@ class FakeGh:
         self.merge = (0, "", "")
         self.delay = 0
         self.on_view = None
+        self.merged = False       # what the pulls API says after a successful `gh pr merge`
 
     def api(self, args):
         """The `gh api` answers merge_facts.fetch reads, derived from the PR the fake serves."""
@@ -50,14 +51,18 @@ class FakeGh:
         if self.api_fail:
             return 1, "", "api down"
         path = args[2]
-        if path.endswith("/commits?per_page=100"):
-            return 0, json.dumps([{"sha": "c1" * 20}]), ""
+        if "/compare/" in path:      # CC-057 round 3: the one pinned base...head comparison
+            status = {"ADDED": "added", "MODIFIED": "modified", "DELETED": "removed", "RENAMED": "renamed"}
+            return 0, json.dumps({"status": "ahead", "total_commits": 1, "commits": [{"sha": self.pr.get("headRefOid")}],
+                                  "files": [{"filename": x["path"], "status": status.get(x["changeType"], "modified"),
+                                             "additions": x["additions"], "deletions": x["deletions"]}
+                                            for x in self.pr.get("files") or []]}), ""
         if "/commits/" in path:
             names = [x["path"] for x in self.pr.get("files") or []] + list(self.history_extra)
-            return 0, json.dumps({"files": [{"filename": n} for n in names]}), ""
+            return 0, json.dumps({"sha": path.rsplit("/", 1)[1], "files": [{"filename": n} for n in names]}), ""
         if "/pulls/" in path:
             return 0, json.dumps({"base": {"sha": self.base_sha, "ref": self.base_ref or self.pr.get("baseRefName")},
-                                  "head": {"sha": self.pr.get("headRefOid")},
+                                  "head": {"sha": self.pr.get("headRefOid")}, "merged": self.merged,
                                   "labels": [{"name": x} for x in self.labels], "body": self.body}), ""
         if "/issues/" in path:
             n = int(path.rsplit("/", 1)[1])
@@ -86,6 +91,7 @@ class FakeGh:
                 self.on_view()
             return 0, json.dumps(self.pr), ""
         if args[:3] == ["gh", "pr", "merge"]:
+            self.merged = self.merge[0] == 0
             return self.merge
         return 1, "", "unexpected gh call"
 
@@ -403,7 +409,8 @@ class RoundTwo(Base):
         self.assertIn("a commit of the PR touched", self.daemon.pipeline.work(k)["gateReason"])
 
     async def test_a_risk_label_on_an_issue_the_pr_links_holds_the_merge(self):
-        self.gh.linked = [{"number": 9, "repository": {"nameWithOwner": REPO}}]
+        self.gh.linked = [{"number": 9, "url": f"https://github.com/{REPO}/issues/9",       # gh 2.98's export shape
+                           "repository": {"name": "CommandCenter", "owner": {"login": "JayDalool"}}}]
         self.gh.issue_labels = {9: ["risk:privileged"]}
         k = self.ready()
         await self.daemon._auto_merge()
@@ -453,6 +460,176 @@ class RoundTwo(Base):
             self.assertTrue(d._auto_merge_stopped("commandcenter"))
         finally:
             os.chmod(os.path.join(self.tmp, "locked"), 0o700)
+
+
+class RoundThree(RoundTwo):
+    """Codex review round 2: a same-head risk change, stale answers, the pinned comparison, the late guards after the
+    last GitHub read, and a retarget after the merge call."""
+
+    def age(self, key, seconds):
+        head, required, at = self.daemon._sec[key]
+        self.daemon._sec[key] = (head, required, at - seconds)
+
+    def on_pull(self, n, fn):
+        """Run `fn` while the n-th `gh api repos/R/pulls/N` read is in flight (1 = facts, 2 = verify, 3 = landed)."""
+        seen = {"n": 0}
+        real = self.gh.api
+
+        def hook(args):
+            if "/pulls/" in args[2]:
+                seen["n"] += 1
+                if seen["n"] == n:
+                    fn()
+            return real(args)
+        self.gh.api = hook
+        return seen
+
+    async def test_a_risk_label_added_at_the_same_head_is_read_fresh_by_the_merge_press_and_slack(self):
+        k = self.prepare()
+        await self.daemon._security_probes()
+        self.assertEqual([r["key"] for r in self.daemon.merge_batch("commandcenter")[0]], [k])   # clean when read
+        self.gh.labels = ["risk:privileged"]                     # same head; the cached answer is still fresh
+        for via, dev in (("slack", False), (None, True)):
+            with self.assertRaises(Exception) as e:
+                await self.daemon.act_merge("commandcenter", [{"key": k, "head": HEAD}], developer=dev, via=via)
+            self.assertIn("security sign-off", str(getattr(e.exception, "message", e.exception)))
+        self.assertIn("security sign-off", self.daemon.security_wait(k))     # the fresh read is remembered
+        self.sign(k)
+        self.assertEqual([r["key"] for r in self.daemon.merge_batch("commandcenter")[0]], [k])
+
+    async def test_an_issue_linked_later_at_the_same_head_is_read_by_the_next_probe(self):
+        k = self.prepare()
+        await self.daemon._security_probes()
+        self.assertIsNone(self.daemon.security_wait(k))
+        self.gh.body = "Refs #9"
+        self.gh.issue_labels = {9: ["security"]}
+        await self.daemon._security_probes()
+        self.assertIsNone(self.daemon.security_wait(k))           # within SEC_REFRESH: not read again yet
+        self.age(k, self.daemon.SEC_REFRESH + 1)
+        await self.daemon._security_probes()
+        self.assertIn("security sign-off", self.daemon.security_wait(k))
+
+    async def test_an_old_not_required_answer_is_not_believed(self):
+        k = self.prepare()
+        await self.daemon._security_probes()
+        self.assertIsNone(self.daemon.security_wait(k))
+        self.age(k, self.daemon.SEC_TTL + 1)
+        self.assertIn("security sign-off", self.daemon.security_wait(k))
+        self.assertEqual(self.daemon.merge_batch("commandcenter")[0], [])
+
+    async def test_a_probe_failure_after_a_clean_result_is_required(self):
+        k = self.prepare()
+        await self.daemon._security_probes()
+        self.assertIsNone(self.daemon.security_wait(k))
+        self.gh.api_fail = True
+        self.age(k, self.daemon.SEC_REFRESH + 1)
+        await self.daemon._security_probes()
+        self.assertIn("security sign-off", self.daemon.security_wait(k))
+        # and on Jay's press: the fresh read fails, so the ticket is skipped, never offered
+        with self.assertRaises(Exception) as e:
+            await self.daemon.act_merge("commandcenter", [{"key": k, "head": HEAD}], developer=True)
+        self.assertIn("security sign-off", str(getattr(e.exception, "message", e.exception)))
+
+    async def test_a_whole_probe_pass_that_fails_forgets_every_earlier_answer(self):
+        k = self.prepare()
+        await self.daemon._security_probes()
+        self.assertIsNone(self.daemon.security_wait(k))
+        self.age(k, self.daemon.SEC_REFRESH + 1)
+        with mock.patch.object(self.daemon.pipeline, "review_head", side_effect=RuntimeError("store down")):
+            await self.daemon._security_probes_safe()           # what derive runs: it must not raise
+        self.assertEqual(self.daemon._sec, {})
+        self.assertIn("security sign-off", self.daemon.security_wait(k))
+
+    async def test_an_intermediate_only_sensitive_change_needs_a_sign_off_on_jays_path(self):
+        k = self.prepare(history_extra=["server/ccd/security.py"])
+        await self.daemon._security_probes()
+        ready, skipped = self.daemon.merge_batch("commandcenter")
+        self.assertEqual((ready, [s_["key"] for s_ in skipped]), ([], [k]))
+        self.assertIn("security sign-off", skipped[0]["reason"])
+
+    async def test_the_files_judged_are_the_pinned_comparisons(self):
+        k = self.ready()
+        await self.daemon._auto_merge()
+        refs = [c[2] for c in self.gh.api_calls]
+        self.assertIn(f"repos/{REPO}/compare/{'ba' * 20}...{HEAD}?per_page=100", refs)
+        self.assertFalse([r for r in refs if "/pulls/7/commits" in r])
+        self.assertEqual(len(self.gh.of("merge")), 1)
+        self.assertIn("pipeline.auto_merged", self.kinds(k))
+
+    async def test_a_comparison_that_differs_from_the_pr_view_is_what_counts(self):
+        k = self.ready()
+        real = self.gh.api
+
+        def compare_with_a_denied_file(args):
+            if "/compare/" in args[2]:
+                return 0, json.dumps({"status": "ahead", "total_commits": 1, "commits": [{"sha": HEAD}],
+                                      "files": [{"filename": "server/ccd/security.py", "status": "modified",
+                                                 "additions": 1, "deletions": 0}]}), ""
+            return real(args)
+        self.gh.api = compare_with_a_denied_file
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertIn("server/ccd/security.py", self.daemon.pipeline.work(k)["gateReason"])
+
+    async def test_a_stop_file_that_appears_during_the_last_github_read_stops_the_merge(self):
+        for name in ("auto-merge.stop", "auto-merge.commandcenter.stop"):
+            self.gh = FakeGh()
+            self.daemon = self.make()
+            self.ready()
+            path = os.path.join(self.tmp, name)
+            seen = self.on_pull(2, lambda: open(path, "w").close())
+            await self.daemon._auto_merge()
+            self.assertEqual(seen["n"], 2, name)                  # the verify read ran, and the file came during it
+            self.assertEqual(self.gh.of("merge"), [], name)
+            os.remove(path)
+
+    async def test_a_needs_jay_flag_set_during_the_last_github_read_holds_the_merge(self):
+        k = self.ready()
+        seen = self.on_pull(2, lambda: self.tickets.update(k, {"needs_jay": True}, "jay"))
+        await self.daemon._auto_merge()
+        self.assertEqual(seen["n"], 2)
+        self.assertEqual(self.gh.of("merge"), [])
+        w = self.daemon.pipeline.work(k)
+        self.assertEqual(w["gate"], "merge")
+        self.assertIn("needs Jay", w["gateReason"])
+
+    async def test_a_sign_off_withdrawn_during_the_last_github_read_holds_the_merge(self):
+        self.gh.labels = ["migration"]
+        k = self.ready()
+        self.sign(k)
+        seen = self.on_pull(2, lambda: self.sign(k, result="fail"))
+        await self.daemon._auto_merge()
+        self.assertEqual(seen["n"], 2)
+        self.assertEqual(self.gh.of("merge"), [])
+        w = self.daemon.pipeline.work(k)
+        self.assertEqual(w["gate"], "merge")
+        self.assertIn("security sign-off", w["gateReason"])
+
+    async def test_a_signed_sensitive_change_still_merges_when_nothing_changes(self):
+        self.gh.labels = ["migration"]
+        k = self.ready()
+        self.sign(k)
+        await self.daemon._auto_merge()
+        self.assertEqual(len(self.gh.of("merge")), 1)
+        self.assertEqual(self.events("merge.base_mismatch"), [])
+
+    async def test_a_retarget_after_the_merge_call_is_raised_to_jay(self):
+        k = self.ready()
+        real = self.gh.__call__
+
+        def retarget_on_merge(args):
+            out = real(args)
+            if args[:3] == ["gh", "pr", "merge"]:
+                self.gh.base_ref = "release"                     # GitHub has no base precondition for the write
+            return out
+        self.daemon.gh_cli = retarget_on_merge
+        await self.daemon._auto_merge()
+        self.assertEqual(len(self.gh.of("merge")), 1)
+        ev = self.events("merge.base_mismatch")
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(ev[0]["severity"], "action")
+        self.assertIn("release", ev[0]["text"])
+        self.assertIn(k, ev[0]["text"])
 
 
 class Skips(Base):

@@ -36,6 +36,9 @@ def facts_for(files, project="commandcenter", **over):
                        for x in files},
              "texts": {x["path"]: {"head": "hello\n", **({} if x["changeType"] == "ADDED" else {"base": "hello\n"})}
                        for x in files},
+             # CC-057 round 3: the files and counts judged come from the pinned comparison (merge_facts.compare)
+             "files": list(files), "additions": sum(x.get("additions", 0) for x in files),
+             "deletions": sum(x.get("deletions", 0) for x in files),
              "truncated": False, "errors": [], "labels": [], "labelsComplete": True,
              "base": {"ref": registry.base_of(project), "sha": "ba" * 20}, "head": HEAD,
              "history": [x["path"] for x in files], "securityRequired": False, "securitySignoff": False,

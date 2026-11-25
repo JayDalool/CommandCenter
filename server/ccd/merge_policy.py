@@ -426,7 +426,14 @@ def security_required(project, ticket, files, labels, facts=None):
         path = f.get("path") if isinstance(f, dict) else None
         if not safe_path(path) or denied(path, project):
             return True
-    return bool(facts_reasons(project, files, facts)) if isinstance(facts, dict) and not facts.get("errors") else False
+    if not isinstance(facts, dict) or facts.get("errors"):
+        return False
+    # CC-057 round 3: a denied path in any commit of the PR (merge_facts.history_paths) needs the sign-off on Jay's
+    # path exactly as it refuses the automatic one; a history that was not read counts as such a path.
+    hist = facts.get("history")
+    if not isinstance(hist, list) or any(not safe_path(p) or denied(p, project) for p in hist):
+        return True
+    return bool(facts_reasons(project, files, facts))
 
 
 def size_reasons(size):
@@ -558,7 +565,12 @@ def classify(project, ticket, work, pr, pr_ref, open_prs, policy="low-risk", fac
         wait.append("CI is still running")
 
     facts = facts if isinstance(facts, dict) else None
-    reasons += file_reasons(project, pr.get("files"), pr.get("additions"), pr.get("deletions"), facts)
+    files, adds, dels = pr.get("files"), pr.get("additions"), pr.get("deletions")
+    if facts is not None and not facts.get("errors"):
+        # CC-057 round 3: the files and line counts judged are those of the one pinned base/head comparison
+        # (merge_facts.compare), never the mutable PR view, which may describe another base commit.
+        files, adds, dels = facts.get("files"), facts.get("additions"), facts.get("deletions")
+    reasons += file_reasons(project, files, adds, dels, facts)
     if facts is None:
         reasons.append("ccd has not read the PR's labels, file modes and text")
     else:
@@ -587,7 +599,7 @@ def classify(project, ticket, work, pr, pr_ref, open_prs, policy="low-risk", fac
         if facts.get("securityRequired") is not False and not facts.get("securitySignoff"):
             reasons.append("the change needs a security sign-off at this head")
         reasons += size_reasons(facts.get("size"))
-        for f in pr.get("files") if isinstance(pr.get("files"), list) else []:
+        for f in files if isinstance(files, list) else []:
             path = f.get("path") if isinstance(f, dict) else None
             if safe_path(path) and is_ui(path):
                 uc = (work or {}).get("userCheck") or {}

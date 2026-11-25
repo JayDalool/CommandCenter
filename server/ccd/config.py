@@ -100,7 +100,13 @@ def load(path=None):
     p = Path(path) if path else CONFIG_PATH
     try:
         if p.exists():
-            cfg.update(json.loads(p.read_text()))
+            raw = json.loads(p.read_text())
+            # CC-057 round 3: only an object is a configuration. null or a scalar would raise in update(), and a list
+            # of key/value pairs would be accepted by it, switching auto_merge on from something that is not config.
+            if not isinstance(raw, dict):
+                cfg["_config_problem"] = ("config.json is not a JSON object; defaults apply and auto_merge is empty")
+            else:
+                cfg.update(raw)
     except (OSError, ValueError):
         # CC-057: a config file that cannot be read or parsed must not switch anything on. Defaults apply (auto_merge
         # is []), and the daemon says so as a security event. The file's text is never put in the message.
