@@ -141,11 +141,14 @@ last digest, Held. Every line starts with its ticket key. It is off until you sw
 
    ```
    MAIL_HOST=smtp.your-provider.example
-   MAIL_PORT=465            # 465 (implicit TLS) or 587 (STARTTLS); nothing else is accepted
+   # 465 (implicit TLS) or 587 (STARTTLS); nothing else is accepted
+   MAIL_PORT=465
    MAIL_USER=...
-   MAIL_PASSWORD=...        # an app password, not your main one
+   # an app password, not your main one
+   MAIL_PASSWORD=...
    MAIL_FROM=ccd@your-domain.example
-   MAIL_TO=you@example.com  # exactly one address
+   # exactly one address
+   MAIL_TO=you@example.com
    ```
 
 2. Settings > Notifications > Slack and phone: Release email On (Developer Unlock), then Send a test. The row says what is

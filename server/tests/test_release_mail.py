@@ -477,12 +477,17 @@ class Failures(Base):
 
         async def needs():
             called.append("needs")
+
+        async def summaries():
+            called.append("summaries")
         self.n.mail.run, real = boom, self.n.mail.run
         self.n.check_needs = needs
+        self.n.summaries = summaries
         self.tick(DUE)
-        self.assertEqual(called, ["needs"])
+        self.assertEqual(called, ["needs", "summaries"])
         self.assertTrue(any("release mail" in str(e) for e in self.d.events))
         self.n.mail.run = real
+        self.assertIn("summaries", called)
 
         async def slack_down():
             raise RuntimeError("slack down")
@@ -568,6 +573,54 @@ class Transport(Base):
         self.assertFalse(run(self.n.send_test())["mail"])
 
 
+class Codex1(Base):
+    """Codex review round 1 of CC-078."""
+
+    def two_apps(self):
+        self.rel.set_live("gyst", True)
+
+    def test_switching_release_email_off_during_one_send_stops_the_next_app(self):
+        self.two_apps()
+        self.server.on_mail = lambda: self.n.update_settings({"releaseMail": False})
+        self.tick(DUE)
+        self.assertEqual(len(self.server.sent), 1)
+
+    def test_an_app_is_re_checked_against_the_clock_so_nothing_goes_at_the_window_start(self):
+        self.two_apps()
+        self.server.on_mail = lambda: self.t.__setitem__(0, WED)      # a slow send carries the batch to the start
+        self.tick(WED - 1)
+        self.assertEqual(len(self.server.sent), 1)
+
+    def test_only_a_regular_owner_only_file_is_read_and_every_other_kind_is_a_sanitized_error(self):
+        os.unlink(self.env_path)
+        os.mkdir(self.env_path, 0o700)
+        self.assertIn("regular file", self.n.public()["mail"]["error"])
+        os.rmdir(self.env_path)
+        os.mkfifo(self.env_path, 0o600)                                 # opening it would block the event loop
+        self.assertIn("regular file", self.n.public()["mail"]["error"])
+        os.unlink(self.env_path)
+        self.write_env()
+        os.chmod(self.env_path, 0o000)
+        self.assertIn("could not be read", self.n.public()["mail"]["error"])
+        os.chmod(self.env_path, 0o600)
+        with open(self.env_path, "wb") as f:
+            f.write(b"\xff\xfe=\x80\n")
+        os.chmod(self.env_path, 0o600)
+        self.assertIn("could not be read", self.n.public()["mail"]["error"])
+        self.tick(DUE)
+        self.assertEqual(self.server.sent, [])
+
+    def test_the_runbooks_mail_env_example_is_accepted_as_written(self):
+        text = (Path(__file__).resolve().parents[2] / "docs" / "runbooks" / "slack-and-ntfy.md").read_text()
+        block = re.search(r"```\n(MAIL_HOST=.*?)```", re.sub(r"(?m)^   ", "", text), re.S).group(1)
+        with open(self.env_path, "w") as f:
+            f.write(block.replace("MAIL_USER=...", "MAIL_USER=u").replace("MAIL_PASSWORD=...", "MAIL_PASSWORD=p"))
+        os.chmod(self.env_path, 0o600)
+        conf, error = self.n.mail.config()
+        self.assertIsNone(error)
+        self.assertEqual((conf["port"], conf["to"], conf["password"]), (465, "you@example.com", "p"))
+
+
 class Switch(Base):
     def test_off_by_default_and_validated(self):
         self.assertFalse(notify.SETTINGS_DEFAULTS["releaseMail"])
@@ -589,8 +642,18 @@ class ReadOnly(Base):
             return self.ts.db.execute("SELECT * FROM ticket_work ORDER BY ticket_id").fetchall(), \
                 self.ts.db.execute("SELECT key, status FROM tickets ORDER BY id").fetchall(), \
                 self.ts.db.execute("SELECT COUNT(*) FROM ticket_events").fetchone()
+        from ccd.daemon import Daemon
+        from .helpers import cfg
+        real = Daemon(cfg(meter={"enabled": False}), Store(os.path.join(self.tmp, "real.db")), None, tasks=self.ts)
+        gated = self.ticket("samvision", "Waiting for Go Live", merge_at=at(17, 9),
+                            deploy={"env": "live", "requestedAt": at(17, 9)})
+        self.ts.db.execute("UPDATE ticket_work SET gate='deploy' WHERE ticket_id=(SELECT id FROM tickets WHERE key=?)",
+                           (gated,))
+        review = real.go_live_review("samvision")
+        self.assertEqual([a["key"] for a in review["approves"]], [gated])
         before = dump()
         self.tick(DUE)
+        self.assertEqual(real.go_live_review("samvision"), review)
         self.assertEqual(len(self.server.sent), 1)
         self.assertEqual(dump(), before)
         src = Path(releasemail.__file__).read_text()

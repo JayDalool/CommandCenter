@@ -1437,3 +1437,17 @@ class OverHttp(unittest.TestCase):
         self.assertEqual((mail["configured"], mail["last"]), (False, None))
         t = self.c.post("/api/notify/test", content="{}", headers=dev)
         self.assertEqual((t.status_code, t.json()["mail"], t.json()["slack"], t.json()["ntfy"]), (200, False, False, False))
+        # With a usable mail.env and a fake transport the same route reports mail true.
+        from unittest import mock
+        from ccd import releasemail
+        from .test_release_mail import ENV, Server, fake_smtp_for
+        env = os.path.join(tempfile.mkdtemp(), "mail.env")
+        with open(env, "w") as f:
+            f.write("".join(f"{k}={v}\n" for k, v in ENV.items()))
+        os.chmod(env, 0o600)
+        self.d.notifier = notify.Notifier(self.d, {"notify": {}}, slack=FakeSlack(), mail_env_path=env)
+        self.d.notifier.update_settings({"releaseMail": True})
+        server = Server()
+        with mock.patch.object(releasemail.smtplib, "SMTP_SSL", fake_smtp_for(server)):
+            t = self.c.post("/api/notify/test", content="{}", headers=dev)
+        self.assertEqual((t.status_code, t.json()["mail"], len(server.sent)), (200, True, 1))

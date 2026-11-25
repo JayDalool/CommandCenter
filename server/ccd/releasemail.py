@@ -263,8 +263,12 @@ class ReleaseMail:
         n = self.n
         if n.d.releases is None or getattr(n.d, "pipeline", None) is None:
             return
-        now = n.clock()
         for p in self._projects():
+            # Re-read the switch and the clock for every app: a slow send must not carry the batch past Jay turning
+            # Release email off, or past a window start (Codex review of CC-078).
+            if not n.settings["releaseMail"]:
+                return
+            now = n.clock()
             if not n.d.releases.live(p):
                 self.config_alerts.pop(p, None)
                 continue

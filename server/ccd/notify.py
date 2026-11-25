@@ -240,13 +240,20 @@ def read_env(path):
     if p.is_symlink():
         raise SlackError(f"{p.name} must be a plain file, not a link")
     st = p.stat()
+    # A FIFO would block the event loop on open and a directory raises; only a regular file is read (CC-078).
+    if not stat.S_ISREG(st.st_mode):
+        raise SlackError(f"{p.name} must be a regular file")
     if st.st_uid != os.getuid():
         raise SlackError(f"{p.name} must belong to the user ccd runs as")
     mode = stat.S_IMODE(st.st_mode)
     if mode & 0o077:
         raise SlackError(f"{p.name} must be readable by its owner only (chmod 600)")
     out = {}
-    for line in p.read_text().splitlines():
+    try:
+        text = p.read_text()
+    except (OSError, UnicodeDecodeError):
+        raise SlackError(f"{p.name} could not be read as text") from None
+    for line in text.splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
