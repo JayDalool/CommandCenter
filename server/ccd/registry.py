@@ -63,6 +63,10 @@ PROJECTS = {
     "gyst":          {"name": "GYST / LifeOps",   "prefix": "GYST", "legacy": (),
                       "root": "/srv/server/repos/gyst-lifeops",     "github": "JayDalool/gyst-lifeops",
                       "pipeline": {"merge": "owner"}},   # Jay accepts every GYST merge (2026-10-09)
+    # The Zaylo Labs website, added by Jay (2026-11-25). Jay merges until he turns automatic merging on for it.
+    "zaylolabs":     {"name": "Zaylo Labs Website", "prefix": "ZL", "legacy": (),
+                      "root": "/srv/server/repos/Zaylolabs-Web",    "github": "JayDalool/Zaylolabs-Web",
+                      "pipeline": {"merge": "owner"}},
 }
 
 # Ticket pipeline defaults (plans/TICKET-PIPELINE-V1.md), the one place they live.

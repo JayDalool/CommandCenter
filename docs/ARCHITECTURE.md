@@ -126,6 +126,7 @@ lives: its display name, its ticket prefix, and any prefix it has retired.
 | MyFamilyExpenses | `MFE` | MFE-008 | – |
 | Command Center | `CC` | CC-012 | – |
 | GYST / LifeOps | `GYST` | GYST-021 | – |
+| Zaylo Labs Website | `ZL` | ZL-001 | – |
 
 Everything reads it from there — `tasks.py` allocates keys, `config.py` fills
 the board's project list, `model.py` strips and extracts IDs from PR and issue
@@ -157,7 +158,7 @@ Issues/Projects. See [ADR 0001](adr/0001-ticket-system-source-of-truth.md).
 
 | table | holds |
 |---|---|
-| `task_projects` | project key → ticket prefix (SV, GZ, GYST, MFE, CC) and a forward-only counter |
+| `task_projects` | project key → ticket prefix (SV, GZ, GYST, MFE, CC, ZL) and a forward-only counter |
 | `task_project_aliases` | prefixes a project has retired (GauzeMate's GM). Resolved forever, never minted again |
 | `tickets` | key, title, description, status, priority, type, assignee (`jay` / `role:X` / `agent:name`), agent pane/session, parent, branch, timestamps, four needs flags, archived, reserved `cycle_id` |
 | `ticket_labels`, `ticket_relations` | labels; `blocks` / `related` / `duplicates` edges (`blocked_by` is the inverse view) |

@@ -18,7 +18,7 @@ class TheRegistry(unittest.TestCase):
     def test_project_to_prefix(self):
         self.assertEqual({r["key"]: r["prefix"] for r in registry.rows()},
                          {"samvision": "SV", "gauzemate": "GZ", "mfe": "MFE",
-                          "commandcenter": "CC", "gyst": "GYST"})
+                          "commandcenter": "CC", "gyst": "GYST", "zaylolabs": "ZL"})
 
     def test_gauzemate_is_gz_not_gm(self):
         self.assertEqual(registry.prefix_of("gauzemate"), "GZ")
