@@ -2921,8 +2921,10 @@ class Daemon(LeadChat, HqDaemon):
                                    else f"PR #{n} new head {sha}" if self.pipeline.review_head(k)
                                    else f"PR #{n} is open")
                             self._auto(k, frm, "IN_REVIEW", why)
+                        # A push is progress for every ticket, in the pipeline or not: the weekly sweep asks
+                        # both kinds (CC-085).
+                        self.pipeline.note_pr_head(k, ref, pr_state["head"])
                         if self.pipeline.participating(k):
-                            self.pipeline.note_pr_head(k, ref, pr_state["head"])   # a push is progress (CC-085)
                             # A pipeline ticket: only its recorded review, tied to this PR's head, decides.
                             self._pipeline_result(*self.pipeline.sync_pr(k, pr_state))
                         elif ready:

@@ -375,9 +375,9 @@ ccd records one `pipeline.flow_stale` event per quiet spell (the briefing shows 
 next step clears it. Until ccd has made its first stale mark, marks are made without events, so switching the flow on does not flood the briefing with old tickets.
 
 **Weekly "Still needed?" sweep (CC-085).** Once a week per ticket, ccd asks Jay one `purpose: "stale"` choice question
-(**Finish it / Move to backlog / Close it**) on every open ticket (RESEARCHING to VERIFYING, BLOCKED) with no recorded
+(**Finish it / Move to backlog / Close it**) on every open ticket (INBOX to VERIFYING, BLOCKED) with no recorded
 progress for 5 days and no open question. Progress is any `pipeline.*` event (steps, handoffs, answers, a PR head change
-recorded as `pipeline.pr_head`), a status change or a linked PR. The ask is recorded as `sweep.still_needed`, which is
+recorded as `pipeline.pr_head`), a status change or a linked PR (not a URL, commit or legacy ID). A PR head change is recorded for every linked ticket, in the pipeline or not. The ask is recorded as `sweep.still_needed`, which is
 how "once a week, also after a restart" is kept (no new table). On `/answers`: "Finish it" only comments; "Move to
 backlog" sets PROPOSED (Jay's answer, as the task check does); "Close it" calls `stale`, i.e. the usual Cancel it / Keep it
 question. Nothing is cancelled automatically.

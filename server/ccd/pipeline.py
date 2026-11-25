@@ -1997,13 +1997,13 @@ class Pipeline:
         """CC-085: once a week, every open ticket with no recorded progress in 5 days gets one "Still needed?"
         question for Jay (finish it, move to backlog, close it). Progress is any pipeline step, handoff, answer, status
         change, linked PR or PR push. A ticket already waiting on a Jay question is skipped, and so is one asked in the
-        last 7 days; that is read from ticket_events, so it holds across a ccd restart. Backlog tickets (INBOX,
-        PROPOSED) are not asked, or "Move to backlog" would only bring the question back next week. Never closes or
-        cancels anything. Returns [(ticket, changes, events)] for the daemon to announce."""
+        last 7 days; that is read from ticket_events, so it holds across a ccd restart. INBOX and PROPOSED are open
+        too, so C1 covers them: a backlog ticket that stays quiet is asked again weekly. Never closes or cancels
+        anything. Returns [(ticket, changes, events)] for the daemon to announce."""
         now = _now() if now is None else now
         out = []
         for key, tid, created in self.db.execute(
-                "SELECT key, id, created_at FROM tickets WHERE archived=0 AND status IN ('RESEARCHING',"
+                "SELECT key, id, created_at FROM tickets WHERE archived=0 AND status IN ('INBOX','PROPOSED','RESEARCHING',"
                 "'READY_TO_IMPLEMENT','IN_PROGRESS','IN_REVIEW','READY_TO_MERGE','VERIFYING','BLOCKED') "
                 "ORDER BY id").fetchall():
             if self.db.execute("SELECT 1 FROM ticket_questions WHERE ticket_id=? AND answered_at IS NULL",
@@ -2015,7 +2015,8 @@ class Pipeline:
                 continue
             last = self.db.execute(
                 "SELECT MAX(at) FROM ticket_events WHERE ticket_id=? AND kind NOT IN (?,?) AND "
-                "(kind LIKE 'pipeline.%' OR field = 'status' OR kind = 'linked')",
+                # Only a linked PR is progress: a URL, commit or imported legacy ID says nothing about work (CC-085).
+                "(kind LIKE 'pipeline.%' OR field = 'status' OR (kind = 'linked' AND field = 'pr'))",
                 (tid, flow_mod.STALE_KIND, SWEEP_KIND)).fetchone()[0]
             if now - max(last or 0, created or 0) < SWEEP_QUIET:
                 continue

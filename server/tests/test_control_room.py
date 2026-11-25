@@ -704,6 +704,42 @@ class ControlRoomApi(PipelineApi):
         self.assertEqual(nxt["options"], ["Cancel it", "Keep it"])
         self.assertIsNone(nxt["answer"])
 
+    def test_a_push_to_the_pr_of_a_ticket_outside_the_pipeline_is_progress_for_the_sweep(self):
+        """CC-085 review: the GitHub poll must record PR head moves for tickets that are not in the pipeline too."""
+        from unittest import mock
+        from .helpers import pr
+        t, _ = self.tickets.create("samvision", "plain ticket", number=91, status="IN_PROGRESS")
+        key = t["key"]
+        self.assertFalse(self.daemon.pipeline.participating(key))
+        t0 = pipeline_mod._now()
+
+        def push(head, at):
+            self.gh.data["samvision"]["prs"] = [dict(pr(191, f"{key}: x"), headRefName=f"{key}-f", headRefOid=head)]
+            with mock.patch.object(pipeline_mod, "_now", return_value=at):
+                self.poll()
+        push("a1" * 20, t0)
+        push("b2" * 20, t0 + 4 * 86400)                                               # a push on day 4
+        n = self.tickets.db.execute("SELECT COUNT(*) FROM ticket_events e JOIN tickets t ON t.id=e.ticket_id "
+                                    "WHERE t.key=? AND e.kind='pipeline.pr_head'", (key,)).fetchone()[0]
+        self.assertEqual(n, 2)
+        self.assertEqual(self.daemon.pipeline.sweep_still_needed(now=t0 + 6 * 86400), [])   # 2 quiet days only
+        self.assertEqual(len(self.daemon.pipeline.sweep_still_needed(now=t0 + 9.5 * 86400)), 1)
+
+    def test_every_still_needed_answer_does_what_its_label_says(self):
+        """CC-085 review: the three real options reach the backend as themselves, not as a Keep it."""
+        for no, (label, status, comment) in enumerate((("Finish it", "IN_PROGRESS", "Kept going"),
+                                                       ("Move to backlog", "PROPOSED", "Moved to backlog")), 70):
+            key = self.tickets.create("samvision", "feature", number=no, status="IN_PROGRESS")[0]["key"]
+            self.daemon.pipeline.sweep_still_needed(now=pipeline_mod._now() + 6 * 86400)
+            q = self.get(f"/api/tasks/{key}/work").json()["questions"][-1]
+            self.assertEqual(q["options"], list(pipeline_mod.SWEEP_OPTIONS))
+            out = self.client.post(f"/api/tasks/{key}/answers", content=json.dumps(
+                {"answers": [{"id": q["id"], "answer": label}]}), headers=dict(JSON, **self.dev())).json()
+            self.assertFalse(out["cancelled"], out)
+            t = self.get(f"/api/tasks/{key}").json()
+            self.assertEqual(t["status"], status, label)
+            self.assertIn(comment, t["comments"][-1]["body"])
+
     def test_the_task_check_sends_one_fixed_message_to_the_idle_coordinator(self):
         self.ticket("INBOX")
         body = json.dumps({"project": "samvision"})

@@ -592,13 +592,31 @@ class StillNeeded(Base):
         self.assertEqual(again.sweep_still_needed(now=late + 6.5 * self.DAY), [])   # asked and answered < 7 days ago
         self.assertEqual(self.asked(again.sweep_still_needed(now=late + 13 * self.DAY)), [k])
 
-    def test_backlog_and_closed_tickets_are_not_asked_and_nothing_is_cancelled(self):
-        k = self.ticket()                                                        # INBOX: the backlog
-        self.assertEqual(self.pl.sweep_still_needed(now=pipeline._now() + 30 * self.DAY), [])
+    def test_backlog_tickets_are_asked_too_and_nothing_is_cancelled(self):
+        """C1 says every open ticket, so INBOX and PROPOSED count (CC-085 review)."""
+        k = self.ticket()                                                        # INBOX
+        self.assertEqual(self.asked(self.pl.sweep_still_needed(now=pipeline._now() + 30 * self.DAY)), [k])
         k2 = self.sized()
         self.pl.sweep_still_needed(now=pipeline._now() + 30 * self.DAY)
         self.assertNotIn(self.status(k2), ("CANCELLED", "DONE", "DENIED"))
         self.assertEqual(self.status(k), "INBOX")
+
+    def test_a_cancelled_ticket_is_not_asked(self):
+        k = self.sized()
+        self.ts.update(k, {"status": "CANCELLED"}, "jay")
+        self.assertEqual(self.pl.sweep_still_needed(now=pipeline._now() + 30 * self.DAY), [])
+
+    def test_only_a_linked_pr_is_progress_not_a_url_or_legacy_id(self):
+        k = self.sized()
+        t0 = pipeline._now()
+        with mock.patch("ccd.tasks._now", return_value=t0 + 4 * self.DAY):
+            self.ts.link(k, "url", "url", "https://example.com/x", "https://example.com/x", None, "jay")
+            self.ts.link(k, "legacy", "legacy_id", "OLD-1", None, None, "jay")
+        self.assertEqual(self.asked(self.pl.sweep_still_needed(now=t0 + 5.5 * self.DAY)), [k])   # still quiet
+        k2 = self.sized()
+        with mock.patch("ccd.tasks._now", return_value=t0 + 4 * self.DAY):
+            self.ts.link(k2, "github", "pr", "o/r#9", None, None, "jay")
+        self.assertEqual(self.pl.sweep_still_needed(now=t0 + 5.5 * self.DAY), [])               # a PR link counts
 
 
 class Shapes(Base):
