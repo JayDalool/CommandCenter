@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""cc-fleet: print the fleet report (account totals per app) from Command Center. See server/ccd/fleet.py."""
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "server"))
+
+from ccd import config  # noqa: E402
+
+
+def main():
+    port = os.environ.get("CCD_PORT", "7777")
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/fleet", headers={
+        "Host": f"127.0.0.1:{port}", "X-CCD-Token": config.TOKEN_PATH.read_text().strip(),
+        "X-CCD-Actor": os.environ.get("CCD_ACTOR", "agent:cto")})
+    try:
+        r = json.load(urllib.request.urlopen(req, timeout=15))
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"Command Center did not answer: {getattr(e, 'reason', e)}")
+        return 1
+    print(r["definition"])
+    for a in r["apps"]:
+        if a["answered"]:
+            print(f"{a['name']}: {a['accounts']} accounts, {a['active']} active")
+        else:
+            print(f"{a['name']}: did not respond ({a['reason']})")
+    t = r["total"]
+    print(f"Total {t['label']}: {t['accounts']} ({t['active']} active), from: {', '.join(t['from']) or 'no app'}")
+    for s in r["singleUser"]:
+        print(f"{s['name']}: single-user app, {s['health']} (not in the total)")
+    return 0
+
+
+sys.exit(main())

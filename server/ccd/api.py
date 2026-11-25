@@ -49,6 +49,7 @@
                                      task session's questions become the ticket's; a lead's go to its Messages
                                      conversation; else {routed: null} and Claude shows its own prompt (ccd/ask_hook.py)
     POST  /api/notify/summary        JAY + DEVELOPER UNLOCK. post the owner's and technical summaries now
+    GET   /api/fleet                 account totals per app from each app's own counts endpoint (CC-079). Jay or agent:cto
     GET   /api/actors                per-agent actor tokens (fingerprints only; a token is shown once, on issue)
     POST  /api/actors/issue          JAY + DEVELOPER UNLOCK. {actor: "agent:<name>" | "svc:<name>", ttlDays?, note?,
                                      project?} → a typed token (cca_a_… / cca_s_…), once. Sent as X-CCD-Actor-Token;
@@ -237,7 +238,7 @@ from starlette.responses import StreamingResponse
 
 from . import broker as broker_mod
 from . import identity as identity_mod
-from . import registry, security
+from . import fleet, registry, security, sources
 from .attachments import content_disposition
 from .daemon import ActionError
 from .files import FileError
@@ -828,6 +829,13 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
 
     async def actors_state(request, _):
         return daemon.actors_state()
+
+    async def fleet_report(request, _):
+        # Counts of production accounts: Jay or the CTO only. X-CCD-Actor is self-asserted, so this is an
+        # honesty guard against other agents asking by accident, not authentication (docs/SECURITY.md).
+        if request.state.actor not in ("jay", "agent:cto"):
+            raise ActionError(403, "the fleet report is for Jay and the CTO")
+        return await asyncio.to_thread(fleet.report, sources.container_status)
 
     async def actor_issue(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
@@ -1558,6 +1566,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
         Route("/api/notify/test", guarded(notify_test), methods=["POST"]),
         Route("/api/hooks/ask", guarded(hook_ask), methods=["POST"]),
         Route("/api/notify/summary", guarded(notify_summary), methods=["POST"]),
+        Route("/api/fleet", guarded(fleet_report), methods=["GET"]),
         Route("/api/actors", guarded(actors_state), methods=["GET"]),
         Route("/api/actors/issue", guarded(actor_issue), methods=["POST"]),
         Route("/api/actors/revoke", guarded(actor_revoke), methods=["POST"]),

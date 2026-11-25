@@ -2,6 +2,7 @@
 
 Steps only Jay can do. Newest first. Delete a line when it's done.
 
+- [ ] CC-079 · Create 0600 token files ~/.config/command-center/fleet/{samvision,mfe}.token · docs/fleet-contract.md
 - [ ] CC-054 · Check PC clock and browser read Winnipeg -05 · docs/MANITOBA-TIMEZONE-AUDIT-2026.md
 - [ ] CC-054 · Upgrade host Node to 22.23.5; run scripts/check-tz.sh · docs/MANITOBA-TIMEZONE-AUDIT-2026.md
 - [ ] CC-030 · Run scripts/go-live.sh --dry-run; check sha and log · scripts/go-live.sh
