@@ -570,14 +570,17 @@ class Pipeline:
                 "url": None, "flags": [f"gate:{g}"], "status": st, "since": at}
                for k, p, title, st, g, reason, at in rows]
         gated = {o["ref"] for o in out}
-        for k, p, title, st, n, stale, at in self.db.execute(
-                "SELECT t.key, t.project, t.title, t.status, COUNT(*), SUM(q.purpose IS 'stale'), MIN(q.asked_at) "
+        for k, p, title, st, n, stale, at, sweep in self.db.execute(
+                "SELECT t.key, t.project, t.title, t.status, COUNT(*), SUM(q.purpose IS 'stale'), MIN(q.asked_at), "
+                "SUM(q.text LIKE ?) "
                 "FROM ticket_questions q JOIN tickets t ON t.id=q.ticket_id WHERE q.answered_at IS NULL AND t.archived=0 "
-                "AND t.status NOT IN ('DONE','DENIED','CANCELLED') GROUP BY t.id ORDER BY MIN(q.asked_at)").fetchall():
+                "AND t.status NOT IN ('DONE','DENIED','CANCELLED') GROUP BY t.id ORDER BY MIN(q.asked_at)",
+                (SWEEP_TEXT + "%",)).fetchall():
             text = (f"Task check — still needed? {title}" if stale == n
                     else f"Claude needs {n} answer{'s' if n > 1 else ''}: {title}")
             item = {"project": p, "ref": k, "text": text[:300], "kind": "questions", "gate": None, "questions": n,
-                    "stale": bool(stale), "url": None, "flags": ["questions"] + (["stale"] if stale else []),
+                    "stale": bool(stale), "sweepOnly": sweep == n, "url": None,
+                    "flags": ["questions"] + (["stale"] if stale else []),
                     "status": st, "since": at}
             if k in gated:   # one item per ticket: the questions come first, they are what unblocks it
                 out = [o for o in out if o["ref"] != k]
@@ -600,7 +603,9 @@ class Pipeline:
         """What makes this ticket wait for Jay (registry `jay_first`, default on): an open question for Jay, a
         plan to approve or a blocker only he can clear — on this ticket, or on an open ticket it is blocked by.
         Every other ticket goes ahead. Sign-offs on finished work (merge acceptance, UI review, live deploy) do
-        not hold; a blocking ticket that needs a lawyer (needs:legal, type LEGAL) waits on the lawyer, not Jay."""
+        not hold, and neither does the weekly "Still needed?" reminder when it is the only open question (CC-085:
+        a quiet-ticket nudge must not stop the ticket from starting); a blocking ticket that needs a lawyer
+        (needs:legal, type LEGAL) waits on the lawyer, not Jay."""
         t = self.db.execute("SELECT id, key, project FROM tickets WHERE key=?", (str(key).upper(),)).fetchone()
         if not t or not registry.pipeline_of(t[2]).get("jay_first", True):
             return []
@@ -610,7 +615,7 @@ class Pipeline:
             (t[0],))}
         refs = blockers | {t[1]}
         return [n for n in self.needs() if n["ref"] in refs
-                and (n["kind"] == "questions" or n.get("gate") in HOLDING_GATES)]
+                and ((n["kind"] == "questions" and not n.get("sweepOnly")) or n.get("gate") in HOLDING_GATES)]
 
     def participating(self, key):
         """In the pipeline: an accepted plan or a recorded review. Its review state then belongs to the

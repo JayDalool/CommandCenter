@@ -1884,11 +1884,17 @@ class Daemon(LeadChat, HqDaemon):
         # The task check: Jay's answer to a stale proposal. "Cancel it" cancels the ticket (and ends its
         # sessions); "Keep it" keeps it. Neither is typed into any Claude session.
         stale = [a for a in answers if isinstance(a, dict) and (before.get(a.get("id")) or {}).get("purpose") == "stale"]
+        # The weekly sweep answer is handled on its own: when it travels with a regular answer (CC-085), the regular
+        # one must still reach the task session, so only an answer set made of sweep answers alone returns here.
+        sweep = [a for a in stale if before[a["id"]]["text"].startswith(pipeline_mod.SWEEP_TEXT)]
+        if sweep:
+            swept = self._still_needed_answer(key, str(sweep[0].get("answer") or "").strip(), actor)
+            if len(sweep) == len(answers):
+                return swept
+            stale = [a for a in stale if a not in sweep]
         if stale:
             q = before[stale[0]["id"]]
             reason = q["text"].split(" — ", 1)[-1]
-            if q["text"].startswith(pipeline_mod.SWEEP_TEXT):
-                return self._still_needed_answer(key, str(stale[0].get("answer") or "").strip(), actor)
             if str(stale[0].get("answer") or "").strip() == pipeline_mod.STALE_OPTIONS[0]:
                 self.task_comment(key, f"Cancelled in the task check. Claude's reason: {reason}", actor)
                 self.task_update(key, {"status": "CANCELLED"}, actor, developer=True)

@@ -704,6 +704,24 @@ class ControlRoomApi(PipelineApi):
         self.assertEqual(nxt["options"], ["Cancel it", "Keep it"])
         self.assertIsNone(nxt["answer"])
 
+    def test_a_regular_answer_posted_with_the_weekly_one_is_still_delivered(self):
+        """CC-085 round 2: the weekly answer must not swallow delivery of a regular answer sent with it."""
+        self.ticket("IN_PROGRESS")
+        self.task_agent()
+        self.daemon.pipeline.sweep_still_needed(now=pipeline_mod._now() + 6 * 86400)
+        self.step("ask", {"questions": ["Which option?"]})
+        qs = self.get("/api/tasks/SV-056/work").json()["questions"]
+        weekly = next(q for q in qs if q["text"].startswith(pipeline_mod.SWEEP_TEXT))
+        regular = next(q for q in qs if q["id"] != weekly["id"])
+        out = self.client.post("/api/tasks/SV-056/answers", content=json.dumps(
+            {"answers": [{"id": weekly["id"], "answer": "Finish it"}, {"id": regular["id"], "answer": "B"}]}),
+            headers=dict(JSON, **self.dev())).json()
+        self.assertEqual((out["complete"], out["delivered"]), (True, True), out)
+        sent = [p for m, p in self.fake.calls if m == "agent.prompt"]
+        self.assertEqual(len(sent), 1)
+        self.assertIn("Which option?\n   → B", sent[0]["text"])
+        self.assertNotIn("Still needed", sent[0]["text"])
+
     def test_a_push_to_the_pr_of_a_ticket_outside_the_pipeline_is_progress_for_the_sweep(self):
         """CC-085 review: the GitHub poll must record PR head moves for tickets that are not in the pipeline too."""
         from unittest import mock

@@ -592,6 +592,19 @@ class StillNeeded(Base):
         self.assertEqual(again.sweep_still_needed(now=late + 6.5 * self.DAY), [])   # asked and answered < 7 days ago
         self.assertEqual(self.asked(again.sweep_still_needed(now=late + 13 * self.DAY)), [k])
 
+    def test_the_weekly_question_is_not_a_start_gate(self):
+        """CC-085 round 2: a quiet-ticket reminder must not make Pipeline.start answer 409 (jay_first hold)."""
+        k = self.sized("small")
+        self.assertEqual(self.asked(self.pl.sweep_still_needed(now=pipeline._now() + 30 * self.DAY)), [k])
+        self.assertEqual(self.pl.held(k), [])
+        self.assertEqual(self.pl.start(k, f"{k}-x", WT + k, "agent:coordinator")[0]["status"], "IN_PROGRESS")
+
+    def test_a_regular_question_next_to_the_weekly_one_still_holds(self):
+        k = self.sized("small")
+        self.pl.sweep_still_needed(now=pipeline._now() + 30 * self.DAY)
+        self.pl.ask(k, ["Which format?"], "agent:coordinator")
+        self.assertEqual([h["ref"] for h in self.pl.held(k)], [k])
+
     def test_backlog_tickets_are_asked_too_and_nothing_is_cancelled(self):
         """C1 says every open ticket, so INBOX and PROPOSED count (CC-085 review)."""
         k = self.ticket()                                                        # INBOX
