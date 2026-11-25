@@ -408,6 +408,71 @@ class Summaries(unittest.TestCase):
         self.assertEqual(len(slack.posts), 5)
 
 
+class MergeList(unittest.TestCase):
+    """CC-084: one DM at 18:00 Winnipeg listing the PRs ready to merge."""
+
+    def setUp(self):
+        self.now = [at(18, 1)]
+        self.n, self.d, self.slack, _ = make(clock=lambda: self.now[0], settings={"slack": True})
+        self.n.daily = {"summary": notify.local_day(self.n.settings, self.now[0])}
+        self.n.seen = set()     # the first tick's baseline is not what this test is about
+        self.d.needs_list = [need("CC-1", text="Ready to merge: Evening list"),
+                             need("CC-2", "questions", None, text="Claude needs 1 answer: x"),
+                             need("CC-3", kind="gate", gate="plan", text="Plan needs approval: y")]
+        self.d.work["CC-1"] = {"review": {"pr": "JayDalool/CommandCenter#141", "head": "a" * 40, "verdict": "APPROVE"}}
+
+    def lists(self):
+        return [p for p in self.slack.posts if "ready to merge:" in p["text"]]
+
+    def test_lists_ready_prs_with_key_title_and_link(self):
+        run(self.n.merge_list())
+        self.assertEqual(len(self.lists()), 1)
+        text = self.lists()[0]["text"]
+        self.assertIn("1 PR ready to merge", text)
+        self.assertIn("CC-1 Evening list", text)
+        self.assertIn("https://github.com/JayDalool/CommandCenter/pull/141", text)
+        self.assertNotIn("CC-2", text)
+        self.assertNotIn("CC-3", text)
+
+    def test_nothing_ready_sends_nothing(self):
+        self.d.needs_list = [need("CC-3", kind="gate", gate="plan", text="Plan needs approval: y")]
+        run(self.n.merge_list())
+        self.assertEqual(self.slack.posts, [])
+
+    def test_before_18_sends_nothing(self):
+        self.now[0] = at(17, 59)
+        run(self.n.merge_list())
+        self.assertEqual(self.slack.posts, [])
+
+    def test_once_per_evening_even_after_a_restart(self):
+        run(self.n.merge_list())
+        run(self.n.merge_list())
+        self.now[0] = at(18, 30)
+        run(self.n.merge_list())
+        self.assertEqual(len(self.lists()), 1)
+        # A new Notifier over the same store is a ccd restart: the day is remembered.
+        again = notify.Notifier(self.d, {"notify": {"slack": {"jay_member_id": JAY}}}, slack=self.slack,
+                                clock=lambda: self.now[0], env_path=self.n.env_path)
+        again.settings["slack"] = True
+        run(again.merge_list())
+        self.assertEqual(len(self.lists()), 1)
+
+    def test_next_evening_sends_again(self):
+        run(self.n.merge_list())
+        self.now[0] = at(18, 0, day=13)
+        run(self.n.merge_list())
+        self.assertEqual(len(self.lists()), 2)
+
+    def test_slack_off_sends_nothing(self):
+        self.n.update_settings({"slack": False})
+        run(self.n.merge_list())
+        self.assertEqual(self.slack.posts, [])
+
+    def test_tick_sends_it(self):
+        run(self.n.tick())
+        self.assertEqual(len(self.lists()), 1)
+
+
 class ReplyBase(unittest.TestCase):
     def setUp(self):
         self.n, self.d, self.slack, _ = make(settings={"slack": True})

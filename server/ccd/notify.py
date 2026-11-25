@@ -67,7 +67,7 @@ import urllib.request
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import registry
+from . import github, registry
 from .pipeline import plan_digest, unshown
 from .security import redact
 
@@ -1048,6 +1048,45 @@ class Notifier:
                 await self.post(chan, self.tech_summary(key, now))
         return True
 
+    # ----- evening merge list (CC-084) -----
+
+    MERGE_LIST_AT = "18:00"     # Winnipeg (settings["timezone"]); fixed, not a setting, so it adds no API surface
+
+    def merge_list_text(self):
+        """One line per ticket whose merge gate is open, or None when none is. Read-only: it names the PR and
+        links it, and never merges, approves or touches a ticket (Jay merges)."""
+        lines = []
+        for n in self.needs():
+            if n.get("kind") != "gate" or n.get("gate") != "merge" or not is_ticket(n.get("ref")):
+                continue
+            ref = esc(n["ref"])
+            if self.client(n.get("project")):
+                # A client project's details stay in CommandCenter, as in need_text().
+                lines.append(f"- {ref} (client project: details in CommandCenter)")
+                continue
+            title = str(n.get("text") or "")
+            title = title.split(": ", 1)[1] if title.startswith(NEED_LABEL["merge"] + ": ") else title
+            pr = self._review(n["ref"]).get("pr")
+            url = github.pr_ref_url(pr) if pr else None
+            tail = f" <{url}|{esc(pr)}>" if url else (f" {esc(pr)}" if pr else "")
+            lines.append(f"- {ref} {esc(title[:120])}{tail}")
+        if not lines:
+            return None
+        return f"{len(lines)} PR{'s' if len(lines) != 1 else ''} ready to merge:\n" + "\n".join(lines)
+
+    async def merge_list(self):
+        """The 18:00 DM. Marked sent for the day before it is posted, so a restart or a second tick that evening
+        never sends it again; nothing ready (or quiet hours) sends nothing."""
+        now = self.clock()
+        if not due(self.settings, self.MERGE_LIST_AT, self.daily.get("mergeList"), now):
+            return False
+        self.daily["mergeList"] = local_day(self.settings, now)
+        self.store.put("notify:daily", self.daily)
+        text = self.merge_list_text()
+        if text is None or in_quiet(self.settings, now):
+            return False
+        return bool(await self.post("dm", text))
+
     # ----- Jay's replies -----
 
     def open_questions(self, key):
@@ -1470,6 +1509,7 @@ class Notifier:
             await self.check_needs()
             if self.settings["slack"]:
                 await self.summaries()
+                await self.merge_list()
         except Exception as e:  # noqa: BLE001 — notifications never take ccd down
             self._fail("notify tick", repr(e))
 
