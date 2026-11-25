@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 import urllib.parse
 from zoneinfo import ZoneInfo
 
@@ -321,6 +322,53 @@ class Settings(unittest.TestCase):
         os.symlink(real, link)
         with self.assertRaises(notify.SlackError):
             notify.read_env(link)
+
+    def test_env_reader_refuses_each_bad_kind_and_never_reads_a_swapped_file(self):
+        # CC-091: type and mode are checked on the one open descriptor, so a swap after the open changes nothing.
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "slack.env")
+
+        def plain(path, text, mode):
+            with open(path, "w") as f:
+                f.write(text)
+            os.chmod(path, mode)
+
+        os.mkdir(p)
+        with self.assertRaisesRegex(notify.SlackError, "regular file"):
+            notify.read_env(p)
+        os.rmdir(p)
+        os.mkfifo(p, 0o600)
+        with self.assertRaisesRegex(notify.SlackError, "regular file"):
+            notify.read_env(p)
+        os.unlink(p)
+        plain(os.path.join(d, "real"), "K=v\n", 0o600)
+        os.symlink(os.path.join(d, "real"), p)
+        with self.assertRaisesRegex(notify.SlackError, "not a link"):
+            notify.read_env(p)
+        os.unlink(p)
+        plain(p, "K=v\n", 0o644)
+        with self.assertRaisesRegex(notify.SlackError, "chmod 600"):
+            notify.read_env(p)
+
+        real_open = os.open
+
+        def swap_after_open(new_text, new_mode):
+            def opener(path, *a, **kw):
+                fd = real_open(path, *a, **kw)
+                os.unlink(p)
+                plain(p, new_text, new_mode)
+                return fd
+            return opener
+
+        # A good file replaced by a bad one after the open: the open descriptor's content is what is read.
+        plain(p, "K=original\n", 0o600)
+        with mock.patch.object(os, "open", swap_after_open("K=swapped\n", 0o644)):
+            self.assertEqual(notify.read_env(p), {"K": "original"})
+        # A 0644 file swapped for a clean 0600 one after the open is still refused.
+        plain(p, "K=original\n", 0o644)
+        with mock.patch.object(os, "open", swap_after_open("K=swapped\n", 0o600)):
+            with self.assertRaisesRegex(notify.SlackError, "chmod 600"):
+                notify.read_env(p)
 
     def test_slack_tokens_are_redacted(self):
         text, n = security.redact("bot xoxb-1111111111-abcdef app xapp-1-A111-222-abcdef")

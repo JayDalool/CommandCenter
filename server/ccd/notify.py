@@ -54,6 +54,7 @@ A message outside a thread goes to the lead of that channel's project; in #cto o
 import asyncio
 import collections
 import datetime
+import errno
 import hashlib
 import json
 import logging
@@ -233,26 +234,38 @@ def due(settings, hhmm, last_day, now):
 
 
 def read_env(path):
-    """KEY=VALUE lines from slack.env. Refused unless the file is the owner's only (0600 or stricter)."""
+    """KEY=VALUE lines from slack.env or mail.env. Refused unless the file is the owner's only (0600 or stricter)."""
     p = Path(path)
-    if not p.exists() and not p.is_symlink():
-        return {}
-    if p.is_symlink():
-        raise SlackError(f"{p.name} must be a plain file, not a link")
-    st = p.stat()
-    # A FIFO would block the event loop on open and a directory raises; only a regular file is read (CC-078).
-    if not stat.S_ISREG(st.st_mode):
-        raise SlackError(f"{p.name} must be a regular file")
-    if st.st_uid != os.getuid():
-        raise SlackError(f"{p.name} must belong to the user ccd runs as")
-    mode = stat.S_IMODE(st.st_mode)
-    if mode & 0o077:
-        raise SlackError(f"{p.name} must be readable by its owner only (chmod 600)")
-    out = {}
+    # CC-091: the file is opened once and every check runs on that open descriptor. Checking the path and then
+    # reading it let a file swapped in between be read. O_NOFOLLOW refuses a symlink; O_NONBLOCK keeps a FIFO from
+    # blocking the event loop on open.
     try:
-        text = p.read_text()
-    except (OSError, UnicodeDecodeError):
+        fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+    except FileNotFoundError:
+        return {}
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise SlackError(f"{p.name} must be a plain file, not a link") from None
         raise SlackError(f"{p.name} could not be read as text") from None
+    try:
+        st = os.fstat(fd)
+        # A FIFO would block and a directory fails to read; only a regular file is read (CC-078).
+        if not stat.S_ISREG(st.st_mode):
+            raise SlackError(f"{p.name} must be a regular file")
+        if st.st_uid != os.getuid():
+            raise SlackError(f"{p.name} must belong to the user ccd runs as")
+        if stat.S_IMODE(st.st_mode) & 0o077:
+            raise SlackError(f"{p.name} must be readable by its owner only (chmod 600)")
+        try:
+            with os.fdopen(fd, "r") as f:
+                fd = None
+                text = f.read()
+        except (OSError, UnicodeDecodeError):
+            raise SlackError(f"{p.name} could not be read as text") from None
+    finally:
+        if fd is not None:
+            os.close(fd)
+    out = {}
     for line in text.splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
