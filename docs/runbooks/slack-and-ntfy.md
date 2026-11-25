@@ -53,6 +53,11 @@ The first tick after start takes the current queue as its baseline instead of se
 Quiet hours (22:00 to 07:00 America/Winnipeg by default) hold the DM and the push. Held items that still wait are sent
 when quiet hours end. GauzeMate (a client project) carries only IDs and a risk line, and has no channel.
 
+Evening merge list (CC-084): one DM at 18:00 America/Winnipeg listing every PR ready to merge (key, title, link);
+nothing ready sends nothing, and it is sent at most once per evening. Quiet hours win over it: if quiet hours cover
+18:00, that evening's list is skipped, not held until they end (Jay's decision, Messages #340). Merge ready in
+Command Center always shows the same list.
+
 ## Replies
 
 ccd reads only messages whose author is `jay_member_id`, never edits or bot messages. In an item's thread:

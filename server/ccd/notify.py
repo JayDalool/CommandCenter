@@ -1099,6 +1099,8 @@ class Notifier:
             return False
         self.daily["mergeList"] = local_day(self.MERGE_LIST_SETTINGS, now)
         self.store.put("notify:daily", self.daily)
+        # Quiet hours win (Jay, Messages #340): the day is already marked sent above, so a list that falls in quiet
+        # hours is skipped for that evening, not held until they end. Merge ready in Command Center shows the same list.
         text = self.merge_list_text()
         if text is None or in_quiet(self.settings, now):
             return False
