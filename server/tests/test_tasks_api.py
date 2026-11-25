@@ -76,6 +76,9 @@ class TaskApi(ApiBase):
         ctx = self.get("/api/tasks/CC-001/context").json()
         self.assertIn("CC-001 · Ship the thing", ctx["brief"])
         self.assertIn("Not authorized", ctx["brief"])
+        # A lead must not take the task's name for its own pane (it would drop out of Messages and Slack).
+        self.assertIn("in a new herdr pane named cc-001", ctx["brief"])
+        self.assertIn("A project lead never renames its own pane", ctx["brief"])
         self.assertFalse(ctx["dispatchable"])
 
     def test_import_preview_writes_nothing(self):
