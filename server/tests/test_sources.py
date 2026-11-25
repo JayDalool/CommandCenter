@@ -36,6 +36,13 @@ class Reshape(unittest.TestCase):
         self.assertEqual(r["prs"][0]["statusCheckRollup"], [{"state": "SUCCESS"}])
         self.assertEqual(r["ci"][0]["conclusion"], "failure")
 
+    def test_merged_nodes_carry_the_head_that_merged_and_the_query_asks_for_it(self):
+        # CC-071: a pinned ticket moves on a merge only at the head its review approved.
+        self.assertIn("nodes { number title url mergedAt headRefOid mergeCommit { oid } }", sources.GITHUB_QUERY)
+        g = copy.deepcopy(GRAPHQL)
+        g["data"]["repository"]["merged"]["nodes"][0]["headRefOid"] = "a" * 40
+        self.assertEqual(sources.reshape(g)["merged"][0]["headRefOid"], "a" * 40)
+
     def test_model_reads_it_exactly_as_before(self):
         c = cfg()
         view = model.project_view(c["projects"][1], sources.reshape(GRAPHQL), [], {}, c)
@@ -108,48 +115,6 @@ class DeriveParity(unittest.TestCase):
 
 def legacy_empty():
     return {"issues": [], "prs": [], "merged": [], "closed": [], "ci": []}
-
-
-class LinkedPr(unittest.TestCase):
-    """CC-071 part D: github_pr passes owner, name and number as gh argv variables, never in the query text."""
-    NODE = {"data": {"repository": {"pullRequest": {
-        "number": 10, "title": "t", "url": "u", "state": "OPEN", "isDraft": False, "reviewDecision": None,
-        "headRefName": "b", "headRefOid": "a" * 40, "mergedAt": None, "mergeCommit": None,
-        "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]}}}}}
-
-    def run_with(self, slug, number, out=None, code=0):
-        calls = []
-        orig, fx = sources._run, sources.FIXTURES
-        sources.FIXTURES = None
-        sources._run = lambda args, **kw: (calls.append(args) or (code, json.dumps(out or self.NODE), "boom"))
-        try:
-            return sources.github_pr(slug, number), calls
-        finally:
-            sources._run, sources.FIXTURES = orig, fx
-
-    def test_values_travel_as_variables_and_never_in_the_query(self):
-        got, calls = self.run_with("JayDalool/jay-dev", 10)
-        self.assertEqual((got["state"], got["headRefName"], got["statusCheckRollup"]),
-                         ("OPEN", "b", [{"state": "SUCCESS"}]))
-        [args] = calls
-        query = next(a for a in args if a.startswith("query="))
-        for value in ("JayDalool", "jay-dev", "10"):
-            self.assertNotIn(value, query)
-        self.assertIn("owner=JayDalool", args)
-        self.assertIn("name=jay-dev", args)
-        self.assertEqual(args[args.index("-F") + 1], "number=10")
-        self.assertEqual(args.count("-f"), 3)
-
-    def test_a_shape_that_is_not_a_repo_and_number_never_reaches_gh(self):
-        for slug, n in (("JayDalool/jay-dev\n{x}", 10), ("a/b/c", 10), ("noslash", 10), ("o/r", "10"), ("o/r", 0),
-                        ("o/r", True), ("o/r", 10 ** 8), ("-o/r", 1), ("o/..", 1)):
-            got, calls = self.run_with(slug, n)
-            self.assertIn("error", got, (slug, n))
-            self.assertEqual(calls, [], (slug, n))
-
-    def test_gh_failures_and_odd_shapes_become_an_error_row(self):
-        self.assertIn("boom", self.run_with("o/r", 1, code=1)[0]["error"])
-        self.assertIn("error", self.run_with("o/r", 1, out={"data": {"repository": None}})[0])
 
 
 if __name__ == "__main__":

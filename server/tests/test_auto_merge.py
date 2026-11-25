@@ -64,7 +64,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.store.close()
 
-    def ready(self, project="commandcenter", number=7, head=HEAD, cache=True, **fields):
+    def ready(self, project="commandcenter", number=7, head=HEAD, cache=True, pin=False, **fields):
         """A ticket in READY_TO_MERGE: planned, started, its PR linked, an approving review recorded at `head`."""
         d, pl = self.daemon, self.daemon.pipeline
         t, _ = self.tickets.create(project, "Add tests", **fields)
@@ -74,6 +74,8 @@ class Base(unittest.IsolatedAsyncioTestCase):
         pl.plan(k, PLAN, "agent:planner")
         if pl.work(k)["gate"] == "plan":
             pl.confirm(k, "plan", "jay")
+        if pin:    # CC-071: the lead pinned the ticket to this PR
+            pl.link(k, ref, "agent:coordinator")
         pl.start(k, f"{k}-tests", f"/srv/server/worktrees/x/{k}", "agent:coordinator")
         self.tickets.update(k, {"status": "IN_REVIEW"}, "system:automation", trigger=f"PR #{number} is open")
         self.tickets.link(k, "github", "pr", ref, None, "x", "system:automation")
@@ -162,6 +164,42 @@ class Merges(Base):
         self.daemon._auto_merge = am
         await self.daemon.rederive()
         self.assertEqual(order, ["automation", "auto-merge"])
+
+
+class Pinned(Base):
+    """CC-071: a PR the lead pinned is merged by Jay, never by ccd; an unpinned merge is dropped if the ticket's PR
+    changed during the awaited gh call."""
+    async def test_a_pinned_ticket_is_held_and_gh_is_never_called(self):
+        k = self.ready(pin=True)
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.calls, [])
+        w = self.daemon.pipeline.work(k)
+        self.assertEqual(w["gate"], "merge")
+        self.assertIn("linked by hand; Jay merges it", w["gateReason"])
+
+    async def _decided_elsewhere(self, k, change):
+        self.gh.on_view = change
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertEqual(self.tickets.get(k)["status"], "READY_TO_MERGE")
+
+    async def test_a_pin_added_while_gh_view_runs_stops_the_merge(self):
+        k = self.ready()
+        ref = f"{REPO}#7"
+        await self._decided_elsewhere(k, lambda: self.daemon.pipeline._tx(
+            k, "agent:coordinator", lambda tid, t, w, at: ({}, {}, [("pipeline.linked", "pinned", {"pr": ref})])))
+
+    async def test_a_review_on_another_pr_while_gh_view_runs_stops_the_merge(self):
+        k = self.ready()
+        await self._decided_elsewhere(k, lambda: self.daemon.pipeline._tx(
+            k, "agent:reviewer", lambda tid, t, w, at: ({}, {"review_pr": f"{REPO}#8"}, [])))
+
+    async def test_a_second_link_added_while_gh_view_runs_stops_the_merge(self):
+        k = self.ready()
+        d = self.daemon
+        d.gh["commandcenter"]["data"]["prs"].append({"number": 8, "headRefOid": "cd" * 20, "statusCheckRollup": [],
+                                                     "isDraft": False})
+        await self._decided_elsewhere(k, lambda: self.tickets.link(k, "github", "pr", f"{REPO}#8", None, "x", "jay"))
 
 
 class Skips(Base):
@@ -552,61 +590,3 @@ class Pending(Base):
         d._am_next.clear()
         await d._auto_merge()
         self.assertEqual(d.pipeline.work(k)["gate"], None)                 # the old clock would have opened a gate
-
-class ForeignPr(Base):
-    """CC-071: the reviewed PR is in another repository: #N here is a different PR, so ccd never merges it and never
-    falls back to this repo's open PR with the same number."""
-    FOREIGN = "JayDalool/jay-dev#10"
-
-    def foreign_ready(self):
-        k = self.ready(number=10)                    # JayDalool/CommandCenter#10 is open and linked too
-        self.tickets.db.execute("UPDATE ticket_work SET review_pr=? WHERE ticket_id=(SELECT id FROM tickets WHERE key=?)",
-                                (self.FOREIGN, k))
-        return k
-
-    async def test_R8_auto_merge_holds_and_never_runs_gh(self):
-        k = self.foreign_ready()
-        await self.daemon._auto_merge()
-        self.assertEqual(self.gh.calls, [])
-        w = self.daemon.pipeline.work(k)
-        self.assertEqual(w["gate"], "merge")
-        self.assertIn("the reviewed PR is in JayDalool/jay-dev; Jay merges it", w["gateReason"])
-
-    async def test_R8_merge_batch_skips_it_by_name(self):
-        k = self.foreign_ready()
-        ready, skipped = self.daemon.merge_batch("commandcenter")
-        self.assertEqual((ready, skipped), ([], [{"key": k, "reason": "its PR is in another repository; merge it by hand"}]))
-
-    async def test_an_own_repo_review_pr_is_unchanged(self):
-        k = self.ready(number=10)
-        await self.daemon._auto_merge()
-        self.assertEqual(len(self.gh.of("merge")), 1)
-        self.assertTrue(k)
-
-    def other_owner(self, ref):
-        t, _ = self.tickets.create("commandcenter", "the PR's real owner")
-        self.tickets.link(t["key"], "github", "pr", ref, None, "x", "agent:coordinator")
-        return t["key"]
-
-    async def test_High1_a_pr_explicitly_owned_by_another_ticket_is_held_and_skipped(self):
-        k = self.ready(number=7)                     # plain system link on k
-        owner = self.other_owner("JayDalool/CommandCenter#7")
-        await self.daemon._auto_merge()
-        self.assertEqual(self.gh.calls, [])
-        self.assertIn("explicitly linked to another ticket", self.daemon.pipeline.work(k)["gateReason"])
-        self.assertTrue(owner)
-
-    async def test_High1_merge_batch_names_the_owner_rule(self):
-        k = self.ready(number=7)
-        self.other_owner("JayDalool/CommandCenter#7")
-        ready, skipped = self.daemon.merge_batch("commandcenter")
-        self.assertEqual((ready, [s_["key"] for s_ in skipped]), ([], [k]))
-        self.assertIn("explicitly linked to another ticket", skipped[0]["reason"])
-
-    async def test_High1_ownership_is_rechecked_just_before_the_merge(self):
-        k = self.ready(number=7)
-        self.gh.on_view = lambda: self.other_owner("JayDalool/CommandCenter#7")   # appears while `gh pr view` runs
-        await self.daemon._auto_merge()
-        self.assertEqual(self.gh.of("merge"), [])
-        self.assertEqual(self.daemon.pipeline.work(k)["gate"], "merge")
-

@@ -32,9 +32,8 @@ At the end: the closing note.
         --criterion "The export opens in Excel with the same columns as the table" \
         --requirement "The Offers table layout does not change" [--parent SV-080]   # (flow PR)
     python -m ccd.pipeline_cli criteria SV-071 --role coordinator --priority medium --due 2026-11-21   # any stage
+    python -m ccd.pipeline_cli link SV-087 --role coordinator --pr JayDalool/SamVisionAI#249   # pin the ticket to its one PR
     python -m ccd.pipeline_cli start SV-082 --role coordinator --branch SV-082-csv --worktree /srv/…/SV-082
-    python -m ccd.pipeline_cli link SV-087 --role coordinator --pr JayDalool/SamVisionAI#249   # repo-native branch / another repo
-    python -m ccd.pipeline_cli start SV-087 --role coordinator --branch SV-118-advisor-typed-guard --worktree /srv/…/SV-087 --pr JayDalool/SamVisionAI#249
     python -m ccd.pipeline_cli handoff SV-082 --role coordinator --done "…" --next "…"
     python -m ccd.pipeline_cli ask SV-082 --role coordinator --question "Export which columns?" \
         --option "Same as the table" --option "All fields" --recommend 1 --why "matches what they see"
@@ -42,23 +41,22 @@ At the end: the closing note.
     python -m ccd.pipeline_cli stale SV-071 --role coordinator --reason "superseded by SV-082"   # Jay decides
     python -m ccd.pipeline_cli close SV-082 --role coordinator --note "What changed, why, how it was checked"  # (flow PR)
 
-## Linking a ticket to a PR whose branch does not lead with its key (CC-071)
+## A PR whose branch does not lead with the ticket key, or lives in another repo
 
-ccd links a PR to a ticket by itself only when the key LEADS the PR's title or branch. For a repo-native branch (SamVision's
-`SV-118-advisor-typed-guard`) or a PR in another repository (Command Center tickets for `JayDalool/jay-dev`), you link it:
+ccd links a PR to a ticket only when the key leads its title or branch. For a repo-native branch (SamVision's
+`SV-118-*`) or a PR in another repository of the project's list (Command Center tickets: `JayDalool/jay-dev`), pin the
+ticket to its PR with `pipeline_cli link KEY --pr owner/repo#N` while it is READY_TO_IMPLEMENT or IN_PROGRESS, then
+`start` with the repo's own branch name (the pin comes first). The pinned PR is then the only one that moves, reviews
+or merges the ticket; every other PR for it, key-led included, is ignored.
 
-1. The PR must be open and linked to no other open ticket. Own repository: ccd must have seen it open in its last GitHub poll
-   (wait one poll after it opens). Another allow-listed repository: ccd reads that one PR itself when you link or start,
-   and refuses if the read fails or the PR is merged or closed.
-2. `pipeline_cli link KEY --role coordinator --pr owner/repo#N`, or give the same `--pr` to `start`, which links in the same step.
-3. `start --branch <the PR's head branch>`: a native branch is accepted only when it is that head branch.
-4. Only a link made by you or Jay counts as explicit, and the actor is self-asserted (`X-CCD-Actor`), so this is as strong as
-   that header. An explicit link makes the PR that ticket's alone for polling, review, user check, rework, auto-merge and Merge
-   ready. An agent's `/links` row is not explicit: for a PR with no explicit owner it still counts in its own repository as
-   before. The repository must be on the project's allow list (`registry.py` `link_repos`; Command Center:
-   `JayDalool/jay-dev`); Jay approves additions.
-5. A merge counts only after you linked the PR. ccd never merges a PR in another repository: it is Jay's, by hand.
-Full rules: `docs/API.md` (explicit links).
+- There is no unpin. Re-pin only before the review (a new `link` replaces the old PR); an approval or user check
+  recorded on the old PR does not carry over.
+- After a rework whose pinned PR is merged or closed, pin the follow-up PR with `link` before the developer pushes:
+  a key-led follow-up PR is ignored on a pinned ticket and would never reach review.
+- A pinned PR that merges without an approval of that PR at the head that merged does not move the ticket; ccd writes
+  one `pipeline.unreviewed_merge` note and you move the ticket by hand. ccd never auto-merges a pinned PR, and Merge
+  ready skips one in another repository: Jay merges it there by hand.
+- The actor on `link` is self-asserted, as on `intake`: only you or Jay run it.
 
 ## When a review sends it back (round 1)
 

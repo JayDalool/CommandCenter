@@ -214,10 +214,10 @@ class RetiringAPrefix(unittest.TestCase):
         self.assertEqual(self.s.aliases(), {"GM": "gauzemate"})
         self.assertEqual({r["key"]: r["prefix"] for r in self.s.projects()}["gauzemate"], "GZ")
 
+
 class LinkRepos(unittest.TestCase):
-    """CC-071: the one allow list ccd reads for explicit PR links."""
+    """CC-071: the one allow list ccd reads for a ticket's pinned PR."""
     def test_a_project_allows_its_own_repo_and_only_the_extras_the_registry_names(self):
-        from ccd import registry
         self.assertEqual(registry.link_repos("commandcenter"), ("JayDalool/CommandCenter", "JayDalool/jay-dev"))
         self.assertEqual(registry.link_repos("samvision"), ("JayDalool/SamVisionAI",))
         self.assertEqual(registry.link_repos("nope"), ())
@@ -225,4 +225,3 @@ class LinkRepos(unittest.TestCase):
             for extra in registry.PROJECTS[key].get("link_repos") or ():
                 self.assertRegex(extra, r"^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$")
                 self.assertNotIn(extra, [p["github"] for p in registry.PROJECTS.values()])
-
