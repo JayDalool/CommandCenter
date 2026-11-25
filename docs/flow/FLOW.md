@@ -23,7 +23,7 @@ Read your seat's page, not all of them: [seats/](seats/).
 | 2 | Investigate | [investigator](seats/investigator.md) | reproduced yes/no/n.a., findings, plan (approach, files affected, risk, tests), "before" screenshots |
 | 3 | Technical review | [tech-reviewer](seats/tech-reviewer.md) | APPROVE or SEND_BACK, the blast radius, the tests that must exist |
 | 4 | Build | [developer](seats/developer.md) | a PR with the change, its tests, and why-comments; handoff written |
-| 5 | User check | [user-reviewer](seats/user-reviewer.md) (+ [design-reviewer](seats/design-reviewer.md) when a screen changes) | every criterion pass/fail on the PR's exact head, "after" screenshots |
+| 5 | User check | [user-reviewer](seats/user-reviewer.md) (+ [design-reviewer](seats/design-reviewer.md) when a screen changes) | every criterion pass/fail on the PR's exact head, each with what the reviewer did and saw, plus proof of the running change ("after" screenshots on a UI ticket) |
 | 6 | Code review | [code-reviewer](seats/code-reviewer.md) | APPROVE or REQUEST_CHANGES on the exact head, findings |
 | 7 | Merge | Jay (ccd only for CommandCenter low-risk docs/tests, flag off today) | merged to main |
 | 8 | Release | [verifier](seats/verifier.md) | deployed (or release-ready) and checked, with evidence |
@@ -40,7 +40,7 @@ The lead sets the size at intake. The technical reviewer may raise it. Only Jay 
 
 | Size | For | Route |
 |---|---|---|
-| small | wording, a setting, a one-file fix with a test | Intake, Build, Code review, Merge, Release, Done. User check too when the ticket is a UI ticket (`ui` label, needs-ui-review flag or DESIGN type) |
+| small | wording, a setting, a one-file fix with a test | Intake, Build, User check, Code review, Merge, Release, Done. The user check is skipped only when the ticket changes nothing a person can use (`docs`, `documentation`, `tests`, `chore` label, and no `ui` label) — Jay, 2026-11-25 |
 | standard | a feature or a bug across several files | all nine |
 | risky | security, sign-in, money, data migration, licensed or personal data, a redesign clients notice | all nine, plus Jay approves the plan after Technical review and approves the release |
 

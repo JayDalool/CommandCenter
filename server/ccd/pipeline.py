@@ -41,6 +41,9 @@ RESUME_STATUS = {"PLAN": "RESEARCHING", "BUILD": "IN_PROGRESS", "REVIEW": "IN_RE
                  "VERIFY": "VERIFYING"}
 PLAN_GATE_LABELS = {"security", "migration", "destructive", "architecture", "product-decision", "ambiguous",
                     "financial", "legal", "gate:plan"}
+# Jay, 2026-11-25: a small ticket gets a real user check too, unless it changes only docs or tests. These labels
+# say "nothing a person can use changed"; anything else small is still run by the user reviewer.
+NO_BEHAVIOUR_LABELS = {"docs", "docs-only", "documentation", "tests", "tests-only", "test-only", "chore"}
 MERGE_POLICIES = ("owner", "low-risk")   # registry pipeline "merge"; "owner" is the default
 AUTO_MERGE_KINDS = ("pipeline.auto_merge_held", "pipeline.auto_merged", "pipeline.auto_merge_failed")
 GATES = ("plan", "merge", "ui", "deploy", "failure")
@@ -122,6 +125,8 @@ def policy(ticket, project_key=None):
         "planReasons": reasons,
         "merge": merge,
         "ui": "needs_ui_review" in flags or ticket.get("type") == "DESIGN" or "ui" in labels,
+        # Only on a small ticket does this skip the user check (flow.route); a standard or risky ticket keeps it.
+        "noBehaviour": bool(labels & NO_BEHAVIOUR_LABELS) and not (labels & {"ui"}),
         "deploy": "needs_deploy" in flags,
     }
 

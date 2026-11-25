@@ -345,7 +345,8 @@ Seats are pipeline roles: lead = `coordinator`, investigator = `planner`, techRe
 verifier = `verifier`. An agent takes a seat with `role KEY --role <role> --session <id>`; it holds the ticket from then
 until the ticket leaves the stage.
 
-Routes: `small` = intake, build, (userCheck when `policy.ui`), codeReview, merge, release, done; `standard` = all
+Routes: `small` = intake, build, userCheck, codeReview, merge, release, done (userCheck dropped when
+`policy.noBehaviour`, i.e. a `docs`/`documentation`/`tests`/`chore` label and no `ui` label); `standard` = all
 nine; `risky` = all nine, Jay approves the plan after the technical review (the plan gate) and the release (the deploy
 gate). A ticket whose labels/flags/type open the plan gate (`PLAN_GATE_LABELS`, needs:jay, SECURITY, LEGAL) is risky
 whatever was typed. **A ticket nobody has sized** (`size: null`, "Not sized") keeps the steps it had before the flow:
@@ -382,7 +383,7 @@ A sized ticket is in the pipeline from the moment it is sized (even in INBOX): l
     planReview: {verdict, by, session, at, note, blast, tests} | null,   // the latest review; null once a new plan is recorded
     planReviews: [{verdict, by, session, at, note, blast, tests}],        // every review, oldest first (CC-066); reviews
                                                                           // from before CC-066 have note/blast/tests null
-    userCheck: {result, head, pr, by, session, at, note} | null,
+    userCheck: {result, head, pr, by, session, at, note, proof: [ref]} | null,
     closing: {note, by, at} | null,
     flow: {size, stage, route: string[], openChildren: number,
            stages: [{stage, state: done|active|todo|skipped|blocked, seat, by, session, at}]   // always nine, in order

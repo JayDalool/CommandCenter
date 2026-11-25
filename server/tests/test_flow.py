@@ -83,8 +83,9 @@ class Intake(Base):
         self.assertEqual([c["id"] for c in w["criteria"]], ["c1", "c2"])
         self.assertEqual({c["state"] for c in w["criteria"]}, {"open"})
         st = {x["stage"]: x["state"] for x in w["flow"]["stages"]}
+        # Jay, 2026-11-25: a small ticket keeps its user check; only investigation and technical review are skipped.
         self.assertEqual((st["investigate"], st["techReview"], st["userCheck"], st["intake"]),
-                         ("skipped", "skipped", "skipped", "done"))
+                         ("skipped", "skipped", "todo", "done"))
         # small starts with no plan at all
         self.assertEqual(self.pl.start(s, f"{s}-x", WT + s, "agent:coordinator")[0]["status"], "IN_PROGRESS")
         k = self.sized("standard")
@@ -446,10 +447,32 @@ class UserCheck(Base):
                            session="ur-1", proof=["after.png"])
         self.assertIn("c1", msg)
 
-    def test_a_route_without_a_user_check_refuses_one(self):
+    def test_a_small_ticket_has_a_user_check_unless_it_is_docs_or_tests_only(self):
+        # Jay, 2026-11-25: small backend work is run too; only docs/tests-only tickets skip the user check.
         k = self.sized("small")
         self.in_review(k)
+        self.assertEqual(self.pl.work(k)["flow"]["stage"], "userCheck")
+        self.assertIn("user check", self.refused(409, self.pl.review, k, "APPROVE", HEAD, "agent:reviewer",
+                                                 session="cr-1", pr=self.pr()))
+        self.passed(k)
+        self.assertEqual(self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="cr-1",
+                                        pr=self.pr())[0]["status"], "READY_TO_MERGE")
+
+    def test_a_docs_only_small_ticket_has_no_user_check(self):
+        k = self.sized("small", labels=["docs"])
+        self.in_review(k)
+        self.assertEqual(self.pl.work(k)["flow"]["stage"], "codeReview")
         self.refused(409, self.pl.user_check, k, "pass", HEAD, "agent:user-reviewer", "ok", pr=self.pr(), session="u")
+        self.assertEqual(self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="cr-1",
+                                        pr=self.pr())[0]["status"], "READY_TO_MERGE")
+
+    def test_a_docs_label_on_a_ui_or_standard_ticket_keeps_the_user_check(self):
+        k = self.sized("small", labels=["docs", "ui"])
+        self.in_review(k)
+        self.assertEqual(self.pl.work(k)["flow"]["stage"], "userCheck")
+        k2 = self.approved(labels=["docs"])
+        self.in_review(k2)
+        self.assertEqual(self.pl.work(k2)["flow"]["stage"], "userCheck")
 
 
 class Closing(Base):
@@ -486,6 +509,7 @@ class Closing(Base):
         k = self.sized("small")
         self.pl.start(k, f"{k}-x", WT + k, "agent:coordinator")
         self.ts.update(k, {"status": "IN_REVIEW"}, "system:automation", trigger="PR")
+        self.passed(k)
         self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="cr-1", pr=self.pr())
         t, _, _ = self.verified(k)
         self.assertEqual(t["status"], "DONE")

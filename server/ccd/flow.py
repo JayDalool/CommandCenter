@@ -18,7 +18,8 @@ a ticket live in pipeline.py, as before; there is no second status set.
 Routes by size. A ticket nobody has sized yet ("Not sized") keeps the steps it had before the flow existed: no
 technical review, no user check. Sizing it (intake, or the `criteria` op) puts it on its route.
 
-    small     intake > build > codeReview > merge > release > done      (+ userCheck when policy().ui)
+    small     intake > build > userCheck > codeReview > merge > release > done
+              (no userCheck when the ticket changes only docs or tests: policy().noBehaviour)
     standard  all nine
     risky     all nine; Jay approves the plan after techReview and approves the release
 """
@@ -75,7 +76,10 @@ def route(size, pol):
         return LEGACY_ROUTE
     eff = effective_size(size, pol)
     if eff == "small":
-        out = ["intake", "build"] + (["userCheck"] if pol.get("ui") else []) + ["codeReview", "merge", "release", "done"]
+        # Jay, 2026-11-25: small tickets get a user check too; only a docs- or tests-only ticket skips it (a UI
+        # ticket always has one, whatever its labels say).
+        check = pol.get("ui") or not pol.get("noBehaviour")
+        out = ["intake", "build"] + (["userCheck"] if check else []) + ["codeReview", "merge", "release", "done"]
         return tuple(out)
     return STAGES
 
