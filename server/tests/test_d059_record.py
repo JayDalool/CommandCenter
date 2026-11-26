@@ -57,9 +57,9 @@ class D059Record(unittest.TestCase):
     def test_spend_replacement_is_scoped_and_lines_are_separate(self):
         self.one("for Secretary and Coach AI and phone spend only, this replaces D-024's no-dollar-limit clause")
         self.one("Command Center agent budgets stay as D-024 and D-033 set them")
-        target = self.one("operating target: 20 USD", "warning at 15 USD")
-        cap = self.one("hard cap: 30 USD")
-        phone = self.one("telephone cap: 8 USD")
+        target = self.one("operating target: 20 USD per month", "warning at 15 USD")
+        cap = self.one("hard cap: 30 USD per month")
+        phone = self.one("telephone cap: 8 USD per month")
         self.assertEqual(len({target, cap, phone}), 3)
         self.assertNotIn("30 USD", target)
         self.assertNotIn("20 USD", cap)
