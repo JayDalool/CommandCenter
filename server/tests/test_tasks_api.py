@@ -852,6 +852,21 @@ class PipelineApi(Automation):
                   if e["kind"] == "task.updated" and "281" in e["text"] and "linked" in e["text"]]
         self.assertEqual(len(linked), 1)
 
+    def test_a_stacked_pr_merged_before_its_first_poll_links_by_head_branch_only(self):
+        # CC-076 round 3: the title names no ticket; only the head branch does. It links, and moves nothing.
+        self.ticket("INBOX")
+        self.step("plan", {"plan": {"summary": "Feature"}}, "agent:planner")
+        self.step("start", {"branch": "SV-056-parent", "worktree": "/srv/w/SV-056"})
+        git = self.gh.data["samvision"]
+        git["merged"] = [{"number": 282, "title": "Stacked part", "url": "u", "mergedAt": "2026-10-03T00:00:00Z",
+                          "baseRefName": "SV-056-parent", "headRefName": "SV-056-child",
+                          "mergeCommit": {"oid": "c" * 40}}]
+        for _ in range(2):
+            self.poll()
+        t = self.tickets.get("SV-056")
+        self.assertEqual(t["status"], "IN_PROGRESS")
+        self.assertEqual([lk["ref"] for lk in t["links"] if lk["kind"] == "pr"], ["JayDalool/SamVisionAI#282"])
+
     def test_a_different_linked_pr_merging_into_main_moves_the_ticket_and_flags_it_unreviewed(self):
         self.ticket("INBOX")
         self.step("plan", {"plan": {"summary": "Feature"}}, "agent:planner")

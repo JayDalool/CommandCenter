@@ -1196,6 +1196,10 @@ class Daemon(LeadChat, HqDaemon):
                 if nightshift_mod.input_is_empty(screen["text"]) is not True:
                     self.work.note(key, "input line not empty or not recognised")
                     return None
+                # CC-076 round 3: the two herdr reads above are awaits; Work Mode, the PR or the reviewer seat can change
+                # while they are pending, so the guard is asked once more, with nothing awaited before the text is typed.
+                if guard is not None and not guard():
+                    return None
                 self._broker("pane.input", key, f"{why} -> pane {agent['pane_id']}")
                 await self.herdr.prompt(agent["pane_id"], text)
                 self.work.nudged(key, now)
@@ -1226,19 +1230,27 @@ class Daemon(LeadChat, HqDaemon):
                     del self._review_pending[key]
                     continue
                 proj = self._project(project)
-                if (proj is None or not self.work.active(project) or registry.paused(project)
-                        or (self.night is not None and self.night.active(project)) or self.chat_budget_check(project)):
+                if proj is None:
                     continue
 
-                def ready(key=key, item=item, head=head):
-                    # Rechecked under the lead lock (a poll and a work tick can both get here): the item is still
-                    # pending, the day's limit holds, and the PR at this head is still green and not a draft.
-                    if self._review_pending.get(key) != item or self.work.day_full(item[0], now):
+                def ready(key=key, item=item, head=head, project=project, at=at):
+                    # Asked under the lead lock and again right before typing (see _lead_send): the item is still
+                    # pending, Work Mode is on, the day's limit holds, no reviewer has taken the seat, and the PR at
+                    # this head is still green and not a draft. Everything is read fresh, nothing carried over.
+                    if self._review_pending.get(key) != item or self.work.day_full(project, now):
                         return False
-                    pr_now = next((p for p in self._open_prs(self.tasks.get(key)) if p["head"] == head), None)
+                    if (not self.work.active(project) or registry.paused(project)
+                            or (self.night is not None and self.night.active(project)) or self.chat_budget_check(project)):
+                        return False
+                    t2 = self.tasks.get(key)
+                    w2 = self.pipeline.work_row(t2["id"])
+                    seat = ((w2.get("roles") or {}).get("reviewer") or {}).get("at") or 0
+                    if not (t2["status"] == "IN_REVIEW" and w2["review"]["head"] != head and seat <= at):
+                        return False
+                    pr_now = next((p for p in self._open_prs(t2) if p["head"] == head), None)
                     return bool(pr_now and pr_now["ciGreen"] and not pr_now["draft"])
                 if not ready():
-                    continue      # red or a draft for now: kept, and typed once it is green again
+                    continue      # off, red or a draft for now: kept, and typed once it is fine again
                 text = self.REVIEW_PROMPT.format(key=key, ref=ref, sha=head[:7],
                                                  checks="no CI checks" if none else "green checks")
                 if await self._lead_send(proj, text, now, f"review prompt {key}", guard=ready,
@@ -3015,7 +3027,7 @@ class Daemon(LeadChat, HqDaemon):
                         if base:
                             # Merged into a feature branch (a stacked PR) before it was ever seen open: keep it as
                             # related work, once (has_link makes a later poll a no-op), and move nothing.
-                            for k in self.tasks.pr_keys(m.get("title", ""), ""):
+                            for k in self.tasks.pr_keys(m.get("title", ""), m.get("headRefName") or ""):
                                 if mine(k) and not self.tasks.has_link(k, "github", "pr", ref):
                                     t, _ = self.tasks.link(k, "github", "pr", ref, github.pr_ref_url(ref),
                                                            m.get("title"), "system:automation",

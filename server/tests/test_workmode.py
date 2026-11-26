@@ -488,6 +488,42 @@ class ReviewPrompts(WorkModeApi):
         [p] = self.prompts()
         self.assertIn("green checks", p["text"])
 
+    def _change_during_the_first_screen_read(self, change):
+        """Round 3, finding 2: Work Mode or the PR changes while the herdr screen read is pending."""
+        real = self.daemon.herdr.read_tail
+        done = []
+
+        async def read_tail(*a, **kw):
+            out = await real(*a, **kw)
+            if not done:
+                done.append(1)
+                change()
+            return out
+        self.daemon.herdr.read_tail = read_tail
+
+    def test_work_mode_switched_off_while_the_screen_is_read_types_nothing(self):
+        self.lead_ready()
+        self.fake.tails["wE:p2"] = self.DRAFT                          # pending: the lead cannot take it yet
+        self.to_review()
+        self.fake.tails["wE:p2"] = self.EMPTY_PROMPT
+        self._change_during_the_first_screen_read(lambda: self.daemon.work.set("samvision", False))
+        self.client.portal.call(self.daemon.send_review_prompts)
+        self.assertEqual(self.prompts(), [])
+
+    def test_a_pr_that_turns_draft_while_the_screen_is_read_types_nothing(self):
+        self.lead_ready()
+        self.fake.tails["wE:p2"] = self.DRAFT
+        self.to_review()
+        self.fake.tails["wE:p2"] = self.EMPTY_PROMPT
+
+        def draft():
+            for pr in self.daemon.gh.get("samvision")["data"]["prs"]:
+                pr["isDraft"] = True
+        self._change_during_the_first_screen_read(draft)
+        self.client.portal.call(self.daemon.send_review_prompts)
+        self.assertEqual(self.prompts(), [])
+        self.assertIn("SV-056", self.daemon._review_pending)            # kept for when it is ready again
+
     def test_a_herdr_error_is_logged_and_the_snapshot_still_publishes(self):
         from ccd import herdr as herdr_mod
         self.lead_ready()
