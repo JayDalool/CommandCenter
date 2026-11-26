@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from ccd import coordid, pty, records, registry
+from ccd import pipeline as pipeline_mod
 from ccd.pipeline import Pipeline, needs_acceptance, visible_stage  # noqa: F401
 from ccd.tasks import TaskError
 
@@ -687,6 +688,68 @@ class ControlRoomApi(PipelineApi):
         self.assertEqual(t["status"], "INBOX")
         self.assertIn("Kept in the task check", t["comments"][-1]["body"])
         self.assertEqual(self.get("/api/tasks/SV-056/work").json()["openQuestions"], 0)
+
+    def _chat_on(self):
+        from ccd import chat as chat_mod
+        base = tempfile.mkdtemp(prefix="quiet-list-")
+        self.daemon.chat = chat_mod.Chat(os.path.join(base, "chat.db"), os.path.join(base, "files"), 1 << 20)
+
+        def off():
+            self.daemon.chat.close()
+            self.daemon.chat = None
+            import shutil
+            shutil.rmtree(base)
+        self.addCleanup(off)
+
+    def test_the_weekly_quiet_list_is_one_messages_line_once_a_week_also_after_a_restart(self):
+        """CC-085: one Messages line per week listing quiet tickets; no question, hold or gate is written."""
+        from ccd.store import Store
+        self._chat_on()
+        self.ticket("IN_PROGRESS")
+        t0 = pipeline_mod._now() + 6 * 86400
+        q_before = self.tickets.db.execute("SELECT COUNT(*) FROM ticket_questions").fetchone()[0]
+        msg = self.daemon.weekly_quiet_list(now=t0)
+        self.assertIsNotNone(msg)
+        self.assertEqual((msg["conversation"], msg["side"]), ("cto", "lead"))
+        self.assertIn("SV-056", msg["text"])
+        self.assertIn("/#/tasks/SV-056", msg["text"])
+        self.assertEqual(self.tickets.db.execute("SELECT COUNT(*) FROM ticket_questions").fetchone()[0], q_before)
+        self.assertEqual(self.daemon.pipeline.held("SV-056"), [])
+        self.assertEqual(self.daemon.pipeline.gate_counts()["open"], 0)
+        self.assertTrue(any(e["kind"] == "chat.reply" for e in self.store.since(0)))   # the notifier relays this to Slack
+        self.assertIsNone(self.daemon.weekly_quiet_list(now=t0 + 3 * 86400))           # the same week
+        self.store.close()                                                             # a ccd restart: same database
+        self.store = self.daemon.store = Store(self.store.path)
+        self.assertIsNone(self.daemon.weekly_quiet_list(now=t0 + 6.5 * 86400))
+        self.assertIsNotNone(self.daemon.weekly_quiet_list(now=t0 + 7.5 * 86400))
+        self.assertEqual(len(self.daemon.chat.history("cto")), 2)
+
+    def test_an_empty_quiet_list_sends_nothing_and_a_ticket_waiting_on_jay_is_left_out(self):
+        self._chat_on()
+        self.assertIsNone(self.daemon.weekly_quiet_list(now=pipeline_mod._now() + 30 * 86400))   # no tickets
+        self.ticket("INBOX")
+        self.step("ask", {"questions": ["Which?"]})                                              # waiting on Jay
+        self.assertIsNone(self.daemon.weekly_quiet_list(now=pipeline_mod._now() + 30 * 86400))
+        self.assertEqual(self.daemon.chat.history("cto"), [])
+
+    def test_a_push_to_the_pr_of_a_ticket_outside_the_pipeline_is_progress_for_the_quiet_list(self):
+        """CC-085 review: the GitHub poll must record PR head moves for tickets that are not in the pipeline too."""
+        from unittest import mock
+        from .helpers import pr
+        t, _ = self.tickets.create("samvision", "plain ticket", number=91, status="IN_PROGRESS")
+        key = t["key"]
+        self.assertFalse(self.daemon.pipeline.participating(key))
+        t0 = pipeline_mod._now()
+
+        def push(head, at):
+            self.gh.data["samvision"]["prs"] = [dict(pr(191, f"{key}: x"), headRefName=f"{key}-f", headRefOid=head)]
+            with mock.patch.object(pipeline_mod, "_now", return_value=at):
+                self.poll()
+        push("a1" * 20, t0)
+        push("b2" * 20, t0 + 4 * 86400)                                               # a push on day 4
+        quiet = lambda at: [x["key"] for x in self.daemon.pipeline.quiet_tickets(now=at)]  # noqa: E731
+        self.assertEqual(quiet(t0 + 6 * 86400), [])                                    # 2 quiet days only
+        self.assertEqual(quiet(t0 + 9.5 * 86400), [key])
 
     def test_the_task_check_sends_one_fixed_message_to_the_idle_coordinator(self):
         self.ticket("INBOX")

@@ -531,6 +531,79 @@ class Stale(Base):
         self.assertEqual(self.pl.sweep_stale(now=pipeline._now() + 49 * 3600), [])
 
 
+class StillNeeded(Base):
+    """CC-085: the weekly quiet-ticket list. The pipeline side only reads; the daemon sends it (test_control_room)."""
+    DAY = 86400
+
+    def quiet(self, at):
+        return [t["key"] for t in self.pl.quiet_tickets(now=at)]
+
+    def test_the_five_day_cutoff(self):
+        k = self.sized()
+        t0 = pipeline._now()
+        self.assertEqual(self.quiet(t0 + 4.9 * self.DAY), [])
+        self.assertEqual(self.quiet(t0 + 5.1 * self.DAY), [k])
+        self.assertEqual(self.pl.quiet_tickets(now=t0 + 5.1 * self.DAY)[0]["days"], 5)
+
+    def test_a_step_is_progress_and_a_ticket_waiting_on_jay_is_skipped(self):
+        k = self.sized()
+        t0 = pipeline._now()
+        with mock.patch.object(pipeline, "_now", return_value=t0 + 4 * self.DAY):
+            self.pl.role(k, "planner", "agent:planner", session="i")             # a pipeline step at day 4
+        self.assertEqual(self.quiet(t0 + 8 * self.DAY), [])                       # only 4 quiet days since
+        self.assertEqual(self.quiet(t0 + 9.5 * self.DAY), [k])
+        self.pl.ask(k, ["Which format?"], "agent:coordinator")                    # waiting on Jay: skipped
+        self.assertEqual(self.quiet(t0 + 30 * self.DAY), [])
+
+    def test_a_pr_push_and_a_jay_answer_are_progress(self):
+        k = self.sized()
+        t0 = pipeline._now()
+        with mock.patch.object(pipeline, "_now", return_value=t0 + 4 * self.DAY):
+            self.pl.note_pr_head(k, "o/r#1", HEAD)
+            self.pl.note_pr_head(k, "o/r#1", HEAD)                                # same head: recorded once
+        with mock.patch.object(pipeline, "_now", return_value=t0 + 8 * self.DAY):
+            self.pl.note_pr_head(k, "o/r#1", HEAD2)                               # a push
+        n = self.ts.db.execute("SELECT COUNT(*) FROM ticket_events WHERE kind='pipeline.pr_head'").fetchone()[0]
+        self.assertEqual(n, 2)
+        self.assertEqual(self.quiet(t0 + 12 * self.DAY), [])
+        self.assertEqual(self.quiet(t0 + 13.5 * self.DAY), [k])
+        self.pl.ask(k, ["Which format?"], "agent:coordinator")
+        qid = self.pl.work(k)["questions"][-1]["id"]
+        with mock.patch.object(pipeline, "_now", return_value=t0 + 14 * self.DAY):
+            self.pl.answer(k, [{"id": qid, "answer": "CSV"}], "jay")             # Jay's answer
+        self.assertEqual(self.quiet(t0 + 18 * self.DAY), [])
+
+    def test_backlog_tickets_are_listed_and_reading_changes_nothing(self):
+        """C1 says every open ticket, so INBOX counts. Listing must write no question, hold, gate or event."""
+        k = self.ticket()                                                        # INBOX
+        k2 = self.sized("small")
+        before = [self.ts.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                  for t in ("ticket_questions", "ticket_events")]
+        self.assertEqual(set(self.quiet(pipeline._now() + 30 * self.DAY)), {k, k2})
+        after = [self.ts.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                 for t in ("ticket_questions", "ticket_events")]
+        self.assertEqual(before, after)
+        self.assertEqual(self.pl.held(k2), [])
+        self.assertEqual(self.pl.start(k2, f"{k2}-x", WT + k2, "agent:coordinator")[0]["status"], "IN_PROGRESS")
+
+    def test_a_cancelled_ticket_is_not_listed(self):
+        k = self.sized()
+        self.ts.update(k, {"status": "CANCELLED"}, "jay")
+        self.assertEqual(self.quiet(pipeline._now() + 30 * self.DAY), [])
+
+    def test_only_a_linked_pr_is_progress_not_a_url_or_legacy_id(self):
+        k = self.sized()
+        t0 = pipeline._now()
+        with mock.patch("ccd.tasks._now", return_value=t0 + 4 * self.DAY):
+            self.ts.link(k, "url", "url", "https://example.com/x", "https://example.com/x", None, "jay")
+            self.ts.link(k, "legacy", "legacy_id", "OLD-1", None, None, "jay")
+        self.assertEqual(self.quiet(t0 + 5.5 * self.DAY), [k])                    # still quiet
+        k2 = self.sized()
+        with mock.patch("ccd.tasks._now", return_value=t0 + 4 * self.DAY):
+            self.ts.link(k2, "github", "pr", "o/r#9", None, None, "jay")
+        self.assertNotIn(k2, self.quiet(t0 + 5.5 * self.DAY))                     # a PR link counts
+
+
 class Shapes(Base):
     def test_the_flow_object_has_nine_stages_and_a_holder(self):
         k = self.planned()

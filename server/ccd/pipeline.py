@@ -128,6 +128,10 @@ def policy(ticket, project_key=None):
 CLOSED_STATUSES = ("DONE", "DENIED", "CANCELLED")
 HOLDING_GATES = ("plan", "failure")       # jay_first: Jay's decisions that hold a ticket (questions too)
 STALE_OPTIONS = ("Cancel it", "Keep it")   # the task check's question; "Cancel it" cancels the ticket
+# CC-085: the weekly "Still needed?" list. A ticket question was tried first and rejected: it became a start gate, hid
+# real plan/failure holds and tangled with answer delivery. The list is a Messages line only and writes no question.
+SWEEP_QUIET = 5 * 86400    # no recorded progress for this long
+SWEEP_EVERY = 7 * 86400    # one list per week, kept in the daemon's store so a restart does not resend it
 # The ten stages Jay sees (spec §24). The canonical statuses stay as they are underneath.
 VISIBLE_STAGES = ("Planning", "Implementing", "Reviewing", "UI Testing", "Verifying", "Ready to Merge", "Deploying",
                   "Needs Jay", "Blocked", "Closed")
@@ -1968,3 +1972,45 @@ class Pipeline:
                 return {}, {}, ([] if first else [(flow_mod.STALE_KIND, "no step recorded for 48 hours", {})])
             out.append(self._tx(key, "system:automation", fn))
         return out
+
+    def note_pr_head(self, key, ref, head):
+        """Record a linked PR's head the first time ccd sees it and whenever it moves, so a push counts as progress
+        for the weekly sweep (CC-085). Nothing else persists a push before review. No event when nothing moved."""
+        if not head:
+            return
+        last = self.db.execute(
+            "SELECT e.data FROM ticket_events e JOIN tickets t ON t.id=e.ticket_id WHERE t.key=? AND "
+            "e.kind='pipeline.pr_head' ORDER BY e.id DESC", (str(key).upper(),)).fetchall()
+        for (data,) in last:
+            d = json.loads(data or "{}")
+            if d.get("ref") == ref:
+                if d.get("head") == head:
+                    return
+                break
+        self._tx(key, "system:automation",
+                 lambda tid, t, w, at: ({}, {}, [("pipeline.pr_head", f"PR {ref} head {head[:7]}",
+                                                  {"ref": ref, "head": head})]))
+
+    def quiet_tickets(self, now=None):
+        """CC-085: open tickets with no recorded progress in 5 days, as [{key, title, status, days}], oldest first.
+        Read-only: it writes no question, hold, gate or event, so a reminder can never block a start or hide a gate.
+        Progress is any pipeline step, handoff, answer, status change, linked PR or PR push. A ticket already waiting
+        on a Jay question is skipped (he is already being asked). INBOX and PROPOSED are open too (c1)."""
+        now = _now() if now is None else now
+        out = []
+        for key, tid, title, status, created in self.db.execute(
+                "SELECT key, id, title, status, created_at FROM tickets WHERE archived=0 AND status IN ('INBOX',"
+                "'PROPOSED','RESEARCHING','READY_TO_IMPLEMENT','IN_PROGRESS','IN_REVIEW','READY_TO_MERGE','VERIFYING',"
+                "'BLOCKED') ORDER BY id").fetchall():
+            if self.db.execute("SELECT 1 FROM ticket_questions WHERE ticket_id=? AND answered_at IS NULL",
+                               (tid,)).fetchone():
+                continue
+            last = self.db.execute(
+                "SELECT MAX(at) FROM ticket_events WHERE ticket_id=? AND kind != ? AND "
+                # Only a linked PR is progress: a URL, commit or imported legacy ID says nothing about work (CC-085).
+                "(kind LIKE 'pipeline.%' OR field = 'status' OR (kind = 'linked' AND field = 'pr'))",
+                (tid, flow_mod.STALE_KIND)).fetchone()[0]
+            since = max(last or 0, created or 0)
+            if now - since >= SWEEP_QUIET:
+                out.append({"key": key, "title": title, "status": status, "days": int((now - since) // 86400)})
+        return sorted(out, key=lambda t: -t["days"])

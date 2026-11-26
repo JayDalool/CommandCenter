@@ -374,6 +374,15 @@ ticket in stages 2-6 with no pipeline step or status move for 48 hours (and not 
 ccd records one `pipeline.flow_stale` event per quiet spell (the briefing shows it as "gone quiet for 48 hours"); the
 next step clears it. Until ccd has made its first stale mark, marks are made without events, so switching the flow on does not flood the briefing with old tickets.
 
+**Weekly "Still needed?" list (CC-085).** At most once a week ccd sends Jay one Messages line (author `agent:cto`, in the
+`cto` conversation, event `chat.reply`, so the notifier also sends it as a Slack DM when Slack is on) listing every open
+ticket (INBOX to VERIFYING, BLOCKED) with no recorded progress for 5 days, each with its ticket-page link; there Jay
+finishes it (nothing to do), moves it to backlog (status) or closes it (the existing stale proposal, which asks him the
+usual Cancel it / Keep it). Progress is any `pipeline.*` event (steps, handoffs, answers, a PR head change recorded as
+`pipeline.pr_head` for every linked ticket), a status change or a linked PR. A ticket waiting on a Jay question is left
+out. The send time is kept in the store (`sweep:quiet_list_at`), so a ccd restart does not resend it; an empty list sends
+nothing. It writes no ticket question, hold, gate or answer, and adds no route. Nothing is cancelled automatically.
+
 A sized ticket is in the pipeline from the moment it is sized (even in INBOX): like a ticket with a plan, its status, labels, type, flags and archive change only through pipeline steps or by Jay with Developer Unlock, and GitHub's review decision never promotes it. Jay's `criteria` edits past investigation, and lowering a risky size, also need Developer Unlock (`X-CCD-Developer`).
 
 `GET /api/tasks/{key}/work` adds:

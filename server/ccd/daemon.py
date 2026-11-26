@@ -1832,6 +1832,37 @@ class Daemon(LeadChat, HqDaemon):
             return
         for r in self.pipeline.sweep_stale():
             self._pipeline_result(*r)
+        self.weekly_quiet_list()
+
+    def weekly_quiet_list(self, now=None):
+        """CC-085: at most once a week, one Messages line (and so the Slack DM, through the notifier's chat.reply relay)
+        listing every open ticket with no progress in 5 days. When it was last sent lives in the store, so a ccd restart
+        does not send it twice. Nothing is sent for an empty list, and the list is not written to any ticket: no question,
+        hold, gate or answer is created. Nothing is cancelled; "close" is the existing stale proposal."""
+        if self.pipeline is None or self.chat is None:
+            return None
+        now = _now() if now is None else now
+        last = self.store.get("sweep:quiet_list_at")[0]
+        if isinstance(last, (int, float)) and now - last < pipeline_mod.SWEEP_EVERY:
+            return None
+        quiet = self.pipeline.quiet_tickets(now)
+        if not quiet:
+            return None
+        base = str(((self.notifier.conf if self.notifier is not None else {}) or {}).get("link_base")
+                   or "http://localhost:7777").rstrip("/")
+        lines = [f"Still needed? {len(quiet)} open ticket{'s' if len(quiet) != 1 else ''} with no progress in 5 days. "
+                 "On each ticket page: finish it (keep going), move it to backlog (status), or close it "
+                 "(propose it as stale; only you cancel)."]
+        lines += [f"{t['key']} ({t['status']}, {t['days']} days): {t['title']} {base}/#/tasks/{t['key']}"
+                  for t in quiet[:20]]
+        if len(quiet) > 20:
+            lines.append(f"and {len(quiet) - 20} more")
+        # Stored before sending so a failed send is not retried every minute; the next list is a week away.
+        self.store.put("sweep:quiet_list_at", now)
+        msg = self._chat_add("cto", "lead", "agent:cto", "\n".join(lines), via="cli")
+        self._event("chat", "chat.reply", f"quiet-ticket list sent in Messages ({len(quiet)} tickets)",
+                    data={"conversation": "cto", "messageId": msg["id"], "author": "agent:cto", "files": 0})
+        return msg
 
     def task_session(self, key):
         """The ticket's task Claude session, from the one resolver (coordid.task_session). A pane that is any
@@ -2928,6 +2959,9 @@ class Daemon(LeadChat, HqDaemon):
                                    else f"PR #{n} new head {sha}" if self.pipeline.review_head(k)
                                    else f"PR #{n} is open")
                             self._auto(k, frm, "IN_REVIEW", why)
+                        # A push is progress for every ticket, in the pipeline or not: the weekly sweep asks
+                        # both kinds (CC-085).
+                        self.pipeline.note_pr_head(k, ref, pr_state["head"])
                         if self.pipeline.participating(k):
                             # A pipeline ticket: only its recorded review, tied to this PR's head, decides.
                             self._pipeline_result(*self.pipeline.sync_pr(k, pr_state))
