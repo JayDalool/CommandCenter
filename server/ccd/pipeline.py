@@ -1090,6 +1090,55 @@ class Pipeline:
             v.sort(key=lambda r: (r["key"].rsplit("-", 1)[0], int(r["key"].rsplit("-", 1)[-1])))
         return out
 
+    def release_facts(self, project, keys, now, db=None):
+        """Read-only (CC-081, the automatic-release dry run): items {key: {status, env, requested, result, urgent,
+        verified, heldUntil, deployedAt}} for the `keys` found in `project`, and lastPass / lastFail, the newest live
+        deploy recorded pass / fail on any of its tickets. One read of ticket_work, on `db` (the dry run's own
+        connection, in its worker thread) or this store's. Changes nothing."""
+        want = set(keys)
+        items, last = {}, {"pass": None, "fail": None}
+        for key, status, merge, deploy, verification in (db or self.db).execute(
+                "SELECT t.key, t.status, w.merge, w.deploy, w.verification FROM tickets t "
+                "LEFT JOIN ticket_work w ON w.ticket_id=t.id WHERE t.project=?", (project,)):
+            d = json.loads(deploy) if deploy else {}
+            if d.get("env") == "live" and d.get("result") in last and d.get("deployedAt"):
+                last[d["result"]] = max(last[d["result"]] or 0, d["deployedAt"])
+            if key not in want:
+                continue
+            m = json.loads(merge) if merge else {}
+            held = None
+            if d.get("env") == "live" and d.get("requestedAt") and not d.get("result") and not d.get("urgent"):
+                held = self._held({"project": project}, {"merge": m, "deploy": d}, now)
+            items[key] = {"status": status, "env": d.get("env"), "requested": bool(d.get("requestedAt")),
+                          "result": d.get("result"), "urgent": bool(d.get("urgent")),
+                          "verified": (json.loads(verification) if verification else {}).get("result") == "pass",
+                          "heldUntil": held, "deployedAt": d.get("deployedAt")}
+        return {"items": items, "lastPass": last["pass"], "lastFail": last["fail"]}
+
+    @staticmethod
+    def release_dry_run(db, project, key, text, data):
+        """CC-081: one append-only `release.dry_run` event (actor system:auto-release) on `db`, the dry run's own
+        connection, and nothing else: no status, gate, work row or updated_at. The kind is not pipeline.*, so
+        idle/stale, Slack, the daily counts and the shadow engine never read it as a step (security review
+        condition 3). Written only for a ticket of `project`, and at most once per ticket, window and phase, so a
+        retry after a partial write never duplicates it. True when it wrote."""
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            row = db.execute("SELECT id FROM tickets WHERE key=? AND project=?", (key, project)).fetchone()
+            done = row is None or db.execute(
+                "SELECT 1 FROM ticket_events WHERE ticket_id=? AND kind='release.dry_run' "
+                "AND json_extract(data, '$.window')=? AND json_extract(data, '$.phase')=? LIMIT 1",
+                (row[0], data["window"], data["phase"])).fetchone() is not None
+            if not done:
+                db.execute("INSERT INTO ticket_events(ticket_id, at, actor, kind, trigger, data) VALUES (?,?,?,?,?,?)",
+                           (row[0], _now(), "system:auto-release", "release.dry_run", str(text)[:300],
+                            json.dumps(data)))
+            db.execute("COMMIT")
+        except BaseException:
+            db.execute("ROLLBACK")
+            raise
+        return not done
+
     def _held(self, t, w, at):
         """The unix start of the release window this ticket's live deploy waits for, or None."""
         if self.releases is None:

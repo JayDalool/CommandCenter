@@ -135,6 +135,29 @@ restarted. The reviewer's "fresh review" is self-reported: ccd checks the record
 the exact head, not who really read the diff. Details and the missing separation (a second GitHub identity or
 branch protection): ADR 0007.
 
+**Automatic release, slice 1: a dry run that only records (CC-081, ADR 0010 proposed).** `ccd/autorelease.py`
+records, for GYST and Command Center only (a constant, `ALLOWED`), what each weekly release window would ship (the
+emailed CC-078 manifest), whether it would be eligible and why not, and afterwards what was actually deployed. It
+deploys, restarts, approves, rolls back and changes no gate or ticket status, whatever the config says: the release
+stays Jay's Go Live press. Switches: `auto_release` in `config.json`, read at start, default `"off"`; only the exact
+string `"dry_run"` turns it on, and `"on"`, `true` or anything else reads as off (logged). While
+`~/command-center/state/auto-release.stop` exists, or a stat of it fails with anything but "no such file", it writes
+nothing. What it may run: `git -C <Command Center checkout>` `reflog show`, `rev-parse --verify` and `log` (list argv,
+5 s timeout, never a fetch), only with revs that match `^[0-9a-f]{7,40}$` (a `-dirty` live build is "cannot tell
+live"). The release target is `origin/main` as the checkout's reflog had it when the digest was delivered, never the
+ref as it is now. What it reads: the CC-078 digest ledger, CC-063's `~/command-center/deploys/<project>/releases.jsonl`
+and `rehearsals.jsonl` (opened non-blocking, regular files only; no healthy release recorded is a blocker, never
+healthy), the policy profile's `capabilities` and the tickets' deploy records. What it writes: the kv ledger
+`auto_release:<project>` in `ccd.db` and append-only ticket events `release.dry_run` (actor `system:auto-release`,
+at most one per ticket, window and phase, only on that project's tickets) in tasks.db, with no Slack post,
+notification or daemon event. Both hold ticket keys, short shas, fixed reason phrases and timestamps only: commit
+subjects are read to find ticket keys and dropped, ticket titles are never read, who deployed is not copied, and a
+manifest key not shaped like the project's own is counted, never stored. All of it runs in a worker thread on its
+own SQLite connections (2 s busy timeout), and the loop waits at most 30 s for it. A failed or inconclusive release
+holds the project in the ledger; deleting or appending to the agent-writable logs does not clear it, and this slice
+has no clear at all (Jay's clear is slice 3). As with auto-merge, agents run as the same user and could edit
+`config.json`, the stop file or the ledger: these are written rules plus review, which is acceptable only because
+nothing here can act. Runbook: `docs/runbooks/auto-release.md`.
 
 ## P4B additions
 

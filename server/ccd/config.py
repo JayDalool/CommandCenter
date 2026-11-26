@@ -64,6 +64,10 @@ DEFAULTS = {
     # ccd may merge low-risk reviewed PRs itself (CC-025). Off until Jay sets it true; read at start.
     # A project must also say pipeline merge "low-risk" in ccd/registry.py.
     "auto_merge": False,
+    # Automatic release, slice 1 (CC-081, ccd/autorelease.py): "off" or "dry_run", read at start. Only the exact
+    # string "dry_run" records what a release window would ship; "on" and anything else read as off. It deploys,
+    # restarts, approves and rolls back nothing, whatever the value. Off until Jay sets it.
+    "auto_release": "off",
     # Onboarding groundwork (ccd/onboarding.py; D-024 proposed): agent registration records, drafts, validation,
     # read-only APIs and the shadow budget report. Off until Jay sets it true; read at start. Records only: it grants
     # nothing, issues no credential and starts no agent.
