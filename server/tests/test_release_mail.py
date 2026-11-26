@@ -1034,6 +1034,23 @@ class Identity(PullBase):
         self.assertEqual(self.thread_replies(post["ts"]), [])
         self.assert_nothing_changed(ledger)
 
+    def test_the_notice_waits_for_quiet_hours_to_end_and_goes_once(self):
+        post = self.listed()
+        n0 = len(self.slack_posts)
+        self.t[0] = at(18, 23)                                      # Wed 23:00: quiet hours
+        self.say(self.g12, thread=post["ts"], user="U0OTHER01")
+        self.say(self.g12, thread=post["ts"], user="U0OTHER02")
+        self.tick(at(18, 23, 30))
+        self.tick(at(19, 6, 59))
+        self.assertEqual(len(self.slack_posts), n0)                 # nothing pings Jay in quiet hours
+        self.tick(at(19, 7))
+        new = self.slack_posts[n0:]
+        self.assertEqual([(p["channel"], p["thread"], p["text"]) for p in new],
+                         [("DJAY", None, f"A message in the {GN} release thread was not from you; nothing changed.")])
+        self.tick(at(19, 7, 1))
+        self.say(self.g12, thread=post["ts"], user="U0OTHER01")    # within 10 min of the notice
+        self.assertEqual(len(self.slack_posts), n0 + 1)
+
     def test_a5_no_sender_or_text_is_kept_jays_marks_survive_and_another_channel_is_ignored(self):
         post = self.listed()
         self.n.to_lead = mock.AsyncMock(return_value={"did": "to_lead", "project": "cto"})

@@ -98,7 +98,7 @@ main and still ships until reverted; a pull never blocks Go Live. Any other text
 merge, "add …") does nothing and gets a why: Slack never adds an item. A pull, or an urgent live deploy Jay approved
 after the digest, sends one correction email by the digest's never-twice rules. The one exception to "anything not from
 Jay is dropped": a plain human message by someone else in a release list's thread gets Jay one fixed DM ("not from
-you; nothing changed"), at most once per thread per 10 min; it records no sender, text or length, uses its own
+you; nothing changed"), at most once per thread per 10 min and held until quiet hours end; it records no sender, text or length, uses its own
 in-memory dedupe, and changes nothing.
 
 Never: the GitHub token, Claude credentials, the ntfy URL or any other config

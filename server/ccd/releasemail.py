@@ -165,6 +165,7 @@ class ReleaseMail:
         # The "not from you" notice (CC-088): in memory only, apart from Jay's seen_events so a flood of foreign
         # messages cannot evict his marks, and holding no sender, text or length (tech review A5).
         self._foreign_at = {}           # "channel:thread" -> when the notice was last sent
+        self._foreign_held = {}         # "channel:thread" -> project, notices waiting for quiet hours to end
         self._foreign_seen = collections.deque(maxlen=200)
 
     # ----- ledger -----
@@ -479,6 +480,7 @@ class ReleaseMail:
         """A message that is not Jay's (from_jay said no). The one exception to dropping it unseen: a plain human
         message in a release list's thread gets Jay one fixed DM, at most once per thread per FOREIGN_GAP. It reads
         and changes nothing else, and records no sender, text or length anywhere (tech review A5)."""
+        from . import notify    # in_quiet lives there; imported late because notify imports this module
         n = self.n
         if ev.get("type") != "message" or ev.get("subtype") or ev.get("bot_id") \
                 or not isinstance(ev.get("user"), str) or not ev.get("user"):
@@ -498,11 +500,31 @@ class ReleaseMail:
         now, where = n.clock(), f"{cid}:{thread}"
         if now < self._foreign_at.get(where, now - FOREIGN_GAP) + FOREIGN_GAP:
             return
+        if notify.in_quiet(n.settings, now):
+            # Nothing pings Jay in quiet hours (lead, CC-088): one notice per thread waits for flush_foreign. In
+            # memory only, like the rest of this notice: a restart in quiet hours drops it.
+            self._foreign_held[where] = item.get("project")
+            return
+        await self._foreign_notice(where, item.get("project"), now)
+
+    async def _foreign_notice(self, where, project, now):
+        n = self.n
         self._foreign_at[where] = now
-        name = n.name(item.get("project"))
+        name = n.name(project)
         n.d._event("notify", "release.foreign_reply", f"A message in the {name} release thread was not Jay's; "
-                   "nothing changed", project=item.get("project"), data={"kind": "release.foreign_reply"})
+                   "nothing changed", project=project, data={"kind": "release.foreign_reply"})
         await n.post("dm", f"A message in the {name} release thread was not from you; nothing changed.")
+
+    async def flush_foreign(self):
+        """Send the "not from you" notices held during quiet hours, once they end (Notifier.tick)."""
+        from . import notify
+        n = self.n
+        now = n.clock()
+        if not self._foreign_held or notify.in_quiet(n.settings, now):
+            return
+        held, self._foreign_held = self._foreign_held, {}
+        for where, project in held.items():
+            await self._foreign_notice(where, project, now)
 
     def _deploy_started(self, key):
         """Whether the ticket's live deploy is already approved or has a result: pulling it would be too late."""

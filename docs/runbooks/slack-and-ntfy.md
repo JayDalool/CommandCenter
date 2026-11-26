@@ -195,4 +195,4 @@ digest. Ledger fields on the digest's row:
 | `corrections` | `[{n, keys, urgent, state, uncertain, attempts, at, sentAt, messageId, error}]`, with the digest's states and retry rules; a failure raises `mail:<project>:<window>:c<n>` |
 
 A message from anyone else in a release list's thread changes nothing; you get one DM saying so (at most one per thread
-every 10 minutes).
+every 10 minutes, held until quiet hours end).

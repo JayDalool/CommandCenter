@@ -1564,6 +1564,7 @@ class Notifier:
                 await self.check_needs()
                 if self.settings["slack"]:
                     await self.summaries()
+                    await self.mail.flush_foreign()     # CC-088: "not from you" notices held in quiet hours
             except Exception as e:  # noqa: BLE001 — notifications never take ccd down
                 self._fail("notify tick", repr(e))
         if self.settings["releaseMail"]:
