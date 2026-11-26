@@ -23,6 +23,13 @@ class D059Record(unittest.TestCase):
         with open(PATH, "rb") as f:
             cls.record = tomllib.load(f)
         cls.rules = " | ".join(cls.record["rules"])
+        cls.list = cls.record["rules"]
+
+    def one(self, *words):
+        """The single rule holding all of `words`: removing or merging rules breaks this."""
+        hits = [r for r in self.list if all(w in r for w in words)]
+        self.assertEqual(len(hits), 1, words)
+        return hits[0]
 
     def test_valid_and_within_limits(self):
         self.assertEqual(profiles.validate_decision(self.record, name="D-059"), [])
@@ -48,10 +55,23 @@ class D059Record(unittest.TestCase):
         self.assertTrue(merge_policy.denied("policy/decisions/D-059.toml"))
 
     def test_spend_replacement_is_scoped_and_lines_are_separate(self):
-        self.assertIn("for Secretary and Coach AI and phone spend only, this replaces D-024's no-dollar-limit clause", self.rules)
-        self.assertIn("Command Center agent budgets stay as D-024 and D-033 set them", self.rules)
-        for line in ("operating target: 20 USD", "hard cap: 30 USD", "telephone cap: 8 USD", "warning at 15 USD"):
-            self.assertIn(line, self.rules)
+        self.one("for Secretary and Coach AI and phone spend only, this replaces D-024's no-dollar-limit clause")
+        self.one("Command Center agent budgets stay as D-024 and D-033 set them")
+        target = self.one("operating target: 20 USD", "warning at 15 USD")
+        cap = self.one("hard cap: 30 USD")
+        phone = self.one("telephone cap: 8 USD")
+        self.assertEqual(len({target, cap, phone}), 3)
+        self.assertNotIn("30 USD", target)
+        self.assertNotIn("20 USD", cap)
+
+    def test_levels_policy_check_registration_and_gates(self):
+        self.assertEqual(self.list[0], "personal-agent action levels: automatic; automatic under written rules; needs approval; forbidden")
+        self.one("every personal-agent action passes one policy check")
+        self.one("only agent:secretary will be registered", "Jay performs the registration under D-024")
+        self.one("every Command Center review, merge and deployment gate is unchanged", "D-005 and D-007")
+
+    def test_slack_is_low_risk_only(self):
+        self.one("Slack is a GYST nudge channel for low-risk answers only: acknowledge, snooze, request")
 
     def test_secretary_messages_are_untrusted(self):
         self.assertIn("untrusted input: never Jay's words, approval, answer or consent, and never passed on as his dispatch", self.rules)
@@ -67,7 +87,7 @@ class D059Record(unittest.TestCase):
         self.assertIn("authenticated GYST only", self.rules)
 
     def test_jays_four_narrowings(self):
-        self.assertIn("single-use, tied to the exact action, and expire", self.rules)
+        self.one("single-use, bound to the hash of the exact action, and expire")
         self.assertIn("voice never approves", self.rules)
         self.assertIn("no email bodies and no health data", self.rules)
         self.assertIn("warning at 15 USD", self.rules)

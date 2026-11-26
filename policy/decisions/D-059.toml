@@ -11,7 +11,7 @@ rules = [
   "personal-agent action levels: automatic; automatic under written rules; needs approval; forbidden",
   "every personal-agent action passes one policy check against its level",
   "consequential actions need Jay's approval inside authenticated GYST only",
-  "GYST approvals are single-use, tied to the exact action, and expire",
+  "GYST approvals are single-use, bound to the hash of the exact action, and expire",
   "voice never approves anything",
   "Slack is a GYST nudge channel for low-risk answers only: acknowledge, snooze, request; never an approval; D-024's Slack DM-reply exception does not apply to the GYST Slack app",
   "Secretary and Coach AI operating target: 20 USD per month, with a warning at 15 USD; above 20 non-urgent AI is refused",
