@@ -2,7 +2,7 @@
 schema = 1
 project = "gyst"
 mode = "autonomous_product"
-decisions = ["D-001", "D-005", "D-006", "D-008"]
+decisions = ["D-001", "D-005", "D-006", "D-008", "D-010"]
 learning = "contextual"
 
 [enforced]
@@ -10,6 +10,10 @@ merge = "owner"
 night = "normal"
 paused = ""
 ui_fix = "ask"
+# Approval tiers (CC-082, D-010). Tier 1: a fix, polish, tests or a small change outside these paths. Tier 2 (Jay's plan gate): a new screen or feature, a migration, anything customers see,
+# or a plan touching tier2_paths. Unclear = Tier 2. Must equal ccd/registry.py.
+plan_tiers = "on"
+tier2_paths = ["**/migrations/**", ".claude/**", "**/models/**", "**/schema*", "**/auth/**", "**/crypto/**"]
 
 [target]
 plan_approval = { required_for = ["risk_high"], package = "standard" }

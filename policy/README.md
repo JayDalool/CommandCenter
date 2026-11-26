@@ -26,6 +26,12 @@ Only Jay. "No agent may expand its own authority": `policy/**` is in the auto-me
 (`ccd/merge_policy.py`), every load records each file's SHA-256 so a change is visible, and a change to a profile
 or decision is a self-protection item that needs Jay's approval (D-001 follow-up, 2026-10-21).
 
+## Approval tiers (D-010)
+
+`[enforced]` may also carry `plan_tiers = "on"|"off"` and `tier2_paths` (globs). Only GYST and Command Center set them;
+the other profiles do not, so SamVision, MyFamilyExpenses and GauzeMate are unchanged. They must equal `ccd/registry.py`
+like every `[enforced]` key, so changing the Tier 2 list always touches `policy/**`, itself Tier 2.
+
 A decision is never edited to mean something else: write a new `D-NNN` with `supersedes = "D-OLD"`.
 
 ## Format

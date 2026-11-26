@@ -1,0 +1,16 @@
+id = "D-010"
+schema = 1
+date = "2026-11-26"
+decided_by = "jay"
+source = "Jay, CC-082 questions 200, 204 and 218"
+projects = ["gyst", "commandcenter"]
+question = "Which GYST and Command Center tickets need Jay's plan approval, and which can go straight to build?"
+decision = "Two tiers, recorded by the technical reviewer with a reason. Tier 2 opens Jay's plan gate: a new screen or feature, a database migration, anything customers see, the D-007 rails (autonomy.py, broker.py, security.py, profiles.py, merge_policy.py, policy/**, agent permissions), and also .github/** (CI), AGENTS.md, CLAUDE.md and GYST's D-005 data, auth and crypto paths. Everything else (a fix, polish, tests or a small change, including the rest of server/ccd, web/app/src and scripts) is Tier 1 and goes to build without that gate. Small tickets are Tier 1. A tier that is unclear is Tier 2. A tier never lowers a size or closes a gate that labels, flags, type or size open."
+rationale = "Fewer approvals for routine work without touching what Jay must always decide. D-005 and D-007 stand unchanged: no rail is weakened and no agent's authority grows. Jay still merges every Tier 1 and Tier 2 change until CC-080 ships, and approves every deploy."
+rules = [
+  "Tier 2 = new screen or feature, migration, customer-facing, D-007 rails, agent permissions, .github/**, AGENTS.md, CLAUDE.md, GYST D-005 paths",
+  "Tier 1 = fix, polish, tests, small change elsewhere; small tickets are Tier 1; unclear = Tier 2",
+  "Tier 2 opens the plan gate only: size, code review, user check, merge and deploy are unchanged",
+  "the Tier 2 path list lives in ccd/registry.py and in [enforced] tier2_paths; changing it touches policy/** and so is Tier 2",
+]
+reconsider = "when CC-080 ships or Jay wants a different Tier 2 list"

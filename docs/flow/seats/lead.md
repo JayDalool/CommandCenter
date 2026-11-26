@@ -56,7 +56,8 @@ Tell Jay only when the ticket is ready to merge, or blocked after round 2. Not a
 Small only when a single person could check it in a minute and it touches one file plus its test. A bundle of small
 related items is also small (Jay to confirm) when every item would be small alone, all are in one area, none touches a
 protected or sensitive path, and it changes at most 3 files plus their tests; otherwise standard. When unsure,
-standard. Anything in the risky list in FLOW.md is risky; do not argue it down.
+standard. Anything in the risky list in FLOW.md is risky; do not argue it down. On GYST and Command Center a ticket with
+a Tier 2 trigger (FLOW.md, Approval tiers) is never small: size it standard or risky so the technical reviewer records its tier.
 
 ## Models
 

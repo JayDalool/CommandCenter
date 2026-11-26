@@ -102,6 +102,8 @@ ENFORCED = {
     "paused": _text(),
     "ui_fix": _enum("ask", "auto"),
 }
+# Optional: only the projects with approval tiers (CC-082) carry them, so SamVision, MFE and GauzeMate stay as they are.
+ENFORCED_OPTIONAL = {"plan_tiers": _enum("on", "off"), "tier2_paths": _strings(GLOB_RE)}
 TARGET = {
     # Metering only (PR 7): ccd shows month-to-date usage against these; nothing is stopped when they are passed.
     "budget": {"monthly_usd": _money(0, 100000), "monthly_tokens": _int(0, 10 ** 12)},
@@ -228,7 +230,7 @@ def validate_profile(p, decisions=None, name=None, registered=True):
             scope = rec.get("projects") if isinstance(rec.get("projects"), list) else []
             if not ("all" in scope or key in scope or (p["mode"] == "restricted" and "restricted" in scope)):
                 errors.append(f"decisions: {d} does not apply to {key}")
-    _check_table("enforced", p["enforced"], ENFORCED, errors, tuple(ENFORCED))
+    _check_table("enforced", p["enforced"], dict(ENFORCED, **ENFORCED_OPTIONAL), errors, tuple(ENFORCED))
     _check_table("target", p["target"], TARGET, errors)
     _check_table("capabilities", p["capabilities"], {c: _bool for c in CAPABILITIES}, errors, CAPABILITIES)
     if errors:
@@ -270,9 +272,13 @@ def enforced_now(key):
     """What the registry makes Command Center do today, in the shape of a profile's [enforced] section."""
     pol = registry.pipeline_of(key)
     # The registry's raw value: a value the pipeline does not know (it treats it as "owner") still shows as drift.
-    return {"merge": pol.get("merge", "owner"),
-            "night": registry.night_mode(key), "paused": registry.paused(key) or "",
-            "ui_fix": registry.ui_fix(key)}
+    now = {"merge": pol.get("merge", "owner"),
+           "night": registry.night_mode(key), "paused": registry.paused(key) or "",
+           "ui_fix": registry.ui_fix(key)}
+    if "plan_tiers" in pol:     # CC-082: only a project that has tiers shows them
+        now["plan_tiers"] = "on" if pol["plan_tiers"] else "off"
+        now["tier2_paths"] = list(pol.get("tier2_paths") or ())
+    return now
 
 
 def drift(key, profile):
@@ -280,8 +286,13 @@ def drift(key, profile):
     if not profile or not isinstance(profile.get("enforced"), dict):
         return []
     now = enforced_now(key)
-    return [{"field": f, "profile": profile["enforced"].get(f), "registry": v}
-            for f, v in now.items() if profile["enforced"].get(f) != v]
+    out = [{"field": f, "profile": profile["enforced"].get(f), "registry": v}
+           for f, v in now.items() if profile["enforced"].get(f) != v]
+    # An optional key the profile sets but the registry does not: also drift, so the Tier 2 list can only change
+    # together with policy/** (itself Tier 2).
+    out += [{"field": f, "profile": profile["enforced"][f], "registry": None}
+            for f in ENFORCED_OPTIONAL if f in profile["enforced"] and f not in now]
+    return out
 
 
 class Policy:
