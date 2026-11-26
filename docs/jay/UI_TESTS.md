@@ -2,6 +2,7 @@
 
 Screens Jay must check. Newest first. Delete a line when it's done.
 
+- [ ] CC-100 · HQ ticket page: edit criteria, Unlock past investigation · http://127.0.0.1:7777/#/tasks/CC-100
 - [ ] CC-078 · Settings > Notifications: Release email row, off; test email after mail.env · http://127.0.0.1:7777/#/settings?tab=notifications
 - [ ] CC-034 · Deploy gate: approve; Claude prepares, waits for pane · http://127.0.0.1:7777/#/dashboard
 - [ ] CC-024 · Server → Worktrees panel says finished tickets' clean worktrees are removed · http://127.0.0.1:7777/#/server

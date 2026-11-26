@@ -249,10 +249,12 @@ def _meta(v, field):
     return v
 
 
-def clean_criteria(raw, old=(), at=None, by=None):
+def clean_criteria(raw, old=(), at=None, by=None, floor=0):
     """The acceptance checklist after an edit. `raw` is a list of texts or {id, text}: an item with a known id keeps
     its state unless its text changed (then it is open again); an item without an id is new. Items left out are
-    removed. State is never set here: only the user check sets it."""
+    removed. State is never set here: only the user check sets it. `floor` is the highest id number ever used on the
+    ticket: without it, removing the top criterion and adding another later reuses its id, and the history (which
+    names criteria by id, CC-100) would then use one id for two criteria."""
     if raw is None:
         return list(old)
     if isinstance(raw, str):
@@ -261,7 +263,7 @@ def clean_criteria(raw, old=(), at=None, by=None):
         raise TaskError(400, f"criteria must be a list of at most {flow_mod.MAX_CRITERIA} items")
     have = {c["id"]: c for c in old}
     used = [int(c["id"][1:]) for c in old if CRITERION_ID_RE.match(c.get("id") or "")]
-    nxt = max(used, default=0) + 1
+    nxt = max(max(used, default=0), floor) + 1
     out, seen = [], set()
     for item in raw:
         cid, text = (None, item) if isinstance(item, str) else \
@@ -1676,6 +1678,20 @@ class Pipeline:
                                                            "due": due_at})]
         return self._tx(key, actor, fn)
 
+    def _highest_removed(self, tid):
+        """The highest criterion number any earlier edit removed (its event data names the removed ids): the floor for
+        new ids, so an id is never reused (CC-100). No schema change: the events already carry it."""
+        top = 0
+        for (data,) in self.db.execute("SELECT data FROM ticket_events WHERE ticket_id=? AND kind='pipeline.criteria' "
+                                       "AND data LIKE '%\"removed\"%'", (tid,)):
+            try:
+                for cid in json.loads(data or "{}").get("removed") or []:
+                    if isinstance(cid, str) and CRITERION_ID_RE.match(cid):
+                        top = max(top, int(cid[1:]))
+            except (ValueError, TypeError, AttributeError):
+                continue
+        return top
+
     def define(self, key, actor, criteria=None, requirements=None, size=None, developer=False, priority=None,
                due=None):
         """Edit the acceptance criteria, requirements or size. The lead while the ticket is in intake or
@@ -1701,7 +1717,7 @@ class Pipeline:
                 raise TaskError(409, f"{t['key']} is past investigation; only Jay edits its criteria now")
             if scope and actor == "jay" and not early and not developer:
                 raise TaskError(403, "Developer Unlock required: changing a ticket past investigation is Jay's")
-            cols, said, fields = {}, [], {}
+            cols, said, fields, ids_changed = {}, [], {}, {}
             if priority is not None:
                 fields["priority"] = priority
                 said.append(f"priority {priority.lower()}")
@@ -1709,11 +1725,18 @@ class Pipeline:
                 fields["dueAt"] = clean_due(due, at)
                 said.append(f"due {due}")
             if criteria is not None:
-                crit = clean_criteria(criteria, f["criteria"])
+                crit = clean_criteria(criteria, f["criteria"], floor=self._highest_removed(tid))
+                old_by = {c["id"]: c for c in f["criteria"]}
+                new_by = {c["id"]: c for c in crit}
+                ids_changed = {"added": [i for i in new_by if i not in old_by],
+                               "edited": [i for i in new_by if i in old_by and new_by[i]["text"] != old_by[i]["text"]],
+                               "removed": [i for i in old_by if i not in new_by]}
                 if not crit and t["status"] not in ("INBOX", "PROPOSED") and f["size"]:
                     raise TaskError(400, "a sized ticket keeps at least one acceptance criterion")
                 cols["criteria"] = crit
-                said.append(f"{len(crit)} criteria")
+                # CC-100: say which criteria changed, by id (never text: ticket_events is append-only, CC-066).
+                moved = [f"{i} {k}" for k in ("edited", "added", "removed") for i in ids_changed[k]]
+                said.append(", ".join(moved) if moved else f"{len(crit)} criteria")
             if requirements is not None:
                 cols["requirements"] = _list(requirements, "requirements", flow_mod.MAX_REQUIREMENTS, 500)
                 said.append(f"{len(cols['requirements'])} requirements")
@@ -1734,6 +1757,8 @@ class Pipeline:
                 self._flow_set(tid, at, **cols)
             data = {k: (len(v) if isinstance(v, list) else v) for k, v in cols.items()}
             data.update({k: v for k, v in fields.items()})
+            if ids_changed:     # new keys beside data.criteria (still the count), so existing readers do not break
+                data.update({k: v for k, v in ids_changed.items() if v})
             # A priority or due date alone is no scope change, and the activity line says what it was.
             return fields, {}, [("pipeline.criteria", ("criteria updated: " if scope else "updated: ") + ", ".join(said),
                                  data)]

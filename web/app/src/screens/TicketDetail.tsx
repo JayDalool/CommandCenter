@@ -18,6 +18,7 @@ import { WorkPanel } from "../tickets/WorkPanel";
 import { GateCard } from "../tickets/GateCard";
 import { QuestionsForm } from "../tickets/Questions";
 import { useWork } from "../tickets/useWork";
+import { ScopeEditor } from "../tickets/ScopeEditor";
 import { taskHref } from "../lib/control";
 
 /** The decision this ticket waits on and Claude's open questions — the same cards as the Workspace. */
@@ -146,6 +147,7 @@ function Detail({ t, onClose, onOpenRoom }: { t: TicketDetail; onClose: () => vo
 
       <Decisions ticketKey={t.key} />
       <WorkPanel t={t} />
+      <ScopeEditor t={t} />
 
       <section aria-label="Development">
         <div className="td-sec-title">Development</div>
