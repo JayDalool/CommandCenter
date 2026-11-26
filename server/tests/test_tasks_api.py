@@ -588,11 +588,22 @@ class PipelineApi(Automation):
         self.assertEqual(sv["limits"], {"investigate": {"used": 0, "max": 2}, "build": {"used": 0, "max": 2}})
         r = self.step("review", {"verdict": "APPROVE", "head": head, "session": "cr-1"}, "agent:reviewer")
         self.assertEqual(r.json()["status"], "READY_TO_MERGE", r.text)
+        # CC-057: the security sign-off is the security engineer's, at this head, from a fresh session
+        body = {"result": "pass", "head": head, "note": "no auth change", "session": "sec-1"}
+        self.assertEqual(self.step("security-check", body, "agent:reviewer").status_code, 403)
+        self.assertEqual(self.step("security-check", dict(body, session="sv-056"), "agent:security-engineer").status_code, 409)
+        self.assertEqual(self.step("security-check", dict(body, head="1" * 40), "agent:security-engineer").status_code, 409)
+        self.assertEqual(self.step("security-check", body, "agent:security-engineer").status_code, 200)
         self.gh.data["samvision"]["prs"] = []
         self.gh.data["samvision"]["merged"] = [{"number": 156, "title": "SV-056: the feature", "url": "u",
-                                                "mergedAt": "2026-10-03T00:00:00Z", "mergeCommit": {"oid": "f" * 40}}]
+                                                "mergedAt": "2026-10-03T00:00:00Z", "headRefOid": head,
+                                                "mergeCommit": {"oid": "f" * 40}}]
         self.poll()
         self.assertEqual(self.status(), "VERIFYING")
+        # CC-057 c4: nobody said "merge it" for this head, so the merge is recorded as nobody's and flagged loudly
+        self.assertEqual(self.get("/api/tasks/SV-056/work").json()["merge"]["allowedBy"], "nobody")
+        outside = [e for e in self.get("/api/activity?limit=200").json()["events"] if e["kind"] == "merge.outside"]
+        self.assertEqual([(e["source"], e["severity"]) for e in outside], [("security", "action")])
         r = self.step("verify", {"result": "pass", "evidence": "health ok"}, "agent:verifier")
         self.assertEqual((r.json()["status"], r.json()["flow"]["waitingOn"]), ("VERIFYING", "lead"), r.text)
         r = self.step("close", {"note": "Comps fixed."})

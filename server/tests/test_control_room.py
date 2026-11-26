@@ -1090,6 +1090,33 @@ class ControlRoomApi(PipelineApi):
         self.assertIn("Wait for CI on main", text)
         self.assertIn("Not authorized: deploying or going live", text)
 
+    def test_a_security_ticket_waits_for_a_sign_off_at_the_reviewed_head(self):
+        # CC-057 (Jay #187): required by ticket type or a security/migration label, read locally, per head
+        h = "c1" * 20
+        k = self.ready_pr(150, 91, h)
+        self.tickets.update(k, {"labels": ["security"]}, "jay")
+        self.assertEqual(self.daemon.security_state(k), "required, missing")
+        ready, skipped = self.daemon.merge_batch("samvision")
+        self.assertEqual(([r["key"] for r in ready], [(x["key"], x["reason"]) for x in skipped]),
+                         ([], [(k, "needs a security sign-off at this head")]))
+        body = {"result": "pass", "head": h, "note": "checked", "session": "sec-1"}
+        r = self.client.post(f"/api/tasks/{k}/work/security-check", content=json.dumps(body),
+                             headers=dict(JSON, **{"x-ccd-actor": "agent:security-engineer"}))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.daemon.security_state(k), "required, present")
+        self.assertEqual([x["key"] for x in self.daemon.merge_batch("samvision")[0]], [k])
+        # a fail recorded after a pass holds it again; a pass at one head says nothing about the next
+        self.client.post(f"/api/tasks/{k}/work/security-check", content=json.dumps(dict(body, result="fail", session="sec-2")),
+                         headers=dict(JSON, **{"x-ccd-actor": "agent:security-engineer"}))
+        self.assertEqual(self.daemon.security_state(k), "required, missing")
+        self.assertIsNone(self.daemon.security_wait(self.ready_pr(151, 92, "c2" * 20)))     # not required: no wait
+        self.assertEqual(self.daemon.security_state(self.ready_pr(151, 92, "c3" * 20, existing="SV-092")), "not required")
+
+    def test_a_security_typed_ticket_is_required_without_a_label(self):
+        k = self.ready_pr(152, 93, "c4" * 20)
+        self.tickets.update(k, {"type": "SECURITY"}, "jay")
+        self.assertEqual(self.daemon.security_state(k), "required, missing")
+
     def test_merge_skips_what_is_not_mergeable_and_never_messages_for_nothing(self):
         k = self.ready_pr(140, 90, "d1" * 20)
         real = self.daemon._open_prs

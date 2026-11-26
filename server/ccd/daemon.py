@@ -1607,7 +1607,8 @@ class Daemon(LeadChat, HqDaemon):
 
     PIPELINE_OPS = ("plan", "start", "review", "verify", "confirm", "handoff", "block", "role", "finding",
                     "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
-                    "intake", "criteria", "plan-review", "user-check", "close", "deploy-plan", "reply")
+                    "intake", "criteria", "plan-review", "user-check", "security-check", "close", "deploy-plan",
+                    "reply")
 
     def task_work(self, key):
         self._need_tasks()
@@ -1706,6 +1707,12 @@ class Daemon(LeadChat, HqDaemon):
                 raise ActionError(409, f"{t['key']} has several open PRs linked; one PR per user check")
             r = self._wrap(pl.user_check, key, body.get("result"), body.get("head"), actor, body.get("note"),
                            body.get("criteria"), pr=self._pr_state(t), open_prs=self._open_prs(t), **meta)
+        elif op == "security-check":
+            t = self._wrap(self.tasks.get, key)
+            if len(self._open_prs(t)) > 1:
+                raise ActionError(409, f"{t['key']} has several open PRs linked; one PR per security check")
+            r = self._wrap(pl.security_check, key, body.get("result"), body.get("head"), actor, body.get("note"),
+                           pr=self._pr_state(t), session=meta["session"])
         elif op == "close":
             r = self._wrap(pl.close, key, body.get("note"), actor)
         elif op == "deploy-plan":
@@ -2229,7 +2236,8 @@ class Daemon(LeadChat, HqDaemon):
             self._event("tasks", "task.pipeline", f"{ticket['key']} {text}"[:300], project=ticket["project"],
                         ref=ticket["key"], data={"kind": kind, **({"actor": actor} if actor else {})},
                         severity="action" if kind in ("pipeline.gate_opened", "pipeline.blocked",
-                                                      "pipeline.unreviewed_merge", "pipeline.questions",
+                                                      "pipeline.unreviewed_merge", "pipeline.merged_without_approval",
+                                                      "pipeline.questions",
                                                       "pipeline.deploy_requested", "pipeline.replan",
                                                       "pipeline.auto_merge_held", "pipeline.auto_merged",
                                                       "pipeline.auto_merge_failed") else "info")
@@ -2928,7 +2936,13 @@ class Daemon(LeadChat, HqDaemon):
                             continue
                         self._auto(k, ("IN_REVIEW", "READY_TO_MERGE"), "VERIFYING", why)
                         if self.pipeline.participating(k):
-                            self._pipeline_result(*self.pipeline.merged(k, ref, ((m.get("mergeCommit") or {}).get("oid"))))
+                            res = self.pipeline.merged(k, ref, ((m.get("mergeCommit") or {}).get("oid")), m.get("headRefOid"))
+                            self._pipeline_result(*res)
+                            if any(e[0] == "pipeline.merged_without_approval" for e in res[2]):
+                                # CC-057 c4: ccd cannot stop a merge outside Jay's "merge it"; it says so at once.
+                                self._event("security", "merge.outside",
+                                            f"{k}: {ref} merged without a matching 'merge it' for its head; check who merged it",
+                                            severity="action", project=res[0]["project"], ref=k)
                 except Exception as e:  # noqa: BLE001
                     log.warning(json.dumps({"msg": "ticket automation skipped a merge", "error": repr(e)[:200]}))
 
@@ -3471,6 +3485,38 @@ class Daemon(LeadChat, HqDaemon):
                     project=project, ref=ticket, data={"kind": "ui_finding", "run": run, "decision": decision})
         return {"ok": True, "finding": finding, **d}
 
+    def security_state(self, key):
+        """'not required', 'required, present' or 'required, missing' for a READY_TO_MERGE ticket's reviewed head
+        (CC-057, Jay #187): required means ticket type SECURITY or a security/migration label. Read from local ticket
+        facts in the same call that decides, so no GitHub-read cache can authorise a merge (the shrunk CC-057 dropped
+        the probe whose cache raced, Codex Medium 3). Sensitive files do not trigger it; the merge DM lists them."""
+        t = self.tasks.get(key)
+        labels = {str(x).lower() for x in (t.get("labels") or [])}
+        if not (str(t.get("type") or "").upper() == "SECURITY" or labels & {"security", "migration"}):
+            return "not required"
+        head = self.pipeline.review_head(key)
+        return "required, present" if head and self.pipeline.security_signoff(key, head) else "required, missing"
+
+    def security_wait(self, key):
+        """Why this ticket may not be offered to Jay yet (a required security sign-off is missing), else None."""
+        if not self.pipeline.review_head(key):
+            return None
+        return "needs a security sign-off at this head" if self.security_state(key) == "required, missing" else None
+
+    def merge_facts_for_dm(self, project, pr_ref):
+        """Files and line counts of the PR, one display-only `gh pr view` (CC-057 c8). Blocks and authorises nothing;
+        the caller compares `head` with the DM's head. Raises on any failure; the notifier says so in the DM."""
+        repo, _, number = str(pr_ref).partition("#")
+        pr = self._gh_json(["gh", "pr", "view", number, "--repo", repo, "--json", "title,files,additions,deletions,headRefOid"])
+        return {"title": str(pr.get("title") or "")[:120], "files": [f["path"] for f in pr["files"]], "additions": int(pr["additions"]),
+                "deletions": int(pr["deletions"]), "head": pr.get("headRefOid")}
+
+    def sensitive_patterns(self, project):
+        """The project profile's protected-path and personal-data globs (CC-057 c8); [] without a valid profile."""
+        prof = self.policy.profile(project) or {}
+        return list((prof.get("self_protection") or {}).get("require_jay_for_paths") or []) + \
+            list((prof.get("personal_data") or {}).get("trigger_paths") or [])
+
     def merge_batch(self, project, keys=None):
         """The project's Ready-to-Merge tickets Jay can merge now, in merge order, and the ones that cannot.
 
@@ -3496,7 +3542,8 @@ class Daemon(LeadChat, HqDaemon):
                       else "its PR is not open (or several are linked)" if not pr
                       else "the PR head changed since the review" if pr["head"] != rv["head"]
                       else "CI is not green" if not pr["ciGreen"]
-                      else "the PR is a draft" if pr["draft"] else None)
+                      else "the PR is a draft" if pr["draft"]
+                      else self.security_wait(t["key"]))
             if reason:
                 skipped.append({"key": t["key"], "reason": reason})
                 continue

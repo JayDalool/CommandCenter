@@ -68,7 +68,7 @@ import urllib.request
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import registry
+from . import merge_summary, registry
 from .pipeline import plan_digest, unshown
 from .releasemail import ReleaseMail
 from .security import redact
@@ -738,7 +738,10 @@ class Notifier:
 
     def needs(self):
         st = self.d.state()
-        items = [dict(n) for n in st.get("needs") or []]
+        # CC-057: a merge question waits until a required security sign-off exists at the reviewed head (Jay #187).
+        items = [dict(n) for n in st.get("needs") or []
+                 if not (n.get("kind") == "gate" and n.get("gate") == "merge" and is_ticket(n.get("ref"))
+                         and self.d.security_wait(n["ref"]))]
         for n in items:
             if n.get("kind") == "questions" and is_ticket(n.get("ref")) and not self.client(n.get("project")):
                 n["qids"] = [q["id"] for q in self.open_questions(n["ref"])]
@@ -747,7 +750,7 @@ class Notifier:
                           "text": f"{b.get('name') or 'an agent'} is waiting for you"})
         return items
 
-    def need_text(self, n, plan=None, review=None):
+    def need_text(self, n, plan=None, review=None, summary=None):
         """The DM for one item. A client project's carries its ID and a risk line only. `plan` is a plan gate's
         plan as send_need read it (so the DM shows exactly what its planHash covers); `review` likewise is a merge
         gate's review, whose head the item records."""
@@ -790,6 +793,7 @@ class Notifier:
         elif n.get("kind") == "gate" and n.get("gate") == "merge" and self.allows("merge"):
             rv = review if review is not None else self._review(n.get("ref"))
             if rv.get("head"):
+                lines += summary or []
                 lines.append(f"*PR:* {esc(rv.get('pr') or 'linked PR')} · head `{esc(str(rv['head'])[:12])}` · review "
                              f"{esc(rv.get('verdict'))}")
                 lines.append("_Reply *merge* to merge this PR at this head, as the Merge button does, or write to the "
@@ -871,20 +875,44 @@ class Notifier:
             return f"{self.name(proj)}: {n.get('ref')} needs you"
         return f"{self.name(proj)}: {need_label(n)} · {n.get('ref')}"
 
+    async def merge_summary(self, n, rv):
+        """The merge DM's three lines (CC-057 c8), each escaped. Display-only: a failed GitHub read, or one for
+        another head than the DM shows, is said in the text and never blocks or authorises the merge (a reply still
+        merges exactly the DM's head)."""
+        if not rv.get("head") or not self.allows("merge"):
+            return []
+        try:
+            w = self._work(n.get("ref"))
+            facts = None
+            try:
+                got = await asyncio.to_thread(self.d.merge_facts_for_dm, n.get("project"), rv.get("pr"))
+                if got.get("head") == rv["head"]:
+                    facts = got
+            except Exception as e:  # noqa: BLE001 — shown as "could not be read", never raised into the DM loop
+                log.warning(json.dumps({"msg": "merge summary files unread", "ref": n.get("ref"), "error": repr(e)[:160]}))
+            return [esc(x) for x in merge_summary.lines(
+                title=facts and facts.get('title'), done=str((w.get("handoff") or {}).get("done") or "")[:200], criteria=w.get("criteria"),
+                head=rv["head"], pr_facts=facts, patterns=self.d.sensitive_patterns(n.get("project")),
+                security=self.d.security_state(n["ref"]))]
+        except Exception as e:  # noqa: BLE001
+            log.warning(json.dumps({"msg": "merge summary failed", "ref": n.get("ref"), "error": repr(e)[:160]}))
+            return [esc(f"*Changed:* {merge_summary.UNREAD}")]
+
     async def send_need(self, n):
         item = {"type": "need", "project": n.get("project"), "kind": n.get("kind"), "gate": n.get("gate"),
                 "ref": n.get("ref"), "stale": bool(n.get("stale")), "qids": list(n.get("qids") or []),
                 "textHash": _digest(n.get("text")), "since": n.get("since")}
-        p = rv = None
+        p = rv = summary = None
         if n.get("kind") == "gate" and n.get("gate") == "merge" and not self.client(n.get("project")):
             # The head this DM shows, read once: a merge reply merges exactly it (approve()).
             rv = self._review(n.get("ref"))
             item["head"] = rv.get("head")
+            summary = await self.merge_summary(n, rv)
         if n.get("kind") == "gate" and n.get("gate") in PLAN_GATES and not self.client(n.get("project")):
             # The plan this DM shows, read once. An approve applies to this plan only (approve()).
             p = self._plan(n.get("ref"))
             item["planHash"] = plan_digest(p["plan"]) if p else None
-        text = self.need_text(n, plan=p, review=rv)
+        text = self.need_text(n, plan=p, review=rv, summary=summary)
         if p is not None and (redact(text)[1] or unshown(text) or plan_unshown(p["plan"])):
             # Part of what an approve approves would not show: CommandCenter only.
             item["planHash"] = None

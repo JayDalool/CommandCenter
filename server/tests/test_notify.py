@@ -174,6 +174,26 @@ class FakeDaemon:
         self.deploys = []
         self._stopping = False
         self.tasks = None
+        self.security = {}          # CC-057: ticket key -> "required, missing" ...; default "not required"
+        self.pr_facts = {}          # PR ref -> the files read, or an exception to raise
+        self.pr_reads = []
+        self.patterns = ["server/ccd/**", "**/migrations/**"]
+
+    def security_state(self, key):
+        return self.security.get(key, "not required")
+
+    def security_wait(self, key):
+        return "needs a security sign-off at this head" if self.security_state(key) == "required, missing" else None
+
+    def merge_facts_for_dm(self, project, pr_ref):
+        self.pr_reads.append((project, pr_ref))
+        r = self.pr_facts.get(pr_ref)
+        if r is None or isinstance(r, Exception):
+            raise r or OSError("gh failed")
+        return r
+
+    def sensitive_patterns(self, project):
+        return list(self.patterns)
 
     def state(self):
         return {"needs": list(self.needs_list), "blocked": list(self.blocked), "projects": []}
@@ -617,6 +637,53 @@ class Replies(ReplyBase):
         self.assertEqual(r["did"], "approved_merge")
         self.assertEqual(self.d.merged, [("SV-40", self.HEAD)])
         self.assertEqual(self.d.confirmed, [])                    # never a bare gate approval
+
+    def merge_dm(self, key, pr="o/r#5", **facts):
+        self.n.update_settings({"replyScope": "all"})
+        self.d.work[key] = {"review": {"verdict": "APPROVE", "head": self.HEAD, "pr": pr},
+                            "handoff": {"done": "added the merge summary"},
+                            "criteria": [{"id": "c1", "state": "pass", "head": self.HEAD},
+                                         {"id": "c2", "state": "open", "head": None}]}
+        if facts:
+            self.d.pr_facts[pr] = dict({"head": self.HEAD, "title": "CC-1: summary"}, **facts)
+        ts = self.send(need(key, "gate", "merge", text="Ready to merge"))
+        return ts, self.slack.posts[-1]["text"]
+
+    def test_the_merge_dm_has_changed_achieved_and_sensitive_lines_above_the_reply_line(self):
+        _, dm = self.merge_dm("SV-50", files=["server/ccd/daemon.py", "docs/a.md"], additions=10, deletions=2)
+        self.assertIn("*Changed:* CC-1: summary (2 files, +10/-2) · added the merge summary", dm)
+        self.assertIn("*Achieved:* criteria 1/2 passed at this head, c2 open", dm)
+        self.assertIn("*Sensitive:* server/ccd/daemon.py · security sign-off: not required", dm)
+        self.assertLess(dm.index("*Sensitive:*"), dm.index("Reply *merge*"))
+
+    def test_a_docs_only_change_says_none_of_the_sensitive_paths_and_shows_a_present_sign_off(self):
+        self.d.security["SV-51"] = "required, present"
+        _, dm = self.merge_dm("SV-51", files=["docs/a.md"], additions=1, deletions=0)
+        self.assertIn("none of the protected or personal-data paths · security sign-off: required, present", dm)
+
+    def test_a_failed_or_wrong_head_read_is_said_in_the_dm_and_the_reply_still_merges_the_dm_head(self):
+        _, dm = self.merge_dm("SV-52")          # the read raises
+        self.assertIn("files could not be read at this head; check the PR", dm)
+        ts, dm = self.merge_dm("SV-53", head="b" * 40, files=["x"], additions=1, deletions=1)     # another head
+        self.assertIn("files could not be read at this head", dm)
+        self.assertNotIn("(1 files", dm)
+        self.assertEqual(self.reply("merge", ts)["did"], "approved_merge")
+        self.assertEqual(self.d.merged, [("SV-53", self.HEAD)])
+
+    def test_a_merge_waits_for_a_missing_required_sign_off(self):
+        self.n.update_settings({"replyScope": "all"})
+        self.d.security["SV-55"] = "required, missing"
+        self.d.work["SV-55"] = {"review": {"verdict": "APPROVE", "head": self.HEAD, "pr": "o/r#5"}}
+        self.d.needs_list = [need("SV-55", "gate", "merge")]
+        run(self.n.tick())
+        self.assertEqual(self.slack.posts, [])
+
+    def test_no_files_read_for_a_client_project(self):
+        self.n.update_settings({"replyScope": "all"})
+        self.d.work["SV-54"] = {"review": {"verdict": "APPROVE", "head": self.HEAD, "pr": "o/r#9"}}
+        self.n.client = lambda proj: True
+        run(self.n.send_need(need("SV-54", "gate", "merge")))
+        self.assertEqual(self.d.pr_reads, [])
 
     def test_only_the_word_merge_merges(self):
         self.n.update_settings({"replyScope": "all"})

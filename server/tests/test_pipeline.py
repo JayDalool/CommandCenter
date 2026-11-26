@@ -314,6 +314,48 @@ class Verify(Base):
         _, ch, ev = self.pl.merged(k, "JayDalool/SamVisionAI#1", "9" * 40)   # idempotent
         self.assertEqual((ch, ev), ([], []))
 
+    def approved_merge(self, k, via):
+        """Review APPROVE at HEAD and Jay's 'merge it' for that head (via ui or slack), then GitHub merges."""
+        self.to_review(k)
+        self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr())
+        if via:
+            self.pl.confirm(k, "merge", "jay", via=via)
+        self.ts.update(k, {"status": "VERIFYING"}, "system:automation", trigger="PR #1 merged")
+
+    def merge_events(self, k, kind):
+        tid = self.ts._id_of(k)
+        return self.pl.db.execute("SELECT data FROM ticket_events WHERE ticket_id=? AND kind=?", (tid, kind)).fetchall()
+
+    def test_a_merge_records_who_allowed_it_from_jays_confirmed_head(self):
+        # CC-057 c4: merge:<head> confirmed through slack or the UI is the allowance; nothing is flagged
+        for via in ("slack", "ui"):
+            k = self.ticket()
+            self.approved_merge(k, via)
+            self.pl.merged(k, "JayDalool/SamVisionAI#1", "9" * 40, HEAD)
+            self.assertEqual(self.pl.work(k)["merge"]["allowedBy"], f"jay:{via}")
+            self.assertEqual(self.merge_events(k, "pipeline.merged_without_approval"), [])
+
+    def test_a_merge_with_no_matching_merge_it_is_recorded_as_nobody_and_flagged(self):
+        k = self.ticket()
+        self.approved_merge(k, None)                  # approved by review, but Jay never said merge it
+        _, _, ev = self.pl.merged(k, "JayDalool/SamVisionAI#1", "9" * 40, HEAD)
+        self.assertEqual(self.pl.work(k)["merge"]["allowedBy"], "nobody")
+        self.assertIn("pipeline.merged_without_approval", [e[0] for e in ev])
+
+    def test_a_merged_head_that_differs_from_the_approved_head_is_flagged(self):
+        k = self.ticket()
+        self.approved_merge(k, "slack")
+        _, _, ev = self.pl.merged(k, "JayDalool/SamVisionAI#1", "9" * 40, "c" * 40)    # a later head was merged
+        self.assertEqual(self.pl.work(k)["merge"]["allowedBy"], "nobody")
+        self.assertIn("pipeline.merged_without_approval", [e[0] for e in ev])
+
+    def test_an_unreported_head_is_unknown_and_not_flagged(self):
+        k = self.ticket()
+        self.approved_merge(k, None)
+        _, _, ev = self.pl.merged(k, "JayDalool/SamVisionAI#1", "9" * 40)
+        self.assertEqual(self.pl.work(k)["merge"]["allowedBy"], "unknown")
+        self.assertNotIn("pipeline.merged_without_approval", [e[0] for e in ev])
+
     def test_pass_without_owner_checks_is_done(self):
         k = self.ticket()
         self.merged(k)
