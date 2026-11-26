@@ -117,6 +117,23 @@ class TierTwo(Base):
         self.assertEqual(self.status(k), "READY_TO_IMPLEMENT")
         self.assertEqual(self.pl.work(k)["flow"]["stage"], "build")
 
+    def test_a_rename_into_a_rail_refuses_tier_one(self):
+        k = self.planned(affected=["web/app/src/x.tsx -> server/ccd/profiles.py"])
+        self.refused(409, self.review, k, 1, "a rename")
+
+    def test_small_is_refused_for_known_tier_two_triggers_on_tier_projects(self):
+        for project in ("commandcenter", "gyst"):
+            for fields in ({"type": "FEATURE"}, {"type": "DESIGN"}, {"labels": ["customer-facing"]}):
+                k = self.ts.create(project, "Small?", description="A change", **fields)[0]["key"]
+                self.assertIn("Tier 2", self.refused(409, self.pl.intake, k, "small", ["works"], "agent:coordinator",
+                                                      priority="MEDIUM"))
+                self.assertEqual(self.status(k), "INBOX")
+            k = self.ts.create(project, "Small", description="A typo")[0]["key"]
+            self.pl.intake(k, "small", ["works"], "agent:coordinator", priority="MEDIUM")     # an ordinary small ticket
+            self.assertEqual(self.status(k), "READY_TO_IMPLEMENT")
+        k = self.ts.create("samvision", "Small", description="A change", type="FEATURE")[0]["key"]
+        self.pl.intake(k, "small", ["works"], "agent:coordinator", priority="MEDIUM")         # other projects as before
+
     def test_an_unclear_tier_is_tier_two(self):                                            # c4
         for tier in (None, "unsure"):
             k = self.planned()
@@ -148,6 +165,23 @@ class RailMatching(unittest.TestCase):
         for e in ("AGENTS.md", "CLAUDE.md", "docs/x/CLAUDE.md", "a/GEMINI.md", "a/SKILL.md", ".codex/config.toml",
                   ".mcp.json", ".claude/settings.json"):
             self.assertIsNotNone(tier2_hit(e, self.CC), e)
+
+    def test_a_rename_destination_a_symlink_target_and_trailing_text_are_checked_too(self):
+        for e in ("web/app/src/x.tsx -> server/ccd/profiles.py", "docs/a.md => policy/projects/x.toml",
+                  "scripts/y.sh (symlink to ../.claude/settings.json)", "web/x.ts renamed to AGENTS.md",
+                  "docs/a.md (moved from .github/workflows/ci.yml)"):
+            self.assertIsNotNone(tier2_hit(e, self.CC), e)
+
+    def test_a_broad_folder_entry_on_gyst_is_ambiguous_so_tier_two(self):
+        g = registry.pipeline_of("gyst")["tier2_paths"]
+        for e in ("internal", "internal/handlers", "app", "db"):
+            self.assertIsNotNone(tier2_hit(e, g), e)
+        for e in ("internal/handlers/x.go", "web/src/Card.tsx"):
+            self.assertIsNone(tier2_hit(e, g), e)
+
+    def test_the_github_reason_names_ci(self):
+        self.assertIn("CI", tier2_hit(".github/workflows/ci.yml", self.CC))
+        self.assertNotIn("agent", tier2_hit(".github/workflows/ci.yml", self.CC))
 
     def test_ordinary_paths_do_not(self):
         for e in ("server/ccd/pipeline.py:1805", "web/app/src/x.tsx", "scripts/y.sh", "server/tests/test_x.py",
@@ -188,11 +222,30 @@ class NothingElseMoves(Base):
         self.assertIn("userCheck", flow.route("standard", cc))
         self.assertIn("codeReview", flow.route("small", cc))
 
-    def test_merge_stays_with_jay(self):                                                   # c6, c10
+    def test_a_tier_one_ticket_runs_the_whole_route_to_jays_merge_and_release(self):       # c6, c10, c11
+        head = "abcdef1234567890abcdef1234567890abcdef12"
+        pr = {"ref": "JayDalool/gyst-lifeops#1", "head": head, "ciGreen": True, "draft": False}
         k = self.planned("gyst", ["internal/x.go"])
-        before = self.pl.work(k)["policy"]["merge"]
         self.review(k, 1, "a fix")
-        self.assertEqual((self.pl.work(k)["policy"]["merge"], before), ("owner", "owner"))
+        tid = self.ts._id_of(k)
+        self.assertIsNone(self.pl._flow(tid)["reviewDue"])                                 # cleared
+        self.pl.start(k, f"{k}-x", WT + k, "agent:coordinator")
+        self.ts.update(k, {"status": "IN_REVIEW"}, "system:automation", trigger="PR #1 is open")
+        ids = [c["id"] for c in self.pl.work(k)["criteria"]]
+        self.pl.user_check(k, "pass", head, "agent:user-reviewer", "tried", {i: "pass" for i in ids}, pr=pr,
+                           session="ur-1")
+        self.pl.review(k, "APPROVE", head, "agent:reviewer", session="cr-1", pr=pr)
+        w = self.pl.work(k)
+        self.assertEqual((w["gate"], w["policy"]["merge"]), ("merge", "owner"))             # Jay's merge gate
+        self.ts.update(k, {"status": "VERIFYING"}, "system:automation", trigger="PR merged")
+        self.pl.merged(k, pr["ref"], "f" * 40)
+        self.pl.verify(k, "pass", "health ok", "agent:verifier")
+        w = self.pl.work(k)
+        self.assertEqual(w["flow"]["stage"], "release")
+        self.assertIsNone(w["gate"])                                                        # no release or deploy gate
+        gates = [json.loads(d).get("gate") for (d,) in self.pl.db.execute(
+            "SELECT data FROM ticket_events WHERE kind='pipeline.gate_opened'")]
+        self.assertEqual(gates, ["merge"])
         self.assertEqual(registry.pipeline_of("gyst")["merge"], "owner")
         self.assertEqual(registry.pipeline_of("commandcenter")["merge"], "low-risk")      # unchanged; auto_merge is off
 

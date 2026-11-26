@@ -141,24 +141,53 @@ def tier2_hit(entry, patterns):
     parts = str(entry or "").split()
     if not parts:
         return "an empty entry"
-    token = parts[0].strip(",;()").rstrip(":")
+    # Every token is checked, not only the first: a rename's destination or a symlink target ("a -> b") may be a Tier 2
+    # path, and the text after a path is not trusted to be a harmless note (Codex round 1). A false hit only costs
+    # Jay's plan gate; a missed one skips it.
+    for raw in parts:
+        if raw in ("->", "=>", "→", "to", "->>"):
+            continue
+        hit = _tier2_token(raw, patterns, merge_policy)
+        if hit:
+            return hit
+    return None
+
+
+def _tier2_token(raw, patterns, merge_policy):
+    token = raw.strip(",;()[]").rstrip(":")
     token = re.sub(r":[\d,\-L]*$", "", token)
     if token.startswith("./"):
         token = token[2:]
     token = token.rstrip("/").lower()
-    if not token or any(c in token for c in "*?[") or not merge_policy.safe_path(token):
-        return "a path that cannot be ruled out"
+    if not token:
+        return None
+    if any(c in token for c in "*?[") or not merge_policy.safe_path(token):
+        # a plain word of a note ("new", "fix") is not a path; anything path-like that is odd cannot be ruled out
+        return "a path that cannot be ruled out" if ("/" in token or "." in token or any(c in token for c in "*?[")) else None
     if merge_policy.hidden_part(token):
-        return "a dot-path (agent configuration)"
+        return "CI (.github)" if token.split("/")[0] == ".github" else "a dot-path (agent or tool configuration)"
     if token.rsplit("/", 1)[-1] in AGENT_FILES:
         return "an agent instruction file"
+    last = token.rsplit("/", 1)[-1]
     for pat in patterns:
         rx = re.compile("^" + merge_policy._glob(pat.lower()) + "$")
-        head = re.split(r"[*?\[]", pat.lower(), 1)[0]
+        head = re.split(r"[*?\[]", pat.lower(), maxsplit=1)[0]
         # the path itself, a folder above it (its literal head starts with the folder) or a folder holding it
         if rx.match(token) or head.startswith(token + "/") or rx.match(token + "/_"):
             return pat
+        # A pattern that starts with ** (GYST's **/models/**) has no literal head, so a folder entry cannot be placed:
+        # a name without an extension might be a folder holding a Tier 2 path. Ambiguous = Tier 2.
+        if pat.startswith("**/") and "." not in last:
+            return f"a folder that may hold a Tier 2 path ({pat})"
     return None
+
+
+def _small_tier2_trigger(t):
+    labels = {str(x).lower() for x in t.get("labels") or []}
+    if t.get("type") in ("FEATURE", "DESIGN"):
+        return f"a {t['type'].lower()} ticket"
+    hit = sorted(labels & {"feature", "new-screen", "customer-facing", "customer", "migration", "auth", "privacy"})
+    return f"the {hit[0]} label" if hit else None
 
 
 def tier2_paths_of(project):
@@ -1701,6 +1730,13 @@ class Pipeline:
                 raise TaskError(409, f"{t['key']} has no description; write what is asked and why first")
             pol = policy(t)
             eff = "risky" if pol["plan"] == "owner" else size
+            if eff == "small" and pol["tiers"]:
+                # A small ticket skips technical review, so no tier is ever recorded and it would reach Build before
+                # Jay's plan gate. Refuse small for the Tier 2 triggers visible at intake (CC-082, Codex round 1).
+                trig = _small_tier2_trigger(t)
+                if trig:
+                    raise TaskError(409, f"{t['key']} cannot be small: {trig} is Tier 2 and needs technical review "
+                                         "and Jay's plan gate; size it standard or risky")
             prio = priority or (t["priority"] if t["priority"] in PRIORITY_SET else None)
             if prio is None:
                 raise TaskError(400, f"intake needs a priority: {', '.join(PRIORITY_SET)}")
