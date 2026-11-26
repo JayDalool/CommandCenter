@@ -44,23 +44,26 @@ class World:
         self.state = {"active": "active", "pid": 500, "restarts": 0}
         self.calls = []
         self.hang = False
+        self.probe_cost = 0
 
     def http(self, method, path, headers, body, timeout):
         self.calls.append((method, path, timeout))
         if self.hang:
             self.clock.t += timeout
             return None, b""
+        self.clock.t += self.probe_cost
         if path == "/api/health":
             return self.api
         if path == "/":
             return self.index
         return self.assets.get(path, 404), b""
 
-    def unit(self):
-        self.calls.append(("systemctl", "show", 0))
+    def unit(self, timeout=rc.REQ_BUDGET_S):
+        self.calls.append(("systemctl", "show", timeout))
         if self.hang:
-            self.clock.t += rc.REQ_BUDGET_S
+            self.clock.t += timeout
             return None
+        self.clock.t += self.probe_cost
         return dict(self.state) if self.state else None
 
     def check(self, **kw):
@@ -107,6 +110,50 @@ class CheckTest(unittest.TestCase):
         self.setUp()
         result, bad = self.failing(lambda w: w.state.update(pid=400))
         self.assertIn("pre-restart process", bad["daemon"])
+
+    def test_pid_a_missing_pid_never_passes_as_none_equals_none(self):
+        # Codex r3: a unit with no MainPID and a health document with no pid used to pass
+        for name, mutate in {
+            "no MainPID, no health pid": lambda w: (w.state.update(pid=None),
+                                                   setattr(w, "api", (200, json.dumps({"herdr": {"ok": True}}).encode()))),
+            "MainPID 0": lambda w: w.state.update(pid=0),
+            "health without pid": lambda w: setattr(w, "api", (200, json.dumps({"herdr": {"ok": True}}).encode())),
+            "health pid not a number": lambda w: setattr(w, "api", (200, json.dumps({"pid": "500"}).encode())),
+        }.items():
+            with self.subTest(name):
+                self.setUp()
+                result, bad = self.failing(mutate)
+                self.assertEqual(result, "failed")
+                self.assertIn("daemon", bad)
+
+    def test_pid_changing_between_samples_is_inconclusive_not_healthy(self):
+        # Codex r3: each sample matched its own MainPID, so two processes added up to one healthy run
+        orig_api = self.w.api
+        n = {"i": 0}
+        orig_unit = self.w.unit
+
+        def hop(timeout=5):
+            n["i"] += 1
+            s = orig_unit(timeout)
+            if s and n["i"] > 5:
+                s["pid"] = 600
+                self.w.api = (200, json.dumps({"pid": 600, "herdr": {"ok": True}}).encode())
+            return s
+        chk = rc.Check(http=self.w.http, unit=hop, new_dir=self.w.new_dir, clock=self.clock, sleep=self.clock.sleep)
+        result, bad = chk.run()
+        self.assertEqual(result, "inconclusive")
+        self.assertIn("changed during the check", bad["daemon"])
+        self.assertIsNotNone(orig_api)
+
+    def test_c6_crash_names_every_failure_of_that_sample(self):
+        # Codex r3: the crash branch dropped the api and ui failures found in the same sample
+        self.w.state.update(restarts=1)
+        self.w.api = (500, b"")
+        self.w.index = (200, b"old")
+        result, bad = self.w.check().run()
+        self.assertEqual(result, "failed")
+        self.assertEqual(set(bad), {"api", "daemon", "ui"})
+        self.assertIn("crashed", bad["daemon"])
 
     def test_c6_crash_fails_at_once_even_in_grace(self):
         result, bad = self.failing(lambda w: w.state.update(restarts=1))
@@ -177,9 +224,24 @@ class CheckTest(unittest.TestCase):
         chk = self.w.check()
         result, _ = chk.run()
         self.assertIn(result, ("failed", "inconclusive"))
-        self.assertLessEqual(self.clock.t - 1000.0, rc.GRACE_S + rc.WINDOW_S + rc.SLACK_S + rc.REQ_BUDGET_S * 3)
-        # every request was capped by the time left
-        self.assertTrue(all(c[2] <= rc.REQ_BUDGET_S for c in self.w.calls if c[0] != "systemctl"))
+        # Codex r3: no overrun at all (it used to allow 15 s); systemctl is capped like every request
+        self.assertLessEqual(self.clock.t - 1000.0, rc.GRACE_S + rc.WINDOW_S + rc.SLACK_S)
+        self.assertTrue(all(c[2] <= rc.REQ_BUDGET_S for c in self.w.calls))
+
+    def test_deadline_a_sample_running_into_it_is_never_healthy(self):
+        # Codex r3: a sample starting at 8 s with a 9 s deadline returned healthy at 13 s
+        self.w.probe_cost = 1                 # 5 probes = 5 s a sample; the 2nd sample ends past the deadline
+        chk = self.w.check(grace=0, window=0, interval=0, slack=9)
+        result, _ = chk.run()
+        self.assertEqual(result, "inconclusive")
+        self.assertLessEqual(self.clock.t - 1000.0, 9)
+
+    def test_deadline_no_probe_starts_once_time_is_up(self):
+        self.w.probe_cost = 1
+        chk = self.w.check(grace=0, window=0, interval=0, slack=9)
+        chk.run()
+        self.assertTrue(all(c[2] > 0 for c in self.w.calls))
+        self.assertLessEqual(len(self.w.calls), 10)
 
     def test_deadline_request_budget_shrinks_to_time_left(self):
         chk = self.w.check()
@@ -195,6 +257,47 @@ class AlertTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(len(calls), 3)
         self.assertLessEqual(clock.t - 1000, rc.NOTIFY_WINDOW_S)
+
+    def test_notify_never_retries_an_ambiguous_post(self):
+        # Codex r3: a POST that timed out may be stored; each POST makes a new message, so a retry shows it twice
+        calls = []
+        self.assertFalse(rc.notify(lambda t: calls.append(t) or None, "x"))
+        self.assertEqual(len(calls), 1)
+
+    def test_post_only_a_refused_connection_counts_as_unsent(self):
+        seen = {}
+
+        def post_with(status):
+            http = lambda m, path, h, b, t: (status, b"")      # noqa: E731
+            tmp = Path(tempfile.mkdtemp(prefix="rc-post-", dir=os.environ.get("TMPDIR")))
+            self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+            (tmp / "t").write_text("x\n")
+            return rc.make_post(1, str(tmp / "t"), "c", http)("hi")
+        seen["ok"], seen["refused"], seen["timeout"], seen["500"] = (post_with(200), post_with(rc.NOT_SENT),
+                                                                      post_with(None), post_with(500))
+        self.assertEqual(seen, {"ok": True, "refused": False, "timeout": None, "500": None})
+
+    def test_append_log_writes_the_whole_line_after_short_writes(self):
+        tmp = Path(tempfile.mkdtemp(prefix="rc-log-", dir=os.environ.get("TMPDIR")))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        real = os.write
+        os.write = lambda fd, data: real(fd, bytes(data)[:3])
+        try:
+            rc.append_log(str(tmp / "l.jsonl"), {"result": "healthy", "x": "y" * 40})
+        finally:
+            os.write = real
+        self.assertEqual(json.loads((tmp / "l.jsonl").read_text())["x"], "y" * 40)
+
+    def test_append_log_raises_when_nothing_can_be_written(self):
+        tmp = Path(tempfile.mkdtemp(prefix="rc-log-", dir=os.environ.get("TMPDIR")))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        real = os.write
+        os.write = lambda fd, data: 0
+        try:
+            with self.assertRaises(OSError):
+                rc.append_log(str(tmp / "l.jsonl"), {"a": 1})
+        finally:
+            os.write = real
 
     def test_notify_stops_at_first_success(self):
         calls = []
@@ -256,7 +359,7 @@ class HttpTest(unittest.TestCase):
         srv = self.serve(trickle)
         t0 = time.monotonic()
         self.assertEqual(rc.loopback_http(srv.port, "GET", "/x", {}, None, 1), (None, b""))
-        self.assertLess(time.monotonic() - t0, 3)
+        self.assertLess(time.monotonic() - t0, 1.5)   # the budget, with no extra second after it (Codex r3)
 
     def test_body_trickle_ends_within_the_budget(self):
         def trickle(c, req):
@@ -290,7 +393,7 @@ class CliTest(unittest.TestCase):
         self.web.mkdir()
         (self.web / "index.html").write_bytes(INDEX)
         self.steps = self.tmp / "steps.txt"
-        self.steps.write_text("Rollback steps: git switch --detach PREVSHA\n")
+        self.steps.write_text("Rollback: follow docs/runbooks/tasks-db-v10-rollback.md\n")
         self.token = self.tmp / "token"
         self.token.write_text("s3cret-token-value\n")
         self.log = self.tmp / "deploys" / "releases.jsonl"
@@ -304,11 +407,13 @@ class CliTest(unittest.TestCase):
         self.shim = shim
         self.posts = []
 
-    def fake_ccd(self, health_ok=True, accept_post=True, ui_ok=True):
+    def fake_ccd(self, health_ok=True, accept_post=True, ui_ok=True, silent_post=False):
         def behave(c, req):
             line = req.split(b"\r\n", 1)[0]
             if line.startswith(b"POST"):
                 self.posts.append(req)
+                if silent_post:
+                    return   # stored (or not) but never answered: the caller cannot know
                 c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}" if accept_post
                           else b"HTTP/1.1 500 X\r\nContent-Length: 0\r\n\r\n")
                 return
@@ -358,7 +463,8 @@ class CliTest(unittest.TestCase):
         self.assertIn("Release check FAILED", body)
         self.assertIn("api", body)
         self.assertIn("bbbbbbb", body)
-        self.assertIn("git switch --detach PREVSHA", body)
+        self.assertIn("docs/runbooks/tasks-db-v10-rollback.md", body)
+        self.assertNotIn("git switch", body)
         self.assertEqual(body.strip(), r.stdout.split("\n(not sent")[0].strip())   # pane and Messages say the same
         entry = json.loads(self.log.read_text())
         self.assertEqual((entry["result"], entry["check"], entry["notified"]), ("failed", "api", True))
@@ -373,8 +479,32 @@ class CliTest(unittest.TestCase):
         self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
         self.assertLess(time.monotonic() - t0, 60)
         self.assertIn("Release check FAILED", r.stdout)
-        self.assertIn("git switch --detach PREVSHA", r.stdout)
+        self.assertIn("docs/runbooks/tasks-db-v10-rollback.md", r.stdout)
         self.assertFalse(json.loads(self.log.read_text())["notified"])
+
+    def test_dup_an_unanswered_post_is_not_retried(self):
+        srv = self.fake_ccd(health_ok=False, silent_post=True)
+        r = self.run_cli(srv)
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertEqual(len(self.posts), 1)
+        self.assertIn("not retried", r.stdout)
+        self.assertFalse(json.loads(self.log.read_text())["notified"])
+
+    def test_log_a_lost_log_line_is_not_a_pass(self):
+        # Codex r3: a failed log append still printed healthy and exited 0, with no release record
+        self.log.parent.mkdir(parents=True)
+        self.log.mkdir()                       # the log path is a directory: the append cannot work
+        r = self.run_cli(self.fake_ccd(), ["--old-pid", "400"])
+        self.assertEqual(r.returncode, 5, r.stdout + r.stderr)
+        self.assertIn("do not record deployed as pass", r.stdout)
+        self.assertIn("could not write the release log", r.stderr)
+
+    def test_log_a_lost_log_line_keeps_the_alert_and_its_exit_code(self):
+        self.log.parent.mkdir(parents=True)
+        self.log.mkdir()
+        r = self.run_cli(self.fake_ccd(health_ok=False))
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("Release check FAILED", r.stdout)
 
     def test_c9_only_systemctl_show_runs_and_the_token_never_leaks(self):
         srv = self.fake_ccd(health_ok=False)

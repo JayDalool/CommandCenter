@@ -164,18 +164,23 @@ class GoLiveTest(GoLiveBase):
         self.assertIn("risky change", r.stdout)
         self.assert_untouched(before)
 
-    def test_e_rollback_text_names_the_recorded_release_and_never_copies_the_backup(self):
+    def test_e_rollback_is_a_runbook_pointer_never_commands(self):
+        # Q220: printed rollback commands were unsafe (an old release on a newer database, a failing step not
+        # stopping the rest), so go-live names the runbook and nothing else.
         full = self.head()
         r = self.run_script("--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn(f"Rollback (back to release 20261012T000000Z-{full[:7]} @ {full[:12]}):", r.stdout)
-        self.assertIn(f"git switch --detach {full}", r.stdout)
-        self.assertIn("server/.venv/bin/pip install -q -r server/requirements.txt", r.stdout)
-        self.assertIn("ln -sfn releases/20261012T000000Z-", r.stdout)   # re-points web/current, no npm rebuild
-        self.assertIn("mv -T", r.stdout)
-        self.assertNotIn("deploy-web.sh", r.stdout.split("Rollback would be:")[1])
-        self.assertNotIn("cp ", r.stdout.split("Rollback would be:")[1])  # Q182: the backup is never copied back
+        text = r.stdout.split("Rollback would be:")[1]
+        self.assertIn("docs/runbooks/tasks-db-v10-rollback.md", text)
+        self.assertTrue((SCRIPT.parents[1] / "docs" / "runbooks" / "tasks-db-v10-rollback.md").is_file())
+        for banned in ("git switch", "ln -sfn", "pip install", "migration_safety", "systemctl", "deploy-web.sh", "cp "):
+            self.assertNotIn(banned, text)
         self.assert_untouched(full)
+
+    def test_the_script_source_prints_no_rollback_commands(self):
+        script = SCRIPT.read_text()
+        for banned in ("switch --detach", "ln -sfn $PREV", "stop ccd", "migration_safety rollback", "PREV_SCHEMA"):
+            self.assertNotIn(banned, script)
 
     def test_f_diverged_local_main_is_refused(self):
         self.push_main("origin side")
@@ -252,8 +257,6 @@ class GoLiveTest(GoLiveBase):
         r = self.run_script("--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(f"note: the checkout is at {pulled[:12]} but live is {live[:12]}", r.stdout)
-        self.assertIn(f"@ {live[:12]}):", r.stdout)
-        self.assertIn(f"git switch --detach {live}", r.stdout)
         arriving = r.stdout.split("leaving live:")[0]
         self.assertIn("merged and pulled, never deployed", arriving)  # not live yet, so it arrives
         self.assertIn("merged since", arriving)
@@ -285,7 +288,6 @@ class GoLiveTest(GoLiveBase):
         r = self.run_script("--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("note:", r.stdout)
-        self.assertIn(f"git switch --detach {before}", r.stdout)
         self.assert_untouched(before)
 
     def test_l_feature_branch_fetch_updates_only_its_tracking_ref(self):
@@ -328,6 +330,7 @@ cat "{t}/health.json" 2>/dev/null || exit 22
 echo ran >> "{self.markers}/deploy-web.sh"
 d="releases/20261101T000000Z-$(git rev-parse --short=7 HEAD)"
 mkdir -p "{web}/$d" && echo '<html>new</html>' > "{web}/$d/index.html"
+[ -f "{t}/noindex" ] && rm "{web}/$d/index.html"
 ln -sfn "$d" "{web}/current"
 """)
         (self.repo / "server" / "ccd").mkdir(parents=True)
@@ -387,7 +390,6 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
         self.assertNotIn("do not record", r.stdout + r.stderr)
 
     def test_c8_failed_check_alerts_and_changes_nothing(self):
-        live = self.head()
         new, r = self.go(STUB_EXIT=3, STUB_OUT="Release check FAILED: api")
         self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
         self.assertIn("do not record deployed as pass", r.stderr)
@@ -397,14 +399,11 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
         web = self.home / ".local" / "share" / "command-center" / "web"
         self.assertIn(new[:7], os.readlink(web / "current"))
         self.assertEqual(len(self.restarts()), 1)
-        # the steps the check shows name this release's previous commit and release, and never copy the backup
+        # the text the check shows links the runbook and holds no command, and never copies the backup
         steps = self.steps()
-        self.assertIn(f"git switch --detach {live}", steps)
-        self.assertIn(f"ln -sfn releases/20261012T000000Z-{live[:7]}", steps)
-        self.assertIn("migration_safety rollback", steps)
-        self.assertIn("--to 14", steps)
-        self.assertNotIn("cp ", steps)
-        self.assertIn("docs/runbooks/tasks-db-v15-rollback.md", steps)
+        self.assertIn("docs/runbooks/tasks-db-v10-rollback.md", steps)
+        for banned in ("git switch", "ln -sfn", "pip install", "migration_safety rollback", "systemctl", "cp "):
+            self.assertNotIn(banned, steps)
 
     def test_exit_4_and_2_pass_through_with_the_same_warning(self):
         for code in (4, 2):
@@ -414,18 +413,9 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
                 self.assertEqual(r.returncode, code, r.stdout + r.stderr)
                 self.assertIn("do not record deployed as pass", r.stderr)
 
-    def test_no_migration_step_when_the_schema_did_not_change(self):
-        (self.tmp / "new_schema").write_text("14\n")
-        self.go()
-        self.assertNotIn("migration_safety", self.steps())
-        self.assertIn("no database change", self.steps())
-
-    def test_old_ccd_down_before_the_restart_says_schema_unknown_and_does_not_judge_herdr(self):
+    def test_old_ccd_down_before_the_restart_does_not_judge_herdr(self):
         (self.tmp / "health.json").unlink()
         self.go()
-        steps = self.steps()
-        self.assertNotIn("migration_safety rollback --db", steps)   # no guessed --to
-        self.assertIn("not known: do not guess", steps)
         args = self.check_args()
         self.assertIn("--herdr-ok unknown", args)
         self.assertIn("--old-pid 400", args)        # still taken from systemctl's MainPID
@@ -435,8 +425,6 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
         (web / "current").unlink()
         _, r = self.go()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("no previous release is recorded", self.steps())
-        self.assertNotIn("git switch --detach", self.steps())
         self.assertIn("--from  --to", self.check_args())
 
     def test_a_failing_restart_still_runs_the_check(self):
@@ -446,13 +434,50 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
         self.assertTrue(self.stub_marker.exists())
         self.assertIn("systemctl restart ccd failed", r.stderr)
 
+    def test_exit_a_failed_restart_is_never_exit_0_even_when_the_check_looks_healthy(self):
+        # Codex r3: the restart failure was discarded, so a healthy-looking sample (the old ccd still up) gave exit 0
+        (self.tmp / "restart_rc").write_text("1\n")
+        _, r = self.go()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("do not record deployed as pass", r.stderr)
+        self.assertIn("docs/runbooks/tasks-db-v10-rollback.md", r.stderr)
+        self.assertNotIn("Live is on", r.stdout)
+
+    def test_exit_5_healthy_but_not_logged_passes_through(self):
+        _, r = self.go(STUB_EXIT=5)
+        self.assertEqual(r.returncode, 5, r.stdout + r.stderr)
+        self.assertIn("do not record deployed as pass", r.stderr)
+
+    def test_exit_a_checker_that_cannot_start_is_cannot_run_with_the_runbook(self):
+        # Codex r3: a missing or crashing checker leaked 1 or 127 and printed no recovery text
+        for label, setup in (("crash", lambda: None), ("missing", lambda: (self.repo / "server/ccd/release_check.py").unlink())):
+            with self.subTest(label):
+                self.setUp()
+                if label == "missing":
+                    (self.repo / "server/ccd/release_check.py").unlink()
+                    git(self.repo, "commit", "-qam", "drop the checker")
+                    git(self.repo, "push", "-q", "origin", "main")
+                    git(self.other, "pull", "-q", "origin", "main")
+                    _, r = self.go()
+                else:
+                    _, r = self.go(STUB_EXIT=1)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("could not run", r.stderr)
+                self.assertIn("docs/runbooks/tasks-db-v10-rollback.md", r.stderr)
+                self.assertIn("do not record deployed as pass", r.stderr)
+
+    def test_exit_2_when_the_new_release_has_no_index_prints_the_runbook(self):
+        (self.tmp / "noindex").write_text("1\n")
+        _, r = self.go()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("docs/runbooks/tasks-db-v10-rollback.md", r.stderr)
+
     def test_a_failing_step_after_the_switch_prints_where_and_the_steps(self):
-        live = self.head()
         (self.tmp / "pip_rc").write_text("1\n")
         new, r = self.go()
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("go-live stopped at: server requirements", r.stderr)
-        self.assertIn(f"git switch --detach {live}", r.stderr)
+        self.assertIn("docs/runbooks/tasks-db-v10-rollback.md", r.stderr)
         self.assertIn("do not record deployed as pass", r.stderr)
         self.assertFalse(self.stub_marker.exists())     # the check never ran
         self.assertEqual(self.restarts(), [])
@@ -464,6 +489,7 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
         deploy_part = script.split('echo "== restart ccd"')[1].split("cat <<EOF")[0]
         self.assertNotIn("stop ccd", deploy_part)
         self.assertNotIn("switch --detach", deploy_part)
+        self.assertNotIn("migration_safety", deploy_part)
 
 
 def write(path, text):

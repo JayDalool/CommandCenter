@@ -99,8 +99,9 @@ usage row written since then is gone from the database. Jay decides this explici
 6. Make sure the code matches the restored schema (a v9 file opens in either release; a v10 file needs the v10
    code), then `systemctl --user start ccd` and check `/api/health` as in A.
 
-`go-live.sh` prints a shorter rollback that copies the pre-deploy backup with `cp`. That is safe only after a clean
-stop with no `tasks.db-wal` present; steps 4 and 5 above cover the case where ccd did not stop cleanly.
+`go-live.sh` prints no rollback commands (CC-063, Q220); its release-check alert links this page and Jay decides. Never
+copy the pre-deploy backup over tasks.db: it loses every row written since go-live. Before going back, check that
+the older release supports the database's current schema (A refuses otherwise), and stop at the first step that fails.
 
 ## Before the upgrade, and how this was tested
 
