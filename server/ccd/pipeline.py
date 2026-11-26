@@ -128,14 +128,10 @@ def policy(ticket, project_key=None):
 CLOSED_STATUSES = ("DONE", "DENIED", "CANCELLED")
 HOLDING_GATES = ("plan", "failure")       # jay_first: Jay's decisions that hold a ticket (questions too)
 STALE_OPTIONS = ("Cancel it", "Keep it")   # the task check's question; "Cancel it" cancels the ticket
-# CC-085: the weekly "Still needed?" sweep. Its question reuses purpose 'stale' (the column's CHECK allows nothing
-# else and a migration is not worth it) and is told apart from the task check by SWEEP_TEXT. Only "Close it" does
-# anything beyond a note, and even that only proposes the ticket as stale: Jay's own cancel is a second question.
-SWEEP_TEXT = "Still needed? No progress recorded for"
-SWEEP_OPTIONS = ("Finish it", "Move to backlog", "Close it")
+# CC-085: the weekly "Still needed?" list. A ticket question was tried first and rejected: it became a start gate, hid
+# real plan/failure holds and tangled with answer delivery. The list is a Messages line only and writes no question.
 SWEEP_QUIET = 5 * 86400    # no recorded progress for this long
-SWEEP_EVERY = 7 * 86400    # one question per ticket per week
-SWEEP_KIND = "sweep.still_needed"   # not 'pipeline.%': asking must not count as progress and restart the quiet spell
+SWEEP_EVERY = 7 * 86400    # one list per week, kept in the daemon's store so a restart does not resend it
 # The ten stages Jay sees (spec §24). The canonical statuses stay as they are underneath.
 VISIBLE_STAGES = ("Planning", "Implementing", "Reviewing", "UI Testing", "Verifying", "Ready to Merge", "Deploying",
                   "Needs Jay", "Blocked", "Closed")
@@ -568,17 +564,14 @@ class Pipeline:
                 "url": None, "flags": [f"gate:{g}"], "status": st, "since": at}
                for k, p, title, st, g, reason, at in rows]
         gated = {o["ref"] for o in out}
-        for k, p, title, st, n, stale, at, sweep in self.db.execute(
-                "SELECT t.key, t.project, t.title, t.status, COUNT(*), SUM(q.purpose IS 'stale'), MIN(q.asked_at), "
-                "SUM(q.text LIKE ?) "
+        for k, p, title, st, n, stale, at in self.db.execute(
+                "SELECT t.key, t.project, t.title, t.status, COUNT(*), SUM(q.purpose IS 'stale'), MIN(q.asked_at) "
                 "FROM ticket_questions q JOIN tickets t ON t.id=q.ticket_id WHERE q.answered_at IS NULL AND t.archived=0 "
-                "AND t.status NOT IN ('DONE','DENIED','CANCELLED') GROUP BY t.id ORDER BY MIN(q.asked_at)",
-                (SWEEP_TEXT + "%",)).fetchall():
+                "AND t.status NOT IN ('DONE','DENIED','CANCELLED') GROUP BY t.id ORDER BY MIN(q.asked_at)").fetchall():
             text = (f"Task check — still needed? {title}" if stale == n
                     else f"Claude needs {n} answer{'s' if n > 1 else ''}: {title}")
             item = {"project": p, "ref": k, "text": text[:300], "kind": "questions", "gate": None, "questions": n,
-                    "stale": bool(stale), "sweepOnly": sweep == n, "url": None,
-                    "flags": ["questions"] + (["stale"] if stale else []),
+                    "stale": bool(stale), "url": None, "flags": ["questions"] + (["stale"] if stale else []),
                     "status": st, "since": at}
             if k in gated:   # one item per ticket: the questions come first, they are what unblocks it
                 out = [o for o in out if o["ref"] != k]
@@ -601,9 +594,7 @@ class Pipeline:
         """What makes this ticket wait for Jay (registry `jay_first`, default on): an open question for Jay, a
         plan to approve or a blocker only he can clear — on this ticket, or on an open ticket it is blocked by.
         Every other ticket goes ahead. Sign-offs on finished work (merge acceptance, UI review, live deploy) do
-        not hold, and neither does the weekly "Still needed?" reminder when it is the only open question (CC-085:
-        a quiet-ticket nudge must not stop the ticket from starting); a blocking ticket that needs a lawyer
-        (needs:legal, type LEGAL) waits on the lawyer, not Jay."""
+        not hold; a blocking ticket that needs a lawyer (needs:legal, type LEGAL) waits on the lawyer, not Jay."""
         t = self.db.execute("SELECT id, key, project FROM tickets WHERE key=?", (str(key).upper(),)).fetchone()
         if not t or not registry.pipeline_of(t[2]).get("jay_first", True):
             return []
@@ -613,7 +604,7 @@ class Pipeline:
             (t[0],))}
         refs = blockers | {t[1]}
         return [n for n in self.needs() if n["ref"] in refs
-                and ((n["kind"] == "questions" and not n.get("sweepOnly")) or n.get("gate") in HOLDING_GATES)]
+                and (n["kind"] == "questions" or n.get("gate") in HOLDING_GATES)]
 
     def participating(self, key):
         """In the pipeline: an accepted plan or a recorded review. Its review state then belongs to the
@@ -2000,42 +1991,26 @@ class Pipeline:
                  lambda tid, t, w, at: ({}, {}, [("pipeline.pr_head", f"PR {ref} head {head[:7]}",
                                                   {"ref": ref, "head": head})]))
 
-    def sweep_still_needed(self, now=None):
-        """CC-085: once a week, every open ticket with no recorded progress in 5 days gets one "Still needed?"
-        question for Jay (finish it, move to backlog, close it). Progress is any pipeline step, handoff, answer, status
-        change, linked PR or PR push. A ticket already waiting on a Jay question is skipped, and so is one asked in the
-        last 7 days; that is read from ticket_events, so it holds across a ccd restart. INBOX and PROPOSED are open
-        too, so C1 covers them: a backlog ticket that stays quiet is asked again weekly. Never closes or cancels
-        anything. Returns [(ticket, changes, events)] for the daemon to announce."""
+    def quiet_tickets(self, now=None):
+        """CC-085: open tickets with no recorded progress in 5 days, as [{key, title, status, days}], oldest first.
+        Read-only: it writes no question, hold, gate or event, so a reminder can never block a start or hide a gate.
+        Progress is any pipeline step, handoff, answer, status change, linked PR or PR push. A ticket already waiting
+        on a Jay question is skipped (he is already being asked). INBOX and PROPOSED are open too (c1)."""
         now = _now() if now is None else now
         out = []
-        for key, tid, created in self.db.execute(
-                "SELECT key, id, created_at FROM tickets WHERE archived=0 AND status IN ('INBOX','PROPOSED','RESEARCHING',"
-                "'READY_TO_IMPLEMENT','IN_PROGRESS','IN_REVIEW','READY_TO_MERGE','VERIFYING','BLOCKED') "
-                "ORDER BY id").fetchall():
+        for key, tid, title, status, created in self.db.execute(
+                "SELECT key, id, title, status, created_at FROM tickets WHERE archived=0 AND status IN ('INBOX',"
+                "'PROPOSED','RESEARCHING','READY_TO_IMPLEMENT','IN_PROGRESS','IN_REVIEW','READY_TO_MERGE','VERIFYING',"
+                "'BLOCKED') ORDER BY id").fetchall():
             if self.db.execute("SELECT 1 FROM ticket_questions WHERE ticket_id=? AND answered_at IS NULL",
                                (tid,)).fetchone():
                 continue
-            asked = self.db.execute("SELECT MAX(at) FROM ticket_events WHERE ticket_id=? AND kind=?",
-                                    (tid, SWEEP_KIND)).fetchone()[0]
-            if asked is not None and now - asked < SWEEP_EVERY:
-                continue
             last = self.db.execute(
-                "SELECT MAX(at) FROM ticket_events WHERE ticket_id=? AND kind NOT IN (?,?) AND "
+                "SELECT MAX(at) FROM ticket_events WHERE ticket_id=? AND kind != ? AND "
                 # Only a linked PR is progress: a URL, commit or imported legacy ID says nothing about work (CC-085).
                 "(kind LIKE 'pipeline.%' OR field = 'status' OR (kind = 'linked' AND field = 'pr'))",
-                (tid, flow_mod.STALE_KIND, SWEEP_KIND)).fetchone()[0]
-            if now - max(last or 0, created or 0) < SWEEP_QUIET:
-                continue
-
-            def fn(tid, t, w, at, key=key, quiet=now - max(last or 0, created or 0)):
-                batch = (self.db.execute("SELECT MAX(batch) FROM ticket_questions WHERE ticket_id=?",
-                                         (tid,)).fetchone()[0] or 0) + 1
-                days = int(quiet // 86400)
-                self.db.execute("INSERT INTO ticket_questions(ticket_id, batch, position, text, kind, options, asked_at, "
-                                "asked_by, purpose) VALUES (?,?,0,?,'choice',?,?,?,'stale')",
-                                (tid, batch, f"{SWEEP_TEXT} {days} days: {t['title']}", json.dumps(list(SWEEP_OPTIONS)),
-                                 at, "system:automation"))
-                return {}, {}, [(SWEEP_KIND, f"asked Jay: still needed? (quiet {days} days)", {"batch": batch})]
-            out.append(self._tx(key, "system:automation", fn))
-        return out
+                (tid, flow_mod.STALE_KIND)).fetchone()[0]
+            since = max(last or 0, created or 0)
+            if now - since >= SWEEP_QUIET:
+                out.append({"key": key, "title": title, "status": status, "days": int((now - since) // 86400)})
+        return sorted(out, key=lambda t: -t["days"])

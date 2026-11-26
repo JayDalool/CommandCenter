@@ -141,26 +141,6 @@ describe("Decisions", () => {
       expect(r).toHaveTextContent("Sent to the SamVision lead in Messages");
     });
 
-    it("the weekly Still needed? question shows its own three answers and sends the one pressed (CC-085)", async () => {
-      withQuestions([q(1, { kind: "choice", options: ["Finish it", "Move to backlog", "Close it"], purpose: "stale",
-        text: "Still needed? No progress recorded for 6 days: Export" })]);
-      developer.set({ active: true, expiresAt: null, error: null });
-      const answers = vi.spyOn(app.api, "answers").mockResolvedValue({ work: work([]), complete: true, delivered: false,
-        reason: "moved to backlog" } as never);
-      const page = await show();
-      const r = row(page);
-      fireEvent.click(within(r).getByRole("button", { name: "Answer here" }));
-      await act(async () => {});
-      expect(within(r).queryByRole("button", { name: "Cancel it" })).toBeNull();
-      expect(within(r).queryByRole("button", { name: "Keep it" })).toBeNull();
-      expect(within(r).getAllByRole("button").map((b) => b.textContent).filter((t) => /it$|backlog$/.test(t!)))
-        .toEqual(["Finish it", "Move to backlog", "Close it"]);
-      fireEvent.click(within(r).getByRole("button", { name: "Move to backlog" }));
-      await act(async () => {});
-      expect(answers).toHaveBeenCalledWith("SV-056", [{ id: 1, answer: "Move to backlog" }]);
-      expect(r).toHaveTextContent("SV-056: moved to backlog");
-    });
-
     it("takes Jay's own words with Something else, and Other: … on a yes / no question", async () => {
       withQuestions([q(1, { kind: "choice", options: ["A", "B"] }), q(2, { kind: "yesno" }), q(3, {})]);
       developer.set({ active: true, expiresAt: null, error: null });

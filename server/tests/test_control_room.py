@@ -689,40 +689,50 @@ class ControlRoomApi(PipelineApi):
         self.assertIn("Kept in the task check", t["comments"][-1]["body"])
         self.assertEqual(self.get("/api/tasks/SV-056/work").json()["openQuestions"], 0)
 
-    def test_still_needed_close_only_proposes_it_as_stale(self):
-        """CC-085: answering the weekly question with "Close it" opens the usual Cancel it / Keep it question."""
-        self.ticket("IN_PROGRESS")
-        self.daemon.pipeline.sweep_still_needed(now=pipeline_mod._now() + 6 * 86400)
-        q = self.get("/api/tasks/SV-056/work").json()["questions"][-1]
-        self.assertTrue(q["text"].startswith(pipeline_mod.SWEEP_TEXT), q)
-        out = self.client.post("/api/tasks/SV-056/answers", content=json.dumps(
-            {"answers": [{"id": q["id"], "answer": "Close it"}]}), headers=dict(JSON, **self.dev())).json()
-        self.assertEqual((out["cancelled"], out["delivered"]), (False, False), out)
-        t = self.get("/api/tasks/SV-056").json()
-        self.assertEqual(t["status"], "IN_PROGRESS")                                   # nothing was cancelled
-        nxt = self.get("/api/tasks/SV-056/work").json()["questions"][-1]
-        self.assertEqual(nxt["options"], ["Cancel it", "Keep it"])
-        self.assertIsNone(nxt["answer"])
+    def _chat_on(self):
+        from ccd import chat as chat_mod
+        base = tempfile.mkdtemp(prefix="quiet-list-")
+        self.daemon.chat = chat_mod.Chat(os.path.join(base, "chat.db"), os.path.join(base, "files"), 1 << 20)
 
-    def test_a_regular_answer_posted_with_the_weekly_one_is_still_delivered(self):
-        """CC-085 round 2: the weekly answer must not swallow delivery of a regular answer sent with it."""
-        self.ticket("IN_PROGRESS")
-        self.task_agent()
-        self.daemon.pipeline.sweep_still_needed(now=pipeline_mod._now() + 6 * 86400)
-        self.step("ask", {"questions": ["Which option?"]})
-        qs = self.get("/api/tasks/SV-056/work").json()["questions"]
-        weekly = next(q for q in qs if q["text"].startswith(pipeline_mod.SWEEP_TEXT))
-        regular = next(q for q in qs if q["id"] != weekly["id"])
-        out = self.client.post("/api/tasks/SV-056/answers", content=json.dumps(
-            {"answers": [{"id": weekly["id"], "answer": "Finish it"}, {"id": regular["id"], "answer": "B"}]}),
-            headers=dict(JSON, **self.dev())).json()
-        self.assertEqual((out["complete"], out["delivered"]), (True, True), out)
-        sent = [p for m, p in self.fake.calls if m == "agent.prompt"]
-        self.assertEqual(len(sent), 1)
-        self.assertIn("Which option?\n   → B", sent[0]["text"])
-        self.assertNotIn("Still needed", sent[0]["text"])
+        def off():
+            self.daemon.chat.close()
+            self.daemon.chat = None
+            import shutil
+            shutil.rmtree(base)
+        self.addCleanup(off)
 
-    def test_a_push_to_the_pr_of_a_ticket_outside_the_pipeline_is_progress_for_the_sweep(self):
+    def test_the_weekly_quiet_list_is_one_messages_line_once_a_week_also_after_a_restart(self):
+        """CC-085: one Messages line per week listing quiet tickets; no question, hold or gate is written."""
+        from ccd.store import Store
+        self._chat_on()
+        self.ticket("IN_PROGRESS")
+        t0 = pipeline_mod._now() + 6 * 86400
+        q_before = self.tickets.db.execute("SELECT COUNT(*) FROM ticket_questions").fetchone()[0]
+        msg = self.daemon.weekly_quiet_list(now=t0)
+        self.assertIsNotNone(msg)
+        self.assertEqual((msg["conversation"], msg["side"]), ("cto", "lead"))
+        self.assertIn("SV-056", msg["text"])
+        self.assertIn("/#/tasks/SV-056", msg["text"])
+        self.assertEqual(self.tickets.db.execute("SELECT COUNT(*) FROM ticket_questions").fetchone()[0], q_before)
+        self.assertEqual(self.daemon.pipeline.held("SV-056"), [])
+        self.assertEqual(self.daemon.pipeline.gate_counts()["open"], 0)
+        self.assertTrue(any(e["kind"] == "chat.reply" for e in self.store.since(0)))   # the notifier relays this to Slack
+        self.assertIsNone(self.daemon.weekly_quiet_list(now=t0 + 3 * 86400))           # the same week
+        self.store.close()                                                             # a ccd restart: same database
+        self.store = self.daemon.store = Store(self.store.path)
+        self.assertIsNone(self.daemon.weekly_quiet_list(now=t0 + 6.5 * 86400))
+        self.assertIsNotNone(self.daemon.weekly_quiet_list(now=t0 + 7.5 * 86400))
+        self.assertEqual(len(self.daemon.chat.history("cto")), 2)
+
+    def test_an_empty_quiet_list_sends_nothing_and_a_ticket_waiting_on_jay_is_left_out(self):
+        self._chat_on()
+        self.assertIsNone(self.daemon.weekly_quiet_list(now=pipeline_mod._now() + 30 * 86400))   # no tickets
+        self.ticket("INBOX")
+        self.step("ask", {"questions": ["Which?"]})                                              # waiting on Jay
+        self.assertIsNone(self.daemon.weekly_quiet_list(now=pipeline_mod._now() + 30 * 86400))
+        self.assertEqual(self.daemon.chat.history("cto"), [])
+
+    def test_a_push_to_the_pr_of_a_ticket_outside_the_pipeline_is_progress_for_the_quiet_list(self):
         """CC-085 review: the GitHub poll must record PR head moves for tickets that are not in the pipeline too."""
         from unittest import mock
         from .helpers import pr
@@ -737,26 +747,9 @@ class ControlRoomApi(PipelineApi):
                 self.poll()
         push("a1" * 20, t0)
         push("b2" * 20, t0 + 4 * 86400)                                               # a push on day 4
-        n = self.tickets.db.execute("SELECT COUNT(*) FROM ticket_events e JOIN tickets t ON t.id=e.ticket_id "
-                                    "WHERE t.key=? AND e.kind='pipeline.pr_head'", (key,)).fetchone()[0]
-        self.assertEqual(n, 2)
-        self.assertEqual(self.daemon.pipeline.sweep_still_needed(now=t0 + 6 * 86400), [])   # 2 quiet days only
-        self.assertEqual(len(self.daemon.pipeline.sweep_still_needed(now=t0 + 9.5 * 86400)), 1)
-
-    def test_every_still_needed_answer_does_what_its_label_says(self):
-        """CC-085 review: the three real options reach the backend as themselves, not as a Keep it."""
-        for no, (label, status, comment) in enumerate((("Finish it", "IN_PROGRESS", "Kept going"),
-                                                       ("Move to backlog", "PROPOSED", "Moved to backlog")), 70):
-            key = self.tickets.create("samvision", "feature", number=no, status="IN_PROGRESS")[0]["key"]
-            self.daemon.pipeline.sweep_still_needed(now=pipeline_mod._now() + 6 * 86400)
-            q = self.get(f"/api/tasks/{key}/work").json()["questions"][-1]
-            self.assertEqual(q["options"], list(pipeline_mod.SWEEP_OPTIONS))
-            out = self.client.post(f"/api/tasks/{key}/answers", content=json.dumps(
-                {"answers": [{"id": q["id"], "answer": label}]}), headers=dict(JSON, **self.dev())).json()
-            self.assertFalse(out["cancelled"], out)
-            t = self.get(f"/api/tasks/{key}").json()
-            self.assertEqual(t["status"], status, label)
-            self.assertIn(comment, t["comments"][-1]["body"])
+        quiet = lambda at: [x["key"] for x in self.daemon.pipeline.quiet_tickets(now=at)]  # noqa: E731
+        self.assertEqual(quiet(t0 + 6 * 86400), [])                                    # 2 quiet days only
+        self.assertEqual(quiet(t0 + 9.5 * 86400), [key])
 
     def test_the_task_check_sends_one_fixed_message_to_the_idle_coordinator(self):
         self.ticket("INBOX")

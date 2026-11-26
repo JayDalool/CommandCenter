@@ -1832,29 +1832,37 @@ class Daemon(LeadChat, HqDaemon):
             return
         for r in self.pipeline.sweep_stale():
             self._pipeline_result(*r)
-        # CC-085: the weekly "Still needed?" question. Its own once-a-week rule lives in the ticket's events.
-        for r in self.pipeline.sweep_still_needed():
-            self._pipeline_result(*r)
+        self.weekly_quiet_list()
 
-    def _still_needed_answer(self, key, answer, actor):
-        """Jay's answer to the weekly "Still needed?" question (CC-085). Nothing here cancels: "Close it" only
-        proposes the ticket as stale, which asks Jay the usual Cancel it / Keep it question, and cancelling stays
-        his. "Move to backlog" is his own answer, so it may move the status (the task check cancels the same way)."""
-        done = {"work": None, "complete": True, "delivered": False, "cancelled": False}
-        if answer == pipeline_mod.SWEEP_OPTIONS[1]:
-            self.task_comment(key, "Moved to backlog in the weekly still-needed check", actor)
-            self.task_update(key, {"status": "PROPOSED"}, actor, developer=True)
-            done["reason"] = "moved to backlog"
-        elif answer == pipeline_mod.SWEEP_OPTIONS[2]:
-            self.task_comment(key, "Jay chose close in the weekly still-needed check; proposed as stale", actor)
-            self._pipeline_result(*self._wrap(self.pipeline.stale, key, "Jay chose close in the weekly "
-                                              "still-needed check", "system:automation"))
-            done["reason"] = "proposed as stale for Jay's cancel"
-        else:
-            self.task_comment(key, "Kept going in the weekly still-needed check", actor)
-            done["reason"] = "kept in the still-needed check"
-        done["work"] = self.task_work(key)
-        return done
+    def weekly_quiet_list(self, now=None):
+        """CC-085: at most once a week, one Messages line (and so the Slack DM, through the notifier's chat.reply relay)
+        listing every open ticket with no progress in 5 days. When it was last sent lives in the store, so a ccd restart
+        does not send it twice. Nothing is sent for an empty list, and the list is not written to any ticket: no question,
+        hold, gate or answer is created. Nothing is cancelled; "close" is the existing stale proposal."""
+        if self.pipeline is None or self.chat is None:
+            return None
+        now = _now() if now is None else now
+        last = self.store.get("sweep:quiet_list_at")[0]
+        if isinstance(last, (int, float)) and now - last < pipeline_mod.SWEEP_EVERY:
+            return None
+        quiet = self.pipeline.quiet_tickets(now)
+        if not quiet:
+            return None
+        base = str(((self.notifier.conf if self.notifier is not None else {}) or {}).get("link_base")
+                   or "http://localhost:7777").rstrip("/")
+        lines = [f"Still needed? {len(quiet)} open ticket{'s' if len(quiet) != 1 else ''} with no progress in 5 days. "
+                 "On each ticket page: finish it (keep going), move it to backlog (status), or close it "
+                 "(propose it as stale; only you cancel)."]
+        lines += [f"{t['key']} ({t['status']}, {t['days']} days): {t['title']} {base}/#/tasks/{t['key']}"
+                  for t in quiet[:20]]
+        if len(quiet) > 20:
+            lines.append(f"and {len(quiet) - 20} more")
+        # Stored before sending so a failed send is not retried every minute; the next list is a week away.
+        self.store.put("sweep:quiet_list_at", now)
+        msg = self._chat_add("cto", "lead", "agent:cto", "\n".join(lines), via="cli")
+        self._event("chat", "chat.reply", f"quiet-ticket list sent in Messages ({len(quiet)} tickets)",
+                    data={"conversation": "cto", "messageId": msg["id"], "author": "agent:cto", "files": 0})
+        return msg
 
     def task_session(self, key):
         """The ticket's task Claude session, from the one resolver (coordid.task_session). A pane that is any
@@ -1892,14 +1900,6 @@ class Daemon(LeadChat, HqDaemon):
         # The task check: Jay's answer to a stale proposal. "Cancel it" cancels the ticket (and ends its
         # sessions); "Keep it" keeps it. Neither is typed into any Claude session.
         stale = [a for a in answers if isinstance(a, dict) and (before.get(a.get("id")) or {}).get("purpose") == "stale"]
-        # The weekly sweep answer is handled on its own: when it travels with a regular answer (CC-085), the regular
-        # one must still reach the task session, so only an answer set made of sweep answers alone returns here.
-        sweep = [a for a in stale if before[a["id"]]["text"].startswith(pipeline_mod.SWEEP_TEXT)]
-        if sweep:
-            swept = self._still_needed_answer(key, str(sweep[0].get("answer") or "").strip(), actor)
-            if len(sweep) == len(answers):
-                return swept
-            stale = [a for a in stale if a not in sweep]
         if stale:
             q = before[stale[0]["id"]]
             reason = q["text"].split(" — ", 1)[-1]

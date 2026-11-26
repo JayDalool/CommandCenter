@@ -216,11 +216,3 @@ export function ticketForAgent(tickets: Ticket[], a: Agent): Ticket | undefined 
 }
 
 export const PRIORITY_ORDER = PRIORITIES;
-
-/** The weekly "Still needed?" question (CC-085) shares purpose "stale" with the task check but has three answers of its
- * own; ccd tells them apart by this text, so the screens show the options the question carries, not Cancel/Keep. */
-export const STILL_NEEDED_TEXT = "Still needed? No progress recorded for";
-export const isStillNeeded = (q: { text: string }) => q.text.startsWith(STILL_NEEDED_TEXT);
-/** What Jay is told after a stale-purpose answer: the ticket's fate for the task check, ccd's own reason otherwise. */
-export const staleSaid = (key: string, q: { text: string }, r: { cancelled?: boolean; reason?: string | null }) =>
-  isStillNeeded(q) ? `${key}: ${r.reason ?? "answered"}` : r.cancelled ? `${key} cancelled` : `${key} kept`;

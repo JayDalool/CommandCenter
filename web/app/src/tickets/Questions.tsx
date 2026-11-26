@@ -6,7 +6,6 @@ import { app } from "../store/app";
 import type { AnswersResult, Question, TicketWork } from "../api/types";
 import { devOr, useDevActive } from "../components/DevMode";
 import { Ago } from "../components/ui";
-import { isStillNeeded, staleSaid } from "./model";
 
 const OTHER = "\u0000other";
 /** The option the agent recommends (multiple-choice questions; older ccds send none), and why. */
@@ -65,17 +64,17 @@ export function QuestionsForm({ ticketKey, work, onDone, compact = false }: {
     try {
       const r = await app.api.answers(ticketKey, [{ id: q.id, answer }]);
       onDone(r.work);
-      app.toast(isStillNeeded(q) ? staleSaid(ticketKey, q, r) : r.cancelled ? `${ticketKey} cancelled — not needed any more` : `${ticketKey} kept`);
+      app.toast(r.cancelled ? `${ticketKey} cancelled — not needed any more` : `${ticketKey} kept`);
     } catch (ex) {
       app.toast((ex as Error).message, "bad");
     } finally { setBusy(false); }
   };
   const staleCards = stale.map((q) => <div key={q.id} className="qs-stale" role="group" aria-label={`Task check on ${ticketKey}`}>
-    <div className="qs-head"><b>{isStillNeeded(q) ? `Still needed — ${ticketKey}` : `Task check — is ${ticketKey} still needed?`}</b></div>
+    <div className="qs-head"><b>Task check — is {ticketKey} still needed?</b></div>
     <div className="qs-q">{q.text.replace(/^Task check: /, "")}</div>
     <div className="row">
-      {(isStillNeeded(q) ? q.options : ["Cancel it", "Keep it"]).map((o, i) =>
-        <button key={o} type="button" className={i === 0 ? "btn is-primary" : "btn"} disabled={busy} onClick={() => void decide(q, o)}>{o}</button>)}
+      <button type="button" className="btn is-primary" disabled={busy} onClick={() => void decide(q, "Cancel it")}>Cancel it</button>
+      <button type="button" className="btn" disabled={busy} onClick={() => void decide(q, "Keep it")}>Keep it</button>
       <span className="mono-xs muted">Asked by {q.askedBy.replace(/^agent:/, "Claude ")} <Ago at={q.askedAt} /></span>
     </div>
     {!dev && <div className="mono-xs muted">Deciding needs Developer Mode (once per session).</div>}

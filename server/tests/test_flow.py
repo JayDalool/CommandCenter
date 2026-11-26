@@ -532,31 +532,28 @@ class Stale(Base):
 
 
 class StillNeeded(Base):
-    """CC-085: the weekly "Still needed?" sweep."""
+    """CC-085: the weekly quiet-ticket list. The pipeline side only reads; the daemon sends it (test_control_room)."""
     DAY = 86400
 
-    def asked(self, out):
-        return [r[0]["key"] for r in out]
+    def quiet(self, at):
+        return [t["key"] for t in self.pl.quiet_tickets(now=at)]
 
     def test_the_five_day_cutoff(self):
         k = self.sized()
         t0 = pipeline._now()
-        self.assertEqual(self.pl.sweep_still_needed(now=t0 + 4.9 * self.DAY), [])
-        out = self.pl.sweep_still_needed(now=t0 + 5.1 * self.DAY)
-        self.assertEqual(self.asked(out), [k])
-        q = self.pl.work(k)["questions"][-1]
-        self.assertEqual((q["purpose"], q["options"]), ("stale", list(pipeline.SWEEP_OPTIONS)))
-        self.assertTrue(q["text"].startswith(pipeline.SWEEP_TEXT))
+        self.assertEqual(self.quiet(t0 + 4.9 * self.DAY), [])
+        self.assertEqual(self.quiet(t0 + 5.1 * self.DAY), [k])
+        self.assertEqual(self.pl.quiet_tickets(now=t0 + 5.1 * self.DAY)[0]["days"], 5)
 
     def test_a_step_is_progress_and_a_ticket_waiting_on_jay_is_skipped(self):
         k = self.sized()
         t0 = pipeline._now()
         with mock.patch.object(pipeline, "_now", return_value=t0 + 4 * self.DAY):
             self.pl.role(k, "planner", "agent:planner", session="i")             # a pipeline step at day 4
-        self.assertEqual(self.pl.sweep_still_needed(now=t0 + 8 * self.DAY), [])  # only 4 quiet days since
-        self.assertEqual(self.asked(self.pl.sweep_still_needed(now=t0 + 9.5 * self.DAY)), [k])
-        # The question is open now: Jay has not answered, so a second ticket state of "waiting" skips it.
-        self.assertEqual(self.pl.sweep_still_needed(now=t0 + 30 * self.DAY), [])
+        self.assertEqual(self.quiet(t0 + 8 * self.DAY), [])                       # only 4 quiet days since
+        self.assertEqual(self.quiet(t0 + 9.5 * self.DAY), [k])
+        self.pl.ask(k, ["Which format?"], "agent:coordinator")                    # waiting on Jay: skipped
+        self.assertEqual(self.quiet(t0 + 30 * self.DAY), [])
 
     def test_a_pr_push_and_a_jay_answer_are_progress(self):
         k = self.sized()
@@ -568,51 +565,31 @@ class StillNeeded(Base):
             self.pl.note_pr_head(k, "o/r#1", HEAD2)                               # a push
         n = self.ts.db.execute("SELECT COUNT(*) FROM ticket_events WHERE kind='pipeline.pr_head'").fetchone()[0]
         self.assertEqual(n, 2)
-        self.assertEqual(self.pl.sweep_still_needed(now=t0 + 12 * self.DAY), [])
-        self.assertEqual(self.asked(self.pl.sweep_still_needed(now=t0 + 13.5 * self.DAY)), [k])
-        with mock.patch.object(pipeline, "_now", return_value=t0 + 14 * self.DAY):
-            qid = self.pl.work(k)["questions"][-1]["id"]
-            self.pl.answer(k, [{"id": qid, "answer": "Finish it"}], "jay")       # Jay's answer
-        self.assertEqual(self.pl.sweep_still_needed(now=t0 + 18 * self.DAY), [])
-
-    def test_asked_at_most_once_a_week_also_after_a_restart(self):
-        k = self.sized()
-        t0 = pipeline._now()
-        late = t0 + 6 * self.DAY
-        with mock.patch.object(pipeline, "_now", return_value=late):
-            self.assertEqual(self.asked(self.pl.sweep_still_needed()), [k])
-            qid = self.pl.work(k)["questions"][-1]["id"]
-            self.pl.answer(k, [{"id": qid, "answer": "Finish it"}], "jay")
-        again = Pipeline(self.ts)                                                # a restarted ccd: no memory
-        self.assertEqual(again.sweep_still_needed(now=late + 6.5 * self.DAY), [])   # asked and answered < 7 days ago
-        self.assertEqual(self.asked(again.sweep_still_needed(now=late + 13 * self.DAY)), [k])
-
-    def test_the_weekly_question_is_not_a_start_gate(self):
-        """CC-085 round 2: a quiet-ticket reminder must not make Pipeline.start answer 409 (jay_first hold)."""
-        k = self.sized("small")
-        self.assertEqual(self.asked(self.pl.sweep_still_needed(now=pipeline._now() + 30 * self.DAY)), [k])
-        self.assertEqual(self.pl.held(k), [])
-        self.assertEqual(self.pl.start(k, f"{k}-x", WT + k, "agent:coordinator")[0]["status"], "IN_PROGRESS")
-
-    def test_a_regular_question_next_to_the_weekly_one_still_holds(self):
-        k = self.sized("small")
-        self.pl.sweep_still_needed(now=pipeline._now() + 30 * self.DAY)
+        self.assertEqual(self.quiet(t0 + 12 * self.DAY), [])
+        self.assertEqual(self.quiet(t0 + 13.5 * self.DAY), [k])
         self.pl.ask(k, ["Which format?"], "agent:coordinator")
-        self.assertEqual([h["ref"] for h in self.pl.held(k)], [k])
+        qid = self.pl.work(k)["questions"][-1]["id"]
+        with mock.patch.object(pipeline, "_now", return_value=t0 + 14 * self.DAY):
+            self.pl.answer(k, [{"id": qid, "answer": "CSV"}], "jay")             # Jay's answer
+        self.assertEqual(self.quiet(t0 + 18 * self.DAY), [])
 
-    def test_backlog_tickets_are_asked_too_and_nothing_is_cancelled(self):
-        """C1 says every open ticket, so INBOX and PROPOSED count (CC-085 review)."""
+    def test_backlog_tickets_are_listed_and_reading_changes_nothing(self):
+        """C1 says every open ticket, so INBOX counts. Listing must write no question, hold, gate or event."""
         k = self.ticket()                                                        # INBOX
-        self.assertEqual(self.asked(self.pl.sweep_still_needed(now=pipeline._now() + 30 * self.DAY)), [k])
-        k2 = self.sized()
-        self.pl.sweep_still_needed(now=pipeline._now() + 30 * self.DAY)
-        self.assertNotIn(self.status(k2), ("CANCELLED", "DONE", "DENIED"))
-        self.assertEqual(self.status(k), "INBOX")
+        k2 = self.sized("small")
+        before = [self.ts.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                  for t in ("ticket_questions", "ticket_events")]
+        self.assertEqual(set(self.quiet(pipeline._now() + 30 * self.DAY)), {k, k2})
+        after = [self.ts.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                 for t in ("ticket_questions", "ticket_events")]
+        self.assertEqual(before, after)
+        self.assertEqual(self.pl.held(k2), [])
+        self.assertEqual(self.pl.start(k2, f"{k2}-x", WT + k2, "agent:coordinator")[0]["status"], "IN_PROGRESS")
 
-    def test_a_cancelled_ticket_is_not_asked(self):
+    def test_a_cancelled_ticket_is_not_listed(self):
         k = self.sized()
         self.ts.update(k, {"status": "CANCELLED"}, "jay")
-        self.assertEqual(self.pl.sweep_still_needed(now=pipeline._now() + 30 * self.DAY), [])
+        self.assertEqual(self.quiet(pipeline._now() + 30 * self.DAY), [])
 
     def test_only_a_linked_pr_is_progress_not_a_url_or_legacy_id(self):
         k = self.sized()
@@ -620,11 +597,11 @@ class StillNeeded(Base):
         with mock.patch("ccd.tasks._now", return_value=t0 + 4 * self.DAY):
             self.ts.link(k, "url", "url", "https://example.com/x", "https://example.com/x", None, "jay")
             self.ts.link(k, "legacy", "legacy_id", "OLD-1", None, None, "jay")
-        self.assertEqual(self.asked(self.pl.sweep_still_needed(now=t0 + 5.5 * self.DAY)), [k])   # still quiet
+        self.assertEqual(self.quiet(t0 + 5.5 * self.DAY), [k])                    # still quiet
         k2 = self.sized()
         with mock.patch("ccd.tasks._now", return_value=t0 + 4 * self.DAY):
             self.ts.link(k2, "github", "pr", "o/r#9", None, None, "jay")
-        self.assertEqual(self.pl.sweep_still_needed(now=t0 + 5.5 * self.DAY), [])               # a PR link counts
+        self.assertNotIn(k2, self.quiet(t0 + 5.5 * self.DAY))                     # a PR link counts
 
 
 class Shapes(Base):

@@ -9,7 +9,6 @@ import { app } from "../../store/app";
 import type { AnswersResult, Question } from "../../api/types";
 import { devOr, useDevActive } from "../../components/DevMode";
 import { useWork } from "../../tickets/useWork";
-import { isStillNeeded, staleSaid } from "../../tickets/model";
 import { usePageNav } from "./route";
 import { cx } from "./ui";
 
@@ -82,15 +81,15 @@ export function AnswerInPlace({ ticket, project, projectName }: { ticket: string
   const decide = (q: AskedQuestion, answer: string) => run(async () => {
     const r = await app.api.answers(ticket, [{ id: q.id, answer }]);
     setWork(r.work);
-    setSaid({ ok: true, text: isStillNeeded(q) ? `${staleSaid(ticket, q, r)}.` : r.cancelled ? `${ticket} cancelled.` : `${ticket} kept.` });
+    setSaid({ ok: true, text: r.cancelled ? `${ticket} cancelled.` : `${ticket} kept.` });
   });
 
   return <div className="hq-ans" aria-label={`Answer ${ticket}`}>
     {stale.map((q) => <div key={q.id} className="hq-ans-q">
       <p className="hq-ans-text">{q.text.replace(/^Task check: /, "")}</p>
       <div className="hq-ans-row">
-        {(isStillNeeded(q) ? q.options : ["Cancel it", "Keep it"]).map((o, i) =>
-          <button key={o} type="button" className={i === 0 ? "hq-btn is-primary" : "hq-btn"} disabled={busy} onClick={() => void decide(q, o)}>{o}</button>)}
+        <button type="button" className="hq-btn is-primary" disabled={busy} onClick={() => void decide(q, "Cancel it")}>Cancel it</button>
+        <button type="button" className="hq-btn" disabled={busy} onClick={() => void decide(q, "Keep it")}>Keep it</button>
       </div>
     </div>)}
     {open.map((q, i) => <Ask key={q.id} q={q} n={open.length > 1 ? i + 1 : null} pick={pick[q.id]} text={text[q.id] ?? ""}

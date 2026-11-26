@@ -543,19 +543,6 @@ describe("the task check", () => {
     await waitFor(() => expect(answers).toHaveBeenCalledWith("SV-012", [{ id: 7, answer: "Cancel it" }]));
   });
 
-  it("the weekly Still needed? question is three buttons, each sent as itself, never as Cancel/Keep (CC-085)", async () => {
-    const weekly = { ...q(8, "Still needed? No progress recorded for 6 days: Export", "choice", ["Finish it", "Move to backlog", "Close it"]),
-      purpose: "stale" as const };
-    const answers = vi.spyOn(app.api, "answers").mockResolvedValue({ work: work(), complete: true, delivered: false, reason: "proposed as stale for Jay's cancel" });
-    act(() => developer.set({ active: true, expiresAt: null, error: null }));
-    render(<QuestionsForm ticketKey="SV-012" work={work({ key: "SV-012", questions: [weekly], openQuestions: 1 })} onDone={() => {}} />);
-    expect(screen.queryByRole("button", { name: "Cancel it" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Keep it" })).toBeNull();
-    for (const name of ["Finish it", "Move to backlog"]) expect(screen.getByRole("button", { name })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Close it" }));
-    await waitFor(() => expect(answers).toHaveBeenCalledWith("SV-012", [{ id: 8, answer: "Close it" }]));
-  });
-
   it("Check all asks every project's coordinator, and says which could not be reached", async () => {
     act(() => developer.set({ active: true, expiresAt: null, error: null }));
     const check = vi.spyOn(app.api, "taskCheck").mockImplementation(async (p) => {
