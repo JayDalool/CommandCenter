@@ -261,6 +261,25 @@ class TechReview(Base):
         w = self.pl.work(k)
         self.assertEqual((self.status(k), w["flow"]["stage"]), ("RESEARCHING", "investigate"))
 
+    def _blocked_in_plan(self, size):
+        k = self.sized(size)
+        self.pl.block(k, "stuck", "agent:coordinator")
+        self.assertEqual((self.status(k), self.pl.work(k)["gate"]), ("BLOCKED", "failure"))
+        self.pl.confirm(k, "failure", "jay")
+        return k
+
+    def test_small_unblocked_in_plan_returns_to_ready_and_can_start(self):
+        # CC-099: it used to come back RESEARCHING, which a small ticket can neither plan nor start from.
+        k = self._blocked_in_plan("small")
+        self.assertEqual(self.status(k), "READY_TO_IMPLEMENT")
+        self.assertEqual(self.pl.start(k, f"{k}-x", WT + k, "agent:coordinator")[0]["status"], "IN_PROGRESS")
+
+    def test_standard_unblocked_in_plan_returns_to_researching(self):
+        self.assertEqual(self.status(self._blocked_in_plan("standard")), "RESEARCHING")
+
+    def test_risky_unblocked_in_plan_returns_to_researching(self):
+        self.assertEqual(self.status(self._blocked_in_plan("risky")), "RESEARCHING")
+
     def test_a_risky_plan_goes_to_jay_after_the_review(self):
         k = self.planned(size="risky")
         self.pl.plan_review(k, "APPROVE", "agent:tech-reviewer", "ok", session="tr-1")
