@@ -1454,26 +1454,29 @@ class Daemon(LeadChat, HqDaemon):
             pin = self.pipeline.pin_of(t["key"]) if self.pipeline is not None else None
             branches = (self.git.get("branches") or {}).get(t["project"]) or {}
             branch = self._branch_for(t, branches)
-            linked = []
-            for link in links.get(t["key"]) or []:
-                num = link["ref"].rsplit("#", 1)[-1]
+            def record(ref, title=None):
+                num = ref.rsplit("#", 1)[-1]
                 # CC-071: a link is looked up in the index of its own repository, never by number alone
                 # (jay-dev#10 is not CommandCenter#10).
-                lslug = link["ref"].rpartition("#")[0].lower()
+                lslug = ref.rpartition("#")[0].lower()
                 if lslug == own_slug:
                     rec = prs.get(int(num)) if num.isdigit() else None
                 elif lslug in self.gh_repos:
-                    rec = self._index_of(self.gh_repos[lslug], link["ref"].rpartition("#")[0]).get(int(num)) \
+                    rec = self._index_of(self.gh_repos[lslug], ref.rpartition("#")[0]).get(int(num)) \
                         if num.isdigit() else None
                 else:
                     rec = None
-                linked.append(rec or {"number": int(num) if num.isdigit() else None, "state": "UNKNOWN",
-                                      "url": github.pr_ref_url(link["ref"]), "title": link["title"], "ci": "NONE",
-                                      "review": "PENDING", "mergedAt": None, "branch": None, "asOf": None})
+                return rec or {"number": int(num) if num.isdigit() else None, "state": "UNKNOWN",
+                               "url": github.pr_ref_url(ref), "title": title, "ci": "NONE",
+                               "review": "PENDING", "mergedAt": None, "branch": None, "asOf": None}
+
+            linked = [record(link["ref"], link["title"]) for link in links.get(t["key"]) or []]
             pr = linked[0] if linked else None
             if pin:
                 pinned = [x for x, l in zip(linked, links.get(t["key"]) or []) if l["ref"].lower() == pin.lower()]
-                pr = pinned[0] if pinned else pr
+                # CC-071 (Codex round 5): the pin is durable but its display link can be removed; the ticket's
+                # PR is still the pin, never whichever unrelated link is left.
+                pr = pinned[0] if pinned else record(pin)
             merged = bool(pr and pr["state"] == "MERGED")
             if merged:
                 merge = "MERGED"
@@ -3086,6 +3089,10 @@ class Daemon(LeadChat, HqDaemon):
         pin = self.pipeline.pin_of(owner)
         st = dict(self._pr_of(pin or ref, pr))
         if not pin or not self.tasks.exists(owner):
+            return
+        # CC-071 (Codex round 5): a poll node without a head is not an observation; "" would count as a new
+        # head and move the pinned ticket to review.
+        if not st["head"]:
             return
         if self.pipeline.new_head(owner, st):
             sha = st["head"][:7]
