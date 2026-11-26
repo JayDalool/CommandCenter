@@ -24,10 +24,12 @@ poorly in one round (CC-057, 063, 070, 071).
    verification passed and its window open; capabilities true and a passing rehearsal recorded; no failed or
    inconclusive release since the last pass; and for Command Center every commit in `live..pinned` is a manifest
    ticket.
-3. **Pinned sha** (Jay, question 230): the release target is `origin/main` as read when the digest went out, so a
-   merge after the digest never joins it.
+3. **Pinned sha** (Jay, question 230): the release target is `origin/main` as the checkout's reflog had it when the
+   digest was delivered, so a merge after delivery never joins it. No reflog entry that old means no pin, and the
+   release holds. The shipped range must carry only tickets that would release, including what each merge carries.
 4. **A failed release holds** further automatic releases for that project until Jay clears it. No automatic
-   rollback; rollback stays Jay's, per the project runbook (question 230).
+   rollback; rollback stays Jay's, per the project runbook (question 230). Slice 1 has no clear at all: the hold
+   stays in the dry-run record, which acts on nothing. Jay's clear arrives with slice 3.
 
 ## Later slices (each needs Jay's decision before it is built)
 
@@ -38,7 +40,8 @@ poorly in one round (CC-057, 063, 070, 071).
 - **Slice 3, real release:** `auto_release` accepts `"on"`. A systemd user timer outside ccd (in `scripts/`,
   installed by Jay) asks `GET /api/release` for the eligible manifest and pinned sha and runs the project's release
   script with an expected sha. It records each deploy under a new approval source (`system:release-window`, a grant
-  Jay approves, never recorded as Jay). Clearing a hold becomes a Jay-only action (Developer Unlock).
+  Jay approves, never recorded as Jay). Clearing a failed-release hold is added here, as a Jay-only action
+  (Developer Unlock), with a test that every refusal leaves the ledger unchanged.
 
 Rails slice 3 changes, each Jay's: the `approvedAt` rule in `pipeline.deployed` and the release-window hold; README
 and AGENTS "No dangerous endpoints" and ADR 0006 "ccd deploys nothing"; FLOW.md "nothing deploys automatically";

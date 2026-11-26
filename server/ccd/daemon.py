@@ -331,8 +331,8 @@ class Daemon(LeadChat, HqDaemon):
             self.pipeline.releases = self.releases
         # Automatic release, slice 1 (CC-081): a dry run that only records. config auto_release is read once, here.
         self.auto_release = autorelease_mod.AutoRelease(
-            store, self.pipeline, self.releases, self.policy, mode=autorelease_mod.mode_of(cfg),
-            projects=lambda: [p["key"] for p in self._projects()]) if self.pipeline is not None else None
+            store, self.pipeline, self.releases, self.policy, mode=autorelease_mod.mode_of(cfg)) \
+            if self.pipeline is not None else None
         # Work mode: per project, Jay's switch for reminding an idle lead of tickets it can move (ccd/workmode.py).
         self.work = workmode_mod.WorkMode(cfg.get("work_mode_path") or STATE_DIR / "work-mode.json")
         # Auto-merge (CC-025): the config switch is read once, here. `gh_cli(args) -> (code, stdout, stderr)` is the
@@ -1058,13 +1058,17 @@ class Daemon(LeadChat, HqDaemon):
                 raise
             except Exception as e:  # noqa: BLE001 — the supervisor must never take ccd down
                 log.warning(json.dumps({"msg": "night shift tick failed", "error": repr(e)[:200]}))
-            if self.auto_release is not None:
-                try:
-                    await self.auto_release.tick()      # CC-081: records only; its file and git reads run in a thread
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:  # noqa: BLE001 — the dry run must never take ccd down
-                    log.warning(json.dumps({"msg": "auto-release tick failed", "error": type(e).__name__}))
+            try:
+                await self.auto_release_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 — the dry run must never take ccd down
+                log.warning(json.dumps({"msg": "auto-release tick failed", "error": type(e).__name__}))
+
+    async def auto_release_tick(self, now=None):
+        """CC-081: the automatic-release dry run. Records only; all of its work runs in a worker thread."""
+        if self.auto_release is not None:
+            await self.auto_release.tick([p["key"] for p in self._projects()], now)
 
     async def night_tick(self):
         """Remind each idle night-shift coordinator to continue, or end its shift (nightshift.NightShift.decide)."""
