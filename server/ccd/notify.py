@@ -1108,6 +1108,10 @@ class Notifier:
         the gate reason, not the title. Read-only: it never merges, approves or touches a ticket (Jay merges)."""
         rows = []
         for p in self.d._projects():
+            if registry.paused(p["key"]):
+                # The Merge ready dialog hides a paused project (Merge.tsx; api.py reads the same registry flag),
+                # so the digest must not offer what Jay cannot press (CC-084).
+                continue
             try:
                 ready, _ = self.d.merge_batch(p["key"])
             except Exception as e:  # noqa: BLE001 — one project's failure must not hide the others

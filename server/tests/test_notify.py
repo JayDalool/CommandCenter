@@ -503,12 +503,27 @@ class MergeList(unittest.TestCase):
         self.assertIn("CC-1 Evening list", self.lists()[0]["text"])
 
     def test_a_client_project_keeps_its_details_out(self):
-        self.d.ready = {"gauzemate": [ready_row("GM-1", "Secret client work", "JayDalool/GM#5")]}
+        # An active client project (GauzeMate is paused, so it cannot stand in for one).
+        self.n.conf["client_projects"] = ["samvision"]
+        self.d.ready = {"samvision": [ready_row("SV-1", "Secret client work", "JayDalool/SV#5")]}
         run(self.n.merge_list())
         text = self.lists()[0]["text"]
-        self.assertIn("GM-1 (client project: details in CommandCenter)", text)
+        self.assertIn("SV-1 (client project: details in CommandCenter)", text)
         self.assertNotIn("Secret", text)
         self.assertNotIn("github.com", text)
+
+    def test_a_day_with_only_paused_project_prs_sends_nothing(self):
+        """The Merge ready dialog hides paused projects; a digest listing them offers what Jay cannot merge."""
+        self.d.ready = {"gauzemate": [ready_row("GM-1", "Paused work", "JayDalool/GM#5")]}
+        run(self.n.merge_list())
+        self.assertEqual(self.lists(), [])
+
+    def test_a_paused_project_is_left_out_of_a_list_with_other_prs(self):
+        self.d.ready["gauzemate"] = [ready_row("GM-1", "Paused work", "JayDalool/GM#5")]
+        run(self.n.merge_list())
+        text = self.lists()[0]["text"]
+        self.assertIn("1 PR ready to merge", text)
+        self.assertNotIn("GM-1", text)
 
     def test_it_runs_at_18_winnipeg_whatever_the_notification_timezone(self):
         self.n.update_settings({"timezone": "Asia/Tokyo"})
