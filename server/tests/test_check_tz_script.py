@@ -56,6 +56,14 @@ class CheckTzScript(unittest.TestCase):
         self.assertTrue(line, r.stdout)
         return line
 
+    def no_tzdata_stub(self, root):
+        """A tzdata package that fails to import, placed first on sys.path (CC-074): a host with a real pip tzdata
+        must not change what the "nothing has the zone" tests see."""
+        pkg = Path(root) / "nostub" / "tzdata"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("raise ImportError('stub: no tzdata')\n")
+        return str(Path(root) / "nostub")
+
     def make_dir(self, root, name, version=None, zone=True):
         d = Path(root) / name
         d.mkdir()
@@ -147,7 +155,10 @@ class CheckTzScript(unittest.TestCase):
             env.update(PYTHONTZPATH=str(empty), CHECK_TZ_PYPATH=str(t / "site"))
             r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, timeout=60, env=env)
             self.assertFalse(marker.exists(), "caller-supplied package code ran")
-            self.assertIn("no source has America/Winnipeg", r.stdout)
+            # CC-074: a host with pip tzdata reports it; unmarked CHECK_TZ_PYPATH must change nothing either way.
+            env.pop("CHECK_TZ_PYPATH")
+            r2 = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, timeout=60, env=env)
+            self.assertEqual(r.stdout, r2.stdout)
 
     def test_host_zone_and_version_probes_ignore_the_callers_path(self):
         # CC-054 round 4: readlink, dpkg-query and head also ran with the caller's environment and PATH.
@@ -155,13 +166,14 @@ class CheckTzScript(unittest.TestCase):
             t = Path(t)
             bin_dir = t / "bin"
             bin_dir.mkdir()
-            for tool in ("readlink", "dpkg-query", "head", "date"):
+            for tool in ("readlink", "dpkg-query", "head", "date", "env", "dirname", "sed", "grep", "bash"):   # CC-074: launcher and helpers too
                 f = bin_dir / tool
                 f.write_text(f"#!/bin/sh\ntouch {t}/ran-{tool}\necho hostile\n")
                 f.chmod(0o755)
             env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
             env.pop("TZDIR", None)
-            r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, timeout=60, env=env)
+            # CC-074 round 6: run the script directly so its shebang is used; a bare "bash" would hide a PATH lookup.
+            r = subprocess.run([str(SCRIPT)], capture_output=True, text=True, timeout=60, env=env)
             self.assertEqual(sorted(p.name for p in t.iterdir()), ["bin"], "a hostile PATH tool ran")
             self.assertNotIn("hostile", r.stdout)
             self.assertRegex(r.stdout, r"(?m)^PASS  C library \(date\): -0500")
@@ -202,7 +214,8 @@ class CheckTzScript(unittest.TestCase):
 
     def test_python_line_says_when_nothing_has_the_zone(self):
         with tempfile.TemporaryDirectory() as t:
-            self.assertIn("no source has America/Winnipeg", self.python_line(str(self.make_dir(t, "e", "2001a", zone=False))))
+            line = self.python_line(str(self.make_dir(t, "e", "2001a", zone=False)), self.no_tzdata_stub(t))
+            self.assertIn("no source has America/Winnipeg", line)
 
     def test_script_has_no_write_commands(self):
         text = SCRIPT.read_text()
