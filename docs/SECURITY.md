@@ -91,14 +91,16 @@ The mail path reads tickets and changes none: it cannot approve, request or reco
 **Pulls by Slack (CC-088).** After a digest is delivered, ccd DMs Jay one list per app (held until quiet hours end)
 of the Scheduled keys, with titles unless a client project. Jay's reply in that thread with only ticket IDs from the
 list pulls them. `Notifier.from_jay` is the only proof that a reply is his; a reply with attachments or files (a
-forward or a share) never pulls. A pull only withholds: it is written to the ledger row (`pulls`) and nothing else, so
-it approves, merges, deploys and changes no gate or ticket (`ReleaseMail.pull`). Go Live leaves a pulled key out of
+forward or a share) never pulls, and only keys the Slack list showed can be pulled. A Slack pull only writes the ledger:
+it records the key in the digest's ledger row (`pulls`, `ReleaseMail.pull`) and nothing else. It cannot approve, merge
+or deploy anything, and it changes no gate, ticket or deploy record. It is refused from the moment Go Live is pressed. Go Live leaves a pulled key out of
 what it approves, re-reads the pulls right before each approval, and shows it as a warning, because the code is on
 main and still ships until reverted; a pull never blocks Go Live. Any other text in that thread (approve, ok, deploy,
 merge, "add …") does nothing and gets a why: Slack never adds an item. A pull, or an urgent live deploy Jay approved
 after the digest, sends one correction email by the digest's never-twice rules. The one exception to "anything not from
 Jay is dropped": a plain human message by someone else in a release list's thread gets Jay one fixed DM ("not from
-you; nothing changed"), at most once per thread per 10 min and held until quiet hours end; it records no sender, text or length, uses its own
+you; nothing changed"), at most once per thread per 10 min and held until quiet hours end (ccd's answers in a release
+thread wait too, in the `release_mail:outbox` kv, which holds only ccd's own words and the thread); it records no sender, text or length, uses its own
 in-memory dedupe, and changes nothing.
 
 Never: the GitHub token, Claude credentials, the ntfy URL or any other config

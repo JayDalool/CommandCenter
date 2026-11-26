@@ -808,7 +808,7 @@ class SlackList(PullBase):
         self.assertIn("Export to CSV", post["text"])
         self.assertNotIn(self.g14, post["text"])
         self.assertEqual(self.gyst()["slack"], {"state": "posted", "attempts": 1, "at": MORNING, "channel": "DJAY",
-                                                "ts": post["ts"], "uncertain": False})
+                                                "ts": post["ts"], "uncertain": False, "shown": [self.g12, self.g13]})
         self.tick(MORNING + 600)
         self.wipe_notifier()
         self.tick(MORNING + 1200)
@@ -877,7 +877,8 @@ class Pull(PullBase):
     def test_c5_jays_reply_pulls_moves_it_to_held_and_one_correction_email_lists_it(self):
         post = self.listed()
         before = self.work_dump()
-        r = self.say(self.g12, thread=post["ts"])
+        self.assertEqual(self.g12, "GYST-012")
+        r = self.say("GYST-12", thread=post["ts"])                 # as Jay types it, not as it is stored
         self.assertEqual(r["did"], "pulled")
         self.assertEqual(self.gyst()["pulls"], {self.g12: {"at": MORNING, "by": "jay:slack"}})
         reply = self.thread_replies(post["ts"])
@@ -965,7 +966,7 @@ class Pull(PullBase):
         self.d.night.went_live("gyst", [self.g13], now=MORNING + 5)
         self.t[0] = MORNING + 10
         r = self.say(self.g12, thread=post["ts"])
-        self.assertIn("Go Live was already sent", r["say"])
+        self.assertIn("Go Live is being sent or was already sent", r["say"])
         self.assertNotIn("pulls", self.gyst())
         self.tick(MORNING + 60)
         self.assertEqual(self.corrections(), [])
@@ -1223,6 +1224,171 @@ class Corrections(PullBase):
         self.assertNotIn("<!channel>", post["text"])
 
 
+class CodexRound1(PullBase):
+    """Codex review round 1 of CC-088."""
+
+    def test_1_jays_own_release_thread_reply_waits_for_quiet_hours_to_end(self):
+        post = self.listed()
+        self.t[0] = at(18, 23)                                      # Wed 23:00: quiet hours
+        self.assertEqual(self.say("GYST-12", thread=post["ts"])["did"], "pulled")     # the pull itself is recorded
+        self.assertEqual(self.say("ok", thread=post["ts"])["did"], "pull_refused")
+        self.tick(at(19, 6, 59))
+        self.assertEqual(self.thread_replies(post["ts"]), [])       # nothing pings Jay in quiet hours
+        self.tick(at(19, 7))
+        replies = self.thread_replies(post["ts"])
+        self.assertEqual(len(replies), 2)
+        self.assertTrue(replies[0].startswith(f"Pulled {self.g12}"))
+        self.assertTrue(replies[1].startswith("Nothing pulled"))
+        self.tick(at(19, 7, 1))
+        self.assertEqual(len(self.thread_replies(post["ts"])), 2)
+
+    def test_2_a_reply_after_quiet_hours_but_before_the_tick_gives_one_dm_per_thread(self):
+        post = self.listed()
+        n0 = len(self.slack_posts)
+        self.t[0] = at(18, 23)
+        self.say(self.g12, thread=post["ts"], user="U0OTHER01")    # held
+        self.t[0] = at(19, 7, 0) + 10                               # quiet hours over, no tick yet
+        self.say(self.g12, thread=post["ts"], user="U0OTHER02")
+        self.tick(at(19, 7, 1))
+        self.tick(at(19, 7, 5))
+        self.assertEqual(len(self.slack_posts), n0 + 1)
+
+    def test_3_a_held_notice_survives_a_restart_and_a_failed_post_and_keeps_no_sender(self):
+        post = self.listed()
+        n0 = len(self.slack_posts)
+        self.t[0] = at(18, 23)
+        self.say("GYST-12 hunter2-synthetic", thread=post["ts"], user="U0OTHERSECRET")
+        box = json.dumps(self.store.get("release_mail:outbox")[0])
+        for needle in ("U0OTHERSECRET", "hunter2", "GYST-12"):
+            self.assertNotIn(needle, box)
+        self.wipe_notifier()                                        # a restart in quiet hours
+        self.n._slack.post = mock.Mock(side_effect=notify.SlackError("ratelimited"))
+        self.tick(at(19, 7))
+        self.assertEqual(len(self.slack_posts), n0)
+        self.assertEqual(len(self.n.mail.outbox()["queue"]), 1)    # Slack refused it: still waiting
+        self.n._slack = FakeSlack(self.slack_posts)
+        self.tick(at(19, 7, 1))
+        self.assertEqual([p["text"] for p in self.slack_posts[n0:]],
+                         [f"A message in the {GN} release thread was not from you; nothing changed."])
+        self.assertEqual(self.n.mail.outbox()["queue"], [])
+
+    def test_3_an_outbox_post_with_an_unknown_outcome_is_not_sent_again(self):
+        post = self.listed()
+        n0 = len(self.slack_posts)
+        self.n._slack.post = mock.Mock(side_effect=notify.SlackError("chat.postMessage: TimeoutError", uncertain=True))
+        self.say("GYST-99", thread=post["ts"])
+        self.n._slack = FakeSlack(self.slack_posts)
+        self.tick(MORNING + 60)
+        self.assertEqual((len(self.slack_posts), self.n.mail.outbox()["queue"]), (n0, []))
+
+    def test_4_slack_errors_that_may_have_posted_are_uncertain(self):
+        import io
+        import socket
+        import urllib.error
+
+        def web(answer):
+            def opener(req, timeout=None):
+                if isinstance(answer, Exception):
+                    raise answer
+
+                class R(io.BytesIO):
+                    headers = {}
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *a):
+                        return False
+                return R(answer)
+            return notify.SlackWeb("xoxb-test", opener=opener)
+        cases = [(socket.timeout("timed out"), True), (b"{not json", True), (ConnectionResetError(), True),
+                 (urllib.error.HTTPError("u", 502, "bad gateway", {}, None), True),
+                 (urllib.error.HTTPError("u", 400, "bad request", {}, None), False),
+                 (b'{"ok": false, "error": "channel_not_found"}', False)]
+        for answer, uncertain in cases:
+            with self.assertRaises(notify.SlackError) as e:
+                web(answer).post("DJAY", "x")
+            self.assertEqual(e.exception.uncertain, uncertain, answer)
+
+    def test_4_a_list_slack_took_but_whose_answer_was_lost_is_never_posted_again(self):
+        self.tick(DUE)
+        posts = self.slack_posts
+
+        def took_then_lost(channel, text, thread_ts=None, as_=None, broadcast=False):
+            posts.append({"channel": channel, "text": text, "thread": thread_ts, "ts": "9.0"})
+            raise notify.SlackError("chat.postMessage: TimeoutError", uncertain=True)
+        self.n._slack.post = took_then_lost
+        self.tick(MORNING)
+        self.assertEqual((self.gyst()["slack"]["state"], self.gyst()["slack"]["uncertain"]), ("failed", True))
+        self.assertIn(f"{GN} release list may not have been posted in Slack, not retried: pulls by Slack unavailable",
+                      [a["text"] for a in self.n.mail.alerts()])
+        self.n._slack = FakeSlack(posts)
+        self.tick(MORNING + 600)
+        self.tick(MORNING + 3600)
+        self.assertEqual(len([p for p in posts if p["text"].startswith(f"*{GN} release")]), 1)
+
+    def big(self, count):
+        keys = [self.ticket_n("gyst", 100 + i, f"Item {i:02d} " + "x" * 90, merge_at=at(17, 9)) for i in range(count)]
+        return keys
+
+    def test_5_a_long_list_goes_on_in_the_thread_and_every_listed_key_is_shown(self):
+        keys = self.big(60)
+        post = self.listed()
+        mine = [post] + self.thread_replies_posts(post["ts"])
+        self.assertGreater(len(mine), 1)
+        for p in mine:
+            self.assertLessEqual(len(p["text"]), releasemail.SLACK_CHUNK)
+            self.assertLess(len(p["text"]), notify.POST_LIMIT)
+        text = "\n".join(p["text"] for p in mine)
+        for k in [self.g12, self.g13] + keys:
+            self.assertIn(k, text)
+        self.assertEqual(self.gyst()["slack"]["shown"], self.gyst()["listed"]["scheduled"])
+        # The boundary: each post is full, so its next line would not have fitted.
+        lines = [p["text"].split("\n") for p in mine]
+        for cur, nxt in zip(lines, lines[1:]):
+            self.assertGreater(len("\n".join(cur)) + 1 + len(nxt[0]), releasemail.SLACK_CHUNK)
+        self.assertEqual(self.say(keys[-1], thread=post["ts"])["did"], "pulled")
+
+    def thread_replies_posts(self, ts):
+        return [p for p in self.slack_posts if p["thread"] == ts]
+
+    def test_5_keys_a_failed_continuation_did_not_show_cannot_be_pulled(self):
+        keys = self.big(60)
+        self.tick(DUE)
+        real = self.n._slack.post
+
+        def root_only(channel, text, thread_ts=None, as_=None, broadcast=False):
+            if thread_ts:
+                raise notify.SlackError("chat.postMessage: msg_too_long")
+            return real(channel, text, thread_ts, as_, broadcast)
+        self.n._slack.post = root_only
+        self.tick(MORNING)
+        self.n._slack.post = real
+        post = next(p for p in self.slack_posts if p["text"].startswith(f"*{GN} release"))
+        shown = self.gyst()["slack"]["shown"]
+        self.assertTrue(0 < len(shown) < len(self.gyst()["listed"]["scheduled"]))
+        self.assertEqual(self.gyst()["slack"]["state"], "posted")
+        hidden = keys[-1]
+        self.assertNotIn(hidden, post["text"])
+        r = self.say(hidden, thread=post["ts"])
+        self.assertIn("not in this release's list", r["say"])
+        self.assertNotIn("pulls", self.gyst())
+
+    def test_7_a_typed_alias_in_another_apps_thread_cannot_pull_the_gyst_ticket(self):
+        self.listed()
+        sv = next(p for p in self.slack_posts if p["text"].startswith("*SamVision release"))
+        r = self.say("GYST-12", thread=sv["ts"])
+        self.assertEqual(r["did"], "pull_refused")
+        self.assertIn("not in this release's list", r["say"])
+        self.assertNotIn("pulls", self.gyst())
+        self.assertNotIn("pulls", self.rows("samvision")[0])
+
+    def test_8_security_md_says_a_pull_only_writes_the_ledger(self):
+        text = " ".join((Path(__file__).resolve().parents[2] / "docs" / "SECURITY.md").read_text().split())
+        self.assertIn("A Slack pull only writes the ledger", text)
+        self.assertIn("It cannot approve, merge or deploy anything", text)
+
+
 class GoLivePulls(PullBase):
     def setUp(self):
         super().setUp()
@@ -1230,6 +1396,7 @@ class GoLivePulls(PullBase):
         from .helpers import cfg
         self.real = Daemon(cfg(meter={"enabled": False}), self.store, None, tasks=self.ts)
         self.real._to_coordinator = mock.AsyncMock(return_value="gyst-lead")
+        self.d.going_live = self.real.going_live        # the notifier's daemon is this one in ccd
         for key in (self.g12, self.g13):
             self.ts.db.execute("UPDATE ticket_work SET gate='deploy', deploy=? WHERE ticket_id=(SELECT id FROM tickets "
                                "WHERE key=?)", (json.dumps({"env": "live", "requestedAt": at(17, 11)}), key))
@@ -1277,15 +1444,34 @@ class GoLivePulls(PullBase):
         self.assertIsNone(self.real.notifier)
         self.assertEqual(self.go_live([self.g12])["approved"], [])
 
-    def test_a4_a_pull_while_the_coordinator_message_is_sent_leaves_the_key_unapproved(self):
+    def test_a4_a_pull_while_the_coordinator_message_is_sent_is_refused_so_the_message_stays_true(self):
         post = self.listed()
-        test = self
+        test, sent = self, []
 
-        async def meanwhile(*a, **k):
+        async def meanwhile(project, what, text, data):
+            sent.append(text)
             r = await test.n.on_slack({"team_id": TEAM, "event_id": "EvA4", "event": {
                 "type": "message", "user": JAY, "text": test.g12, "channel": "DJAY", "ts": "500.0",
                 "thread_ts": post["ts"], "team": TEAM}})
-            test.assertEqual(r["did"], "pulled")
+            test.assertEqual(r["did"], "pull_refused")
+            test.assertIn("Go Live is being sent", r["say"])
+            return "gyst-lead"
+        self.real._to_coordinator = meanwhile
+        r = self.go_live([self.g12, self.g13])
+        self.assertIn(f"approved the live-deploy gate on: {self.g12}, {self.g13}.", sent[0])
+        self.assertEqual((r["approved"], r["skipped"]), ([self.g12, self.g13], []))    # as the message said
+        self.assertTrue(self.deploy(self.g12).get("approvedAt"))
+        self.assertNotIn("pulls", self.gyst())
+        self.assertEqual(self.real.going_live, set())
+        self.assertEqual(self.say(self.g13, thread=post["ts"])["did"], "pull_refused")   # Go Live was sent
+
+    def test_a4_a_pull_in_the_ledger_is_read_again_right_before_each_approval(self):
+        self.listed()
+
+        async def meanwhile(project, what, text, data):
+            # Not reachable from Slack (pull refuses during Go Live): the re-read is defense in depth.
+            self.gyst()["pulls"] = {self.g12: {"at": MORNING, "by": "jay:slack"}}
+            self.n.mail._save("gyst")
             return "gyst-lead"
         self.real._to_coordinator = meanwhile
         r = self.go_live([self.g12, self.g13])

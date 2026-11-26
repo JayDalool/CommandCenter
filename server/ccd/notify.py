@@ -175,7 +175,12 @@ NEED_LABEL = {"plan": "Plan needs approval", "merge": "Ready to merge", "ui": "U
 
 
 class SlackError(Exception):
-    pass
+    """`uncertain` (CC-088): the request may have reached Slack and been carried out (a timeout, a lost or garbled
+    response, a 5xx), so a post must not be sent again on the strength of this failure."""
+
+    def __init__(self, what="", uncertain=False):
+        super().__init__(what)
+        self.uncertain = uncertain
 
 
 # ---------- settings ----------
@@ -319,9 +324,10 @@ class SlackWeb:
                 if e.code == 429 and attempt < retries:
                     time.sleep(min(30, int(e.headers.get("Retry-After") or 1)))
                     continue
-                raise SlackError(f"{method}: HTTP {e.code}") from None
+                raise SlackError(f"{method}: HTTP {e.code}", uncertain=e.code >= 500) from None
             except (urllib.error.URLError, OSError, ValueError) as e:
-                raise SlackError(f"{method}: {type(e).__name__}") from None
+                # The request may have been sent and done, with only the answer lost (CC-088).
+                raise SlackError(f"{method}: {type(e).__name__}", uncertain=True) from None
             if not out.get("ok"):
                 raise SlackError(f"{method}: {out.get('error') or 'failed'}")
             return out
@@ -704,15 +710,19 @@ class Notifier:
 
     async def post(self, where, text, thread_ts=None, item=None, who=None, broadcast=False):
         """Post to a channel name, or 'dm'. Records the thread so a reply can find its item. Returns ts or None."""
-        if not self.settings["slack"]:
-            return None
         try:
-            cid = await (self.dm_id() if where == "dm" else self.channel_id(where))
-            as_, prefix = self._as(who)
-            r = await self._call(self.slack().post, cid, redact(prefix + text)[0][:POST_LIMIT], thread_ts, as_, broadcast)
+            return await self.post_or_raise(where, text, thread_ts, item, who, broadcast)
         except SlackError as e:
             self._fail(f"slack {where}", e)
             return None
+
+    async def post_or_raise(self, where, text, thread_ts=None, item=None, who=None, broadcast=False):
+        """post(), raising the SlackError (with its `uncertain`) for a caller that must not post twice (CC-088)."""
+        if not self.settings["slack"]:
+            return None
+        cid = await (self.dm_id() if where == "dm" else self.channel_id(where))
+        as_, prefix = self._as(who)
+        r = await self._call(self.slack().post, cid, redact(prefix + text)[0][:POST_LIMIT], thread_ts, as_, broadcast)
         self.status.update(slack="ok", lastSentAt=self.clock())
         ts = r.get("ts")
         if item is not None and ts:
@@ -1146,7 +1156,9 @@ class Notifier:
         self.d._event("notify", "notify.slack_reply", f"Slack reply: {result['did']}",
                       project=result.get("project"), ref=(item or {}).get("ref"),
                       data={"kind": result["did"], "count": len(text)})
-        if result.get("say"):
+        if result.get("say") and (item or {}).get("type") == "release":
+            await self.mail.say(cid, here, result["say"])      # CC-088: held in quiet hours, kept until Slack takes it
+        elif result.get("say"):
             await self._reply(cid, here, result["say"])
         if result.get("message_id") is not None:
             self.threads[f"msg:{result['message_id']}"] = {"type": "origin", "channel": cid, "ts": here,
@@ -1564,7 +1576,7 @@ class Notifier:
                 await self.check_needs()
                 if self.settings["slack"]:
                     await self.summaries()
-                    await self.mail.flush_foreign()     # CC-088: "not from you" notices held in quiet hours
+                    await self.mail.flush()     # CC-088: release-thread replies and notices held in quiet hours
             except Exception as e:  # noqa: BLE001 — notifications never take ccd down
                 self._fail("notify tick", repr(e))
         if self.settings["releaseMail"]:

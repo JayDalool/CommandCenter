@@ -195,4 +195,7 @@ digest. Ledger fields on the digest's row:
 | `corrections` | `[{n, keys, urgent, state, uncertain, attempts, at, sentAt, messageId, error}]`, with the digest's states and retry rules; a failure raises `mail:<project>:<window>:c<n>` |
 
 A message from anyone else in a release list's thread changes nothing; you get one DM saying so (at most one per thread
-every 10 minutes, held until quiet hours end).
+every 10 minutes). That DM and ccd's answers in a release thread wait while quiet hours last, in `ccd.db` kv
+`release_mail:outbox`, and leave it only once Slack took them (a post whose outcome is unknown is not sent again).
+A list longer than one post continues in its thread; only the keys Slack showed can be pulled. A list post whose
+outcome is unknown is never re-posted: its alert says "may not have been posted".

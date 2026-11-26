@@ -398,6 +398,7 @@ class Daemon(LeadChat, HqDaemon):
         self.ptys = None          # pty.PtyManager, set by __main__
         self.records_dir = None   # where task records are written; None = off (tests, previews)
         self.night = None         # nightshift.NightShift (reports + supervisor state); set by __main__
+        self.going_live = set()   # projects whose Go Live press is being sent (CC-088: no Slack pull meanwhile)
         self.uitests = None       # uitests.UiTests (UI test runs and Jay's decisions); set by __main__
         self.notifier = None      # notify.Notifier (Slack and ntfy; off until Jay switches it on); set by __main__
         self._activity = {}       # project → when one of its tickets last changed (night-shift progress)
@@ -3633,21 +3634,27 @@ class Daemon(LeadChat, HqDaemon):
         # The coordinator must be reachable before anything is approved: no approval without the message. Every
         # check that can refuse (409) runs before it; after it, a ticket that cannot be approved (its gate moved
         # since the page loaded) is reported in `errors` and never undoes the others.
-        name = await self._to_coordinator(project, "go-live", text, {"approved": pending})
-        approved, errors = [], []
-        for key in pending:
-            # A pull Jay sent from Slack while the coordinator message was on its way (CC-088, tech review A4): read
-            # again right before each approval, so the item's gate stays open for the next window.
-            if key in releasemail.pulled(self.store, project):
-                skipped.append({"key": key, "reason": releasemail.PULL_REASON})
-                continue
-            try:
-                self._pipeline_result(*self._wrap(self.pipeline.confirm, key, "deploy", actor, "go-live"), actor=actor)
-                approved.append(key)
-            except Exception as e:  # noqa: BLE001 — one ticket must not stop the others
-                errors.append({"key": key, "error": str(e)[:160]})
-        if self.night is not None:
-            self.night.went_live(project, approved)
+        # CC-088: no Slack pull from here until went_live (ReleaseMail.pull refuses it), so the message's list of
+        # approved tickets stays true (Codex round 1). Nothing awaits between the check above and this line.
+        self.going_live.add(project)
+        try:
+            name = await self._to_coordinator(project, "go-live", text, {"approved": pending})
+            approved, errors = [], []
+            for key in pending:
+                # Defense in depth (tech review A4): pulls are read again right before each approval.
+                if key in releasemail.pulled(self.store, project):
+                    skipped.append({"key": key, "reason": releasemail.PULL_REASON})
+                    continue
+                try:
+                    self._pipeline_result(*self._wrap(self.pipeline.confirm, key, "deploy", actor, "go-live"),
+                                          actor=actor)
+                    approved.append(key)
+                except Exception as e:  # noqa: BLE001 — one ticket must not stop the others
+                    errors.append({"key": key, "error": str(e)[:160]})
+            if self.night is not None:
+                self.night.went_live(project, approved)
+        finally:
+            self.going_live.discard(project)
         return {"ok": True, "project": project, "coordinator": name, "approved": approved, "skipped": skipped,
                 "errors": errors}
 

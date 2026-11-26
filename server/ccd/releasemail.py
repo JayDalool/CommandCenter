@@ -46,6 +46,8 @@ PULL_TEXT_MAX = 200
 PULL_KEYS_MAX = 20
 CORRECTIONS_MAX = 10        # correction emails per digest
 FOREIGN_GAP = 600           # s: at most one "not from you" DM per release thread in this time
+SLACK_CHUNK = 3500          # characters of one release-list post, below notify.POST_LIMIT (3900), which cuts
+OUTBOX_TRIES = 3            # posts of one outbox entry that Slack definitely refused before it is dropped
 PULL_REASON = "pulled from this release: its code still ships until reverted"
 
 
@@ -162,10 +164,8 @@ class ReleaseMail:
         self.rows = {}                  # project -> ledger rows, newest first
         self.config_alerts = {}         # project -> window start, while mail.env stops a due digest
         self._config_failed = set()     # (project, window) already reported
-        # The "not from you" notice (CC-088): in memory only, apart from Jay's seen_events so a flood of foreign
-        # messages cannot evict his marks, and holding no sender, text or length (tech review A5).
-        self._foreign_at = {}           # "channel:thread" -> when the notice was last sent
-        self._foreign_held = {}         # "channel:thread" -> project, notices waiting for quiet hours to end
+        # Redelivered events of the "not from you" notice (CC-088): apart from Jay's seen_events so a flood of
+        # foreign messages cannot evict his marks, and holding only Slack's event id (tech review A5).
         self._foreign_seen = collections.deque(maxlen=200)
 
     # ----- ledger -----
@@ -248,10 +248,11 @@ class ReleaseMail:
         out, name = [], self.n.name(p)
         s = r.get("slack") or {}
         if s.get("state") == "failed":
-            final = s.get("uncertain") or s["attempts"] >= 2
+            text = (f"{name} release list may not have been posted in Slack, not retried: pulls by Slack unavailable"
+                    if s.get("uncertain") else f"{name} release list not posted in Slack: pulls by Slack unavailable"
+                    if s["attempts"] >= 2 else f"{name} release list not posted in Slack, retrying once")
             out.append({"id": f"mail:{p}:{r['window']}:slack", "severity": "warn", "source": "notify", "project": p,
-                        "text": f"{name} release list not posted in Slack" + (": pulls by Slack unavailable" if final
-                                                                             else ", retrying once")})
+                        "text": text})
         c = (r.get("corrections") or [None])[-1]
         if c and c["state"] == "failed":
             text = (f"{name} release correction email may not have been sent, not retried" if c["uncertain"]
@@ -431,8 +432,9 @@ class ReleaseMail:
     async def slack_list(self, p):
         """Post the newest delivered digest's Scheduled items to Jay's DM, once. Held while quiet hours last (Jay's
         answer on the plan), never after the window ends or Go Live was sent. Its state is written before the post;
-        a definite failure is retried once after RETRY_AFTER, an unknown outcome never (a second list would be a
-        second thread to pull from)."""
+        a definite failure is retried once after RETRY_AFTER, an uncertain one never (Slack may have taken it: a
+        second list would be a second thread to pull from). A long list goes on in the thread, SLACK_CHUNK
+        characters a post, and `shown` holds the keys of every post Slack took: only those can be pulled."""
         from . import notify    # in_quiet lives there; imported late because notify imports this module
         n = self.n
         rows = self.ledger(p)
@@ -449,20 +451,48 @@ class ReleaseMail:
             return
         keys = (row.get("listed") or {}).get("scheduled") or []
         titles = self._titles(p)
-        lines = [f"*{n.name(p)} release {self._local(row['window'])}*: reply in this thread with a ticket ID to pull "
-                 "it from this release. A pulled item waits for the next release; its code is on main and still "
-                 "ships with Go Live until reverted."]
-        lines += [f"• {notify.esc(self._line(p, k, titles.get(k)))}" for k in keys] or ["Nothing is scheduled."]
+        head = (f"*{n.name(p)} release {self._local(row['window'])}*: reply in this thread with a ticket ID to pull "
+                "it from this release. A pulled item waits for the next release; its code is on main and still "
+                "ships with Go Live until reverted.")
+        chunks = [[head, []]]
+        for k in keys:
+            line = f"• {notify.esc(self._line(p, k, titles.get(k)))}"
+            text, ks = chunks[-1]
+            if len(text) + 1 + len(line) > SLACK_CHUNK:
+                chunks.append([line, [k]])
+            else:
+                chunks[-1] = [text + "\n" + line, ks + [k]]
+        if not keys:
+            chunks[0][0] += "\nNothing is scheduled."
         s = {"state": "posting", "attempts": s.get("attempts", 0) + 1, "at": now, "channel": None, "ts": None,
-             "uncertain": False}
+             "uncertain": False, "shown": []}
         row["slack"] = s
         self._save(p)
-        ts = await n.post("dm", "\n".join(lines), item={"type": "release", "project": p, "window": row["window"]})
-        if ts and n._dm:
-            s.update(state="posted", channel=n._dm, ts=ts)
-        else:
-            s.update(state="failed")    # post() has already recorded why
+        cid, ts = None, None
+        try:
+            cid = await n.dm_id()       # sends no message, so its failure is a definite one
+            ts = await n.post_or_raise("dm", chunks[0][0], item={"type": "release", "project": p,
+                                                                  "window": row["window"]})
+        except notify.SlackError as e:
+            s.update(state="failed", uncertain=cid is not None and e.uncertain)
+            self._save(p)
+            n._fail("slack dm", e)
+            return
+        if not ts:          # Slack switched off meanwhile: nothing was sent
+            s.update(state="failed")
+            self._save(p)
+            return
+        s.update(state="posted", channel=cid, ts=ts, shown=list(chunks[0][1]))
         self._save(p)
+        for text, ks in chunks[1:]:
+            try:
+                await n.post_or_raise("dm", text, ts)
+            except notify.SlackError as e:
+                # The rest of the list was not shown (or may not have been): those keys cannot be pulled.
+                n._fail("slack dm", e)
+                break
+            s["shown"] = s["shown"] + ks
+            self._save(p)
 
     def find_thread(self, cid, ts):
         """The release list whose thread this is, from the ledger: Notifier.threads keeps 1000 posts and a busy week
@@ -480,7 +510,6 @@ class ReleaseMail:
         """A message that is not Jay's (from_jay said no). The one exception to dropping it unseen: a plain human
         message in a release list's thread gets Jay one fixed DM, at most once per thread per FOREIGN_GAP. It reads
         and changes nothing else, and records no sender, text or length anywhere (tech review A5)."""
-        from . import notify    # in_quiet lives there; imported late because notify imports this module
         n = self.n
         if ev.get("type") != "message" or ev.get("subtype") or ev.get("bot_id") \
                 or not isinstance(ev.get("user"), str) or not ev.get("user"):
@@ -497,34 +526,69 @@ class ReleaseMail:
         if mark in self._foreign_seen:
             return
         self._foreign_seen.append(mark)
-        now, where = n.clock(), f"{cid}:{thread}"
-        if now < self._foreign_at.get(where, now - FOREIGN_GAP) + FOREIGN_GAP:
-            return
-        if notify.in_quiet(n.settings, now):
-            # Nothing pings Jay in quiet hours (lead, CC-088): one notice per thread waits for flush_foreign. In
-            # memory only, like the rest of this notice: a restart in quiet hours drops it.
-            self._foreign_held[where] = item.get("project")
-            return
-        await self._foreign_notice(where, item.get("project"), now)
+        where, box = f"{cid}:{thread}", self.outbox()
+        sent = box["noticeAt"].get(where)
+        # One rule for held and sent notices (Codex round 1): a thread with a notice waiting, or one sent within
+        # FOREIGN_GAP, gets no other.
+        if not any(e.get("where") == where for e in box["queue"]) \
+                and not (sent is not None and n.clock() < sent + FOREIGN_GAP):
+            name = n.name(item.get("project"))
+            n.d._event("notify", "release.foreign_reply", f"A message in the {name} release thread was not Jay's; "
+                       "nothing changed", project=item.get("project"), data={"kind": "release.foreign_reply"})
+            box["queue"].append({"kind": "notice", "where": where, "project": item.get("project")})
+            self._put_outbox(box)
+        await self.flush()
 
-    async def _foreign_notice(self, where, project, now):
-        n = self.n
-        self._foreign_at[where] = now
-        name = n.name(project)
-        n.d._event("notify", "release.foreign_reply", f"A message in the {name} release thread was not Jay's; "
-                   "nothing changed", project=project, data={"kind": "release.foreign_reply"})
-        await n.post("dm", f"A message in the {name} release thread was not from you; nothing changed.")
+    # The outbox (CC-088): what ccd says because of a release thread, held while quiet hours last (nothing pings Jay
+    # then) and kept in ccd.db until Slack takes it, so a restart or a failed post loses nothing. It holds ccd's own
+    # words and the thread they go to; never a sender, nor the text of a message that is not Jay's.
 
-    async def flush_foreign(self):
-        """Send the "not from you" notices held during quiet hours, once they end (Notifier.tick)."""
+    def outbox(self):
+        box = self.n.store.get("release_mail:outbox", None)[0] or {}
+        return {"queue": list(box.get("queue") or []), "noticeAt": dict(box.get("noticeAt") or {})}
+
+    def _put_outbox(self, box):
+        now = self.n.clock()
+        box["noticeAt"] = {k: v for k, v in box["noticeAt"].items() if now < v + FOREIGN_GAP}
+        self.n.store.put("release_mail:outbox", box)
+
+    async def say(self, cid, thread, text):
+        """ccd's answer to Jay's reply in a release thread: in the thread, through the outbox."""
+        box = self.outbox()
+        box["queue"].append({"kind": "reply", "channel": cid, "thread": thread, "text": text})
+        self._put_outbox(box)
+        await self.flush()
+
+    async def flush(self):
+        """Send what the outbox holds, in order, once quiet hours are over (Notifier.tick, and after each new
+        entry). An entry leaves the outbox only once Slack took it; a definite failure stays for a later tick (at
+        most OUTBOX_TRIES), an uncertain one is dropped, because Slack may have posted it."""
         from . import notify
         n = self.n
-        now = n.clock()
-        if not self._foreign_held or notify.in_quiet(n.settings, now):
+        if not n.settings["slack"] or notify.in_quiet(n.settings, n.clock()):
             return
-        held, self._foreign_held = self._foreign_held, {}
-        for where, project in held.items():
-            await self._foreign_notice(where, project, now)
+        box = self.outbox()
+        while box["queue"]:
+            e = box["queue"][0]
+            try:
+                await n.dm_id()
+                if e["kind"] == "notice":
+                    await n.post_or_raise("dm", f"A message in the {n.name(e.get('project'))} release thread was "
+                                                "not from you; nothing changed.")
+                    box["noticeAt"][e["where"]] = n.clock()
+                else:
+                    await n.post_or_raise("dm", e["text"], e["thread"])
+            except notify.SlackError as err:
+                n._fail("slack dm", err)
+                e["tries"] = e.get("tries", 0) + 1
+                if getattr(err, "uncertain", False) or e["tries"] >= OUTBOX_TRIES:
+                    box["queue"].pop(0)
+                    continue
+                self._put_outbox(box)
+                return
+            box["queue"].pop(0)
+            self._put_outbox(box)
+        self._put_outbox(box)
 
     def _deploy_started(self, key):
         """Whether the ticket's live deploy is already approved or has a result: pulling it would be too late."""
@@ -558,9 +622,13 @@ class ReleaseMail:
         now = n.clock()
         if self._ended(row, now):
             return no("this release window has ended.")
-        if self._went_live(p, row):
-            return no("Go Live was already sent for this release.")
-        listed = set((row.get("listed") or {}).get("scheduled") or [])
+        if self._went_live(p, row) or p in getattr(n.d, "going_live", ()):
+            # A pull while Go Live's message is on its way would make that message call a pulled item approved
+            # (Codex round 1): from the press on, a pull is too late, as after it (tech review A3).
+            return no("Go Live is being sent or was already sent for this release.")
+        # Only what Jay could see in Slack: a key a long list could not show is not pullable (Codex round 1).
+        shown = set((row.get("slack") or {}).get("shown") or [])
+        listed = {k for k in (row.get("listed") or {}).get("scheduled") or [] if k in shown}
         # Keys are stored zero-padded (GYST-012); "GYST-12" as Jay may type it is the same ticket.
         by_num = {_num(k): k for k in listed}
         keys = list(dict.fromkeys(by_num.get(_num(k), k) for k in keys))
