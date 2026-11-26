@@ -34,6 +34,8 @@ or `scope out` (a later ticket).
 3. Blast radius: nothing outside the plan's `affected` list changed without reason.
 4. Why-comments where the code is not obvious; no dead code; no secrets or customer data.
 5. Protected paths (see the repository's `AGENTS.md`): flag any change for Jay.
+6. Tiers (GYST and Command Center): a small or Tier 1 PR whose diff touches a `tier2_paths` entry (`ccd/registry.py`) or
+   changes `tasks.MIGRATIONS` / `SCHEMA_VERSION` is `REQUEST_CHANGES`; the lead re-plans it as Tier 2 for Jay's plan gate.
 
 Risky tickets and changes to protected paths also get a second review from a different model family (Codex), on
 top of yours (D-024 clause 15). A small ticket that touches no protected or sensitive path gets one Sonnet reviewer per

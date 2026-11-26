@@ -30,6 +30,19 @@ A ticket in RESEARCHING with a recorded plan. You must not be the investigator's
     python -m ccd.pipeline_cli plan-review SV-082 APPROVE --role tech-reviewer --session <your session> \
         --size risky --note "…"                                      # (flow PR) Jay approves the plan next
 
+## Tier (GYST and Command Center)
+
+On these two projects every APPROVE carries `--tier 1|2|unsure --tier-reason "…"` ([FLOW.md](../FLOW.md#approval-tiers-gyst-and-command-center)).
+Tier 2 (opens Jay's plan gate): a new screen or feature, a migration, anything customers see, a D-007 rail, `.github/**`,
+agent instruction files, and on GYST every D-005 category (data model, retention, privacy, encryption, deletion,
+personal-data handling, authentication), also off the listed paths. A `tasks.db` migration is Tier 2 even though its code
+sits in `server/ccd`. Tier 1 is a fix, polish, tests or a small change elsewhere; give the reason. When unsure, `unsure`
+(recorded as Tier 2). ccd refuses Tier 1 for a plan that lists a Tier 2 path, no files, or a FEATURE. On SamVision, MFE
+and GauzeMate leave `--tier` out (ccd refuses it).
+
+    python -m ccd.pipeline_cli plan-review CC-082 APPROVE --role tech-reviewer --session <your session> \
+        --tier 1 --tier-reason "bug fix in one module, no rail" --note "…"
+
 ## Send it back when
 
 The plan does not meet every criterion, misses an affected area, has no test for a criterion, or the approach would

@@ -122,7 +122,47 @@ def policy(ticket, project_key=None):
         "merge": merge,
         "ui": "needs_ui_review" in flags or ticket.get("type") == "DESIGN" or "ui" in labels,
         "deploy": "needs_deploy" in flags,
+        # CC-082: the project has approval tiers (the technical reviewer records Tier 1 or 2). Read by plan_review
+        # and the Work panel; never changes a gate by itself.
+        "tiers": bool(registry.pipeline_of(project_key or ticket.get("project")).get("plan_tiers")),
     }
+
+
+# CC-082: agent instruction files anywhere in the tree are agent permission rules (D-007), like merge_policy.DENY.
+AGENT_FILES = ("agents.md", "agents.override.md", "agent.md", "claude.md", "claude.local.md", "gemini.md", "skill.md")
+_TIER_TIERS = {"1": 1, "2": 2, "unsure": None}
+
+
+def tier2_hit(entry, patterns):
+    """The Tier 2 path (or reason) a plan.affected entry hits, else None. Fails closed: an entry that names a folder
+    above a Tier 2 path, holds a glob character, is an odd path, is a dot-path or an agent file counts as a hit.
+    `entry` may carry a ':line' suffix or a note after the path ("server/ccd/profiles.py:99-105", "x.py (new)")."""
+    from . import merge_policy      # here: merge_policy imports pipeline
+    parts = str(entry or "").split()
+    if not parts:
+        return "an empty entry"
+    token = parts[0].strip(",;()").rstrip(":")
+    token = re.sub(r":[\d,\-L]*$", "", token)
+    if token.startswith("./"):
+        token = token[2:]
+    token = token.rstrip("/").lower()
+    if not token or any(c in token for c in "*?[") or not merge_policy.safe_path(token):
+        return "a path that cannot be ruled out"
+    if merge_policy.hidden_part(token):
+        return "a dot-path (agent configuration)"
+    if token.rsplit("/", 1)[-1] in AGENT_FILES:
+        return "an agent instruction file"
+    for pat in patterns:
+        rx = re.compile("^" + merge_policy._glob(pat.lower()) + "$")
+        head = re.split(r"[*?\[]", pat.lower(), 1)[0]
+        # the path itself, a folder above it (its literal head starts with the folder) or a folder holding it
+        if rx.match(token) or head.startswith(token + "/") or rx.match(token + "/_"):
+            return pat
+    return None
+
+
+def tier2_paths_of(project):
+    return tuple(registry.pipeline_of(project).get("tier2_paths") or ())
 
 
 CLOSED_STATUSES = ("DONE", "DENIED", "CANCELLED")
@@ -452,7 +492,8 @@ class Pipeline:
             except ValueError:
                 d = {}
             out.append({"verdict": d.get("verdict"), "by": actor, "session": d.get("session"), "at": at,
-                        "note": d.get("note"), "blast": d.get("blast"), "tests": d.get("tests")})
+                        "note": d.get("note"), "blast": d.get("blast"), "tests": d.get("tests"),
+                        "tier": d.get("tier"), "tierReason": d.get("tierReason")})
         return out
 
     def questions(self, tid):
@@ -1739,9 +1780,12 @@ class Pipeline:
                                  data)]
         return self._tx(key, actor, fn)
 
-    def plan_review(self, key, verdict, actor, note, blast=None, tests=None, size=None, model=None, session=None):
+    def plan_review(self, key, verdict, actor, note, blast=None, tests=None, size=None, model=None, session=None,
+                    tier=None, tier_reason=None):
         """The technical reviewer reads the investigator's plan: APPROVE sends it to build (a risky ticket opens the
-        plan gate for Jay first); SEND_BACK returns it to investigation. Never the planner's own session."""
+        plan gate for Jay first); SEND_BACK returns it to investigation. Never the planner's own session.
+        CC-082: on a project with approval tiers APPROVE also records a tier. Tier 2 (or no tier) opens Jay's plan
+        gate; Tier 1 goes to build. A tier never lowers a size or closes a gate that size, labels or flags open."""
         if actor != "agent:tech-reviewer":
             raise TaskError(403, "a plan review is the technical reviewer's (--role tech-reviewer)")
         if verdict not in ("APPROVE", "SEND_BACK"):
@@ -1756,9 +1800,14 @@ class Pipeline:
         if not session:
             raise TaskError(400, "say which reviewer session reviews the plan (--session)")
         _meta(session, "session")
+        raw_tier = None if tier is None else str(tier).strip().lower()
+        if raw_tier is not None and raw_tier not in _TIER_TIERS:
+            raise TaskError(400, "tier must be 1, 2 or unsure")
+        tier_reason = _text(tier_reason, 300, "tierReason", multiline=False)
         # CC-066: the review text now goes into ticket_events, which is append-only, so a secret could never be
         # removed again (ticket_flow.plan_review is overwritten by the next review). Refuse before anything is written.
-        for field, val in (("session", session), ("note", note), ("blast", blast), *[("tests", x) for x in tests]):
+        for field, val in (("session", session), ("note", note), ("blast", blast), ("tierReason", tier_reason),
+                           *[("tests", x) for x in tests]):
             if val and redact(val)[1]:
                 raise TaskError(400, f"the {field} has text the secret filter would hide (a key, token, password or "
                                      "connection string): reword it, plan reviews are kept for good")
@@ -1774,6 +1823,23 @@ class Pipeline:
             planner = (w["roles"].get("planner") or {}).get("session")
             if planner and session == planner:
                 raise TaskError(409, "the investigator cannot review its own plan; a fresh session must")
+            if raw_tier is not None and not pol["tiers"]:
+                raise TaskError(400, f"{t['key']}'s project has no approval tiers; leave out --tier")
+            tier_no, tier_why = None, None
+            if pol["tiers"] and verdict == "APPROVE":
+                tier_no = _TIER_TIERS.get(raw_tier)
+                if tier_no == 1:
+                    if not tier_reason:
+                        raise TaskError(400, "a Tier 1 approval needs its reason (--tier-reason)")
+                    refusal = self._tier1_refusal(t, w)
+                    if refusal:
+                        raise TaskError(409, f"not Tier 1: {refusal}")
+                    tier_why = tier_reason
+                elif tier_no is None:       # no tier, or "unsure": unclear is Tier 2 (c4)
+                    tier_no = 2
+                    tier_why = "unclear: treated as Tier 2" + (f": {tier_reason}" if tier_reason else "")
+                else:
+                    tier_why = tier_reason or "Tier 2"
             order = {s: i for i, s in enumerate(flow_mod.SIZES)}
             cur = flow_mod.effective_size(f["size"], pol)
             new = cur
@@ -1783,9 +1849,13 @@ class Pipeline:
                 new = size
             review = {"verdict": verdict, "by": actor, "session": session, "at": at, "note": note, "blast": blast,
                       "tests": tests}
+            if tier_no:
+                review.update(tier=tier_no, tierReason=tier_why)
             # CC-066: every verdict's text also rides on its event, so work().planReviews keeps reviews that
             # ticket_flow.plan_review loses when a new plan clears it.
             kept = {"session": session, "note": note, "blast": blast, "tests": tests}
+            if tier_no:
+                kept.update(tier=tier_no, tierReason=tier_why)
             work = {"roles": self._role(w, "tech-reviewer", model, session, at)}
             cols = {"plan_review": review}
             if new != f["size"]:
@@ -1805,13 +1875,19 @@ class Pipeline:
                         ("pipeline.blocked", reason, {"stage": "PLAN"})]
                 return {}, work, [("pipeline.plan_reviewed", f"plan sent back (round {rounds['techReview']})",
                                    dict(kept, verdict=verdict, rounds=rounds["techReview"]))]
-            if new == "risky":
-                # The existing plan gate: Jay approves a risky plan after the technical review.
+            if new == "risky" or tier_no == 2:
+                # The existing plan gate: Jay approves a risky plan, or a Tier 2 plan (CC-082), after the technical
+                # review. Tier 2 changes no size and adds no stage: the same gate, nothing after it.
                 self._flow_set(tid, at, **cols)
-                reason = "technical review approved; risky: " + (", ".join(pol["planReasons"]) or "sized risky")
+                if new == "risky":
+                    reason = "technical review approved; risky: " + (", ".join(pol["planReasons"]) or "sized risky")
+                    if tier_no == 2:
+                        reason += f" · Tier 2: {tier_why}"
+                else:
+                    reason = f"Tier 2: {tier_why}"
                 work.update(gate="plan", gate_reason=reason[:300], plan_state="proposed",
                             confirmed=sorted(set(w["confirmed"]) | {"owner:plan"}))
-                return {}, work, [("pipeline.plan_reviewed", "plan approved; Jay approves risky plans",
+                return {}, work, [("pipeline.plan_reviewed", "plan approved; Jay approves risky and Tier 2 plans",
                                    dict(kept, verdict=verdict, gate=True)),
                                   ("pipeline.gate_opened", "plan gate: " + reason[:200], {"gate": "plan"})]
             cols["review_due"] = None
@@ -1820,6 +1896,24 @@ class Pipeline:
             return {"status": "READY_TO_IMPLEMENT"}, work, [("pipeline.plan_reviewed", "plan approved",
                                                              dict(kept, verdict=verdict, gate=False))]
         return self._tx(key, actor, fn)
+
+    @staticmethod
+    def _tier1_refusal(t, w):
+        """Why this ticket cannot be Tier 1 (CC-082), or None. The tech reviewer's judgement decides between Tier 1 and
+        2; this only refuses what a path, the ticket type or its history already rules out."""
+        affected = (w.get("plan") or {}).get("affected") or []
+        if not affected:
+            return "the plan lists no affected files, so a Tier 2 path cannot be ruled out"
+        paths = tier2_paths_of(t["project"])
+        for e in affected:
+            hit = tier2_hit(e, paths)
+            if hit:
+                return f"{str(e).split()[0] if str(e).split() else e} is Tier 2 ({hit})"
+        if t.get("type") == "FEATURE":
+            return "a feature is Tier 2"
+        if "owner:plan" in w["confirmed"]:      # same stickiness as plan(): a plan that needed Jay keeps needing him
+            return "this ticket's plan needed Jay before"
+        return None
 
     @staticmethod
     def _marks(raw):

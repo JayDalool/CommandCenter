@@ -1697,7 +1697,8 @@ class Daemon(LeadChat, HqDaemon):
                            developer=developer, priority=body.get("priority"), due=body.get("due"))
         elif op == "plan-review":
             r = self._wrap(pl.plan_review, key, body.get("verdict"), actor, body.get("note"), body.get("blast"),
-                           body.get("tests"), body.get("size"), **meta)
+                           body.get("tests"), body.get("size"), tier=body.get("tier"),
+                           tier_reason=body.get("tierReason"), **meta)
         elif op == "user-check":
             t = self._wrap(self.tasks.get, key)
             if len(self._open_prs(t)) > 1:

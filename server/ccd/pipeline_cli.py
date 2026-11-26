@@ -31,7 +31,7 @@ The delivery flow (docs/flow/FLOW.md). Each line runs as the seat named in brack
     python -m ccd.pipeline_cli criteria    SV-056 --criterion "…" [--criterion …] [--requirement …] [--size risky]  [lead]
     python -m ccd.pipeline_cli criteria    SV-056 --priority URGENT --due 2026-11-18     (any stage while open)  [lead]
     python -m ccd.pipeline_cli plan-review SV-056 APPROVE|SEND_BACK --session <fresh> --note "…" [--blast "…" …] \
-                                           [--test "…"] [--size risky]                                       [tech-reviewer]
+                                           [--test "…"] [--size risky] [--tier 1|2|unsure --tier-reason "…"] [tech-reviewer]
     python -m ccd.pipeline_cli user-check  SV-056 pass|fail --head <sha> --session <fresh> --note "…" \
                                            --criterion c1=pass [--criterion c2=fail …]                        [user-reviewer]
     python -m ccd.pipeline_cli close       SV-056 --note "what was done, what to know next time"             [lead]
@@ -177,6 +177,8 @@ def build(argv):
     p.add_argument("--requirement", action="append")
     p.add_argument("--parent")
     p.add_argument("--blast", action="append")
+    p.add_argument("--tier", choices=("1", "2", "unsure"), help="plan-review on GYST and Command Center: the approval tier")
+    p.add_argument("--tier-reason", help="plan-review: why this tier (required for Tier 1)")
     p.add_argument("--test", action="append")
     a = p.parse_args(argv)
     if a.decision is not None and a.op not in ("plan-review", "user-check"):
@@ -218,7 +220,8 @@ def build(argv):
         "plan-review": lambda: {"verdict": a.decision or a.verdict, "note": a.note,
                                 # CC-055: --blast repeats; the ticket keeps one text, so a single value is unchanged.
                                 "blast": "; ".join(a.blast) if a.blast else None,
-                                "tests": a.test or [], **({"size": a.size} if a.size else {}), **meta},
+                                "tests": a.test or [], **({"size": a.size} if a.size else {}),
+                                **{k: v for k, v in (("tier", a.tier), ("tierReason", a.tier_reason)) if v}, **meta},
         "user-check": lambda: {"result": a.decision or a.result, "head": a.head, "note": a.note,
                                "criteria": a.criterion or [], **meta},
         "close": lambda: {"note": a.note},

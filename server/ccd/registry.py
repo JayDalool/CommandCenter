@@ -59,10 +59,17 @@ PROJECTS = {
     "commandcenter": {"name": "Command Center",   "prefix": "CC",   "legacy": (),
                       "root": "/srv/server/repos/CommandCenter",    "github": "JayDalool/CommandCenter",
                       # The only project that may auto-merge, and only its tests and docs (merge_policy.ALLOW).
-                      "pipeline": {"merge": "low-risk"}},
+                      "pipeline": {"merge": "low-risk", "plan_tiers": True, "tier2_paths": (
+                          # The D-007 rails, then agent permissions, CI and the agent instruction files (Jay, q218).
+                          "server/ccd/autonomy.py", "server/ccd/broker.py", "server/ccd/security.py",
+                          "server/ccd/profiles.py", "server/ccd/merge_policy.py", "policy/**", ".claude/**",
+                          ".github/**", "AGENTS.md", "CLAUDE.md")}},
     "gyst":          {"name": "GYST / LifeOps",   "prefix": "GYST", "legacy": (),
                       "root": "/srv/server/repos/gyst-lifeops",     "github": "JayDalool/gyst-lifeops",
-                      "pipeline": {"merge": "owner"}},   # Jay accepts every GYST merge (2026-10-09)
+                      "pipeline": {"merge": "owner", "plan_tiers": True, "tier2_paths": (
+                          # Migrations, agent permissions and the D-005 data, auth and crypto paths (Jay, q218).
+                          "**/migrations/**", ".claude/**", "**/models/**", "**/schema*", "**/auth/**",
+                          "**/crypto/**")}},   # Jay accepts every GYST merge (2026-10-09)
 }
 
 # Ticket pipeline defaults (plans/TICKET-PIPELINE-V1.md), the one place they live.
@@ -75,6 +82,10 @@ PROJECTS = {
 # open question for Jay, a plan waiting on his approval or a blocker only he can clear (Pipeline.held). Every
 # other ticket goes ahead. Lawyer tasks (needs:legal, type LEGAL) and sign-offs on finished work do not hold.
 # Implementation lanes and investigations: no limit per project (Jay, 2026-11-26: every task can run at once).
+# plan_tiers / tier2_paths (CC-082, GYST and Command Center only, never in PIPELINE_DEFAULTS): the technical reviewer
+# records Tier 1 or 2 at plan review. Tier 2 opens Jay's plan gate; Tier 1 goes straight to build. tier2_paths is the
+# floor: a ticket whose plan touches one of them can never be Tier 1. D-005 and D-007 stand; Jay's list is questions
+# 204 and 218. A project without plan_tiers is untouched (SamVision, MyFamilyExpenses, GauzeMate).
 # A project overrides with a "pipeline" dict in PROJECTS above.
 PIPELINE_DEFAULTS = {"merge": "owner", "ui_review": False, "jay_first": True}
 

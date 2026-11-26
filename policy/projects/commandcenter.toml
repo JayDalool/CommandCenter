@@ -2,7 +2,7 @@
 schema = 1
 project = "commandcenter"
 mode = "experimental_autonomy"
-decisions = ["D-001", "D-003", "D-006", "D-007", "D-008"]
+decisions = ["D-001", "D-003", "D-006", "D-007", "D-008", "D-010"]
 learning = "contextual"
 
 # What Command Center does TODAY. Must equal ccd/registry.py (a test and a runtime drift check keep them equal).
@@ -11,6 +11,11 @@ merge = "low-risk"          # ccd merges reviewed tests/docs PRs only, and only 
 night = "normal"
 paused = ""
 ui_fix = "ask"
+# Approval tiers (CC-082, D-010). Tier 1: a fix, polish, tests or a small change, also in server/ccd, web/app/src and
+# scripts outside these paths. Tier 2 (Jay's plan gate): a new screen or feature, a migration, anything customers see,
+# or a plan touching tier2_paths. Unclear = Tier 2. Must equal ccd/registry.py.
+plan_tiers = "on"
+tier2_paths = ["server/ccd/autonomy.py", "server/ccd/broker.py", "server/ccd/security.py", "server/ccd/profiles.py", "server/ccd/merge_policy.py", "policy/**", ".claude/**", ".github/**", "AGENTS.md", "CLAUDE.md"]
 
 # self_protection is folder-level (2026-10-22, L-01): every rail ccd has, including files added later.
 # The agreed policy. NOT enforced: the Autonomy Engine evaluates it in shadow mode only (D-008).

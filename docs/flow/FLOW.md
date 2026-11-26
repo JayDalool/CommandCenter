@@ -52,6 +52,26 @@ was typed. The route decides which stages run; a skipped stage is refused by ccd
 stay small only when every item would be small alone, all are in one area, none touches a protected or sensitive path,
 and the whole change is at most 3 files plus their tests. Otherwise the bundle is standard.
 
+## Approval tiers (GYST and Command Center)
+
+On GYST and Command Center the technical reviewer records a tier with its reason on every APPROVE (`--tier 1|2|unsure
+--tier-reason "…"`; D-010). The tier decides only whether Jay approves the plan first.
+
+- **Tier 2** opens Jay's plan gate and nothing else: a new screen or feature, a database migration, anything customers
+  see, the D-007 rails (`autonomy.py`, `broker.py`, `security.py`, `profiles.py`, `merge_policy.py`, `policy/**`, agent
+  permissions: `.claude/**`, every dot-path and agent files such as `AGENTS.md` and `CLAUDE.md`), `.github/**` (CI) and, on
+  GYST, the D-005 data, auth and crypto paths (`**/models/**`, `**/schema*`, `**/auth/**`, `**/crypto/**`). The path list is
+  `tier2_paths` in `ccd/registry.py` and the profile's `[enforced]`; ccd refuses Tier 1 when the plan's `affected` list
+  touches one, is empty, or the ticket is a FEATURE, and when the plan needed Jay before (a re-plan stays Tier 2).
+- **Tier 1** is a fix, polish, tests or a small change elsewhere, also in the rest of `server/ccd`, `web/app/src` and
+  `scripts`. It goes straight to Build. Jay still merges those PRs.
+- **Small tickets are Tier 1.** They skip technical review, so no tier is recorded; the Work panel shows "Tier: 1 · small ticket".
+  A small ticket must exclude every Tier 2 trigger (the bundle rule already keeps protected paths out).
+- **Unclear is Tier 2.** An APPROVE without a tier, or with `unsure`, is recorded as Tier 2.
+- A tier never lowers a size and never closes a gate that size, labels, flags or type open; Tier 2 changes no size and adds
+  no release approval or deploy gate. No review stage is removed: every route keeps code review, and standard and risky
+  keep the user check. Every merge and deploy stays with Jay (auto-merge stays off until CC-080 ships).
+
 ## Models and usage
 
 Use the cheapest model that can do the seat's work. The agent's own default is the model; a lead never passes a

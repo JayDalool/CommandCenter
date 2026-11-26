@@ -375,7 +375,8 @@ export interface TicketWork {
   stages: { stage: PipelineStage; state: "done" | "active" | "blocked" | "todo" }[];
   plan: { summary?: string; requirements?: string[]; approach?: string; affected?: string[]; risk?: string; tests?: string[]; questions?: string[] };
   planState: "none" | "proposed" | "accepted";
-  policy: { plan: "auto" | "owner"; planReasons: string[]; merge: string; ui: boolean; deploy: boolean };
+  /** `tiers`: the project has approval tiers (CC-082: GYST and Command Center); absent from an older ccd. */
+  policy: { plan: "auto" | "owner"; planReasons: string[]; merge: string; ui: boolean; deploy: boolean; tiers?: boolean };
   gate: PipelineGate | null; gateReason: string | null; confirmed: string[];
   branch: string | null; worktree: string | null; prs: string[];
   roles: Record<string, { model: string | null; session: string | null; at: number }>;
@@ -402,6 +403,8 @@ export interface TicketWork {
   size?: TicketSize | null;
   requirements?: string[];
   criteria?: Criterion[];
+  /** The latest technical review; `tier` and `tierReason` only on a project with approval tiers (CC-082). */
+  planReview?: { verdict: "APPROVE" | "SEND_BACK"; tier?: 1 | 2; tierReason?: string } | null;
   flow?: TicketFlow;
   handoffs?: Handoff[];
   closing?: { note: string; by: string; at: number } | null;

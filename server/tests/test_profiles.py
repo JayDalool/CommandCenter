@@ -29,6 +29,26 @@ class RepoPolicy(unittest.TestCase):
             self.assertRegex(rec["sha256"], r"^[0-9a-f]{64}$")
         self.assertTrue(self.policy.examples["example-restricted"]["valid"])
 
+    def test_approval_tiers_match_the_registry_and_only_gyst_and_command_center_have_them(self):   # CC-082 c1
+        for key in ("gyst", "commandcenter"):
+            enf = self.policy.profiles[key]["profile"]["enforced"]
+            self.assertEqual(enf["plan_tiers"], "on", key)
+            self.assertEqual(enf["tier2_paths"], list(registry.pipeline_of(key)["tier2_paths"]), key)
+            self.assertIn("D-010", self.policy.profiles[key]["profile"]["decisions"])
+        for key in ("samvision", "mfe", "gauzemate"):
+            self.assertNotIn("plan_tiers", self.policy.profiles[key]["profile"]["enforced"], key)
+            self.assertNotIn("tier2_paths", self.policy.profiles[key]["profile"]["enforced"], key)
+            self.assertNotIn("plan_tiers", profiles.enforced_now(key))
+
+    def test_the_tier_keys_drift_when_either_side_differs(self):                                       # CC-082 c1
+        prof = copy.deepcopy(self.policy.profiles["gyst"]["profile"])
+        self.assertEqual(profiles.drift("gyst", prof), [])
+        prof["enforced"]["tier2_paths"] = prof["enforced"]["tier2_paths"][:-1]
+        self.assertEqual([d["field"] for d in profiles.drift("gyst", prof)], ["tier2_paths"])
+        prof = copy.deepcopy(self.policy.profiles["samvision"]["profile"])
+        prof["enforced"]["plan_tiers"] = "on"                     # the profile claims tiers the registry lacks
+        self.assertEqual([d["field"] for d in profiles.drift("samvision", prof)], ["plan_tiers"])
+
     def test_jays_decisions_are_encoded(self):
         p = {k: self.policy.profile(k) for k in registry.PROJECTS}
         self.assertEqual({k: v["mode"] for k, v in p.items()}, {
@@ -93,6 +113,8 @@ class Validator(unittest.TestCase):
             (lambda p: p.update(decisions=["D-001", "D-001"]), "decisions has duplicates"),
             (lambda p: p["target"]["merge"].pop("policy"), "target.merge.policy is missing"),
             (lambda p: p["target"]["personal_data"].update(trigger_paths=["app/models/"]), "badly formed: app/models/"),
+            (lambda p: p["enforced"].update(plan_tiers="maybe"), "enforced.plan_tiers must be one of"),      # CC-082
+            (lambda p: p["enforced"].update(tier2_paths=["/etc/x"]), "enforced.tier2_paths badly formed"),
         ]
         for change, expected in cases:
             p = copy.deepcopy(self.good)

@@ -45,7 +45,10 @@ a rule for agents now:
 
 
 `server/ccd/**`, `scripts/**`, `launcher/**`, `.github/**`, `policy/**`, `web/app/src/**`, `.claude/**`,
-`AGENTS.md`, `CLAUDE.md`. Never weaken the rails, and never change your own or another agent's authority.
+`AGENTS.md`, `CLAUDE.md`. Approval tiers (D-010, FLOW.md): a plan that touches the D-007 rails, `.claude/**`, `.github/**`,
+`AGENTS.md`, `CLAUDE.md`, adds a migration, a screen or feature or anything customers see is Tier 2 and needs Jay's plan
+approval first; a fix, polish, tests or small change in the rest of `server/ccd`, `web/app/src` and `scripts` is Tier 1 and
+skips that plan gate, never the code review, user check or Jay's merge; unclear is Tier 2. Never weaken the rails, and never change your own or another agent's authority.
 CI configuration is never changed without Jay's explicit approval.
 
 ## Git and pull requests

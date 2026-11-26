@@ -52,6 +52,12 @@ export function WorkPanel({ t }: { t: TicketDetail }) {
     }
   })();
 
+  // CC-082: the tier recorded at technical review. A small ticket skips that review and counts as Tier 1 (derived, never
+  // stored), so the row is shown only on a project with tiers.
+  const tier = w.planReview?.tier
+    ? `${w.planReview.tier}${w.planReview.tierReason ? ` · ${w.planReview.tierReason}` : ""}`
+    : w.policy.tiers && w.size === "small" ? "1 · small ticket" : null;
+
   return <section aria-label="Work">
     <div className="td-sec-title">Work</div>
     {worker && <div className="row" style={{ marginBottom: 6 }}>
@@ -69,6 +75,7 @@ export function WorkPanel({ t }: { t: TicketDetail }) {
     <dl>
       {w.plan.summary && <DetailRow label="Plan"><span className="trunc" title={w.plan.approach || w.plan.summary}>{w.plan.summary}
         {w.planState === "proposed" && <span className="label">proposed</span>}</span></DetailRow>}
+      {tier && <DetailRow label="Tier"><span className="trunc" title={tier}>{tier}</span></DetailRow>}
       {(w.branch || w.worktree) && <DetailRow label="Branch"><span className="mono-xs trunc" title={w.worktree ?? ""}>{w.branch ?? "—"}</span></DetailRow>}
       {w.review.verdict && <DetailRow label="Review"><span className="mono-xs">{w.review.verdict === "APPROVE" ? "approved" : "changes requested"}
         {w.review.head ? ` at ${w.review.head.slice(0, 7)}` : ""}{w.review.cycles ? ` · cycle ${w.review.cycles}` : ""}</span></DetailRow>}

@@ -70,6 +70,23 @@ it("plan gate: Approve plan closes it through ccd; locked asks to unlock first",
   await waitFor(() => expect(confirm).toHaveBeenCalledWith("SV-056", "plan"));
 });
 
+it("shows the approval tier and its reason, 'Tier 1 · small ticket' for a small ticket, and nothing without tiers (CC-082)", async () => {
+  const spy = vi.spyOn(app.api, "taskWork");
+  spy.mockResolvedValue(work({ policy: { plan: "auto", planReasons: [], merge: "owner", ui: false, deploy: false, tiers: true },
+    planReview: { verdict: "APPROVE", tier: 2, tierReason: "a D-007 rail" } }));
+  const { unmount } = render(<WorkPanel t={T} />);
+  expect((await screen.findByText("Tier")).closest("div")).toHaveTextContent("2 · a D-007 rail");
+  unmount();
+  spy.mockResolvedValue(work({ size: "small", policy: { plan: "auto", planReasons: [], merge: "owner", ui: false, deploy: false, tiers: true } }));
+  const second = render(<WorkPanel t={T} />);
+  expect((await screen.findByText("Tier")).closest("div")).toHaveTextContent("1 · small ticket");
+  second.unmount();
+  spy.mockResolvedValue(work({ size: "small" }));                                   // a project without tiers
+  render(<WorkPanel t={T} />);
+  await screen.findByText("SV-056-valuation");
+  expect(screen.queryByText("Tier")).toBeNull();
+});
+
 it("blocked shows the stage and reason once, with Resume", async () => {
   vi.spyOn(app.api, "taskWork").mockResolvedValue(work({ status: "BLOCKED", stage: "REVIEW", gate: "failure",
     gateReason: "2 review cycles requested changes", blocked: { stage: "REVIEW", reason: "2 review cycles requested changes", at: 1 },
