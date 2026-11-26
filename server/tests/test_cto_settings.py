@@ -56,7 +56,11 @@ class CtoSettingsTemplate(Fixtures):
                     f"docker rm --volumes {ID}", f"sudo docker rm -f {ID}", f"docker container rm -f {ID}",
                     f"docker container remove -f {ID}", f"docker rmi -f {ID}", f"docker rmi {ID} --force",
                     f"docker image rm -f {ID}", f"docker image remove --force {ID}", f"sudo docker rmi -f {ID}",
-                    f"docker rm -fv {ID}"])
+                    f"docker rm -fv {ID}",
+                    # flags after the operand (separate rules from flags before it)
+                    f"docker rm {ID} -v", f"docker rm {ID} --volumes", f"docker rmi {ID} -v",
+                    f"docker rmi {ID} --volumes", f"docker container rm {ID} -v",
+                    f"docker image rm {ID} --volumes"])
 
     def test_compose_down_volumes_all_spellings(self):
         self.check(["docker compose down -v", "docker compose down --volumes", "docker compose -f x.yml down -v",
@@ -99,6 +103,18 @@ class CtoSettingsTemplate(Fixtures):
             self.check([f"rm {t}", f"mv {t} /tmp", f"cp /tmp/x {t}", f"echo x > {t}", f"echo x >> {t}",
                         f"tee {t}", f"sed -i s/a/b/ {t}", f"truncate -s0 {t}", f"chmod 777 {t}"])
         self.check(["rm -r /home/jay/cto/.claude", "mv /home/jay/cto/.claude /tmp"])
+
+    def test_relative_operands_from_the_cto_start_folder(self):
+        self.check(["cp x CLAUDE.md", "mv a .claude/settings.json", "rm ./CLAUDE.md", "tee ./CLAUDE.md",
+                    "echo x > CLAUDE.md", "echo x >> .claude/settings.json", "sed -i s/a/b/ CLAUDE.md",
+                    "cp x ./.claude/settings.json", "truncate -s0 .claude/settings.json"])
+
+    def test_home_backup_spellings(self):
+        for tree in ("~/backups", "$HOME/backups"):
+            for operand in (tree, tree + "/", tree + "/odoo/x"):
+                self.check([f"rm {operand}", f"mv {operand} /tmp", f"cp /tmp/x {operand}",
+                            f"echo x > {operand}", f"tee {operand}", f"sed -i s/a/b/ {operand}",
+                            f"find {operand} -delete"])
 
     def test_harmless_commands_still_allowed(self):
         for cmd in [
