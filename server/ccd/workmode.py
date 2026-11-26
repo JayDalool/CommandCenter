@@ -69,16 +69,12 @@ def _day(at):
     return datetime.datetime.fromtimestamp(at, TZ).date().isoformat()
 
 
-def movable(rows, build_full=False):
+def movable(rows):
     """The tickets the lead can move without Jay, in the order to take them. `rows`: dicts with key, status, type,
     flags, priority, dueAt, number, stage, holder, waitingOn, stale (flow.view's fields plus the ticket's).
-    `build_full`: the project's build lanes are all taken (pipeline.lanes >= lane_limit)."""
+    There is no build-lane limit any more (Jay, 2026-11-26), so a ticket waiting to start a build is always listed."""
     out = []
     for r in rows:
-        # CC-090: with every build lane taken, starting another build is refused (409), so naming it made the lead
-        # get the same dispatch again and again. A ticket already IN_PROGRESS holds its own lane and stays listed.
-        if build_full and r.get("stage") == "build" and r.get("status") != "IN_PROGRESS":
-            continue
         if r.get("status") in CLOSED or r.get("status") == "BLOCKED":
             continue
         if r.get("waitingOn") == "jay" or r.get("stage") not in STAGE_ORDER:

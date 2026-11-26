@@ -83,7 +83,7 @@ class Validator(unittest.TestCase):
             (lambda p: p["target"]["merge"].update(requires=["ci_green", "vibes"]), "unknown value(s) vibes"),
             (lambda p: p.update(mode="anarchy"), "mode must be one of"),
             (lambda p: p["enforced"].pop("merge"), "enforced.merge is missing"),
-            (lambda p: p["enforced"].update(max_lanes=99), "enforced.max_lanes must be a whole number"),
+            (lambda p: p["enforced"].update(max_lanes=2), "enforced.max_lanes is not a known key"),   # no lane limit now
             (lambda p: p["capabilities"].update(auto_rollback="yes"), "capabilities.auto_rollback must be true or false"),
             (lambda p: p.update(extra=1), "extra is not a known section or key"),
             (lambda p: p.update(decisions=["D-404"]), "D-404 does not exist"),

@@ -100,7 +100,7 @@ Never put secrets, tokens, customer data, licensed data or pasted terminal outpu
 
 ## Limits that stop half-finished work
 
-- Per project: at most 2 tickets in Investigate and 2 in Build.
+- No cap on how many tickets are in Investigate or Build at once (Jay, 2026-11-26): every task can run.
 - Finishing first: no `start` and no first `plan` while another ticket in the same project has waited more than
   4 hours in Technical review, User check or Code review with nobody in that seat. Fill that seat instead.
 - Stale: 48 hours with no recorded step in stages 2 to 6 marks the ticket stale. The lead moves it, sends it back

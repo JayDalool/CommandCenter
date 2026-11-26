@@ -10,7 +10,6 @@ learning = "contextual"
 merge = "low-risk"          # ccd merges reviewed tests/docs PRs only, and only while auto_merge is on (ADR 0007)
 night = "normal"
 paused = ""
-max_lanes = 2
 ui_fix = "ask"
 
 # self_protection is folder-level (2026-10-22, L-01): every rail ccd has, including files added later.

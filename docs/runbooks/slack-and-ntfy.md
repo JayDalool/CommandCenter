@@ -78,6 +78,12 @@ ccd reads only messages whose author is `jay_member_id`, never edits or bot mess
   review and Jay's merge.
 - **Blockers and UI reviews:** `approve` clears a blocker (`failure`) or accepts a UI review (`ui`) with the scope
   `answers_low_risk` or `all`.
+- **CommandCenter and GYST blockers, whatever the scope** (Jay, 2026-11-26, `notify.UNBLOCK_PROJECTS`): the Blocked
+  DM takes the blocked card's three steps. `approve` clears the blocker and the task resumes; `fix` (or
+  `fix and continue`, or `fix:` with what needs fixing) sends it back to implementation exactly as Fix and continue
+  does (with no words, the blocker's recommended action is what Claude is told); `replan:` with why sends it back to
+  planning (`Daemon.slack_unblock`). Only on the blocker the DM showed; anything else goes to the lead. The same
+  `fix` and `replan` words work on any project whose blockers the scope lets Slack clear. Client projects never.
 - **Merges** (scope `all`): the "Ready to merge" DM shows the PR, its head and the review. Only `merge` (or "merge
   it", "merge now") merges that one PR at that head, exactly as the Merge button does (`Daemon.slack_merge` →
   `act_merge`): the lead merges it, and nothing is merged if the head, the review, CI or another gate moved. `ok`,
