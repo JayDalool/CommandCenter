@@ -229,6 +229,28 @@ class InputLine(unittest.TestCase):
         self.assertFalse(input_is_empty("> \n? for shortcuts"))
 
 
+class InputBoxWhole(unittest.TestCase):
+    """CC-053 security review (Jay's Q229): the whole input box counts, not only its last `>` line."""
+    E = "\x1b"
+    RULE = E + "[38;2;136;136;136m" + "─" * 30 + E + "[0m"
+
+    def test_a_draft_followed_by_a_bare_prompt_line_is_a_draft_plain(self):
+        self.assertFalse(input_is_empty(f"done.\n{self.RULE.replace(self.E, '')}\n> half a thought\n>\n"
+                                        f"{'─' * 30}\n  ? for shortcuts"))
+
+    def test_a_draft_followed_by_a_bare_prompt_line_is_a_draft_with_colour(self):
+        screen = f"done.\n{self.RULE}\n\u276f\u00a0half a thought\n\u276f\u00a0\n{self.RULE}\n  ? for shortcuts"
+        self.assertFalse(input_is_empty(screen))
+        # a continuation line of a draft inside the box, then a bare prompt
+        screen = f"done.\n{self.RULE}\n\u276f\u00a0\n  second line of a draft\n\u276f\u00a0\n{self.RULE}"
+        self.assertFalse(input_is_empty(screen))
+
+    def test_an_empty_box_and_a_lone_suggestion_still_read_empty(self):
+        sugg = "\u276f\u00a0" + self.E + "[0m" + self.E + "[2mrun the tests" + self.E + "[0m"
+        self.assertTrue(input_is_empty(f"done.\n{self.RULE}\n\u276f\u00a0\n{self.RULE}\n  ? for shortcuts"))
+        self.assertTrue(input_is_empty(f"done.\n{self.RULE}\n{sugg}\n{self.RULE}\n  ? for shortcuts"))
+
+
 class InputLineColour(unittest.TestCase):
     """CC-053: Claude Code draws its grey suggested prompt faint (SGR 2); a read with colour codes tells it from typing."""
     ESC = "\x1b"

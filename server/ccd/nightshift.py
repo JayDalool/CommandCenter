@@ -98,6 +98,35 @@ def _under_prompt_ok(lines, at):
     return True
 
 
+_BORDER_CHARS = set("─━╭╮╯╰┌┐└┘")
+
+
+def _above_prompt_ok(clean, at, prompt_empty):
+    """CC-053 (security review, Jay's Q229): the box is more than its last `>` line. Walk up from the last prompt to the
+    box's top border: every earlier prompt line must itself be empty, and (once a border proves it is inside the box)
+    any other text is a continuation line of a draft. So a draft followed by a line that is just `>` is a draft."""
+    seen_text = False
+    for k in range(at - 1, -1, -1):
+        rest = clean[k].strip().strip("│┃").strip()
+        if not rest:
+            continue
+        if all(c in BOX_CHARS for c in rest) and any(c in _BORDER_CHARS for c in rest):
+            return not seen_text
+        if PROMPT_RE.match(clean[k]):
+            if not prompt_empty(k):
+                return False
+        else:
+            seen_text = True
+    return True
+
+
+async def input_still_empty(herdr, pane_id):
+    """Fresh read of the pane for the moment before a send (CC-053). herdr has no conditional send, so the check and
+    the paste cannot be atomic; reading again right before `agent.prompt` shrinks the gap to milliseconds."""
+    screen = await herdr.read_tail(pane_id, 40, ansi=True)
+    return input_is_empty(screen["text"]) is True
+
+
 def _ansi_prompt_is_empty(raw_line):
     if _EMPTY_PROMPT_RE.fullmatch(raw_line):
         return True
@@ -125,7 +154,10 @@ def input_is_empty(text):
         typed = (PROMPT_RE.match(lines[at]).group(1) or "").strip()
         if typed and not typed.startswith('Try "'):
             return False
-        return _under_prompt_ok(lines, at)
+        def plain_empty(k):
+            t = (PROMPT_RE.match(lines[k]).group(1) or "").strip()
+            return not t or t.startswith('Try "')
+        return _above_prompt_ok(lines, at, plain_empty) and _under_prompt_ok(lines, at)
     clean = [_CSI_RE.sub("", ln) for ln in lines]   # only to locate the prompt and read the lines under it
     # Tech review (CC-053): a non-CSI escape (ESC(B, an OSC, a truncated CSI) left anywhere could hide the real prompt
     # line from the locate step so an earlier bare prompt reads empty over a typed draft. Uncertain: send nothing.
@@ -136,7 +168,7 @@ def input_is_empty(text):
         return None
     if not _ansi_prompt_is_empty(lines[at]):
         return False
-    return _under_prompt_ok(clean, at)
+    return _above_prompt_ok(clean, at, lambda k: _ansi_prompt_is_empty(lines[k])) and _under_prompt_ok(clean, at)
 
 
 def cutoff_after(started, hhmm=CUTOFF_DEFAULT):

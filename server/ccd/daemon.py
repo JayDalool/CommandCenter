@@ -1082,6 +1082,10 @@ class Daemon(LeadChat, HqDaemon):
                             self.night.skipped(key, "input line not empty or not recognised")
                             continue
                         self._broker("pane.input", key, f"night-shift nudge -> pane {agent['pane_id']}")
+                        # CC-053: fresh read right before the send (herdr has no conditional send; SECURITY.md)
+                        if not await nightshift_mod.input_still_empty(self.herdr, agent["pane_id"]):
+                            self.night.skipped(key, "input line not empty or not recognised")
+                            continue
                         await self.herdr.prompt(agent["pane_id"], self.night.nudge_text(key))
                         self.night.nudged(key)               # counted only once it was delivered
                         self._event("action", "action.night_shift", f"night shift reminder → {coordinators.canonical(proj)}",
@@ -1162,6 +1166,10 @@ class Daemon(LeadChat, HqDaemon):
                     self.work.note(key, "input line not empty or not recognised")
                     continue
                 self._broker("pane.input", key, f"work-mode reminder -> pane {agent['pane_id']}")
+                # CC-053: fresh read right before the send (herdr has no conditional send; SECURITY.md)
+                if not await nightshift_mod.input_still_empty(self.herdr, agent["pane_id"]):
+                    self.work.note(key, "input line not empty or not recognised")
+                    continue
                 await self.herdr.prompt(agent["pane_id"], workmode_mod.reminder_text(key, nxt, now))
                 self.work.nudged(key, now)                          # counted only once it was delivered
                 self._event("action", "action.work_mode", f"work mode reminder → {coordinators.canonical(proj)}",

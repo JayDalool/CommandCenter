@@ -271,6 +271,13 @@ class ChatApi(ApiBase):
         self.assertEqual(len(self.prompts()), 1)
 
 
+    def test_a_draft_typed_after_the_first_read_stops_the_messages_nudge(self):
+        # CC-053 (Jay's Q229): the pane is read again right before the send; the first read is clean, the second is not
+        self.fake.ansi_queue["wE:p2"] = [self.ansi_screen("run the tests again", faint=True),
+                                         self.ansi_screen("half a sentence Jay is typing", faint=False)]
+        self.assertEqual(self.send("samvision", "one").json()["delivery"], "queued")
+        self.assertEqual(self.prompts(), [])
+
     def test_a_malformed_colour_reset_before_typed_words_stays_queued(self):
         # CC-053 Codex round 2: ESC[00m after the hint made typed words look faint; only the exact shape is a suggestion
         self.fake.tails_ansi["wE:p2"] = self.ansi_screen("hint\x1b[00m typed words", faint=True)

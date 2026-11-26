@@ -367,8 +367,8 @@ shows its placeholder; a screen it cannot parse is skipped. The check reads the 
 `agent.read` `format: ansi`, the three automatic senders only; board tails and the agent read API stay
 colour-stripped): only a bare prompt or the exact shape herdr draws for Claude Code's grey suggested prompt
 (CC-053) counts as empty; anything else on the input line, including any other colour code, a paste or image
-placeholder, or a colour sequence it does not recognise, is a draft and nothing is sent. A plain read without codes behaves as before. This is a best-effort check on screen text: a draft
-it misreads, or typed between the read and the paste, can still be submitted. The hard limits bound that risk:
+placeholder, or a colour sequence it does not recognise, is a draft and nothing is sent. The check parses the whole input box (a draft followed by a bare `>` line is still a draft) and the pane is read again right before each send. A plain read without codes behaves as before. This is a best-effort check on screen text: a draft
+it misreads can still be submitted, and so can one typed in the few milliseconds between that last read and the paste, because herdr has no conditional send (Jay accepted this residual race, CC-053). The hard limits bound that risk:
 it stops after 6 reminders in a shift, after the morning cutoff (07:00 local by default), when the report says
 complete, or after 3 reminders with no ticket or report change. The reminder text is a constant; no report or
 ticket text is ever typed. (Go Live, End night shift and the other buttons are Jay's own presses and do not

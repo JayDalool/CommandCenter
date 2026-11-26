@@ -248,6 +248,16 @@ class WorkModeApi(ApiBase):
         self.assertEqual([p["target"] for p in self.prompts()], ["wE:p2"])       # a suggestion: sent
         self.assertEqual(self.get("/api/work-mode").json()["projects"]["samvision"]["remindersToday"], 1)
 
+    def test_a_draft_typed_after_the_first_read_stops_the_work_mode_reminder(self):
+        # CC-053 (Jay's Q229): read again right before the send
+        self.tickets.create("samvision", "feature", number=56, status="INBOX")
+        self.put("samvision", True, self.dev())
+        rule = "\x1b[38;2;136;136;136m" + "─" * 30 + "\x1b[0m"
+        self.idle_long_ago()
+        self.fake.ansi_queue["wE:p2"] = [f"x\n{rule}\n❯ \n{rule}\n  ? for shortcuts",
+                                         f"x\n{rule}\n❯ half a thought\n{rule}\n  ? for shortcuts"]
+        self.tick()
+        self.assertEqual(self.prompts(), [])
 
     def test_work_next_lists_builds_however_many_are_running(self):     # no lane limit (Jay, 2026-11-26)
         pl = self.daemon.pipeline

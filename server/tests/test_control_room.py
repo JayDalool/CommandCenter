@@ -998,6 +998,18 @@ class ControlRoomApi(PipelineApi):
         self.client.portal.call(self.daemon.night_tick)
         self.assertEqual((len(self.prompts()), ns.get("samvision")["nudges"]), (sent0 + 1, 1))  # a suggestion: sent, counted
 
+    def test_a_draft_typed_after_the_first_read_stops_the_night_shift_reminder(self):
+        # CC-053 (Jay's Q229): read again right before the send
+        ns = self.night()
+        self.client.post("/api/tasks/night-shift", content=json.dumps({"project": "samvision"}), headers=dict(JSON, **self.dev()))
+        sent0 = len(self.prompts())
+        s = ns.state["samvision"]
+        rule = "\x1b[38;2;136;136;136m" + "─" * 30 + "\x1b[0m"
+        s["idleSince"] = s["startedAt"] - 3600
+        self.fake.ansi_queue["wE:p2"] = [f"x\n{rule}\n❯ \n{rule}\n  ? for shortcuts",
+                                         f"x\n{rule}\n❯ half a thought\n{rule}\n  ? for shortcuts"]
+        self.client.portal.call(self.daemon.night_tick)
+        self.assertEqual((len(self.prompts()), ns.get("samvision")["nudges"]), (sent0, 0))
 
     def test_the_morning_cutoff_ends_the_shift_even_with_herdr_down_and_types_nothing(self):
         ns = self.night()
