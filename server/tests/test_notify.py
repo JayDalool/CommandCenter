@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 import urllib.parse
 from zoneinfo import ZoneInfo
 
@@ -321,6 +322,53 @@ class Settings(unittest.TestCase):
         os.symlink(real, link)
         with self.assertRaises(notify.SlackError):
             notify.read_env(link)
+
+    def test_env_reader_refuses_each_bad_kind_and_never_reads_a_swapped_file(self):
+        # CC-091: type and mode are checked on the one open descriptor, so a swap after the open changes nothing.
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "slack.env")
+
+        def plain(path, text, mode):
+            with open(path, "w") as f:
+                f.write(text)
+            os.chmod(path, mode)
+
+        os.mkdir(p)
+        with self.assertRaisesRegex(notify.SlackError, "regular file"):
+            notify.read_env(p)
+        os.rmdir(p)
+        os.mkfifo(p, 0o600)
+        with self.assertRaisesRegex(notify.SlackError, "regular file"):
+            notify.read_env(p)
+        os.unlink(p)
+        plain(os.path.join(d, "real"), "K=v\n", 0o600)
+        os.symlink(os.path.join(d, "real"), p)
+        with self.assertRaisesRegex(notify.SlackError, "not a link"):
+            notify.read_env(p)
+        os.unlink(p)
+        plain(p, "K=v\n", 0o644)
+        with self.assertRaisesRegex(notify.SlackError, "chmod 600"):
+            notify.read_env(p)
+
+        real_open = os.open
+
+        def swap_after_open(new_text, new_mode):
+            def opener(path, *a, **kw):
+                fd = real_open(path, *a, **kw)
+                os.unlink(p)
+                plain(p, new_text, new_mode)
+                return fd
+            return opener
+
+        # A good file replaced by a bad one after the open: the open descriptor's content is what is read.
+        plain(p, "K=original\n", 0o600)
+        with mock.patch.object(os, "open", swap_after_open("K=swapped\n", 0o644)):
+            self.assertEqual(notify.read_env(p), {"K": "original"})
+        # A 0644 file swapped for a clean 0600 one after the open is still refused.
+        plain(p, "K=original\n", 0o644)
+        with mock.patch.object(os, "open", swap_after_open("K=swapped\n", 0o600)):
+            with self.assertRaisesRegex(notify.SlackError, "chmod 600"):
+                notify.read_env(p)
 
     def test_slack_tokens_are_redacted(self):
         text, n = security.redact("bot xoxb-1111111111-abcdef app xapp-1-A111-222-abcdef")
@@ -1422,3 +1470,32 @@ class OverHttp(unittest.TestCase):
         r = self.c.put("/api/notify", content='{"slack": true, "quietStart": "23:00"}', headers=dev)
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual((r.json()["settings"]["slack"], r.json()["settings"]["quietStart"]), (True, "23:00"))
+
+    def test_release_email_needs_developer_unlock_and_the_test_reports_mail(self):
+        # CC-078: the switch is Jay's, behind Developer Unlock, like every notify setting; no new route.
+        self.assertFalse(self.c.get("/api/notify", headers=self.h).json()["settings"]["releaseMail"])
+        self.assertEqual(self.c.put("/api/notify", content='{"releaseMail": true}', headers=self.h).status_code, 403)
+        sid = self.c.post("/api/developer/unlock", content=json.dumps({"token": self.DEV}), headers=self.h).json()["session"]
+        dev = dict(self.h, **{"x-ccd-developer": sid})
+        self.assertEqual(self.c.put("/api/notify", content='{"releaseMail": "on"}', headers=dev).status_code, 400)
+        self.assertEqual(self.c.post("/api/notify/test", content="{}", headers=dev).status_code, 409)
+        r = self.c.put("/api/notify", content='{"releaseMail": true}', headers=dev)
+        self.assertTrue(r.json()["settings"]["releaseMail"])
+        mail = r.json()["mail"]
+        self.assertEqual((mail["configured"], mail["last"]), (False, None))
+        t = self.c.post("/api/notify/test", content="{}", headers=dev)
+        self.assertEqual((t.status_code, t.json()["mail"], t.json()["slack"], t.json()["ntfy"]), (200, False, False, False))
+        # With a usable mail.env and a fake transport the same route reports mail true.
+        from unittest import mock
+        from ccd import releasemail
+        from .test_release_mail import ENV, Server, fake_smtp_for
+        env = os.path.join(tempfile.mkdtemp(), "mail.env")
+        with open(env, "w") as f:
+            f.write("".join(f"{k}={v}\n" for k, v in ENV.items()))
+        os.chmod(env, 0o600)
+        self.d.notifier = notify.Notifier(self.d, {"notify": {}}, slack=FakeSlack(), mail_env_path=env)
+        self.d.notifier.update_settings({"releaseMail": True})
+        server = Server()
+        with mock.patch.object(releasemail.smtplib, "SMTP_SSL", fake_smtp_for(server)):
+            t = self.c.post("/api/notify/test", content="{}", headers=dev)
+        self.assertEqual((t.status_code, t.json()["mail"], len(server.sent)), (200, True, 1))

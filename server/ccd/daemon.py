@@ -994,6 +994,9 @@ class Daemon(LeadChat, HqDaemon):
             elif n["kind"] == "ci":
                 out.append({"id": f"ci:{n['project']}", "severity": "warn", "source": "github",
                             "project": n["project"], "text": f"{n['project']} main checks failing"})
+        notifier = getattr(self, "notifier", None)
+        if notifier is not None and getattr(notifier, "mail", None) is not None and notifier.settings.get("releaseMail"):
+            out.extend(notifier.mail.alerts())      # a failed release email stays visible until a later one is sent
         problems = self.policy.problems()
         if problems:
             out.append({"id": "policy:problems", "severity": "warn", "source": "policy", "project": None,
@@ -1122,6 +1125,12 @@ class Daemon(LeadChat, HqDaemon):
                         "waitingOn": fl["waitingOn"], "stale": fl["stale"]})
         return out
 
+    def work_next(self, project):
+        """movable() for a project, told by pipeline's own lane count whether its build lanes are full (CC-090)."""
+        pl = self.pipeline
+        full = pl is not None and pl.lanes(project) >= pl.lane_limit(project)
+        return workmode_mod.movable(self.work_rows(project), build_full=full)
+
     async def work_tick(self, now=None):
         """Remind each idle lead of a project in work mode that tickets can move without Jay (workmode.decide)."""
         for proj in self._projects():
@@ -1137,7 +1146,7 @@ class Daemon(LeadChat, HqDaemon):
             if self.chat_budget_check(key):
                 self.work.note(key, "budget on hold")
                 continue
-            nxt = workmode_mod.movable(self.work_rows(key))
+            nxt = self.work_next(key)
             # With herdr down there is no status: never a reminder.
             r = coordinators.resolution(proj, self.panes) if self.herdr_state["ok"] else {"state": "none"}
             status = r.get("status") if r["state"] == "ready" else None
@@ -1174,7 +1183,7 @@ class Daemon(LeadChat, HqDaemon):
         for proj in self._projects():
             key = proj["key"]
             row = self.work.public(key, now)
-            row["next"] = [t["key"] for t in workmode_mod.movable(self.work_rows(key))[:workmode_mod.SHOW]]
+            row["next"] = [t["key"] for t in self.work_next(key)[:workmode_mod.SHOW]]
             row["paused"] = bool(registry.paused(key))
             out[key] = row
         return {"projects": out, "limits": {"idleS": workmode_mod.IDLE_GRACE, "gapS": workmode_mod.NUDGE_GAP,
