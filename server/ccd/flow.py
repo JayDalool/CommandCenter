@@ -41,7 +41,6 @@ REVIEW_STAGES = ("techReview", "userCheck", "codeReview")
 WORK_STAGES = ("investigate", "techReview", "build", "userCheck", "codeReview")     # stages 2-6: these go stale
 STALE_AFTER = 48 * 3600
 UNSEATED_AFTER = 4 * 3600         # finishing first: a review nobody has taken for this long holds new work
-MAX_INVESTIGATE = 2
 MAX_CRITERIA = 20
 MAX_REQUIREMENTS = 20
 STALE_KIND = "pipeline.flow_stale"

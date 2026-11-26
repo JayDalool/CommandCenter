@@ -585,7 +585,7 @@ class PipelineApi(Automation):
         self.assertEqual([(t["key"], t["stage"], t["waitingOn"]) for t in sv["inFlight"]],
                          [("SV-056", "codeReview", "reviewer")])
         self.assertEqual(len(sv["inFlight"][0]["route"]), 9)
-        self.assertEqual(sv["limits"], {"investigate": {"used": 0, "max": 2}, "build": {"used": 0, "max": 2}})
+        self.assertEqual(sv["limits"], {"investigate": {"used": 0, "max": None}, "build": {"used": 0, "max": None}})
         r = self.step("review", {"verdict": "APPROVE", "head": head, "session": "cr-1"}, "agent:reviewer")
         self.assertEqual(r.json()["status"], "READY_TO_MERGE", r.text)
         self.gh.data["samvision"]["prs"] = []

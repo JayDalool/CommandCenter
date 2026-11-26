@@ -669,7 +669,7 @@ export interface BudgetsState {
 
 /** GET /api/notify: Slack and ntfy. Never a token or the ntfy URL, only whether each is configured. */
 export interface NotifySettings {
-  slack: boolean; ntfy: boolean; quietStart: string; quietEnd: string; summaryAt: string; timezone: string;
+  slack: boolean; ntfy: boolean; releaseMail?: boolean; quietStart: string; quietEnd: string; summaryAt: string; timezone: string;
   replyScope: "answers" | "answers_low_risk" | "all";
   /** Projects whose leads' Messages files are uploaded to Slack; elsewhere Slack gets each file's name and size. */
   slackFiles?: string[];
@@ -684,6 +684,8 @@ export interface NotifyState {
   /** Which projects may upload files (never SamVision, the CTO or a client), and whether the bot token has files:write
    *  (null until Slack has answered once). Missing from an older ccd. */
   slackFiles?: { choices: string[]; never: string[]; scope: boolean | null };
+  /** Release email (CC-078): whether mail.env is usable, why not, and the newest digest. Never an address or password. */
+  mail?: { configured: boolean; error: string | null; last: { project: string; window: number; state: string; at: number } | null };
 }
 
 /** Messages (ccd/chat.py, ccd/leadchat.py): Jay's conversations with the CTO and each project lead. */

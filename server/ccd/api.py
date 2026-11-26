@@ -39,12 +39,14 @@
                                      ?full=1 walks it all), and what enforcing identity would refuse. ?actor= ?verified=0|1 ?limit=
     GET   /api/usage                 token use and estimated cost from the agents' session logs (PR 7) by project,
                                      model, day and ticket, plus month-to-date against profile budgets. ?days=
-    GET   /api/notify                Slack and ntfy: settings, status, what is configured (never a token or the ntfy URL)
-    PUT   /api/notify                JAY + DEVELOPER UNLOCK. change those settings: slack, ntfy (on/off), quiet hours,
+    GET   /api/notify                Slack, ntfy and Release email: settings, status, what is configured, and `mail`
+                                     {configured, error, last} (never a token, the ntfy URL, an address or a password)
+    PUT   /api/notify                JAY + DEVELOPER UNLOCK. change those settings: slack, ntfy, releaseMail (on/off), quiet hours,
                                      summary time, time zone, replyScope ("answers" | "answers_low_risk" | "all"),
                                      slackFiles (projects whose leads' Messages files upload to Slack; never
                                      SamVision, the CTO or a client project)
-    POST  /api/notify/test           JAY + DEVELOPER UNLOCK. one test DM and one test push, now
+    POST  /api/notify/test           JAY + DEVELOPER UNLOCK. one test DM, one test push and (Release email on) one test
+                                     email, now: {slack, ntfy, mail}
     POST  /api/hooks/ask             Claude's AskUserQuestion, from scripts/cc-ask-hook: {sessionId, questions}. A ticket's
                                      task session's questions become the ticket's; a lead's go to its Messages
                                      conversation; else {routed: null} and Claude shows its own prompt (ccd/ask_hook.py)
@@ -655,8 +657,8 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     async def notify_test(request, body):
         _jay_dev(request, "a test sends to your phone")
         n = _notifier()
-        if not (n.settings["slack"] or n.settings["ntfy"]):
-            raise ActionError(409, "switch Slack or ntfy on first")
+        if not (n.settings["slack"] or n.settings["ntfy"] or n.settings["releaseMail"]):
+            raise ActionError(409, "switch Slack, ntfy or Release email on first")
         return await n.send_test()
 
     async def notify_summary(request, body):

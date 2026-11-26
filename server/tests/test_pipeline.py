@@ -112,7 +112,7 @@ class Stages(Base):
         self.assertGreater(after["last"], before)
         self.assertEqual(after["open"], 1)
 
-    def test_start_needs_the_ticket_branch_convention_and_a_free_lane(self):
+    def test_start_needs_the_ticket_branch_convention(self):
         k = self.ticket()
         self.pl.plan(k, PLAN, "agent:planner")
         for bad in ("main", "feature/x", f"{k}", f"{k}-UPPER", f"SV-999-{k}", f"{k}-x;rm"):
@@ -123,36 +123,21 @@ class Stages(Base):
                 self.pl.start(k, f"{k}-x", bad, "agent:coordinator")
         t, _, _ = self.pl.start(k, f"{k}-valuation", f"/srv/w/{k}", "agent:coordinator", model="sonnet")
         self.assertEqual((t["status"], t["branch"]), ("IN_PROGRESS", f"{k}-valuation"))
-        others = [self.ticket() for _ in range(2)]
-        for o in others:
-            self.pl.plan(o, PLAN, "agent:planner")
-        self.pl.start(others[0], f"{others[0]}-a", "/srv/w/a", "agent:coordinator")
-        with self.assertRaises(TaskError) as e:                      # third lane in the same project
-            self.pl.start(others[1], f"{others[1]}-b", "/srv/w/b", "agent:coordinator")
-        self.assertIn("lanes", e.exception.message)
-        self.assertIn("samvision", e.exception.message)
 
-    def test_lanes_are_counted_per_project(self):
-        sv = [self.ticket() for _ in range(3)]
+    def test_every_ticket_can_build_at_once(self):
+        # Jay, 2026-11-26: no implementation-lane limit. Starting, reworking and clearing a build blocker are never
+        # refused because other builds are running ("2 implementation lanes are already running").
+        sv = [self.ticket() for _ in range(5)]
         for k in sv:
             self.pl.plan(k, PLAN, "agent:planner")
-        for k in sv[:2]:
-            self.pl.start(k, f"{k}-x", f"/srv/w/{k}", "agent:coordinator")
+        for k in sv:
+            self.assertEqual(self.pl.start(k, f"{k}-x", f"/srv/w/{k}", "agent:coordinator")[0]["status"],
+                             "IN_PROGRESS")
         gz, _ = self.ts.create("gyst", "Galaxy keyboard navigation", "jay")
-        self.pl.plan(gz["key"], PLAN, "agent:planner")              # SamVision's two lanes do not hold GYST
+        self.pl.plan(gz["key"], PLAN, "agent:planner")
         self.assertEqual(self.pl.start(gz["key"], f"{gz['key']}-x", "/srv/w/gz", "agent:coordinator")[0]["status"],
                          "IN_PROGRESS")
-        self.assertEqual((self.pl.lanes("samvision"), self.pl.lanes("gyst")), (2, 1))
-        with self.assertRaises(TaskError):
-            self.pl.start(sv[2], f"{sv[2]}-x", "/srv/w/c", "agent:coordinator")
-        from ccd import registry
-        old = registry.PROJECTS["samvision"].get("pipeline")
-        registry.PROJECTS["samvision"]["pipeline"] = dict(old or {}, max_lanes=3)
-        try:
-            self.assertEqual(self.pl.start(sv[2], f"{sv[2]}-x", "/srv/w/c", "agent:coordinator")[0]["status"],
-                             "IN_PROGRESS")
-        finally:
-            registry.PROJECTS["samvision"]["pipeline"] = old
+        self.assertEqual((self.pl.lanes("samvision"), self.pl.lanes("gyst")), (5, 1))
 
 
 class Review(Base):
@@ -184,6 +169,23 @@ class Review(Base):
         for draft in (True,):
             self.pl.review(k, "APPROVE", HEAD, "agent:reviewer", session="review-1", pr=self.pr(draft=draft))
             self.assertEqual(self.ts.get(k)["status"], "IN_REVIEW")
+
+    def test_one_reviewer_session_reviews_several_tickets_each_at_its_own_head(self):
+        # CC-068: a day's small tickets may share one review session (FLOW.md, bundled review). ccd must keep
+        # each verdict, head and review cycle on its own ticket, and still refuse the session that built one of them.
+        a, b, c = self.ticket(), self.ticket(), self.ticket()
+        for k in (a, b, c):
+            self.to_review(k)
+        head_b, head_c = "1234567" + "0" * 33, "7654321" + "0" * 33
+        self.pl.role(b, "implementer", "agent:implementer", model="sonnet", session="shared-review")
+        self.pl.review(a, "APPROVE", HEAD, "agent:reviewer", session="shared-review", pr=self.pr())
+        self.pl.review(c, "APPROVE", head_c, "agent:reviewer", session="shared-review", pr=self.pr(head=head_c))
+        with self.assertRaises(TaskError):                                    # it built B, so it may not review B
+            self.pl.review(b, "APPROVE", head_b, "agent:reviewer", session="shared-review", pr=self.pr(head=head_b))
+        self.pl.review(b, "REQUEST_CHANGES", head_b, "agent:reviewer", session="shared-review")   # a round on B only
+        wa, wb, wc = self.pl.work(a), self.pl.work(b), self.pl.work(c)
+        self.assertEqual((wa["review"]["head"], wc["review"]["head"]), (HEAD, head_c))
+        self.assertEqual((wa["review"]["cycles"], wb["review"]["cycles"], wc["review"]["cycles"]), (0, 1, 0))
 
     def test_review_keeps_the_model_of_the_same_session_only(self):
         # CC-067: writing the verdict used to reset the model; a new session must not inherit the old one either.
