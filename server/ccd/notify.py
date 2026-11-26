@@ -46,6 +46,8 @@ with the bot or a channel the bot is in, are read; everything else is ignored. A
                 "answers"). "merge" merges that one PR at the head the DM showed, as the Merge button does. A
                 deploy takes two replies: "approve" (or "deploy") asks the agent to PREPARE; its plan comes back as
                 a new DM (deploy_go), and only "deploy" there tells it to deploy.
+    release     (CC-088, a release list's thread in the DM) only ticket IDs from that list, which pulls them from
+                the release (ReleaseMail.pull). Anything else there gets a why and does nothing.
     otherwise   the text goes to the project's lead (Daemon.deliver_to_lead, the in-app chat's store), and the
                 lead's reply comes back in the same thread.
 
@@ -173,7 +175,12 @@ NEED_LABEL = {"plan": "Plan needs approval", "merge": "Ready to merge", "ui": "U
 
 
 class SlackError(Exception):
-    pass
+    """`uncertain` (CC-088): the request may have reached Slack and been carried out (a timeout, a lost or garbled
+    response, a 5xx), so a post must not be sent again on the strength of this failure."""
+
+    def __init__(self, what="", uncertain=False):
+        super().__init__(what)
+        self.uncertain = uncertain
 
 
 # ---------- settings ----------
@@ -317,9 +324,10 @@ class SlackWeb:
                 if e.code == 429 and attempt < retries:
                     time.sleep(min(30, int(e.headers.get("Retry-After") or 1)))
                     continue
-                raise SlackError(f"{method}: HTTP {e.code}") from None
+                raise SlackError(f"{method}: HTTP {e.code}", uncertain=e.code >= 500) from None
             except (urllib.error.URLError, OSError, ValueError) as e:
-                raise SlackError(f"{method}: {type(e).__name__}") from None
+                # The request may have been sent and done, with only the answer lost (CC-088).
+                raise SlackError(f"{method}: {type(e).__name__}", uncertain=True) from None
             if not out.get("ok"):
                 raise SlackError(f"{method}: {out.get('error') or 'failed'}")
             return out
@@ -702,15 +710,19 @@ class Notifier:
 
     async def post(self, where, text, thread_ts=None, item=None, who=None, broadcast=False):
         """Post to a channel name, or 'dm'. Records the thread so a reply can find its item. Returns ts or None."""
-        if not self.settings["slack"]:
-            return None
         try:
-            cid = await (self.dm_id() if where == "dm" else self.channel_id(where))
-            as_, prefix = self._as(who)
-            r = await self._call(self.slack().post, cid, redact(prefix + text)[0][:POST_LIMIT], thread_ts, as_, broadcast)
+            return await self.post_or_raise(where, text, thread_ts, item, who, broadcast)
         except SlackError as e:
             self._fail(f"slack {where}", e)
             return None
+
+    async def post_or_raise(self, where, text, thread_ts=None, item=None, who=None, broadcast=False):
+        """post(), raising the SlackError (with its `uncertain`) for a caller that must not post twice (CC-088)."""
+        if not self.settings["slack"]:
+            return None
+        cid = await (self.dm_id() if where == "dm" else self.channel_id(where))
+        as_, prefix = self._as(who)
+        r = await self._call(self.slack().post, cid, redact(prefix + text)[0][:POST_LIMIT], thread_ts, as_, broadcast)
         self.status.update(slack="ok", lastSentAt=self.clock())
         ts = r.get("ts")
         if item is not None and ts:
@@ -1120,9 +1132,13 @@ class Notifier:
         return ev.get("type") == "message" and isinstance(ev.get("text"), str)
 
     async def on_slack(self, payload):
-        """One Events API payload from the socket. Anything not from Jay is dropped without a trace in Slack."""
+        """One Events API payload from the socket. Anything not from Jay is dropped without a trace in Slack, except
+        that a plain human message in a release list's thread gets Jay one fixed DM (ReleaseMail.foreign, CC-088)."""
         ev = (payload or {}).get("event") or {}
-        if not self.settings["slack"] or not self.from_jay(ev, payload.get("team_id")):
+        if not self.settings["slack"]:
+            return None
+        if not self.from_jay(ev, payload.get("team_id")):
+            await self.mail.foreign(ev, payload)
             return None
         # Slack redelivers an event after a missed ack or a reconnect: act on each message once.
         mark = ev.get("client_msg_id") or payload.get("event_id") or f"{ev.get('channel')}:{ev.get('ts')}"
@@ -1135,12 +1151,14 @@ class Notifier:
         here = thread or ev.get("ts")
         item = self.threads.get(f"{cid}:{thread}") if thread else None
         if item is None and thread:
-            item = self._ticket_item(cid, thread)
-        result = await self.handle_reply(cid, item, text)
+            item = self._ticket_item(cid, thread) or self.mail.find_thread(cid, thread)
+        result = await self.handle_reply(cid, item, text, ev)
         self.d._event("notify", "notify.slack_reply", f"Slack reply: {result['did']}",
                       project=result.get("project"), ref=(item or {}).get("ref"),
                       data={"kind": result["did"], "count": len(text)})
-        if result.get("say"):
+        if result.get("say") and (item or {}).get("type") == "release":
+            await self.mail.say(cid, here, result["say"])      # CC-088: held in quiet hours, kept until Slack takes it
+        elif result.get("say"):
             await self._reply(cid, here, result["say"])
         if result.get("message_id") is not None:
             self.threads[f"msg:{result['message_id']}"] = {"type": "origin", "channel": cid, "ts": here,
@@ -1160,7 +1178,11 @@ class Notifier:
             return False
         return True
 
-    async def handle_reply(self, cid, item, text):
+    async def handle_reply(self, cid, item, text, ev=None):
+        if item and item.get("type") == "release":
+            # CC-088: a release list's thread only pulls. This returns before every approve, merge, deploy and
+            # lead path, so no other word there does anything but get a why (tech review A6).
+            return await self.mail.pull(item, text, ev or {})
         if not text:
             return {"did": "empty"}
         if item and item.get("type") == "ticket":
@@ -1554,6 +1576,7 @@ class Notifier:
                 await self.check_needs()
                 if self.settings["slack"]:
                     await self.summaries()
+                    await self.mail.flush()     # CC-088: release-thread replies and notices held in quiet hours
             except Exception as e:  # noqa: BLE001 — notifications never take ccd down
                 self._fail("notify tick", repr(e))
         if self.settings["releaseMail"]:

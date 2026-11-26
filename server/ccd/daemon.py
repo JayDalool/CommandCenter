@@ -26,6 +26,7 @@ from pathlib import Path
 from . import __version__, autonomy, coordid, coordinators, github, ledger, merge_policy, model, profiles, registry, sources
 from . import flow as flow_mod
 from . import release as release_mod
+from . import releasemail
 from . import pipeline as pipeline_mod
 from . import workers as workers_mod
 from . import inbox as inbox_mod
@@ -397,6 +398,7 @@ class Daemon(LeadChat, HqDaemon):
         self.ptys = None          # pty.PtyManager, set by __main__
         self.records_dir = None   # where task records are written; None = off (tests, previews)
         self.night = None         # nightshift.NightShift (reports + supervisor state); set by __main__
+        self.going_live = set()   # projects whose Go Live press is being sent (CC-088: no Slack pull meanwhile)
         self.uitests = None       # uitests.UiTests (UI test runs and Jay's decisions); set by __main__
         self.notifier = None      # notify.Notifier (Slack and ntfy; off until Jay switches it on); set by __main__
         self._activity = {}       # project → when one of its tickets last changed (night-shift progress)
@@ -3624,38 +3626,56 @@ class Daemon(LeadChat, HqDaemon):
         # Approve only what Jay saw AND is still open: a gate that opened after the page loaded stays open for him.
         open_now = [a["key"] for a in self.go_live_review(project)["approves"]]
         pending = [k for k in shown if k in open_now]
-        skipped = [{"key": k, "reason": "its live-deploy gate is no longer open"} for k in shown if k not in open_now]
+        pulled = releasemail.pulled(self.store, project)
+        skipped = [{"key": k, "reason": releasemail.PULL_REASON if k in pulled
+                    else "its live-deploy gate is no longer open"} for k in shown if k not in open_now]
         text = GO_LIVE_TEMPLATE.format(project=project, approved=", ".join(pending) or "none")
         self._broker("go_live.approve", project, ("Go Live: " + (", ".join(pending) or "none"))[:200])
         # The coordinator must be reachable before anything is approved: no approval without the message. Every
         # check that can refuse (409) runs before it; after it, a ticket that cannot be approved (its gate moved
         # since the page loaded) is reported in `errors` and never undoes the others.
-        name = await self._to_coordinator(project, "go-live", text, {"approved": pending})
-        approved, errors = [], []
-        for key in pending:
-            try:
-                self._pipeline_result(*self._wrap(self.pipeline.confirm, key, "deploy", actor, "go-live"), actor=actor)
-                approved.append(key)
-            except Exception as e:  # noqa: BLE001 — one ticket must not stop the others
-                errors.append({"key": key, "error": str(e)[:160]})
-        if self.night is not None:
-            self.night.went_live(project, approved)
+        # CC-088: no Slack pull from here until went_live (ReleaseMail.pull refuses it), so the message's list of
+        # approved tickets stays true (Codex round 1). Nothing awaits between the check above and this line.
+        self.going_live.add(project)
+        try:
+            name = await self._to_coordinator(project, "go-live", text, {"approved": pending})
+            approved, errors = [], []
+            for key in pending:
+                # Defense in depth (tech review A4): pulls are read again right before each approval.
+                if key in releasemail.pulled(self.store, project):
+                    skipped.append({"key": key, "reason": releasemail.PULL_REASON})
+                    continue
+                try:
+                    self._pipeline_result(*self._wrap(self.pipeline.confirm, key, "deploy", actor, "go-live"),
+                                          actor=actor)
+                    approved.append(key)
+                except Exception as e:  # noqa: BLE001 — one ticket must not stop the others
+                    errors.append({"key": key, "error": str(e)[:160]})
+            if self.night is not None:
+                self.night.went_live(project, approved)
+        finally:
+            self.going_live.discard(project)
         return {"ok": True, "project": project, "coordinator": name, "approved": approved, "skipped": skipped,
                 "errors": errors}
 
     def go_live_review(self, project):
         """What Go Live would approve in `project` (tickets whose live-deploy gate is open), and what Jay should
         look at first: tickets merged into main (VERIFYING) that are not verified, or still wait for a UI review.
-        Go Live prepares the deploy of main as it is, so those ride along."""
+        Go Live prepares the deploy of main as it is, so those ride along. An item Jay pulled from the release by
+        Slack (CC-088) is never approved: it is a warning, because its code still ships until reverted."""
         out = {"approves": [], "warnings": []}
         if self.tasks is None or self.pipeline is None:
             return out
         open_ = sorted((t for t in self.tasks.list(project=project) if t["status"] not in tasks_mod.CLOSED),
                        key=lambda t: t["number"])
         marks = self.pipeline.compact(t["id"] for t in open_)
+        pulled = releasemail.pulled(self.store, project)
         for t in open_:
             m = marks.get(t["id"]) or {}
             row = {"key": t["key"], "title": CONTROL_RE.sub(" ", str(t["title"])).strip()[:100]}
+            if t["key"] in pulled:
+                out["warnings"].append(dict(row, reason=releasemail.PULL_REASON))
+                continue
             if m.get("gate") == "deploy":
                 out["approves"].append(row)
             if t["status"] == "VERIFYING":

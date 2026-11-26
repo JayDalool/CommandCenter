@@ -173,3 +173,29 @@ Read the ledger: `sqlite3 ccd.db "select value from kv where key='release_mail:<
 A failed digest raises the alert `mail:<project>:<window>` until a later digest is delivered or Release email is switched
 off, and each failure is a `notify.failed` event. Changing the window within the mailed release sends nothing more; a
 window moved to a later day after the mailed one ended gets its own digest.
+
+### Pull an item by Slack (CC-088)
+
+With Slack and Release email on, each delivered digest is followed by one DM per app listing its Scheduled items,
+held until quiet hours end (07:00 Wednesday for the Tuesday 22:00 digest). Reply in that message's thread with ticket
+IDs only (`GYST-12`, or `pull GYST-12, GYST-13`): all of them must be in that list, or nothing is pulled. ccd answers
+in the thread. A pulled item is held for the next release: Go Live leaves it out of what it approves and shows it
+under "look at these first" with "pulled from this release: its code still ships until reverted". Its code is on main,
+so revert it before Go Live if it must not ship. A pull lasts until the app's next digest. It is refused after the
+window ends or once Go Live was sent. Anything else typed there (ok, approve, deploy, add) does nothing.
+
+Each pull, and each urgent live deploy you approve after the digest, sends one correction email ("Correction: <App>
+release <time>", threaded under the digest) while Release email is on and the window has not ended; at most 10 per
+digest. Ledger fields on the digest's row:
+
+| field | meaning |
+|---|---|
+| `slack` | the list's post: `state` `posting` (written before the post), `posted` (with `channel` and `ts`), or `failed` (retried once after 300 s; `uncertain` when ccd stopped during the post, never re-posted). A final failure raises `mail:<project>:<window>:slack` ("pulls by Slack unavailable") |
+| `pulls` | `{KEY: {at, by: "jay:slack"}}` |
+| `corrections` | `[{n, keys, urgent, state, uncertain, attempts, at, sentAt, messageId, error}]`, with the digest's states and retry rules; a failure raises `mail:<project>:<window>:c<n>` |
+
+A message from anyone else in a release list's thread changes nothing; you get one DM saying so (at most one per thread
+every 10 minutes). That DM and ccd's answers in a release thread wait while quiet hours last, in `ccd.db` kv
+`release_mail:outbox`, and leave it only once Slack took them (a post whose outcome is unknown is not sent again).
+A list longer than one post continues in its thread; only the keys Slack showed can be pulled. A list post whose
+outcome is unknown is never re-posted: its alert says "may not have been posted".
