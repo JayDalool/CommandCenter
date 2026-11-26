@@ -41,6 +41,13 @@ class Movable(unittest.TestCase):
                 row("CC-15", stage="intake", status="INBOX", flags=["needs-legal"])]
         self.assertEqual(sorted(r["key"] for r in movable(rows)), ["CC-1", "CC-12", "CC-6", "CC-7", "CC-8"])
 
+    def test_a_ticket_waiting_to_start_a_build_is_always_listed(self):     # no lane limit (Jay, 2026-11-26)
+        rows = [row("B1", stage="build", status="READY_TO_IMPLEMENT"),
+                row("B2", stage="build", status="IN_PROGRESS", holder={"seat": "developer"}, stale=True),
+                row("R1", stage="codeReview", status="IN_REVIEW"),
+                row("I1")]
+        self.assertEqual(sorted(r["key"] for r in movable(rows)), ["B1", "B2", "I1", "R1"])
+
     def test_order_is_priority_then_due_date_then_later_stage_then_oldest(self):
         rows = [row("A", priority="LOW", number=1),
                 row("B", priority="HIGH", due=T0 + 5 * 86400, number=2),
@@ -241,6 +248,13 @@ class WorkModeApi(ApiBase):
         self.assertEqual([p["target"] for p in self.prompts()], ["wE:p2"])       # a suggestion: sent
         self.assertEqual(self.get("/api/work-mode").json()["projects"]["samvision"]["remindersToday"], 1)
 
+
+    def test_work_next_lists_builds_however_many_are_running(self):     # no lane limit (Jay, 2026-11-26)
+        pl = self.daemon.pipeline
+        rows = [row("SV-1", stage="build", status="READY_TO_IMPLEMENT"), row("SV-2", stage="codeReview", status="IN_REVIEW")]
+        self.daemon.work_rows = lambda project: rows
+        pl.lanes = lambda project: 12                                 # many builds already running
+        self.assertEqual(sorted(r["key"] for r in self.daemon.work_next("samvision")), ["SV-1", "SV-2"])
 
     def test_an_idle_lead_is_reminded_of_the_next_tickets_and_never_over_a_draft(self):
         self.tickets.create("samvision", "feature", number=56, status="INBOX")

@@ -76,6 +76,18 @@ it can quote anything the coordinator saw: the page shows it as text, and the in
 licensed data, records or secrets into a report. It leaves ccd only to a client holding the ccd token, like the
 rest of the API, and is never stored in SQLite or the log.
 
+**Release email (CC-078, off until Jay switches it on).** One plain-text digest per live app, a day before its release
+window, goes from ccd to Jay's SMTP provider: project name, window time, and ticket keys (with titles, except for a
+client project, which carries keys only), passed through `redact()`. One recipient: `MAIL_TO` must be exactly one
+address. TLS is verified or nothing is sent: port 465 implicit TLS, or 587 with STARTTLS (refused if the server does not
+offer it); any other port is a config error; the default `ssl` context checks the certificate chain and host name. The
+settings and Jay's address live only in `~/.config/command-center/mail.env` (`MAIL_HOST`, `MAIL_PORT`, `MAIL_USER`,
+`MAIL_PASSWORD`, `MAIL_FROM`, `MAIL_TO`; path overridable by `CCD_MAIL_ENV` for tests), read at send time and refused
+unless it is a plain file, owned by ccd's user, mode 0600 or stricter. They are never copied to the repo, ccd.db,
+events, logs, alerts or `GET /api/notify`; a failure records only the step, the exception class and the SMTP code.
+The mail path reads tickets and changes none: it cannot approve, request or record a deploy. The ledger
+(`ccd.db` kv `release_mail:<project>`) keeps window, state, attempts, message id and the ticket keys each digest listed.
+
 Never: the GitHub token, Claude credentials, the ntfy URL or any other config
 value outside `PUBLIC_PROJECT_FIELDS`, `.env` contents, transcripts, and
 **terminal titles** (Claude titles its terminal after the conversation, which

@@ -74,8 +74,7 @@ PROJECTS = {
 # jay_first: a ticket does not start (pipeline `start`) while it — or an open ticket it is blocked by — has an
 # open question for Jay, a plan waiting on his approval or a blocker only he can clear (Pipeline.held). Every
 # other ticket goes ahead. Lawyer tasks (needs:legal, type LEGAL) and sign-offs on finished work do not hold.
-# Implementation lanes: at most 2 tickets IN_PROGRESS with a worktree per project (pipeline.MAX_LANES); a
-# project may set "max_lanes" in its pipeline dict.
+# Implementation lanes and investigations: no limit per project (Jay, 2026-11-26: every task can run at once).
 # A project overrides with a "pipeline" dict in PROJECTS above.
 PIPELINE_DEFAULTS = {"merge": "owner", "ui_review": False, "jay_first": True}
 
