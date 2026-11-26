@@ -451,8 +451,8 @@ Activity / Logs and Ctrl+K.
 
 Layout is per browser (every window of it); the work is not: rooms and panes are views of named ccd PTY
 sessions and herdr panes, so moving a room between windows, popping out a pane or closing a window never
-starts or stops a process. Concurrency limits are unchanged: 4 visible rooms per window is not 4 heavy
-implementation lanes (`pipeline.MAX_LANES` still bounds IN_PROGRESS work).
+starts or stops a process. 4 visible rooms per window is not 4 heavy implementation lanes; since 2026-11-26 there
+is no limit on IN_PROGRESS work per project (Jay: every task can run at once).
 
 
 ## v2 Phase 1: Project Operating Profiles (policy/)

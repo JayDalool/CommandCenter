@@ -78,6 +78,12 @@ ccd reads only messages whose author is `jay_member_id`, never edits or bot mess
   review and Jay's merge.
 - **Blockers and UI reviews:** `approve` clears a blocker (`failure`) or accepts a UI review (`ui`) with the scope
   `answers_low_risk` or `all`.
+- **CommandCenter and GYST blockers, whatever the scope** (Jay, 2026-11-26, `notify.UNBLOCK_PROJECTS`): the Blocked
+  DM takes the blocked card's three steps. `approve` clears the blocker and the task resumes; `fix` (or
+  `fix and continue`, or `fix:` with what needs fixing) sends it back to implementation exactly as Fix and continue
+  does (with no words, the blocker's recommended action is what Claude is told); `replan:` with why sends it back to
+  planning (`Daemon.slack_unblock`). Only on the blocker the DM showed; anything else goes to the lead. The same
+  `fix` and `replan` words work on any project whose blockers the scope lets Slack clear. Client projects never.
 - **Merges** (scope `all`): the "Ready to merge" DM shows the PR, its head and the review. Only `merge` (or "merge
   it", "merge now") merges that one PR at that head, exactly as the Merge button does (`Daemon.slack_merge` →
   `act_merge`): the lead merges it, and nothing is merged if the head, the review, CI or another gate moved. `ok`,
@@ -130,3 +136,40 @@ its message showed, and approves only the gate it showed; if either changed sinc
 
 Every reply is an event (`notify.slack_reply`) with what it did and its length, never its text. A gate closed from
 Slack is recorded with `via: "slack"`.
+
+## Release email (CC-078)
+
+One digest email per live app, to you only, 24 hours before its release window (default Tuesday 22:00 Winnipeg for the
+Wednesday 22:00 window), whatever quiet hours say. Three headings: Scheduled this release, Verified in production since
+last digest, Held. Every line starts with its ticket key. It is off until you switch it on, and it never deploys anything.
+
+1. Create `~/.config/command-center/mail.env`, mode 0600, owned by the user ccd runs as:
+
+   ```
+   MAIL_HOST=smtp.your-provider.example
+   # 465 (implicit TLS) or 587 (STARTTLS); nothing else is accepted
+   MAIL_PORT=465
+   MAIL_USER=...
+   # an app password, not your main one
+   MAIL_PASSWORD=...
+   MAIL_FROM=ccd@your-domain.example
+   # exactly one address
+   MAIL_TO=you@example.com
+   ```
+
+2. Settings > Notifications > Slack and phone: Release email On (Developer Unlock), then Send a test. The row says what is
+   missing until the file is usable. A due digest is held, not lost, while the file is wrong: fix it before the window starts.
+3. A project gets a digest only while it is marked live (Release window).
+
+Read the ledger: `sqlite3 ccd.db "select value from kv where key='release_mail:<project>'"`. Each row has `state`:
+
+| state | meaning |
+|---|---|
+| `sending` | written before the SMTP call; a row still `sending` when ccd starts is closed as `failed` + `uncertain` |
+| `delivered` | the server accepted the message (250 after DATA); never sent again |
+| `failed` | the first failure before DATA is retried once, 300 s or more later and only before the window starts |
+| `failed` + `uncertain` | the connection broke during or after DATA, so the message may have gone: never retried, and Jay sees an alert ("may not have been sent"). Check the inbox before sending it by hand |
+
+A failed digest raises the alert `mail:<project>:<window>` until a later digest is delivered or Release email is switched
+off, and each failure is a `notify.failed` event. Changing the window within the mailed release sends nothing more; a
+window moved to a later day after the mailed one ended gets its own digest.

@@ -9,7 +9,6 @@ learning = "contextual"
 merge = "owner"
 night = "normal"
 paused = ""
-max_lanes = 2
 ui_fix = "ask"
 
 [target]

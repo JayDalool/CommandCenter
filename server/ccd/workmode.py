@@ -71,7 +71,8 @@ def _day(at):
 
 def movable(rows):
     """The tickets the lead can move without Jay, in the order to take them. `rows`: dicts with key, status, type,
-    flags, priority, dueAt, number, stage, holder, waitingOn, stale (flow.view's fields plus the ticket's)."""
+    flags, priority, dueAt, number, stage, holder, waitingOn, stale (flow.view's fields plus the ticket's).
+    There is no build-lane limit any more (Jay, 2026-11-26), so a ticket waiting to start a build is always listed."""
     out = []
     for r in rows:
         if r.get("status") in CLOSED or r.get("status") == "BLOCKED":

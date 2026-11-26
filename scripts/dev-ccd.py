@@ -193,7 +193,7 @@ def seed_control_room(ts):
 
 def _seed_control_room(ts):
     from ccd.pipeline import Pipeline
-    pl = Pipeline(ts, max_lanes=9)
+    pl = Pipeline(ts)
     head = "5" * 40
 
     def mk(project, number, title, description="", **f):

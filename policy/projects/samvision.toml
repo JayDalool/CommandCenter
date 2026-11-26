@@ -9,7 +9,6 @@ learning = "deep"
 merge = "owner"
 night = "careful"
 paused = ""
-max_lanes = 2
 ui_fix = "ask"
 
 [target]

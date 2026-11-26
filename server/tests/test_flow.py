@@ -483,19 +483,14 @@ class Children(Base):
 
 
 class Limits(Base):
-    def test_two_investigations_per_project(self):
-        a, b, c = self.sized(), self.sized(), self.sized()
-        self.pl.role(a, "planner", "agent:planner", session="i-a")
-        self.pl.role(b, "planner", "agent:planner", session="i-b")
-        self.assertIn("investigated", self.refused(409, self.pl.role, c, "planner", "agent:planner", session="i-c"))
-        self.refused(409, self.pl.plan, c, PLAN, "agent:planner", session="i-c")
-        legacy = self.ticket(labels=["migration"])                             # unsized, waiting on Jay's plan gate
-        self.pl.plan(legacy, PLAN, "agent:planner", session="i-l")
-        self.pl.role(self.ticket(), "planner", "agent:planner", session="i-u")  # unsized tickets are not limited
-        other = self.sized(project="gyst")
-        self.pl.role(other, "planner", "agent:planner", session="i-g")          # per project
-        self.pl.plan(a, PLAN, "agent:planner", session="i-a")                   # a moves on to technical review
-        self.pl.role(c, "planner", "agent:planner", session="i-c")
+    def test_investigations_have_no_limit(self):
+        # Jay, 2026-11-26: every task can run at once; a third (or fifth) investigation is never refused.
+        keys = [self.sized() for _ in range(5)]
+        for i, k in enumerate(keys):
+            self.pl.role(k, "planner", "agent:planner", session=f"i-{i}")
+        for i, k in enumerate(keys):
+            self.pl.plan(k, PLAN, "agent:planner", session=f"i-{i}")
+        self.assertEqual(self.pl.investigating("samvision"), [])                # all moved on to technical review
 
     def test_finishing_first_holds_new_work_behind_an_unseated_review(self):
         waiting = self.planned()
