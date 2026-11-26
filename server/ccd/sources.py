@@ -54,13 +54,13 @@ query($owner: String!, $name: String!, $ref: String!) {
     }
     pullRequests(states: OPEN, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
-        number title url isDraft reviewDecision mergeable headRefName headRefOid updatedAt
+        number title url isDraft reviewDecision mergeable baseRefName headRefName headRefOid updatedAt
         labels(first: 20) { nodes { name } }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
     }
     merged: pullRequests(states: MERGED, first: 30, orderBy: {field: UPDATED_AT, direction: DESC}) {
-      nodes { number title url mergedAt mergeCommit { oid } }
+      nodes { number title url mergedAt baseRefName headRefName mergeCommit { oid } }
     }
     closed: issues(states: CLOSED, first: 30, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes { number title url closedAt stateReason }
@@ -112,7 +112,7 @@ def reshape(data):
         state = (((commits[0] if commits else {}).get("commit") or {}).get("statusCheckRollup") or {}).get("state")
         prs.append({"number": n["number"], "title": n["title"], "url": n["url"], "isDraft": n["isDraft"],
                     "reviewDecision": n.get("reviewDecision"), "mergeable": n.get("mergeable"),
-                    "headRefName": n["headRefName"],
+                    "headRefName": n["headRefName"], "baseRefName": n.get("baseRefName"),
                     "headRefOid": n["headRefOid"], "updatedAt": n["updatedAt"], "labels": _labels_of(n),
                     "statusCheckRollup": _rollup_list(state)})
     return {

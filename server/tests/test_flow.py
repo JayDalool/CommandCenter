@@ -557,7 +557,7 @@ class Shapes(Base):
         t = self.ts.get(k)
         m = self.pl.compact([t["id"]])[t["id"]]
         self.assertEqual(Pipeline.list_marks(t, m), {"size": "standard", "stage": "techReview", "stale": False,
-                                                     "route": list(flow.STAGES)})
+                                                     "route": list(flow.STAGES), "needsTriage": False})
         r = self.ticket(labels=["security"])                     # risky by policy, not sized: today's route
         t = self.ts.get(r)
         m = self.pl.compact([t["id"]]).get(t["id"]) or {"gate": None, "openQuestions": 0}

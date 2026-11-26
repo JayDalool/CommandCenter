@@ -69,7 +69,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from . import registry
-from .pipeline import plan_digest, unshown
+from .pipeline import Pipeline, plan_digest, unshown
 from .releasemail import ReleaseMail
 from .security import redact
 
@@ -159,6 +159,7 @@ LEAD_ICON, CTO_ICON = ":compass:", ":office:"
 # records (criteria edits, evidence, findings one by one, writer checkpoints, stale marks).
 TEAM_KINDS = frozenset({
     "pipeline.intake", "pipeline.role", "pipeline.plan", "pipeline.plan_reviewed", "pipeline.plan_accepted",
+    "pipeline.review_ready",
     "pipeline.replan", "pipeline.started", "pipeline.handoff", "pipeline.user_checked", "pipeline.review",
     "pipeline.rework", "pipeline.blocked", "pipeline.questions", "pipeline.answered", "pipeline.gate_opened",
     "pipeline.gate_confirmed", "pipeline.ready_to_merge", "pipeline.unreviewed_merge", "pipeline.verified",
@@ -982,6 +983,38 @@ class Notifier:
         text = str(ev.get("text") or "")
         if text.startswith(key + " "):
             text = text[len(key) + 1:]
+        if data.get("kind") in ("pipeline.handoff", "pipeline.blocked", "pipeline.user_checked"):
+            work = self._work(key)
+            when = ev.get("at") or self.clock()
+            if data.get("kind") == "pipeline.handoff":
+                handoff = work.get("handoff") or {}
+                if (handoff.get("at") or 0) > when:
+                    handoff = {}  # A newer handoff is a different Slack update.
+                parts = [f"{label}: {str(handoff[field])[:220]}"
+                         + (f" (owner: {handoff['owner']})" if field == "next" and handoff.get("owner") else "")
+                         for field, label in
+                         (("done", "Completed"), ("next", "Next"), ("blockers", "Blocked by")) if handoff.get(field)]
+                text = "\n".join(parts) or text
+            elif data.get("kind") == "pipeline.blocked":
+                blocked = work.get("blocked") or {}
+                if (blocked.get("at") or 0) > when:
+                    blocked = {}  # A newer block is a different Slack update.
+                # The same test as the work-mode line and `pipeline_cli tasks` (Pipeline.triage_needed), so the post
+                # never says a next step exists when the lead has been told to triage it.
+                still = Pipeline.triage_needed("BLOCKED", blocked, work.get("handoff"), work.get("openQuestions", 0))
+                if not still and blocked.get("action") and blocked.get("owner"):
+                    text = f"{text}\nNext: {str(blocked['action'])[:220]} (owner: {blocked['owner']})"
+                elif not still:
+                    h = work.get("handoff") or {}
+                    step = (f"{str(h['next'])[:220]} (owner: {h['owner']})" if h.get("next") and h.get("owner")
+                            else "Jay's answer to the open question")
+                    text = f"{text}\nNext: {step}"
+                else:
+                    text = f"{text}\nNo next step or owner: the lead triages it today"
+            else:
+                check = work.get("userCheck") or {}
+                if check.get("note") and (check.get("at") or 0) <= when:
+                    text += f"\nChecked: {str(check['note'])[:220]}"
         root = await self._ticket_thread(key, ev.get("project"), chan)
         if root is not None:
             await self.post(chan, esc(text), thread_ts=root, who=SEATS.get(data.get("actor")),

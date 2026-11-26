@@ -36,9 +36,21 @@ At the end: the closing note.
     python -m ccd.pipeline_cli handoff SV-082 --role coordinator --done "…" --next "…"
     python -m ccd.pipeline_cli ask SV-082 --role coordinator --question "Export which columns?" \
         --option "Same as the table" --option "All fields" --recommend 1 --why "matches what they see"
-    python -m ccd.pipeline_cli block SV-082 --role coordinator --reason "…" --what "…" --action "…"
+    python -m ccd.pipeline_cli block SV-082 --role coordinator --reason "…" --what "…" --action "…" --next-owner developer
     python -m ccd.pipeline_cli stale SV-071 --role coordinator --reason "superseded by SV-082"   # Jay decides
     python -m ccd.pipeline_cli close SV-082 --role coordinator --note "What changed, why, how it was checked"  # (flow PR)
+
+## Each session: triage blocked tickets first
+
+Start with `pipeline_cli tasks PROJECT`. A line marked `TRIAGE TODAY` is a blocked ticket that names no next step and
+owner. Do one of these today: `handoff --next "…" --next-owner SEAT`, `rework` (an ordinary fix inside the plan),
+`replan` (the assumptions or scope changed), or `ask` Jay with options and a recommendation.
+
+## Finish first
+
+Take work closest to done first (code review, user check, release, then build fixing review findings, other builds,
+technical review, investigation), the lowest ticket number first inside a step. A new idea waits in intake; never
+drop it or push current work aside for it. Priority and due date do not reorder work.
 
 ## When a review sends it back (round 1)
 

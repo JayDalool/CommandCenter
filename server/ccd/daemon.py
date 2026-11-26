@@ -386,6 +386,8 @@ class Daemon(LeadChat, HqDaemon):
         self.broker = broker_mod.Shadow(tasks.db) if has_db else None
         self.onboarding = onboarding_mod.Onboarding(tasks.db, enabled=self.onboarding_on) if has_db else None
         self._auto_seen = {}  # project -> GitHub asOf already run through ticket automation
+        self._review_pending = {}   # ticket key -> (project, head, at, pr ref, no CI): review prompts not yet typed (CC-076)
+        self._lead_locks = {}       # project -> asyncio.Lock: one text at a time into a lead's pane (CC-076)
         self.github_fn = github_fn or sources.github
         self.host_fn = host_fn or host_snapshot
         self.git_fn = git_fn or self._git_collect
@@ -850,6 +852,7 @@ class Daemon(LeadChat, HqDaemon):
         self._decorate(snap)
         self._diff_and_alert(snap)    # synchronous: what it logs IS this snapshot
         self._ticket_automation()
+        await self.send_review_prompts()
         await self._auto_merge()
         self._workers_beat()
         snap["seq"] = self.seq if quiet else snap_seq
@@ -1115,19 +1118,24 @@ class Daemon(LeadChat, HqDaemon):
         for (key,) in pl.db.execute("SELECT key FROM tickets WHERE project=? AND archived=0 AND status NOT IN "
                                     "('DONE','DENIED','CANCELLED') ORDER BY number", (project,)).fetchall():
             t = pl.ts.get(key)
-            fl, _hs = pl.flow_of(key, t)
+            w = pl.work_row(t["id"])
+            fl, _hs = pl.flow_of(key, t, w)
             out.append({"key": t["key"], "status": t["status"], "type": t.get("type"), "flags": t.get("flags") or [],
                         "priority": t.get("priority"), "dueAt": t.get("dueAt"),
                         "number": t.get("number"), "stage": fl["stage"], "holder": fl["holder"],
-                        "waitingOn": fl["waitingOn"], "stale": fl["stale"]})
+                        "waitingOn": fl["waitingOn"], "stale": fl["stale"],
+                        # CC-076: a build that is fixing review findings is closer to done than a fresh one.
+                        "reworked": pl.rework_prs(key) is not None and t["status"] in ("IN_PROGRESS", "READY_TO_IMPLEMENT"),
+                        "needsTriage": pl.needs_triage(t, w)})
         return out
 
-    def work_next(self, project):
+    def work_next(self, project, rows=None):
         """movable() for a project. No build lanes fill up any more (Jay, 2026-11-26), so every build is listed."""
-        return workmode_mod.movable(self.work_rows(project))
+        return workmode_mod.movable(self.work_rows(project) if rows is None else rows)
 
     async def work_tick(self, now=None):
         """Remind each idle lead of a project in work mode that tickets can move without Jay (workmode.decide)."""
+        await self.send_review_prompts(now)
         for proj in self._projects():
             key = proj["key"]
             if not self.work.active(key):
@@ -1141,35 +1149,115 @@ class Daemon(LeadChat, HqDaemon):
             if self.chat_budget_check(key):
                 self.work.note(key, "budget on hold")
                 continue
-            nxt = self.work_next(key)
+            rows = self.work_rows(key)
+            nxt, tri = self.work_next(key, rows), workmode_mod.triage(rows)
             # With herdr down there is no status: never a reminder.
             r = coordinators.resolution(proj, self.panes) if self.herdr_state["ok"] else {"state": "none"}
             status = r.get("status") if r["state"] == "ready" else None
-            action = self.work.decide(key, status, self._activity.get(key), len(nxt), now)
+            action = self.work.decide(key, status, self._activity.get(key), len(nxt) + len(tri), now)
             if action == "rest":
                 self._event("action", "action.work_mode", f"{key} work mode resting: no ticket moved after "
                             f"{workmode_mod.REST_AFTER} reminders", project=key,
                             data={"kind": "work_mode_rest", "until": self.work.get(key).get("restUntil")})
             if action != "nudge":
                 continue
+            last = self.work.get(key).get("lastNudgeAt")
+            sent = await self._lead_send(
+                proj, workmode_mod.reminder_text(key, nxt, now, tri), now, "work-mode reminder",
+                # A review prompt typed meanwhile counts as this minute's reminder: never two texts at once.
+                guard=lambda: self.work.get(key).get("lastNudgeAt") == last)
+            if sent:
+                self._event("action", "action.work_mode", f"work mode reminder → {coordinators.canonical(proj)}",
+                            project=key, agent_id=sent,
+                            data={"kind": "work_mode_nudge", "tickets": [t["key"] for t in nxt[:workmode_mod.SHOW]],
+                                  "triage": [t["key"] for t in tri[:10]]})
+
+    async def _lead_send(self, proj, text, now, why, guard=None, after=None):
+        """Type one fixed text into a project's idle lead pane; the pane id, or None when nothing was sent.
+
+        The one path for work-mode reminders and review prompts (CC-076): a lock per project so two never type at
+        once, the pane's status read fresh, an empty input line (never over a draft), the broker's record, and herdr
+        errors caught. A delivery counts toward the day's limit only once it happened (work.nudged)."""
+        key = proj["key"]
+        async with self._lead_locks.setdefault(key, asyncio.Lock()):
+            if guard is not None and not guard():
+                return None
+            r = coordinators.resolution(proj, self.panes) if self.herdr_state["ok"] else {"state": "none"}
+            if r["state"] != "ready":
+                return None
             try:
                 agent = await self._fresh_agent(r["paneId"])
                 if agent["status"] not in ("idle", "done"):       # busy or blocked now: nothing sent, nothing counted
-                    continue
+                    return None
                 # As the night shift does: send only when the input line is plainly empty, never over a draft.
                 screen = await self.herdr.read_tail(agent["pane_id"], 40)
                 if nightshift_mod.input_is_empty(screen["text"]) is not True:
                     self.work.note(key, "input line not empty or not recognised")
-                    continue
-                self._broker("pane.input", key, f"work-mode reminder -> pane {agent['pane_id']}")
-                await self.herdr.prompt(agent["pane_id"], workmode_mod.reminder_text(key, nxt, now))
-                self.work.nudged(key, now)                          # counted only once it was delivered
-                self._event("action", "action.work_mode", f"work mode reminder → {coordinators.canonical(proj)}",
-                            project=key, agent_id=agent["pane_id"],
-                            data={"kind": "work_mode_nudge", "tickets": [t["key"] for t in nxt[:workmode_mod.SHOW]]})
+                    return None
+                # CC-076 round 3: the two herdr reads above are awaits; Work Mode, the PR or the reviewer seat can change
+                # while they are pending, so the guard is asked once more, with nothing awaited before the text is typed.
+                if guard is not None and not guard():
+                    return None
+                self._broker("pane.input", key, f"{why} -> pane {agent['pane_id']}")
+                await self.herdr.prompt(agent["pane_id"], text)
+                self.work.nudged(key, now)
+                if after is not None:
+                    after()         # still under the lock: a waiting sender then finds the item consumed
+                return agent["pane_id"]
             except (ActionError, OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
                 self.work.note(key, "reminder failed")
-                log.warning(json.dumps({"msg": "work mode reminder failed", "project": key, "error": str(e)[:160]}))
+                log.warning(json.dumps({"msg": "work mode send failed", "project": key, "why": why,
+                                        "error": str(e)[:160]}))
+                return None
+
+    REVIEW_PROMPT = ("Work mode (Command Center): {key}'s PR {ref} at {sha} has {checks} and no review. Take the "
+                     "code-review seat for it now: start a fresh code reviewer per FLOW.md. Never merge or deploy.")
+
+    async def send_review_prompts(self, now=None):
+        """CC-076 (c19): tell a lead in work mode that a PR's checks passed and nobody reviews it. One text per head
+        (pipeline.review_ready is recorded once per head); retried while the lead is busy, dropped once the ticket,
+        the head or the reviewer changes. Work mode off: the event and Slack post stand, nothing is typed."""
+        for key, item in list(self._review_pending.items()):
+            project, head, at, ref, none = item
+            try:
+                t = self.tasks.get(key)
+                w = self.pipeline.work_row(t["id"])
+                reviewer = ((w.get("roles") or {}).get("reviewer") or {}).get("at") or 0
+                if not (t["status"] == "IN_REVIEW" and w["review"]["head"] != head and reviewer <= at
+                        and any(p["head"] == head for p in self._open_prs(t))):
+                    del self._review_pending[key]
+                    continue
+                proj = self._project(project)
+                if proj is None:
+                    continue
+
+                def ready(key=key, item=item, head=head, project=project, at=at):
+                    # Asked under the lead lock and again right before typing (see _lead_send): the item is still
+                    # pending, Work Mode is on, the day's limit holds, no reviewer has taken the seat, and the PR at
+                    # this head is still green and not a draft. Everything is read fresh, nothing carried over.
+                    if self._review_pending.get(key) != item or self.work.day_full(project, now):
+                        return False
+                    if (not self.work.active(project) or registry.paused(project)
+                            or (self.night is not None and self.night.active(project)) or self.chat_budget_check(project)):
+                        return False
+                    t2 = self.tasks.get(key)
+                    w2 = self.pipeline.work_row(t2["id"])
+                    seat = ((w2.get("roles") or {}).get("reviewer") or {}).get("at") or 0
+                    if not (t2["status"] == "IN_REVIEW" and w2["review"]["head"] != head and seat <= at):
+                        return False
+                    pr_now = next((p for p in self._open_prs(t2) if p["head"] == head), None)
+                    return bool(pr_now and pr_now["ciGreen"] and not pr_now["draft"])
+                if not ready():
+                    continue      # off, red or a draft for now: kept, and typed once it is fine again
+                text = self.REVIEW_PROMPT.format(key=key, ref=ref, sha=head[:7],
+                                                 checks="no CI checks" if none else "green checks")
+                if await self._lead_send(proj, text, now, f"review prompt {key}", guard=ready,
+                                         after=lambda key=key, item=item: self._review_pending.pop(key, None)
+                                         if self._review_pending.get(key) == item else None):
+                    self._event("action", "action.work_mode", f"work mode review prompt for {key}", project=project,
+                                data={"kind": "work_mode_review_prompt", "ticket": key})
+            except Exception as e:  # noqa: BLE001 — a prompt must never fail the poll
+                log.warning(json.dumps({"msg": "review prompt failed", "key": key, "error": repr(e)[:200]}))
 
     def work_state(self, now=None):
         """GET /api/work-mode: per project, on or off, why nothing was sent, and the tickets that can move next."""
@@ -1178,7 +1266,9 @@ class Daemon(LeadChat, HqDaemon):
         for proj in self._projects():
             key = proj["key"]
             row = self.work.public(key, now)
-            row["next"] = [t["key"] for t in self.work_next(key)[:workmode_mod.SHOW]]
+            rows = self.work_rows(key)
+            row["next"] = [t["key"] for t in self.work_next(key, rows)[:workmode_mod.SHOW]]
+            row["triage"] = [t["key"] for t in workmode_mod.triage(rows)]
             row["paused"] = bool(registry.paused(key))
             out[key] = row
         return {"projects": out, "limits": {"idleS": workmode_mod.IDLE_GRACE, "gapS": workmode_mod.NUDGE_GAP,
@@ -1621,7 +1711,10 @@ class Daemon(LeadChat, HqDaemon):
         repo = next((p.get("repo") for p in self.cfg["projects"] if p["key"] == ticket["project"]), None) \
             or registry.github_of(ticket["project"])
         out = []
+        target = (self._project(ticket["project"]) or {}).get("branch") or "main"
         for pr in g.get("prs") if isinstance(g.get("prs"), list) else []:
+            if pr.get("baseRefName") and pr["baseRefName"] != target:
+                continue
             ref = f"{repo}#{pr.get('number')}"
             if ref in refs:
                 ci = model.ci_mark(pr.get("statusCheckRollup"))
@@ -1671,7 +1764,7 @@ class Daemon(LeadChat, HqDaemon):
         elif op == "block":
             explain = body.get("explain") if isinstance(body.get("explain"), dict) else \
                 {k: body.get(k) for k in pl.EXPLAIN if body.get(k)}
-            r = self._wrap(pl.block, key, body.get("reason"), actor, explain or None)
+            r = self._wrap(pl.block, key, body.get("reason"), actor, explain or None, body.get("owner"))
         elif op == "role":
             r = self._wrap(pl.role, key, body.get("role"), actor, **meta)
         elif op == "finding":
@@ -2249,6 +2342,10 @@ class Daemon(LeadChat, HqDaemon):
         names who recorded it, so Slack can post the step under that seat (notify.SEATS); ccd's own steps have none."""
         self._announce(ticket, changes)
         for kind, text, _data in events:
+            if kind == "pipeline.review_ready":
+                # Typed into a lead's pane later, by send_review_prompts (async, behind work mode).
+                self._review_pending[ticket["key"]] = (ticket["project"], _data["head"], time.time(), _data.get("pr") or "",
+                                                       bool(_data.get("ciNone")))
             self._event("tasks", "task.pipeline", f"{ticket['key']} {text}"[:300], project=ticket["project"],
                         ref=ticket["key"], data={"kind": kind, **({"actor": actor} if actor else {})},
                         severity="action" if kind in ("pipeline.gate_opened", "pipeline.blocked",
@@ -2868,7 +2965,8 @@ class Daemon(LeadChat, HqDaemon):
           linked PR approved, no failing or pending check ("–": no checks at all, said as such), not draft,
           ticket IN_REVIEW                                                 → READY_TO_MERGE
           linked PR no longer ready, ticket READY_TO_MERGE                 → IN_REVIEW
-          linked PR merged (found by link, not title), IN_REVIEW/READY_TO_MERGE → VERIFYING
+          linked PR merged into the project's delivery branch, IN_REVIEW/READY_TO_MERGE → VERIFYING
+          (a PR merged into another branch is linked as related work and moves nothing)
 
         A merge moves a ticket once; a reopened ticket waits for a new merge. GitHub keeps listing a merged PR,
         so the move is skipped when automation already made it for that PR (a status event with trigger
@@ -2888,6 +2986,8 @@ class Daemon(LeadChat, HqDaemon):
                 continue
             self._auto_seen[p["key"]] = g.get("asOf")
             data = g["data"]
+            # CC-076: only a merge into the delivery branch is delivery; a stacked PR's merge is related work.
+            target = p.get("branch") or "main"
 
             def mine(k):
                 return prefixes.get(k.rsplit("-", 1)[0]) == p["key"] and self.tasks.exists(k)
@@ -2910,6 +3010,8 @@ class Daemon(LeadChat, HqDaemon):
                             t, _ = self.tasks.link(k, "github", "pr", ref, github.pr_ref_url(ref), pr.get("title"),
                                                    "system:automation", trigger=f"PR #{n} title or branch leads with {k}")
                             self._task_event("task.updated", t, f"linked PR #{n}", {"kind": "links"})
+                        if pr.get("baseRefName") and pr["baseRefName"] != target:
+                            continue  # linked for context; a stacked PR is not this ticket's delivery
                         t = self.tasks.get(k)
                         if not t["branch"] and pr.get("headRefName"):
                             t, ch = self.tasks.update(k, {"branch": pr["headRefName"]}, "system:automation",
@@ -2943,6 +3045,19 @@ class Daemon(LeadChat, HqDaemon):
                 try:
                     ref = f"{p['repo']}#{m['number']}"
                     why = f"PR #{m['number']} merged"
+                    base = m.get("baseRefName")
+                    if base != target:
+                        if base:
+                            # Merged into a feature branch (a stacked PR) before it was ever seen open: keep it as
+                            # related work, once (has_link makes a later poll a no-op), and move nothing.
+                            for k in self.tasks.pr_keys(m.get("title", ""), m.get("headRefName") or ""):
+                                if mine(k) and not self.tasks.has_link(k, "github", "pr", ref):
+                                    t, _ = self.tasks.link(k, "github", "pr", ref, github.pr_ref_url(ref),
+                                                           m.get("title"), "system:automation",
+                                                           trigger=f"PR #{m['number']} merged into {base}")
+                                    self._task_event("task.updated", t, f"linked PR #{m['number']} (merged into {base})",
+                                                     {"kind": "links"})
+                        continue  # an unknown base (null) waits for a poll that knows it
                     for k in self.tasks.keys_linked("github", "pr", ref):
                         # A merge moves a ticket once. GitHub keeps listing a merged PR for a while, so after a
                         # reopen or rework the old merge must not send the ticket on to VERIFYING again.

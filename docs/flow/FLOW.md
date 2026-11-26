@@ -80,7 +80,7 @@ rounds.
 | Acceptance criteria: up to 20 lines that must be true when it is done | lead or Jay (only Jay edits them after Investigate) |
 | Requirements: what must not change, what it depends on | lead |
 | Size, parent | lead |
-| Priority (urgent, high, medium, low) and due date | lead at intake, and at any stage while the ticket is open; Jay any time. No due date given: the ticket's own, even a past one (it shows overdue and comes first), else 2, 5 or 10 days from intake for small, standard or risky |
+| Priority (urgent, high, medium, low) and due date | lead at intake, and at any stage while the ticket is open; Jay any time. No due date given: the ticket's own, even a past one (it shows overdue; priority and due date no longer order the lead's work, see Work mode), else 2, 5 or 10 days from intake for small, standard or risky |
 | Findings and plan | investigator |
 | Blast radius and required tests | tech-reviewer |
 | Screenshots: before (investigator), after (user-reviewer) | `pipeline_cli evidence` |
@@ -106,17 +106,32 @@ Never put secrets, tokens, customer data, licensed data or pasted terminal outpu
 - Stale: 48 hours with no recorded step in stages 2 to 6 marks the ticket stale. The lead moves it, sends it back
   or proposes cancelling it (`pipeline_cli stale`; only Jay cancels).
 - Two rounds at most per review stage: the second send-back blocks the ticket.
+- A blocked ticket names its next step and who owns it (`block … --action "…" --next-owner SEAT`, or a later
+  `handoff --next "…" --next-owner SEAT`; the seats are lead, investigator, tech-reviewer, developer, user-reviewer,
+  code-reviewer, verifier, jay). One that names neither is marked TRIAGE TODAY in `pipeline_cli tasks`, in every
+  project, and is put to the lead the same day. The lead records a next step with its owner, sends it back with
+  `rework`, re-plans with `replan` if the assumptions or scope changed, or asks Jay with `ask` (options and a
+  recommendation). Keep the blocker visible until there is a recorded decision or a way forward.
 
 ## Work mode: work keeps moving
 
 A lead acts when someone messages it. With **work mode** on for a project (Jay's switch in Settings › Operating
 profiles; every project starts off), ccd checks once a minute and reminds the idle lead, at most every 10 minutes,
-of the tickets that can move without Jay, in this order: priority, then the earliest due date, then the later stage, then the
-oldest. Take them in that order, within the limits above. A ticket that needs Jay: ask or block it, then take the
-next one. A ticket in intake flagged needs-Jay is not named; a release-stage ticket is named for verifying only.
+of the tickets that can move without Jay, finishing first: code review, user check and release (verify only), then a
+build fixing review findings, other builds, technical review, investigation. Inside a step the lowest ticket number
+goes first (first come, first served); priority and due date are shown but do not order the work. New ideas wait in line: an intake ticket is named only when nothing already
+started can move, oldest first, and is never dropped or moved aside. Take the tickets in that order, within the
+limits above. A ticket that needs Jay: ask or block it (with its next step and owner), then take the next one. A
+ticket in intake flagged needs-Jay is not named. A blocked ticket with no next step or owner gets its own line,
+"triage today", beyond the three named. The same mark shows in `pipeline_cli tasks`, work mode or not.
 The reminder grants nothing; every gate still waits for Jay. It stays quiet while the project is paused,
 the night shift runs or a budget is on hold, rests 2 hours after 3 reminders with no ticket change, and stops for
 the day after 36 (per Winnipeg day, even if the switch goes off and on).
+
+When a PR's checks pass (or the project has no CI checks) and nobody has reviewed that head, ccd records
+`pipeline.review_ready` once per head and posts it in the ticket's Slack thread. A lead in work mode with an empty,
+idle input line is also told, once, to start a fresh code reviewer; that text counts toward the day's 36 and is
+tried again while the lead is busy, until a reviewer starts. Work mode off: the record and the Slack post only.
 
 ## Who answers a question
 

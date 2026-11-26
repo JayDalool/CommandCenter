@@ -51,6 +51,9 @@ LEADS = ("jay", "agent:coordinator")          # who runs intake, edits criteria 
 USER_REVIEWERS = ("agent:user-reviewer", "agent:design-reviewer")
 CRITERION_ID_RE = re.compile(r"^c[0-9]{1,3}$")
 MAX_REVIEW_CYCLES = 2
+# CC-076: who can own a blocked ticket's next step (the seat names of FLOW.md, plus Jay). A fixed list, checked on
+# its own, so "owner" can never be free text that a reader mistakes for a decision.
+OWNERS = ("lead", "investigator", "tech-reviewer", "developer", "user-reviewer", "code-reviewer", "verifier", "jay")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")   # the full PR head commit: no prefix can match another head
 SLUG_RE = r"[a-z0-9][a-z0-9-]{0,60}"
 META_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/@+-]{0,79}$")
@@ -73,6 +76,15 @@ def _end_of(day):
 def clean_priority(v):
     if v not in PRIORITY_SET:
         raise TaskError(400, f"priority must be one of {', '.join(PRIORITY_SET)}")
+    return v
+
+
+def clean_owner(v):
+    """The seat that owns a blocked ticket's next step, or None when none is given."""
+    if v in (None, ""):
+        return None
+    if v not in OWNERS:
+        raise TaskError(400, f"owner must be one of {', '.join(OWNERS)}")
     return v
 
 
@@ -501,11 +513,12 @@ class Pipeline:
                                           f"AND ticket_id IN ({marks}) GROUP BY ticket_id", chunk):
                 out.setdefault(tid, {"gate": None, "gateReason": None, "deploy": None, "verification": None})["openQuestions"] = n
             # What the list's size / stage / stale need (flow.list_marks), without each ticket's whole history.
-            for tid, plan_state, blocked in self.db.execute(
-                    f"SELECT ticket_id, plan_state, blocked FROM ticket_work WHERE ticket_id IN ({marks})", chunk):
+            for tid, plan_state, blocked, handoff in self.db.execute(
+                    f"SELECT ticket_id, plan_state, blocked, handoff FROM ticket_work WHERE ticket_id IN ({marks})", chunk):
                 m = out.setdefault(tid, {"gate": None, "gateReason": None, "deploy": None, "verification": None,
                                          "openQuestions": 0})
-                m.update(planState=plan_state, blocked=json.loads(blocked) if blocked else None)
+                m.update(planState=plan_state, blocked=json.loads(blocked) if blocked else None,
+                         handoff=json.loads(handoff) if handoff else None)
             for tid, size, review_due, user_check in self.db.execute(
                     f"SELECT ticket_id, size, review_due, user_check FROM ticket_flow WHERE ticket_id IN ({marks})",
                     chunk) if self._has_flow() else ():
@@ -532,7 +545,9 @@ class Pipeline:
         idle = m.get("idleSince") or t.get("createdAt")
         now = time.time() if now is None else now
         return {"size": flow_mod.shown_size(f.get("size"), pol), "stage": stage, "route": list(rt),
-                "stale": flow_mod.is_stale(stage, t["status"], waiting, idle, now)}
+                "stale": flow_mod.is_stale(stage, t["status"], waiting, idle, now),
+                "needsTriage": Pipeline.triage_needed(t["status"], m.get("blocked"), m.get("handoff"),
+                                                      m.get("openQuestions"))}
 
     @staticmethod
     def _stages(status, stage):
@@ -912,6 +927,19 @@ class Pipeline:
         passed on another head of the same PR is cleared: the new commits are checked again."""
         def fn(tid, t, w, at):
             status, work, events = inner(tid, t, w, at)
+            rv = w["review"]
+            # CC-076 (c19): checks are green on a PR that nobody has reviewed at this head: say so once per head.
+            # Whether a lead's pane is told is ccd's call (work mode); the event and the Slack post always happen.
+            if (t["status"] == "IN_REVIEW" and status.get("status", "IN_REVIEW") == "IN_REVIEW" and pr.get("ciGreen")
+                    and not pr.get("draft") and pr.get("head") and rv["head"] != pr["head"]
+                    and not (rv.get("pr") and pr.get("ref") != rv["pr"])
+                    and not any(k == "pipeline.review_ready" and (json.loads(d or "{}")).get("head") == pr["head"]
+                                for _a, _b, k, _f, _fr, _to, d in self._events(tid))):
+                sha = pr["head"][:7]
+                events = events + [("pipeline.review_ready",
+                                    f"{pr.get('ref') or 'PR'} at {sha} has {'no CI checks' if pr.get('ciNone') else 'green checks'}"
+                                    f" and no review",
+                                    {"head": pr["head"], "pr": pr.get("ref"), "ciNone": bool(pr.get("ciNone"))})]
             uc = self._flow(tid)["userCheck"] or {}
             if uc.get("result") == "pass" and pr.get("head") and pr["head"] != uc.get("head") \
                     and (not uc.get("pr") or uc["pr"] == pr.get("ref")):
@@ -1182,12 +1210,30 @@ class Pipeline:
         h = {k: _text(body.get(k), 2000, k) for k in ("done", "decisions", "next", "blockers")}
         if not any(h.values()):
             raise TaskError(400, "a handoff says at least one of done, decisions, next, blockers")
+        owner = clean_owner(body.get("owner"))
+        if owner:
+            h["owner"] = owner      # who takes `next`; with it a blocked ticket no longer needs triage
         return self._tx(key, actor, lambda tid, t, w, at: ({}, {"handoff": dict(h, at=at, by=actor)},
                                                           [("pipeline.handoff", "handoff updated", {})]))
 
     EXPLAIN = ("what", "why", "action", "impact", "technical")
 
-    def block(self, key, reason, actor, explain=None):
+    @staticmethod
+    def triage_needed(status, blocked, handoff, open_questions):
+        """CC-076 (c20, c8): a BLOCKED ticket with no open question must name its next step AND who owns it, in the
+        block itself or in a later handoff. One check for the work-mode line, GET /api/tasks, `pipeline_cli tasks` and
+        the Slack blocked post, so they never disagree. Auto-blocks (send-backs, failed checks) name neither."""
+        if status != "BLOCKED" or open_questions:
+            return False
+        b, h = blocked or {}, handoff or {}
+        if b.get("action") and b.get("owner"):
+            return False
+        return not (h.get("next") and h.get("owner") and (h.get("at") or 0) > (b.get("at") or 0))
+
+    def needs_triage(self, t, w):
+        return self.triage_needed(t["status"], w.get("blocked"), w.get("handoff"), w.get("openQuestions", 0))
+
+    def block(self, key, reason, actor, explain=None, owner=None):
         """Blocked, explained for a manager first (what happened, why it matters, recommended action,
         estimated impact) with the technical details kept underneath."""
         reason = _text(reason, 300, "reason", multiline=False)
@@ -1197,6 +1243,9 @@ class Pipeline:
             raise TaskError(400, "explain must be an object")
         more = {k: _text((explain or {}).get(k), 4000 if k == "technical" else 2000, k) for k in self.EXPLAIN}
         more = {k: v for k, v in more.items() if v}
+        owner = clean_owner(owner)
+        if owner:
+            more["owner"] = owner       # next to `action`: who takes the recommended next step
 
         def fn(tid, t, w, at):
             stage = stage_of(t["status"])

@@ -1075,6 +1075,58 @@ class TeamThreads(ReplyBase):
         self.assertEqual(code["as"], ("Code reviewer", ":eyes:"))
         self.assertEqual(len([p for p in self.channel_posts() if p["thread"] is None]), 1)      # still one thread
 
+    def test_handoff_and_blocker_state_explain_the_next_action(self):
+        self.d.task_work = lambda key: {
+            "handoff": {"done": "Portion tests passed", "next": "Check the review screen", "owner": "user-reviewer"},
+            "blocked": {"action": "Check the missing fixture", "owner": "developer"},
+        }
+        self.step("SV-44", "pipeline.handoff", "handoff updated", "agent:implementer")
+        self.step("SV-44", "pipeline.blocked", "Preview data missing", "agent:coordinator")
+        _, handoff, blocker = self.channel_posts()
+        self.assertIn("Completed: Portion tests passed\nNext: Check the review screen (owner: user-reviewer)",
+                      handoff["text"])
+        self.assertIn("Preview data missing\nNext: Check the missing fixture (owner: developer)", blocker["text"])
+
+    def test_a_block_with_no_next_step_or_no_owner_says_the_lead_triages_it_today(self):
+        for blocked in ({}, {"action": "Fix the fixture"}, {"owner": "developer"}):
+            self.d.task_work = lambda key, blocked=blocked: {"blocked": blocked}
+            self.step("SV-45", "pipeline.blocked", "Preview data missing", "agent:coordinator")
+            self.assertIn("Preview data missing\nNo next step or owner: the lead triages it today",
+                          self.channel_posts()[-1]["text"])
+
+    def test_the_blocked_post_uses_the_shared_triage_predicate(self):
+        # CC-076 Codex round 1, finding 4: an open question, or a later handoff with next and owner, is not a triage case.
+        from ccd.pipeline import Pipeline
+        cases = [
+            ({"blocked": {"at": 1}, "openQuestions": 1}, "Next: Jay's answer to the open question"),
+            ({"blocked": {"at": 1}, "handoff": {"next": "Re-run CI", "owner": "developer", "at": 2}},
+             "Next: Re-run CI (owner: developer)"),
+            ({"blocked": {"at": 1}, "handoff": {"next": "Re-run CI", "at": 2}},
+             "No next step or owner: the lead triages it today"),
+            ({"blocked": {"at": 1}, "handoff": {"next": "Old", "owner": "lead", "at": 0}},
+             "No next step or owner: the lead triages it today"),
+        ]
+        for work, expect in cases:
+            self.d.task_work = lambda key, work=work: work
+            self.step("SV-50", "pipeline.blocked", "stuck", "agent:coordinator")
+            post = self.channel_posts()[-1]["text"]
+            self.assertIn(expect, post)
+            needed = Pipeline.triage_needed("BLOCKED", work.get("blocked"), work.get("handoff"),
+                                            work.get("openQuestions", 0))
+            self.assertEqual(needed, "No next step" in post)
+
+    def test_user_check_says_what_was_tested(self):
+        self.d.task_work = lambda key: {"userCheck": {"note": "Tried the export on 375px", "at": 1}}
+        self.step("SV-47", "pipeline.user_checked", "user check passed", "agent:user-reviewer")
+        post = self.channel_posts()[-1]
+        self.assertIn("user check passed\nChecked: Tried the export on 375px", post["text"])
+        self.assertIn("User reviewer", post["text"])                      # the seat label on the post
+
+    def test_review_ready_posts_in_the_ticket_thread(self):
+        self.step("SV-49", "pipeline.review_ready", "PR #9 at abc1234 has green checks and no review")
+        root, ready = self.channel_posts()
+        self.assertEqual((ready["thread"], ready["broadcast"]), (root["ts"], False))
+
     def test_milestones_also_show_in_the_channel_and_small_records_stay_out(self):
         self.step("SV-41", "pipeline.criteria", "criteria updated: 3 criteria", "agent:coordinator")
         self.step("SV-41", "pipeline.evidence", "evidence: screenshot", "agent:user-reviewer")

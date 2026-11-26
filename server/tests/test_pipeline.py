@@ -37,6 +37,115 @@ class Base(unittest.TestCase):
         return {"ref": "JayDalool/SamVisionAI#1", "head": head, "ciGreen": green, "draft": draft}
 
 
+class Triage(Base):
+    """CC-076 (c20, c8): a blocked ticket names its next step and owner, or the lead triages it today."""
+
+    def blocked(self, **kw):
+        key = self.ticket()
+        self.pl.plan(key, PLAN, "agent:planner")
+        self.pl.block(key, "CI is red on main", "agent:implementer", **kw)
+        return key
+
+    def needs(self, key):
+        return self.pl.needs_triage(self.ts.get(key), self.pl.work_row(self.ts.get(key)["id"]))
+
+    def test_action_and_owner_together_clear_it_and_anything_less_does_not(self):
+        self.assertFalse(self.needs(self.blocked(explain={"action": "Fix the flaky test"}, owner="developer")))
+        self.assertTrue(self.needs(self.blocked(explain={"action": "Fix the flaky test"})))
+        self.assertTrue(self.needs(self.blocked(owner="developer")))
+        self.assertTrue(self.needs(self.blocked()))
+
+    def test_a_later_handoff_with_next_and_owner_clears_it_and_an_earlier_one_does_not(self):
+        key = self.ticket()
+        self.pl.plan(key, PLAN, "agent:planner")
+        self.pl.handoff(key, {"next": "Wait for CI", "owner": "developer"}, "agent:implementer")
+        self.pl.block(key, "CI is red", "agent:implementer")
+        self.assertTrue(self.needs(key))                                  # that handoff is older than the block
+        self.pl.handoff(key, {"next": "Re-run the job"}, "agent:coordinator")
+        self.assertTrue(self.needs(key))                                  # no owner
+        self.pl.handoff(key, {"next": "Re-run the job", "owner": "lead"}, "agent:coordinator")
+        self.assertFalse(self.needs(key))
+
+    def test_an_open_question_or_leaving_blocked_clears_it(self):
+        key = self.blocked()
+        self.pl.ask(key, [{"text": "Which way?", "kind": "yesno"}], "agent:coordinator")
+        self.assertFalse(self.needs(key))
+        other = self.blocked()
+        self.pl.rework(other, "fix it", "agent:coordinator")
+        self.assertFalse(self.needs(other))
+
+    def test_an_owner_outside_the_seat_list_is_refused(self):
+        key = self.ticket()
+        self.pl.plan(key, PLAN, "agent:planner")
+        with self.assertRaises(TaskError) as e:
+            self.pl.block(key, "stuck", "agent:implementer", owner="somebody")
+        self.assertEqual(e.exception.status, 400)
+        with self.assertRaises(TaskError) as e:
+            self.pl.handoff(key, {"next": "x", "owner": "somebody"}, "agent:implementer")
+        self.assertEqual(e.exception.status, 400)
+
+    def test_the_list_marks_agree_with_the_single_check(self):
+        flagged, clear = self.blocked(), self.blocked(explain={"action": "Fix"}, owner="lead")
+        ids = [self.ts.get(k)["id"] for k in (flagged, clear)]
+        marks = self.pl.compact(ids)
+        got = [Pipeline.list_marks(self.ts.get(k), marks[i])["needsTriage"] for k, i in zip((flagged, clear), ids)]
+        self.assertEqual(got, [True, False])
+
+
+class ReviewReady(Base):
+    def test_green_unreviewed_head_is_recorded_once_per_head(self):
+        key = self.ticket()
+        self.to_review(key)
+        kinds = lambda ev: [k for k, _t, _d in ev]  # noqa: E731
+        self.assertEqual(kinds(self.pl.sync_pr(key, self.pr())[2]), ["pipeline.review_ready"])
+        self.assertEqual(kinds(self.pl.sync_pr(key, self.pr())[2]), [])           # the same head again
+        new = "1" * 40
+        self.assertEqual(kinds(self.pl.sync_pr(key, self.pr(head=new))[2]), ["pipeline.review_ready"])
+
+    def test_not_for_a_draft_red_checks_or_a_head_already_reviewed(self):
+        key = self.ticket()
+        self.to_review(key)
+        self.assertEqual(self.pl.sync_pr(key, self.pr(draft=True))[2], [])
+        self.assertEqual(self.pl.sync_pr(key, self.pr(green=False))[2], [])
+        self.pl.review(key, "REQUEST_CHANGES", HEAD, "agent:reviewer", [{"summary": "x"}], pr=self.pr())
+        self.assertEqual([e for e in self.pl.sync_pr(key, self.pr())[2] if e[0] == "pipeline.review_ready"], [])
+
+    def test_no_ci_checks_are_said_as_such(self):
+        key = self.ticket()
+        self.to_review(key)
+        _t, _c, events = self.pl.sync_pr(key, dict(self.pr(), ciNone=True))
+        self.assertIn("no CI checks", events[0][1])
+        self.assertTrue(events[0][2]["ciNone"])
+
+
+class CliBuild(unittest.TestCase):
+    """CC-076: the CLI maps --next-owner onto the existing work route."""
+
+    def test_next_owner_goes_with_block_and_handoff_and_must_be_a_seat(self):
+        _m, _p, body, _a = pipeline_cli.build(["block", "CC-9", "--role", "coordinator", "--reason", "CI", "--action",
+                                               "Fix it", "--next-owner", "developer"])
+        self.assertEqual((body["action"], body["owner"]), ("Fix it", "developer"))
+        _m, _p, body, _a = pipeline_cli.build(["handoff", "CC-9", "--role", "coordinator", "--next", "Wait",
+                                               "--next-owner", "lead"])
+        self.assertEqual(body, {"next": "Wait", "owner": "lead"})
+        with self.assertRaises(SystemExit):
+            pipeline_cli.build(["handoff", "CC-9", "--role", "coordinator", "--next", "x", "--next-owner", "nobody"])
+
+    def test_tasks_marks_a_blocked_ticket_that_needs_triage_whatever_work_mode_says(self):
+        import contextlib
+        import io
+        rows = {"tickets": [{"key": "CC-1", "number": 1, "status": "BLOCKED", "title": "stuck", "needsTriage": True},
+                            {"key": "CC-2", "number": 2, "status": "BLOCKED", "title": "owned", "needsTriage": False}]}
+        real, pipeline_cli.call = pipeline_cli.call, lambda *a, **kw: (0, rows)
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                pipeline_cli.main(["tasks", "commandcenter"])
+        finally:
+            pipeline_cli.call = real
+        self.assertEqual(out.getvalue().splitlines(), ["CC-1\tBLOCKED\tstuck\tTRIAGE TODAY", "CC-2\tBLOCKED\towned"])
+
+
 class Stages(Base):
     def test_every_canonical_status_maps_to_one_stage(self):
         self.assertEqual({stage_of(s) for s in tasks.STATUSES},
