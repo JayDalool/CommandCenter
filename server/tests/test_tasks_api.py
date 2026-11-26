@@ -1238,6 +1238,13 @@ class PinnedPr(Automation):
         self.assertEqual(self.status(), "IN_REVIEW")
         self.assertEqual(len(self.events("pipeline.unreviewed_merge")), 1)
 
+    def test_a_pinned_pr_first_seen_already_merged_in_progress_notes_once_and_does_not_advance(self):
+        self.started(87)
+        for _ in range(2):
+            self.sv_merged(249, head=self.H1)
+        self.assertEqual(self.status(), "IN_PROGRESS")
+        self.assertEqual(len(self.events("pipeline.unreviewed_merge")), 1)
+
     def test_a_merged_node_without_its_head_neither_moves_nor_notes_until_it_has_one(self):
         self.started(87)
         self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"))
@@ -1341,6 +1348,8 @@ class PinnedPr(Automation):
         self.assertEqual(set(self.daemon.health()["gh"]["projects"]), {p["key"] for p in self.cfg["projects"]})
         # jay-dev is not a project: it must not appear in the polled snapshot either
         self.assertEqual(set(self.daemon.gh), {p["key"] for p in self.cfg["projects"]})
+        # ... nor in the public snapshot's GitHub map (CC-071 c5)
+        self.assertEqual(set(self.daemon.state()["sources"]["github"]), {p["key"] for p in self.cfg["projects"]})
         r = self.user_pass(self.H1)
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(self.work()["userCheck"]["pr"], self.JD)
@@ -1358,6 +1367,19 @@ class PinnedPr(Automation):
         self.assertEqual(self.work()["merge"]["pr"], self.JD)
         kinds = [e["data"].get("kind") for e in self.get("/api/activity?limit=200").json()["events"] if e["kind"] == "task.pipeline"]
         self.assertIn("pipeline.merged", kinds)                                  # announced like any merge
+
+    def test_an_approved_own_repo_pin_is_merge_ready_with_its_full_ref(self):
+        self.cc_polled()
+        CC = "JayDalool/CommandCenter#20"
+        self.lane(7, "commandcenter")
+        self.assertEqual(self.pin(CC).status_code, 200)
+        self.step("start", {"branch": "CC-007-x", "worktree": "/srv/server/worktrees/x/CC-007"})
+        self.gh.data["commandcenter"]["prs"] = [dict(pr(20, "CC-007 x"), headRefName="CC-007-x", headRefOid=self.H1)]
+        self.poll()
+        self.assertEqual(self.user_pass(self.H1).status_code, 200)
+        self.assertEqual(self.approve(self.H1).json()["status"], "READY_TO_MERGE")
+        ready, skipped = self.daemon.merge_batch("commandcenter")
+        self.assertEqual([(r["key"], r["pr"]) for r in ready], [("CC-007", CC)], skipped)
 
     def test_P9_a_failed_repo_poll_stops_only_itself(self):
         self.cc_polled()

@@ -1149,10 +1149,12 @@ class Pipeline:
         def fn(tid, t, w, at):
             pin = self._pin_of(tid)
             if not pin or pin.lower() != str(ref).lower() or self.pins().get(pin.lower()) != t["key"] \
-                    or t["status"] not in ("IN_REVIEW", "READY_TO_MERGE") or (w["merge"] or {}).get("pr") == pin:
+                    or t["status"] not in ("IN_PROGRESS", "IN_REVIEW", "READY_TO_MERGE") or (w["merge"] or {}).get("pr") == pin:
                 return {}, {}, []
             rv = w["review"]
-            if rv["verdict"] != "APPROVE" or str(rv.get("pr") or "").lower() != pin.lower() or rv["head"] != head:
+            # CC-071: a PR first seen already merged while the ticket is still IN_PROGRESS must never advance it,
+            # but the lead still gets the unreviewed-merge note.
+            if t["status"] == "IN_PROGRESS" or rv["verdict"] != "APPROVE" or str(rv.get("pr") or "").lower() != pin.lower() or rv["head"] != head:
                 if any(json.loads(r[0] or "{}").get("pr") == pin for r in self.db.execute(
                         "SELECT data FROM ticket_events WHERE ticket_id=? AND kind='pipeline.unreviewed_merge'", (tid,))):
                     return {}, {}, []
