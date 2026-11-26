@@ -68,7 +68,7 @@ import urllib.request
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import registry
+from . import github, registry
 from .pipeline import plan_digest, unshown
 from .releasemail import ReleaseMail
 from .security import redact
@@ -1094,6 +1094,68 @@ class Notifier:
                 await self.post(chan, self.tech_summary(key, now))
         return True
 
+    # ----- evening merge list (CC-084) -----
+
+    MERGE_LIST_AT = "18:00"
+    # c1 fixes the evening at America/Winnipeg, not at the configurable notification timezone: with another
+    # setting the schedule and the once-a-day key would otherwise move (CC-084 review).
+    MERGE_LIST_SETTINGS = {"timezone": "America/Winnipeg"}
+    MERGE_LIST_MAX = 3500       # under POST_LIMIT, so post() never cuts a line or a link in half
+
+    def merge_list_text(self):
+        """One line per PR Jay can merge now, or None when there is none. Uses the daemon's own merge_batch (the
+        Ready to merge press), not the Needs Jay queue: that queue swaps a gate for an open question and carries
+        the gate reason, not the title. Read-only: it never merges, approves or touches a ticket (Jay merges)."""
+        rows = []
+        for p in self.d._projects():
+            if registry.paused(p["key"]):
+                # The Merge ready dialog hides a paused project (Merge.tsx; api.py reads the same registry flag),
+                # so the digest must not offer what Jay cannot press (CC-084).
+                continue
+            try:
+                ready, _ = self.d.merge_batch(p["key"])
+            except Exception as e:  # noqa: BLE001 — one project's failure must not hide the others
+                self._fail("merge list " + str(p.get("key")), repr(e))
+                continue
+            for r in ready:
+                if self.client(p["key"]):
+                    # A client project's details stay in CommandCenter, as in need_text().
+                    rows.append(f"- {esc(r['key'])} (client project: details in CommandCenter)")
+                    continue
+                pr = r.get("pr")
+                url = github.pr_ref_url(pr) if pr else None
+                tail = f" <{url}|{esc(pr)}>" if url else (f" {esc(pr)}" if pr else "")
+                rows.append(f"- {esc(r['key'])} {esc(str(r.get('title') or '')[:90])}{tail}")
+        if not rows:
+            return None
+        head = f"{len(rows)} PR{'s' if len(rows) != 1 else ''} ready to merge:\n"
+        if len(head) + sum(len(x) + 1 for x in rows) <= self.MERGE_LIST_MAX:
+            return head + "\n".join(rows)
+        # One DM, whole lines only; the rest is named by count and points at the full list in CommandCenter.
+        kept, size = [], len(head) + 90
+        for line in rows:
+            if size + len(line) + 1 > self.MERGE_LIST_MAX:
+                break
+            kept.append(line)
+            size += len(line) + 1
+        return (head + "\n".join(kept) + f"\n+{len(rows) - len(kept)} more: the full list is under Merge ready "
+                "in CommandCenter")
+
+    async def merge_list(self):
+        """The 18:00 Winnipeg DM. Marked sent for the day before it is posted, so a restart or a second tick that
+        evening never sends it again; nothing ready (or quiet hours) sends nothing."""
+        now = self.clock()
+        if not due(self.MERGE_LIST_SETTINGS, self.MERGE_LIST_AT, self.daily.get("mergeList"), now):
+            return False
+        self.daily["mergeList"] = local_day(self.MERGE_LIST_SETTINGS, now)
+        self.store.put("notify:daily", self.daily)
+        # Quiet hours win (Jay, Messages #340): the day is already marked sent above, so a list that falls in quiet
+        # hours is skipped for that evening, not held until they end. Merge ready in Command Center shows the same list.
+        text = self.merge_list_text()
+        if text is None or in_quiet(self.settings, now):
+            return False
+        return bool(await self.post("dm", text))
+
     # ----- Jay's replies -----
 
     def open_questions(self, key):
@@ -1554,6 +1616,7 @@ class Notifier:
                 await self.check_needs()
                 if self.settings["slack"]:
                     await self.summaries()
+                    await self.merge_list()
             except Exception as e:  # noqa: BLE001 — notifications never take ccd down
                 self._fail("notify tick", repr(e))
         if self.settings["releaseMail"]:
