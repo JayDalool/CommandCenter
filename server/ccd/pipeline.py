@@ -1151,8 +1151,11 @@ class Pipeline:
                     self._flow_set(tid, at, rounds=rounds)
                 back = RESUME_STATUS.get(stage, "RESEARCHING")
                 # CC-099: a small ticket's route has no investigation, so RESEARCHING is a dead end (plan
-                # refuses it, start needs READY_TO_IMPLEMENT); unblocked in PLAN it goes back to build.
-                if stage == "PLAN" and flow_mod.effective_size(self._flow(tid)["size"], policy(t)) == "small":
+                # refuses it, start needs READY_TO_IMPLEMENT). Only a ticket that WAS ready to implement when
+                # block recorded it goes back there: size alone would skip intake (blocked in INBOX/PROPOSED)
+                # or a pending plan review. No recorded status (older block): today's behaviour.
+                if stage == "PLAN" and (w["blocked"] or {}).get("fromStatus") == "READY_TO_IMPLEMENT" \
+                        and flow_mod.effective_size(self._flow(tid)["size"], policy(t)) == "small":
                     back = "READY_TO_IMPLEMENT"
                 return {"status": back}, work, events
             if gate == "deploy" and not (w["deploy"] or {}).get("requestedAt") and not policy(t)["deploy"]:
@@ -1208,7 +1211,8 @@ class Pipeline:
             if not stage or stage == "DONE":
                 raise TaskError(409, f"{t['key']} is {t['status']}; nothing to block")
             return {"status": "BLOCKED"}, {"gate": "failure", "gate_reason": reason,
-                                           "blocked": dict(more, stage=stage, reason=reason, at=at)}, \
+                                           "blocked": dict(more, stage=stage, reason=reason, at=at,
+                                                           fromStatus=t["status"])}, \
                 [("pipeline.blocked", reason, {"stage": stage})]
         return self._tx(key, actor, fn)
 
