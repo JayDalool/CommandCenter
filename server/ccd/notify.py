@@ -54,6 +54,7 @@ A message outside a thread goes to the lead of that channel's project; in #cto o
 import asyncio
 import collections
 import datetime
+import errno
 import hashlib
 import json
 import logging
@@ -69,12 +70,15 @@ from zoneinfo import ZoneInfo
 
 from . import registry
 from .pipeline import Pipeline, plan_digest, unshown
+from .releasemail import ReleaseMail
 from .security import redact
 
 log = logging.getLogger("ccd.notify")
 
 SLACK_ENV = Path(os.environ.get("CCD_SLACK_ENV", Path.home() / ".config" / "command-center" / "slack.env"))
 SLACK_API = "https://slack.com/api/"
+# Release email (CC-078): SMTP settings and Jay's address live only here, read at send time, never copied elsewhere.
+MAIL_ENV = Path(os.environ.get("CCD_MAIL_ENV", Path.home() / ".config" / "command-center" / "mail.env"))
 
 # The gates a Slack reply may close, fixed in code; replyScope (Jay's setting, changed only in CommandCenter with
 # Developer Unlock) says which of them a reply closes now.
@@ -107,6 +111,7 @@ TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 SETTINGS_DEFAULTS = {
     "slack": False,                 # post to Slack and read Jay's replies
     "ntfy": False,                  # push Needs You items to the ntfy topic
+    "releaseMail": False,           # one digest email per live app, 24 h before its release window (CC-078)
     "quietStart": "22:00",
     "quietEnd": "07:00",
     "summaryAt": "07:00",           # owner's and technical summaries, daily
@@ -173,7 +178,7 @@ def clean_settings(raw, base=None):
     for k, v in raw.items():
         if k not in SETTINGS_DEFAULTS:
             raise ValueError(f"unknown setting {k}")
-        if k in ("slack", "ntfy"):
+        if k in ("slack", "ntfy", "releaseMail"):
             if not isinstance(v, bool):
                 raise ValueError(f"{k} must be true or false")
         elif k in ("quietStart", "quietEnd", "summaryAt"):
@@ -230,20 +235,39 @@ def due(settings, hhmm, last_day, now):
 
 
 def read_env(path):
-    """KEY=VALUE lines from slack.env. Refused unless the file is the owner's only (0600 or stricter)."""
+    """KEY=VALUE lines from slack.env or mail.env. Refused unless the file is the owner's only (0600 or stricter)."""
     p = Path(path)
-    if not p.exists() and not p.is_symlink():
+    # CC-091: the file is opened once and every check runs on that open descriptor. Checking the path and then
+    # reading it let a file swapped in between be read. O_NOFOLLOW refuses a symlink; O_NONBLOCK keeps a FIFO from
+    # blocking the event loop on open.
+    try:
+        fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+    except FileNotFoundError:
         return {}
-    if p.is_symlink():
-        raise SlackError(f"{p.name} must be a plain file, not a link")
-    st = p.stat()
-    if st.st_uid != os.getuid():
-        raise SlackError(f"{p.name} must belong to the user ccd runs as")
-    mode = stat.S_IMODE(st.st_mode)
-    if mode & 0o077:
-        raise SlackError(f"{p.name} must be readable by its owner only (chmod 600)")
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise SlackError(f"{p.name} must be a plain file, not a link") from None
+        raise SlackError(f"{p.name} could not be read as text") from None
+    try:
+        st = os.fstat(fd)
+        # A FIFO would block and a directory fails to read; only a regular file is read (CC-078).
+        if not stat.S_ISREG(st.st_mode):
+            raise SlackError(f"{p.name} must be a regular file")
+        if st.st_uid != os.getuid():
+            raise SlackError(f"{p.name} must belong to the user ccd runs as")
+        if stat.S_IMODE(st.st_mode) & 0o077:
+            raise SlackError(f"{p.name} must be readable by its owner only (chmod 600)")
+        try:
+            with os.fdopen(fd, "r") as f:
+                fd = None
+                text = f.read()
+        except (OSError, UnicodeDecodeError):
+            raise SlackError(f"{p.name} could not be read as text") from None
+    finally:
+        if fd is not None:
+            os.close(fd)
     out = {}
-    for line in p.read_text().splitlines():
+    for line in text.splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
@@ -523,7 +547,8 @@ class Notifier:
 
     TICK = 20
 
-    def __init__(self, daemon, cfg, *, slack=None, ntfy=None, clock=time.time, env_path=None):
+    def __init__(self, daemon, cfg, *, slack=None, ntfy=None, clock=time.time, env_path=None,
+                 mail_env_path=None):
         self.d = daemon
         self.store = daemon.store
         ncfg = (cfg.get("notify") or {}) if isinstance(cfg, dict) else {}
@@ -532,6 +557,7 @@ class Notifier:
         self.ntfy_url = (cfg.get("ntfy_url") or "") if isinstance(cfg, dict) else ""
         self.clock = clock
         self.env_path = env_path or SLACK_ENV
+        self.mail_env_path = mail_env_path or MAIL_ENV
         self._slack = slack            # a SlackWeb, or a fake in tests; built from slack.env when None
         self._ntfy = ntfy or ntfy_send
         self._ids = {}                 # channel name -> id
@@ -553,6 +579,8 @@ class Notifier:
         seen_ev, _ = self.store.get("notify:events", [])
         self.seen_events = collections.deque(seen_ev or [], maxlen=SEEN_EVENTS_MAX)
         self.was_quiet = None
+        self.mail = ReleaseMail(self)
+        self.mail.sweep()
 
     # ----- settings and status -----
 
@@ -572,7 +600,9 @@ class Notifier:
                 "slackFiles": {"choices": self.file_choices(), "never": sorted(NO_SLACK_FILES),
                                "scope": self.files_scope()},
                 "slackPlans": bool(PLAN_GATES),
-                "quietNow": in_quiet(self.settings, self.clock()), "held": len(self.held)}
+                "quietNow": in_quiet(self.settings, self.clock()), "held": len(self.held),
+                # Whether mail.env is usable and the newest digest's state; never the address or the password.
+                "mail": self.mail.status()}
 
     def update_settings(self, body):
         settings = clean_settings(body, self.settings)
@@ -583,6 +613,9 @@ class Notifier:
                                  f"{', '.join(self.file_choices()) or 'no project'}")
         self.settings = settings
         self.store.put("notify:settings", self.settings)
+        dirty = getattr(self.d, "_dirty", None)
+        if dirty is not None:
+            dirty.set()             # a release-email alert appears or clears with the switch
         self.d._event("notify", "notify.settings", "notification settings changed",
                       data={"kind": "notify.settings"})
         return self.public()
@@ -694,12 +727,13 @@ class Notifier:
             return False
 
     async def send_test(self):
-        """One test DM and one test push, each reported on its own. lastError is cleared first, so it holds only
-        what failed in this test."""
+        """One test DM, one test push and (Release email on) one test email, each reported on its own. lastError is
+        cleared first, so it holds only what failed in this test."""
         self.status["lastError"] = None
         ts = await self.post("dm", "CommandCenter test: Slack works. Reply here to check that replies reach ccd.")
         pushed = await self.push("CommandCenter test", self.link())
-        return {"ok": True, "slack": bool(ts), "ntfy": pushed, "status": dict(self.status)}
+        mailed = await self.mail.send_test() if self.settings["releaseMail"] else False
+        return {"ok": True, "slack": bool(ts), "ntfy": pushed, "mail": mailed, "status": dict(self.status)}
 
     # ----- Needs You → DM and ntfy -----
 
@@ -1497,14 +1531,20 @@ class Notifier:
     # ----- loops -----
 
     async def tick(self):
-        if not (self.settings["slack"] or self.settings["ntfy"]):
-            return
-        try:
-            await self.check_needs()
-            if self.settings["slack"]:
-                await self.summaries()
-        except Exception as e:  # noqa: BLE001 — notifications never take ccd down
-            self._fail("notify tick", repr(e))
+        if self.settings["slack"] or self.settings["ntfy"]:
+            try:
+                await self.check_needs()
+                if self.settings["slack"]:
+                    await self.summaries()
+            except Exception as e:  # noqa: BLE001 — notifications never take ccd down
+                self._fail("notify tick", repr(e))
+        if self.settings["releaseMail"]:
+            # Its own guard and not under the Slack one: a failing Slack must not stop the digest, nor a failing
+            # mail step the needs and summaries (CC-078). Sent whatever the quiet hours: Jay fixed the time (c10).
+            try:
+                await self.mail.run()
+            except Exception as e:  # noqa: BLE001
+                self._fail("release mail", type(e).__name__)
 
     async def tick_loop(self):
         while not self.d._stopping:

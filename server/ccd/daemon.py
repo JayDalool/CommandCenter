@@ -994,6 +994,9 @@ class Daemon(LeadChat, HqDaemon):
             elif n["kind"] == "ci":
                 out.append({"id": f"ci:{n['project']}", "severity": "warn", "source": "github",
                             "project": n["project"], "text": f"{n['project']} main checks failing"})
+        notifier = getattr(self, "notifier", None)
+        if notifier is not None and getattr(notifier, "mail", None) is not None and notifier.settings.get("releaseMail"):
+            out.extend(notifier.mail.alerts())      # a failed release email stays visible until a later one is sent
         problems = self.policy.problems()
         if problems:
             out.append({"id": "policy:problems", "severity": "warn", "source": "policy", "project": None,
@@ -1126,6 +1129,12 @@ class Daemon(LeadChat, HqDaemon):
                         "needsTriage": pl.needs_triage(t, w)})
         return out
 
+    def work_next(self, project, rows=None):
+        """movable() for a project, told by pipeline's own lane count whether its build lanes are full (CC-090)."""
+        pl = self.pipeline
+        full = pl is not None and pl.lanes(project) >= pl.lane_limit(project)
+        return workmode_mod.movable(self.work_rows(project) if rows is None else rows, build_full=full)
+
     async def work_tick(self, now=None):
         """Remind each idle lead of a project in work mode that tickets can move without Jay (workmode.decide)."""
         await self.send_review_prompts(now)
@@ -1143,7 +1152,7 @@ class Daemon(LeadChat, HqDaemon):
                 self.work.note(key, "budget on hold")
                 continue
             rows = self.work_rows(key)
-            nxt, tri = workmode_mod.movable(rows), workmode_mod.triage(rows)
+            nxt, tri = self.work_next(key, rows), workmode_mod.triage(rows)
             # With herdr down there is no status: never a reminder.
             r = coordinators.resolution(proj, self.panes) if self.herdr_state["ok"] else {"state": "none"}
             status = r.get("status") if r["state"] == "ready" else None
@@ -1248,7 +1257,7 @@ class Daemon(LeadChat, HqDaemon):
             key = proj["key"]
             row = self.work.public(key, now)
             rows = self.work_rows(key)
-            row["next"] = [t["key"] for t in workmode_mod.movable(rows)[:workmode_mod.SHOW]]
+            row["next"] = [t["key"] for t in self.work_next(key, rows)[:workmode_mod.SHOW]]
             row["triage"] = [t["key"] for t in workmode_mod.triage(rows)]
             row["paused"] = bool(registry.paused(key))
             out[key] = row

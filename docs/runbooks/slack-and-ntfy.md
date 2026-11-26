@@ -130,3 +130,40 @@ its message showed, and approves only the gate it showed; if either changed sinc
 
 Every reply is an event (`notify.slack_reply`) with what it did and its length, never its text. A gate closed from
 Slack is recorded with `via: "slack"`.
+
+## Release email (CC-078)
+
+One digest email per live app, to you only, 24 hours before its release window (default Tuesday 22:00 Winnipeg for the
+Wednesday 22:00 window), whatever quiet hours say. Three headings: Scheduled this release, Verified in production since
+last digest, Held. Every line starts with its ticket key. It is off until you switch it on, and it never deploys anything.
+
+1. Create `~/.config/command-center/mail.env`, mode 0600, owned by the user ccd runs as:
+
+   ```
+   MAIL_HOST=smtp.your-provider.example
+   # 465 (implicit TLS) or 587 (STARTTLS); nothing else is accepted
+   MAIL_PORT=465
+   MAIL_USER=...
+   # an app password, not your main one
+   MAIL_PASSWORD=...
+   MAIL_FROM=ccd@your-domain.example
+   # exactly one address
+   MAIL_TO=you@example.com
+   ```
+
+2. Settings > Notifications > Slack and phone: Release email On (Developer Unlock), then Send a test. The row says what is
+   missing until the file is usable. A due digest is held, not lost, while the file is wrong: fix it before the window starts.
+3. A project gets a digest only while it is marked live (Release window).
+
+Read the ledger: `sqlite3 ccd.db "select value from kv where key='release_mail:<project>'"`. Each row has `state`:
+
+| state | meaning |
+|---|---|
+| `sending` | written before the SMTP call; a row still `sending` when ccd starts is closed as `failed` + `uncertain` |
+| `delivered` | the server accepted the message (250 after DATA); never sent again |
+| `failed` | the first failure before DATA is retried once, 300 s or more later and only before the window starts |
+| `failed` + `uncertain` | the connection broke during or after DATA, so the message may have gone: never retried, and Jay sees an alert ("may not have been sent"). Check the inbox before sending it by hand |
+
+A failed digest raises the alert `mail:<project>:<window>` until a later digest is delivered or Release email is switched
+off, and each failure is a `notify.failed` event. Changing the window within the mailed release sends nothing more; a
+window moved to a later day after the mailed one ended gets its own digest.

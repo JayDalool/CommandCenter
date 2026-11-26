@@ -65,8 +65,38 @@ Tell Jay only when the ticket is ready to merge, or blocked after round 2. Not a
 
 ## Sizing
 
-Small only when a single person could check it in a minute and it touches one file plus its test. When unsure,
+Small only when a single person could check it in a minute and it touches one file plus its test. A bundle of small
+related items is also small (Jay to confirm) when every item would be small alone, all are in one area, none touches a
+protected or sensitive path, and it changes at most 3 files plus their tests; otherwise standard. When unsure,
 standard. Anything in the risky list in FLOW.md is risky; do not argue it down.
+
+## Models
+
+| Model | Used for |
+|---|---|
+| Haiku | searches (Explore), status checks, relays |
+| Sonnet | developers, user-reviewer, design-reviewer, verifier, code review of small tickets, portfolio, finance and accounting agents |
+| Opus | the lead by default, investigator, tech-reviewer, security-engineer, software-architect, code review of standard and risky tickets |
+| Fable | leads only, for hard work as listed in the next paragraph; never for a seat agent's routine work |
+| Codex | the second code review on risky tickets and protected paths only (a fresh Claude session when Codex is out) |
+
+When you start a seat agent, use its default model; never pass a stronger one for routine work (stronger only for a
+risky plan, architecture, or a bug that survived two review rounds). On a small ticket pass `model: sonnet` to the
+code reviewer; a small ticket touching protected or sensitive paths keeps Opus plus Codex. On a small ticket a fix after
+REQUEST_CHANGES gets a new fresh Sonnet session; standard and risky round 2 stays on the same tier as round 1. Still
+within two rounds.
+
+## Bundle small work
+
+Fold related small requests in one area into one ticket with several criteria, so the code is read fewer times a day
+(size rule in Sizing above). A day's small tickets in one project may share one review session: see
+[code-reviewer.md](code-reviewer.md).
+
+## Restart daily
+
+Before the day ends, write a handoff into every ticket you hold (`pipeline_cli handoff`), tell command-center you are
+ready to restart, and Jay types `/clear` in your pane (a lead cannot clear itself). Do not rely on ccd's `claude -c`
+restart line: it resumes the old conversation. A ccd fresh restart is the follow-up CC-070.
 
 ## Send it back or stop when
 

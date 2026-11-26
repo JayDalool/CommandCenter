@@ -87,6 +87,15 @@ class Movable(unittest.TestCase):
         self.assertEqual([r["key"] for r in movable(idea + [row("BUILD", stage="build", number=3)])], ["BUILD"])
         self.assertEqual([r["key"] for r in movable(idea)], ["I1", "I2"])
 
+    def test_full_build_lanes_hide_tickets_waiting_to_start_a_build(self):      # CC-090
+        rows = [row("B1", stage="build", status="READY_TO_IMPLEMENT"),
+                row("B2", stage="build", status="IN_PROGRESS", holder={"seat": "developer"}, stale=True),
+                row("R1", stage="codeReview", status="IN_REVIEW"),
+                row("I1")]
+        self.assertEqual(sorted(r["key"] for r in movable(rows, build_full=True)), ["B2", "I1", "R1"])
+        # a lane freed: the waiting build ticket is listed again
+        self.assertEqual(sorted(r["key"] for r in movable(rows)), ["B1", "B2", "I1", "R1"])
+
     def test_reminder_names_stage_priority_and_due_never_the_title(self):
         rows = movable([row("CC-053", priority="HIGH", due=T0 + 2 * 86400),
                         row("CC-054", stage="codeReview", status="IN_REVIEW", due=T0 - 86400),
@@ -256,6 +265,15 @@ class WorkModeApi(ApiBase):
         data = [e["data"] for e in self.get("/api/activity?limit=50").json()["events"] if e["kind"] == "action.work_mode"]
         self.assertIn({"kind": "work_mode_set", "on": True}, data)        # the store keeps "on" (EVENT_DATA_KEYS)
         self.assertFalse(self.put("samvision", False, dev).json()["projects"]["samvision"]["on"])
+
+    def test_work_next_uses_pipelines_own_lane_count(self):      # CC-090
+        pl = self.daemon.pipeline
+        rows = [row("SV-1", stage="build", status="READY_TO_IMPLEMENT"), row("SV-2", stage="codeReview", status="IN_REVIEW")]
+        self.daemon.work_rows = lambda project: rows
+        pl.lanes = lambda project: pl.lane_limit(project)            # every lane taken
+        self.assertEqual([r["key"] for r in self.daemon.work_next("samvision")], ["SV-2"])
+        pl.lanes = lambda project: pl.lane_limit(project) - 1        # one frees
+        self.assertEqual(sorted(r["key"] for r in self.daemon.work_next("samvision")), ["SV-1", "SV-2"])
 
     def test_an_idle_lead_is_reminded_of_the_next_tickets_and_never_over_a_draft(self):
         self.tickets.create("samvision", "feature", number=56, status="INBOX")
