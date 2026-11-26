@@ -27,6 +27,8 @@ class FakeHerdr:
         self.calls = []
         self.subscriptions = []        # list of (subscription list, writer)
         self.tails = {}                # pane_id -> text
+        self.ansi_queue = {}           # pane_id -> screens served first, one per ansi read (CC-053 re-read tests)
+        self.tails_ansi = {}           # pane_id -> text for format=ansi reads (CC-053); falls back to tails
         self.fail_methods = {}         # method -> (code, message)
         self.dir = tempfile.mkdtemp(prefix="fake-herdr-")
         self.path = os.path.join(self.dir, "herdr.sock")
@@ -167,6 +169,10 @@ class FakeHerdr:
                         reply = {"id": rid, "error": {"code": "agent_not_found", "message": f"agent target {target} not found"}}
                     else:
                         text = self.tails.get(a["pane_id"], "line one\nline two")
+                        if params.get("format") == "ansi":     # CC-053: a colour-coded read, when a test set one
+                            text = self.tails_ansi.get(a["pane_id"], text)
+                            if self.ansi_queue.get(a["pane_id"]):
+                                text = self.ansi_queue[a["pane_id"]].pop(0)
                         reply = {"id": rid, "result": {"type": "agent_read", "read": {
                             "pane_id": a["pane_id"], "workspace_id": "wE", "tab_id": "wE:t1", "source": "recent",
                             "format": "text", "text": text, "revision": 1, "truncated": False}}}

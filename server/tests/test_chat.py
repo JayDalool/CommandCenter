@@ -240,6 +240,51 @@ class ChatApi(ApiBase):
             later += leadchat.NUDGE_EVERY + 1
         self.assertEqual(len(self.prompts()), leadchat.NUDGE_MAX)                    # then it stops reminding
 
+    def ansi_screen(self, text, faint):
+        """CC-053: the lead's screen as herdr draws it with colour codes; a suggestion is faint, typing is not."""
+        rule = "\x1b[38;2;136;136;136m" + "─" * 30 + "\x1b[0m"
+        body = "\x1b[0m\x1b[2m" + text + "\x1b[0m" if faint else text
+        return f"assistant text\n{rule}\n❯ {body}\n{rule}\n  ? for shortcuts"
+
+    def test_a_grey_suggestion_in_the_input_line_is_empty_and_the_lead_is_nudged(self):
+        # CC-053 c1: the plain (stripped) read looks like a draft; only the colour-coded read shows it is a suggestion
+        self.fake.tails["wE:p2"] = "assistant text\n❯ run the tests again\n  ? for shortcuts"
+        self.fake.tails_ansi["wE:p2"] = self.ansi_screen("run the tests again", faint=True)
+        r = self.send("samvision", "Please draw the auth flow")
+        self.assertEqual(r.json()["delivery"], "nudged")
+        sent = self.prompts()
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["text"], leadchat.NUDGE_TEXT.format(conv="samvision", bin=leadchat.SCRIPTS))
+        reads = [p for m, p in self.fake.calls if m == "agent.read"]
+        self.assertTrue(reads and all(p.get("format") == "ansi" and "strip_ansi" not in p for p in reads))
+
+    def test_text_jay_really_typed_stays_queued_until_it_is_gone(self):
+        # CC-053 c2: typed text is drawn in the default colour, so it is a draft even beside a suggestion-shaped line
+        self.fake.tails_ansi["wE:p2"] = self.ansi_screen("half a sentence Jay is typing", faint=False)
+        self.assertEqual(self.send("samvision", "one").json()["delivery"], "queued")
+        self.client.portal.call(self.daemon.chat_tick)
+        self.assertEqual(self.prompts(), [])                                         # the tick sends nothing either
+        self.fake.tails_ansi["wE:p2"] = self.ansi_screen("run the tests again", faint=True)
+        self.client.portal.call(self.daemon.chat_tick)
+        self.assertEqual(len(self.prompts()), 1)                                     # suggestion only: nudged once
+        self.client.portal.call(self.daemon.chat_tick)
+        self.assertEqual(len(self.prompts()), 1)
+
+
+    def test_a_draft_typed_after_the_first_read_stops_the_messages_nudge(self):
+        # CC-053 (Jay's Q229): the pane is read again right before the send; the first read is clean, the second is not
+        self.fake.ansi_queue["wE:p2"] = [self.ansi_screen("run the tests again", faint=True),
+                                         self.ansi_screen("half a sentence Jay is typing", faint=False)]
+        self.assertEqual(self.send("samvision", "one").json()["delivery"], "queued")
+        self.assertEqual(self.prompts(), [])
+
+    def test_a_malformed_colour_reset_before_typed_words_stays_queued(self):
+        # CC-053 Codex round 2: ESC[00m after the hint made typed words look faint; only the exact shape is a suggestion
+        self.fake.tails_ansi["wE:p2"] = self.ansi_screen("hint\x1b[00m typed words", faint=True)
+        self.assertEqual(self.send("samvision", "one").json()["delivery"], "queued")
+        self.client.portal.call(self.daemon.chat_tick)
+        self.assertEqual(self.prompts(), [])
+
     def test_offline_and_paused_leads(self):
         self.assertEqual(self.send("gyst", "hello").json()["delivery"], "lead-offline")
         self.assertEqual(self.send("gauzemate", "hello").json()["delivery"], "lead-paused")

@@ -1,5 +1,6 @@
 """The night-shift supervisor (ccd/nightshift.py): reminders from facts only, and when a shift ends."""
 import os
+import re
 import tempfile
 from datetime import datetime
 import unittest
@@ -226,6 +227,124 @@ class InputLine(unittest.TestCase):
 
     def test_text_under_the_prompt_without_a_border_is_not_trusted(self):
         self.assertFalse(input_is_empty("> \n? for shortcuts"))
+
+
+class InputBoxWhole(unittest.TestCase):
+    """CC-053 security review (Jay's Q229): the whole input box counts, not only its last `>` line."""
+    E = "\x1b"
+    RULE = E + "[38;2;136;136;136m" + "─" * 30 + E + "[0m"
+
+    def test_a_draft_followed_by_a_bare_prompt_line_is_a_draft_plain(self):
+        self.assertFalse(input_is_empty(f"done.\n{self.RULE.replace(self.E, '')}\n> half a thought\n>\n"
+                                        f"{'─' * 30}\n  ? for shortcuts"))
+
+    def test_a_draft_followed_by_a_bare_prompt_line_is_a_draft_with_colour(self):
+        screen = f"done.\n{self.RULE}\n\u276f\u00a0half a thought\n\u276f\u00a0\n{self.RULE}\n  ? for shortcuts"
+        self.assertFalse(input_is_empty(screen))
+        # a continuation line of a draft inside the box, then a bare prompt
+        screen = f"done.\n{self.RULE}\n\u276f\u00a0\n  second line of a draft\n\u276f\u00a0\n{self.RULE}"
+        self.assertFalse(input_is_empty(screen))
+
+    def test_an_empty_box_and_a_lone_suggestion_still_read_empty(self):
+        sugg = "\u276f\u00a0" + self.E + "[0m" + self.E + "[2mrun the tests" + self.E + "[0m"
+        self.assertTrue(input_is_empty(f"done.\n{self.RULE}\n\u276f\u00a0\n{self.RULE}\n  ? for shortcuts"))
+        self.assertTrue(input_is_empty(f"done.\n{self.RULE}\n{sugg}\n{self.RULE}\n  ? for shortcuts"))
+
+
+class InputLineColour(unittest.TestCase):
+    """CC-053: Claude Code draws its grey suggested prompt faint (SGR 2); a read with colour codes tells it from typing."""
+    ESC = "\x1b"
+    RULE = ESC + "[38;2;136;136;136m" + "─" * 30 + ESC + "[0m"
+    FOOT = "  ? for shortcuts"
+
+    def screen(self, prompt):
+        return f"done.\n{self.RULE}\n{prompt}\n{self.RULE}\n{self.FOOT}"
+
+    def sugg(self, text="run the tests again"):
+        # the live structure: glyph, NBSP, reset, then the suggestion in faint
+        return "❯ " + self.ESC + "[0m" + self.ESC + "[2m" + text + self.ESC + "[0m"
+
+    def test_the_captured_suggestion_is_empty_but_the_same_screen_without_colours_is_a_draft(self):
+        self.assertTrue(input_is_empty(self.screen(self.sugg())))
+        plain = re.sub(r"\x1b\[[0-9;:]*m", "", self.screen(self.sugg()))
+        self.assertFalse(input_is_empty(plain))                    # no colour codes: fail safe, as before
+
+    def test_trailing_blanks_and_a_plain_space_separator_still_match(self):
+        E = self.ESC
+        self.assertTrue(input_is_empty(self.screen(self.sugg() + " \u00a0  ")))
+        self.assertTrue(input_is_empty(self.screen("\u276f " + E + "[0m" + E + "[2mhint" + E + "[0m")))
+
+    def test_a_bare_prompt_is_empty(self):
+        self.assertTrue(input_is_empty(self.screen("\u276f\u00a0")))
+        self.assertTrue(input_is_empty(self.screen("\u276f")))
+
+    def test_typed_text_is_a_draft(self):
+        E = self.ESC
+        self.assertFalse(input_is_empty(self.screen("\u276f\u00a0fix the bug")))
+        self.assertFalse(input_is_empty(self.screen("\u276f\u00a0fix the bu" + E + "[7mg" + E + "[0m")))
+        self.assertFalse(input_is_empty(self.screen("\u276f\u00a0" + E + "[7m" + E + "[0m")))   # cursor cell: not a known shape
+
+    def test_other_colour_codes_never_make_typed_words_look_like_a_suggestion(self):
+        # CC-053 Codex rounds 1 and 2: each of these once read empty. None is the exact shape, so none can.
+        E = self.ESC
+        head = "\u276f\u00a0" + E + "[0m" + E + "[2mhint"
+        for bad in ("[00m", "[022m", "[038;2m", "[4::?m", "[02m", "[2;2m", "[2:0m", "[1;2m", "[22;2m", "[2;38;5;240m",
+                    "[38:2::1:2:3m", "[38;2;10m", "[38;2;10;20m", "[38;5m", "[38m", "[48;2m", "[?25m", "[2K",
+                    "[10;20H", "(B", "7", "]0;t\x07", "[2", ""):
+            line = head + E + bad + "typed words"
+            self.assertIsNot(input_is_empty(self.screen(line)), True, repr(bad))
+            line = head + E + bad + E + "[0mtyped words"
+            self.assertIsNot(input_is_empty(self.screen(line)), True, repr(bad))
+            # and before the lower border, on the line under the prompt
+            below = self.sugg() + "\n" + E + bad + "typed words"
+            self.assertIsNot(input_is_empty(self.screen(below)), True, repr(bad))
+        self.assertIsNot(input_is_empty(self.screen("\u276f\u00a0\x1b")), True)
+        self.assertIsNot(input_is_empty(self.screen("\u276f\u00a0\x1b[2")), True)
+
+    def test_shapes_that_are_not_the_exact_suggestion_read_as_typed(self):
+        E, R = self.ESC, self.ESC + "[0m"
+        for line in (
+            "\u276f\u00a0typed " + E + "[2mcompletion" + R,                 # typed, then a faint completion
+            self.sugg() + "tail",                                            # text after the closing reset
+            "\u276f\u00a0" + R + E + "[2mno close",                         # no closing reset
+            self.sugg("one") + E + "[2mtwo" + R,                             # two faint runs
+            self.sugg("a\x07b"), self.sugg("a\u009bb"),                     # control characters in the hint
+            "  " + self.sugg(),                                              # indented glyph
+            "\u2502 " + self.sugg() + " \u2502",                             # old box form with codes
+            self.sugg("[Pasted text #1 +20 lines]"), self.sugg("[Image #1]"),
+            self.sugg(" "),                                                  # a hint of only blanks
+        ):
+            self.assertIs(input_is_empty(self.screen(line)), False, repr(line))
+
+    def test_text_under_the_prompt_or_an_earlier_prompt_is_a_draft(self):
+        self.assertIs(input_is_empty(f"{self.RULE}\n{self.sugg()}\nmore typed\n{self.RULE}"), False)
+        self.assertIs(input_is_empty(f"{self.sugg()}\n{self.RULE}\n\u276f\u00a0typed\n{self.RULE}"), False)
+        self.assertIs(input_is_empty(f"{self.RULE}\n{self.sugg()}\n{self.ESC}[2mfaint\n{self.RULE}"), False)
+
+    def test_no_prompt_line_in_an_ansi_screen_is_none(self):
+        self.assertIsNone(input_is_empty(self.RULE + "\nhello\n" + self.RULE))
+        self.assertIsNone(input_is_empty("\x1b[2m"))
+
+    def test_a_stray_non_csi_escape_anywhere_hides_nothing(self):
+        # Tech review: an escape the locate step cannot remove must not let an earlier bare prompt read empty
+        E = self.ESC
+        for stray in (E + "(B", E + "]0;t\x07", E + "[", E + "7"):
+            screen = f"\u276f\u00a0\n{self.RULE}\n{stray}\u276f\u00a0typed words\n{self.RULE}"
+            self.assertIsNone(input_is_empty(screen), repr(stray))
+            self.assertIsNone(input_is_empty(self.screen(self.sugg() + stray)), repr(stray))
+
+    def test_shapes_that_used_to_read_empty_now_read_typed(self):
+        E = self.ESC
+        for line in ("\u276f\u00a0" + E + "[7m \x1b[0m", "\u276f\u00a0" + E + "]0;t\x07", self.sugg("   ")):
+            self.assertIsNot(input_is_empty(self.screen(line)), True, repr(line))
+
+    def test_a_very_long_line_is_decided_quickly(self):
+        import time
+        E = self.ESC
+        for line in (self.sugg("x" * 20000), "\u276f\u00a0" + E + "[0m" + E + "[2m" + "x" * 20000):
+            t = time.monotonic()
+            input_is_empty(self.screen(line))
+            self.assertLess(time.monotonic() - t, 0.5)
 
 
 if __name__ == "__main__":

@@ -229,6 +229,36 @@ class WorkModeApi(ApiBase):
         self.assertIn({"kind": "work_mode_set", "on": True}, data)        # the store keeps "on" (EVENT_DATA_KEYS)
         self.assertFalse(self.put("samvision", False, dev).json()["projects"]["samvision"]["on"])
 
+    def test_a_grey_suggestion_counts_as_empty_and_typed_text_does_not(self):
+        # CC-053: same colour-coded check as Messages and the night shift; the plain read is a decoy
+        self.tickets.create("samvision", "feature", number=56, status="INBOX")
+        self.put("samvision", True, self.dev())
+        rule = "\x1b[38;2;136;136;136m" + "─" * 30 + "\x1b[0m"
+
+        def screen(body):
+            return f"assistant text\n{rule}\n❯ {body}\n{rule}\n  ? for shortcuts"
+        self.fake.tails["wE:p2"] = "assistant text\n❯ run the tests again\n  ? for shortcuts"
+        self.idle_long_ago()
+        self.fake.tails_ansi["wE:p2"] = screen("half a thought")
+        self.tick()
+        self.assertEqual(self.prompts(), [])                                     # typed: nothing sent
+        self.idle_long_ago()
+        self.fake.tails_ansi["wE:p2"] = screen("\x1b[0m\x1b[2mrun the tests again\x1b[0m")
+        self.tick()
+        self.assertEqual([p["target"] for p in self.prompts()], ["wE:p2"])       # a suggestion: sent
+        self.assertEqual(self.get("/api/work-mode").json()["projects"]["samvision"]["remindersToday"], 1)
+
+    def test_a_draft_typed_after_the_first_read_stops_the_work_mode_reminder(self):
+        # CC-053 (Jay's Q229): read again right before the send
+        self.tickets.create("samvision", "feature", number=56, status="INBOX")
+        self.put("samvision", True, self.dev())
+        rule = "\x1b[38;2;136;136;136m" + "─" * 30 + "\x1b[0m"
+        self.idle_long_ago()
+        self.fake.ansi_queue["wE:p2"] = [f"x\n{rule}\n❯ \n{rule}\n  ? for shortcuts",
+                                         f"x\n{rule}\n❯ half a thought\n{rule}\n  ? for shortcuts"]
+        self.tick()
+        self.assertEqual(self.prompts(), [])
+
     def test_work_next_lists_builds_however_many_are_running(self):     # no lane limit (Jay, 2026-11-26)
         pl = self.daemon.pipeline
         rows = [row("SV-1", stage="build", status="READY_TO_IMPLEMENT"), row("SV-2", stage="codeReview", status="IN_REVIEW")]

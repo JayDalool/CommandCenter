@@ -36,7 +36,8 @@ starts the morning deploy) were added with two features that type into a Claude 
    `CCD_NIGHT_CUTOFF`), whatever the coordinator does. Progress is only a ticket or report change; "working" is
    not progress. A reminder counts only after it was delivered to an idle pane **whose input line is empty**:
    herdr "idle" only means ready for input, and `agent.prompt` pastes and presses Enter, so before each reminder
-   ccd reads the pane's text and skips (without counting) unless Claude's prompt line is plainly empty. That is a
+   ccd reads the pane's text and skips (without counting) unless Claude's prompt line is plainly empty. The read keeps colour codes so that only the exact shape of Claude Code's grey suggested
+   prompt counts as empty; anything else on the input line is a draft (CC-053). That is a
    best-effort check on screen text: a prompt it cannot parse is skipped, but a draft it misreads, or typed in the
    moments between the read and the paste, can still be submitted. The cutoff and the 6-reminder cap bound it. The reminder text says whether a
    report exists. With herdr down, the cutoff still ends the shift. Ending the shift at the cutoff types nothing.

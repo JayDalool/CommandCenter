@@ -1077,11 +1077,15 @@ class Daemon(LeadChat, HqDaemon):
                         # and presses Enter, so a half-typed draft of Jay's would be submitted. Read the pane's
                         # text (never stored or logged) and send only when the input line is plainly empty;
                         # a draft, or a screen we cannot parse, means skip (best effort, not counted).
-                        screen = await self.herdr.read_tail(agent["pane_id"], 40)
+                        screen = await self.herdr.read_tail(agent["pane_id"], 40, ansi=True)
                         if nightshift_mod.input_is_empty(screen["text"]) is not True:
                             self.night.skipped(key, "input line not empty or not recognised")
                             continue
                         self._broker("pane.input", key, f"night-shift nudge -> pane {agent['pane_id']}")
+                        # CC-053: fresh read right before the send (herdr has no conditional send; SECURITY.md)
+                        if not await nightshift_mod.input_still_empty(self.herdr, agent["pane_id"]):
+                            self.night.skipped(key, "input line not empty or not recognised")
+                            continue
                         await self.herdr.prompt(agent["pane_id"], self.night.nudge_text(key))
                         self.night.nudged(key)               # counted only once it was delivered
                         self._event("action", "action.night_shift", f"night shift reminder → {coordinators.canonical(proj)}",
@@ -1157,11 +1161,15 @@ class Daemon(LeadChat, HqDaemon):
                 if agent["status"] not in ("idle", "done"):       # busy or blocked now: nothing sent, nothing counted
                     continue
                 # As the night shift does: send only when the input line is plainly empty, never over a draft.
-                screen = await self.herdr.read_tail(agent["pane_id"], 40)
+                screen = await self.herdr.read_tail(agent["pane_id"], 40, ansi=True)
                 if nightshift_mod.input_is_empty(screen["text"]) is not True:
                     self.work.note(key, "input line not empty or not recognised")
                     continue
                 self._broker("pane.input", key, f"work-mode reminder -> pane {agent['pane_id']}")
+                # CC-053: fresh read right before the send (herdr has no conditional send; SECURITY.md)
+                if not await nightshift_mod.input_still_empty(self.herdr, agent["pane_id"]):
+                    self.work.note(key, "input line not empty or not recognised")
+                    continue
                 await self.herdr.prompt(agent["pane_id"], workmode_mod.reminder_text(key, nxt, now))
                 self.work.nudged(key, now)                          # counted only once it was delivered
                 self._event("action", "action.work_mode", f"work mode reminder → {coordinators.canonical(proj)}",

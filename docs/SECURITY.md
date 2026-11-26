@@ -363,8 +363,12 @@ deploy, which authorizes no deploy: Jay confirms it himself in that pane). The o
 reminder into an idle coordinator, at most every 10 minutes, counted only once delivered. herdr "idle" only
 means ready for input, and `agent.prompt` pastes and presses Enter, so before each reminder ccd reads the pane's
 text (not stored or logged) and skips the reminder, uncounted, unless Claude's prompt line is plainly empty or
-shows its placeholder; a screen it cannot parse is skipped. This is a best-effort check on screen text: a draft
-it misreads, or typed between the read and the paste, can still be submitted. The hard limits bound that risk:
+shows its placeholder; a screen it cannot parse is skipped. The check reads the pane **with colour codes** (herdr
+`agent.read` `format: ansi`, the three automatic senders only; board tails and the agent read API stay
+colour-stripped): only a bare prompt or the exact shape herdr draws for Claude Code's grey suggested prompt
+(CC-053) counts as empty; anything else on the input line, including any other colour code, a paste or image
+placeholder, or a colour sequence it does not recognise, is a draft and nothing is sent. The check parses the whole input box (a draft followed by a bare `>` line is still a draft) and the pane is read again right before each send. A plain read without codes behaves as before. This is a best-effort check on screen text: a draft
+it misreads can still be submitted, and so can one typed in the few milliseconds between that last read and the paste, because herdr has no conditional send (Jay accepted this residual race, CC-053). The hard limits bound that risk:
 it stops after 6 reminders in a shift, after the morning cutoff (07:00 local by default), when the report says
 complete, or after 3 reminders with no ticket or report change. The reminder text is a constant; no report or
 ticket text is ever typed. (Go Live, End night shift and the other buttons are Jay's own presses and do not
@@ -541,7 +545,8 @@ granted, no agent started, no proposed policy enforced. `ccd/onboarding.py` and 
 Jay talks to the CTO and each project lead in HQ's Messages (docs/API.md, Messages).
 
 - **Nothing Jay writes is typed into a terminal** (C2 b). The lead gets one fixed nudge through herdr's `agent.prompt`,
-  only while idle and only when its input line reads as empty (the night-shift check), so a half-typed draft is never
+  only while idle and only when its input line reads as empty (the night-shift check, which treats Claude Code's grey
+  suggested prompt, matched by its exact shape, as empty: CC-053), so a half-typed draft is never
   submitted. The nudge names the conversation and the two commands; the lead reads the words with `cc-inbox`.
   The nudge's wording is neutral: it says a message is waiting and that the lead's usual rules, gates and approvals
   apply to anything it asks. A message is never an approval.

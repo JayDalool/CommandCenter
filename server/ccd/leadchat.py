@@ -304,13 +304,17 @@ class LeadChat:
         if agent["status"] not in ("idle", "done"):
             return "queued"
         try:
-            screen = await self.herdr.read_tail(agent["pane_id"], 40)
+            screen = await self.herdr.read_tail(agent["pane_id"], 40, ansi=True)
         except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError):
             return "queued"
         if nightshift_mod.input_is_empty(screen["text"]) is not True:
             return "queued"      # never submit a half-typed draft of Jay's in that pane
         self._broker("pane.input", self._proj_key(conv), f"messages nudge -> pane {agent['pane_id']}")
         try:
+            # CC-053: read again right before the send; herdr has no conditional send, so a millisecond race remains
+            # (docs/SECURITY.md). Anything but an empty box or the grey suggestion means the message waits.
+            if not await nightshift_mod.input_still_empty(self.herdr, agent["pane_id"]):
+                return "queued"
             await self.herdr.prompt(agent["pane_id"], self.nudge_text(conv))
         except (OSError, herdr_mod.HerdrError, asyncio.TimeoutError) as e:
             log.warning(json.dumps({"msg": "messages nudge failed", "conversation": conv, "error": str(e)[:160]}))
