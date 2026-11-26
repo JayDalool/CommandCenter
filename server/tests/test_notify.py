@@ -1031,17 +1031,6 @@ class TeamThreads(ReplyBase):
         self.assertIn("user check passed\nChecked: Tried the export on 375px", post["text"])
         self.assertIn("User reviewer", post["text"])                      # the seat label on the post
 
-    def test_an_urgent_exception_is_broadcast_with_its_kind_and_reason_and_escaped(self):
-        self.step("SV-48", "pipeline.urgent", "urgent exception (production): site <!channel> is down", "agent:coordinator")
-        root, urgent = self.channel_posts()
-        self.assertEqual((urgent["thread"], urgent["broadcast"]), (root["ts"], True))
-        self.assertIn("urgent exception (production)", urgent["text"])
-        self.assertIn("Lead", urgent["text"])
-        self.assertNotIn("<!channel>", urgent["text"])
-        before = len(self.slack.posts)
-        self.step("GM-4", "pipeline.urgent", "urgent exception (security): x", "agent:coordinator", project="gauzemate")
-        self.assertEqual(len(self.slack.posts), before)                   # a client project posts nothing
-
     def test_review_ready_posts_in_the_ticket_thread(self):
         self.step("SV-49", "pipeline.review_ready", "PR #9 at abc1234 has green checks and no review")
         root, ready = self.channel_posts()

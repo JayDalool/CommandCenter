@@ -19,8 +19,7 @@ it as Jay's), and nobody holds its seat (or the ticket has gone stale). The orde
 2026-11-24): code review, user check and release (verify only) first, then a build fixing review findings, other
 builds, technical review, investigation; inside a rank the lowest ticket number first (first come, first served).
 Priority and due date are shown but no longer order the work. An intake row is named only when nothing already
-started can move, oldest first, and is never dropped. A ticket under the lead's urgent exception comes before all.
-A blocked ticket with no next step and owner is named on its own line ("triage today"), outside the three shown. The
+started can move, oldest first, and is never dropped. A blocked ticket with no next step and owner is named on its own line ("triage today"), outside the three shown. The
 reminder grants nothing: the lead follows its repository's rules and the flow, and every plan, merge and deploy gate
 still waits for Jay.
 
@@ -49,7 +48,7 @@ STAGE_ORDER = ("intake", "investigate", "techReview", "build", "userCheck", "cod
 STAGE_LABEL = {"intake": "intake", "investigate": "investigate", "techReview": "technical review", "build": "build",
                "userCheck": "user check", "codeReview": "code review", "release": "release, verify only"}
 # Closest to done first (CC-076). Release (merged, verify only) ranks with code review and user check: it is the last
-# step, as it was before this ticket. Build with review fixes outranks other build work; an urgent exception is -1.
+# step, as it was before this ticket. Build with review fixes outranks other build work.
 STAGE_RANK = {"codeReview": 0, "userCheck": 0, "release": 0, "techReview": 3, "investigate": 4, "intake": 5}
 CLOSED = ("DONE", "DENIED", "CANCELLED")
 
@@ -83,9 +82,7 @@ def _day(at):
 
 
 def rank(r):
-    """Lower is closer to done (CC-076). The urgent exception is above every rank."""
-    if r.get("urgent"):
-        return -1
+    """Lower is closer to done (CC-076)."""
     if r["stage"] == "build":
         return 1 if r.get("reworked") else 2
     return STAGE_RANK[r["stage"]]
@@ -101,7 +98,7 @@ def _free(r):
 
 def movable(rows):
     """The tickets the lead can move without Jay, in the order to take them. `rows`: dicts with key, status, type,
-    flags, number, stage, holder, waitingOn, stale, reworked (a build fixing review findings), urgent (flow.view's
+    flags, number, stage, holder, waitingOn, stale, reworked (a build fixing review findings) (flow.view's
     fields plus the ticket's). Priority and due date are on the row for describe() but do not order it."""
     out = []
     for r in rows:
@@ -117,8 +114,8 @@ def movable(rows):
         out.append(r)
     # New ideas wait in line: an intake row is named only when nothing already started can move (c17). It is never
     # cancelled or refused here; this only decides what the reminder names.
-    if any(r["stage"] != "intake" or r.get("urgent") for r in out):
-        out = [r for r in out if r["stage"] != "intake" or r.get("urgent")]
+    if any(r["stage"] != "intake" for r in out):
+        out = [r for r in out if r["stage"] != "intake"]
     return sorted(out, key=lambda r: (rank(r), r.get("number") or 0))
 
 

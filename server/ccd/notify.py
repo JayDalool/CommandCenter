@@ -132,9 +132,7 @@ SEEN_EVENTS_MAX = 500
 IDS_REFRESH_S = 60              # at most one re-read of the channel list a minute per unknown channel
 ALERT_KINDS = ("pr.opened", "pr.closed", "ci.main_changed", "pr.ci_changed", "task.pipeline")
 PIPELINE_ALERTS = {"pipeline.merged": "merged", "pipeline.auto_merged": "auto-merged", "pipeline.deployed": "deployed",
-                   "pipeline.done": "done", "pipeline.auto_merge_failed": "auto-merge failed",
-                   # CC-076: Jay is told about every urgent exception in the channel, with its kind and reason.
-                   "pipeline.urgent": "urgent exception"}
+                   "pipeline.done": "done", "pipeline.auto_merge_failed": "auto-merge failed"}
 # Who posts a ticket's steps in its Slack thread: the seat of the actor that recorded the step (pipeline_cli
 # --role), with its icon. Anything else (Jay, ccd's own GitHub poll) posts as the app itself.
 SEATS = {"agent:coordinator": ("Lead", ":compass:"), "agent:planner": ("Investigator", ":mag:"),

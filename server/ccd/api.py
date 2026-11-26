@@ -76,7 +76,7 @@
     GET   /api/pty                   live terminal sessions (names, cwd, clients)
     GET   /api/tasks/{key}/work      the ticket's durable pipeline state (plan, stage, gate, roles, review head, …)
     POST  /api/tasks/{key}/work/{op} one pipeline step: plan start review verify handoff block role finding
-                                     ask replan rework evidence writer deploy-request deploy-plan deployed stale reply urgent,
+                                     ask replan rework evidence writer deploy-request deploy-plan deployed stale reply,
                                      and the flow's intake criteria plan-review user-check close;
                                      `confirm` (close an owner gate) needs Jay AND Developer Unlock
     GET   /api/flow                  the delivery flow per project: seats, tickets in flight, WIP limits
@@ -621,8 +621,7 @@ def create_app(daemon, token, port, lifespan=None, ui=None):
     async def task_work_op(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")
         return await daemon.task_work_op_async(request.path_params["key"], request.path_params["op"], body,
-                                               request.state.actor, developer=dev,
-                                               actor_token=request.headers.get("x-ccd-actor-token"))
+                                               request.state.actor, developer=dev)
 
     async def task_answers(request, body):
         dev = gate is not None and gate.check(request.headers.get(DEV_HEADER) or "")

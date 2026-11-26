@@ -79,14 +79,6 @@ Never put secrets, tokens, customer data, licensed data or pasted terminal outpu
 - Per project: at most 2 tickets in Investigate and 2 in Build.
 - Finishing first: no `start` and no first `plan` while another ticket in the same project has waited more than
   4 hours in Technical review, User check or Code review with nobody in that seat. Fill that seat instead.
-- **Urgent exception** (Jay, 2026-11-24): a serious technical, security or production problem may start right away
-  even when both limits are full. Only the lead (or Jay) declares it, once per project at a time:
-  `pipeline_cli urgent KEY --role coordinator --kind technical|security|production --reason "…"`. It skips only the
-  2 and 2 limits and the 4-hour rule. Investigation, every review, and Jay's plan, merge and deploy approvals stay.
-  The ticket still counts toward the limits, so nothing new starts until work falls back under them, and the paused
-  work resumes first. Jay sees it in the project's Slack channel with its kind and reason: write no secret, customer
-  data or exploit detail in the reason. It ends at the first move to Verifying or close, and a later rework of that
-  ticket is limited like any other.
 - Stale: 48 hours with no recorded step in stages 2 to 6 marks the ticket stale. The lead moves it, sends it back
   or proposes cancelling it (`pipeline_cli stale`; only Jay cancels).
 - Two rounds at most per review stage: the second send-back blocks the ticket.
@@ -103,8 +95,7 @@ A lead acts when someone messages it. With **work mode** on for a project (Jay's
 profiles; every project starts off), ccd checks once a minute and reminds the idle lead, at most every 10 minutes,
 of the tickets that can move without Jay, finishing first: code review, user check and release (verify only), then a
 build fixing review findings, other builds, technical review, investigation. Inside a step the lowest ticket number
-goes first (first come, first served); priority and due date are shown but do not order the work. A ticket under the
-urgent exception comes before all. New ideas wait in line: an intake ticket is named only when nothing already
+goes first (first come, first served); priority and due date are shown but do not order the work. New ideas wait in line: an intake ticket is named only when nothing already
 started can move, oldest first, and is never dropped or moved aside. Take the tickets in that order, within the
 limits above. A ticket that needs Jay: ask or block it (with its next step and owner), then take the next one. A
 ticket in intake flagged needs-Jay is not named. A blocked ticket with no next step or owner gets its own line,

@@ -21,10 +21,10 @@ def describe_text(r):
 
 
 def row(key, stage="investigate", status="RESEARCHING", priority="NO_PRIORITY", due=None, number=1, holder=None,
-        waiting=None, stale=False, type_="FEATURE", flags=(), reworked=False, urgent=False, triage_=False):
+        waiting=None, stale=False, type_="FEATURE", flags=(), reworked=False, triage_=False):
     return {"key": key, "status": status, "type": type_, "flags": list(flags), "priority": priority, "dueAt": due,
             "number": number, "stage": stage, "holder": holder, "waitingOn": waiting, "stale": stale,
-            "reworked": reworked, "urgent": urgent, "needsTriage": triage_}
+            "reworked": reworked, "needsTriage": triage_}
 
 
 class Movable(unittest.TestCase):
@@ -80,10 +80,7 @@ class Movable(unittest.TestCase):
         self.assertEqual([r["key"] for r in movable(same)], ["C", "B", "A"])         # by number whatever the priority
         self.assertIn("urgent", describe_text(same[1]))                               # …but still shown
 
-    def test_an_open_urgent_exception_ranks_above_everything_and_intake_waits_in_line(self):
-        rows = [row("REV", stage="codeReview", status="IN_REVIEW", number=1),
-                row("URG", stage="investigate", number=9, urgent=True)]
-        self.assertEqual([r["key"] for r in movable(rows)], ["URG", "REV"])
+    def test_intake_waits_in_line(self):
         # c17: an URGENT-priority intake row is left out while started work can move, named oldest first otherwise
         idea = [row("I2", stage="intake", status="INBOX", priority="URGENT", number=2),
                 row("I1", stage="intake", status="INBOX", number=1)]

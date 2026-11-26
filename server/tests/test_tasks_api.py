@@ -902,47 +902,6 @@ class PipelineApi(Automation):
                              content=json.dumps({"branch": f"{k}-x", "worktree": f"/srv/w/{k}"}))
         self.assertEqual(r.status_code, 409, r.text)
 
-    def test_urgent_exception_over_http_start_past_the_lanes_and_the_work_view_says_why(self):
-        agent = dict(JSON, **{"x-ccd-actor": "agent:coordinator"})
-        keys = []
-        for n in range(3):
-            k = self.tickets.create("samvision", f"lane {n}", number=300 + n, status="INBOX")[0]["key"]
-            keys.append(k)
-            self.client.post(f"/api/tasks/{k}/work/plan", content=json.dumps({"plan": {"summary": "x"}}),
-                             headers=dict(JSON, **{"x-ccd-actor": "agent:planner"}))
-
-        def start(k):
-            return self.client.post(f"/api/tasks/{k}/work/start", headers=agent,
-                                    content=json.dumps({"branch": f"{k}-x", "worktree": f"/srv/w/{k}"}))
-        self.assertEqual([start(k).status_code for k in keys[:2]], [200, 200])
-        self.assertEqual(start(keys[2]).status_code, 409)
-        tokens = self.daemon.actor_tokens
-        lead = {"x-ccd-actor-token": tokens.issue("agent:coordinator", "jay")["token"]}
-        dev_tok = {"x-ccd-actor-token": tokens.issue("agent:implementer", "jay")["token"]}
-        urgent = lambda body, actor="agent:coordinator", extra=lead: self.client.post(  # noqa: E731
-            f"/api/tasks/{keys[2]}/work/urgent", content=json.dumps(body),
-            headers=dict(JSON, **{"x-ccd-actor": actor}, **extra))
-        self.assertEqual(urgent({"kind": "production", "reason": "down"}, "agent:implementer", dev_tok).status_code, 403)
-        # CC-076 Codex round 1: a claimed actor is not proof. The lead's name with no token, another agent's token,
-        # or Jay's name without Developer Unlock grants nothing.
-        for claimed, extra in (("agent:coordinator", {}), ("agent:coordinator", dev_tok), ("jay", {}), ("jay", lead)):
-            r = urgent({"kind": "production", "reason": "down"}, claimed, extra)
-            self.assertEqual(r.status_code, 403, (claimed, r.text))
-        self.assertIsNone(self.get(f"/api/tasks/{keys[2]}/work").json()["urgent"])
-        self.assertEqual(urgent({"kind": "nope", "reason": "down"}).status_code, 400)
-        self.assertEqual(urgent({"kind": "production", "reason": ""}).status_code, 400)
-        r = urgent({"kind": "production", "reason": "the live site is down"})
-        self.assertEqual(r.status_code, 200, r.text)
-        self.assertEqual((r.json()["urgent"]["kind"], r.json()["urgent"]["reason"]), ("production", "the live site is down"))
-        self.assertEqual(start(keys[2]).status_code, 200)
-        self.assertEqual(self.get(f"/api/tasks/{keys[0]}/work").json()["urgent"], None)
-        second = self.client.post(f"/api/tasks/{keys[0]}/work/urgent", headers=dict(agent, **lead),
-                                  content=json.dumps({"kind": "technical", "reason": "also bad"}))
-        self.assertEqual(second.status_code, 409)
-        self.assertIn(keys[2], second.json()["error"])
-        events = [e for e in self.get("/api/activity?limit=200").json()["events"] if e["data"].get("kind") == "pipeline.urgent"]
-        self.assertEqual(len(events), 1)
-
     def test_blocked_needs_triage_until_it_names_a_next_step_and_an_owner(self):
         self.ticket("INBOX")
         self.step("plan", {"plan": {"summary": "x"}}, "agent:planner")

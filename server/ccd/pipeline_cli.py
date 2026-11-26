@@ -7,7 +7,6 @@
     python -m ccd.pipeline_cli verify   SV-056 --role verifier --result pass --evidence "…"
     python -m ccd.pipeline_cli handoff  SV-056 --role coordinator --done … --next … [--next-owner SEAT] [--decisions …] [--blockers …]
     python -m ccd.pipeline_cli block    SV-056 --role coordinator --reason "…" [--what … --why … --action … --next-owner SEAT --impact … --technical …]
-    python -m ccd.pipeline_cli urgent   SV-056 --role coordinator --kind technical|security|production --reason "…"
     python -m ccd.pipeline_cli role     SV-056 --role implementer --model sonnet --session sv-056
     python -m ccd.pipeline_cli finding  SV-056 --role reviewer --scope out --category perf --summary "…"
     python -m ccd.pipeline_cli ask      SV-056 --role coordinator --question "Same layout on mobile?" --question "…"
@@ -69,7 +68,7 @@ ROLES = ("coordinator", "planner", "implementer", "reviewer", "verifier", "tech-
          "design-reviewer")
 # The flow's steps run as their seat when no --role is given.
 OWNERS = ("lead", "investigator", "tech-reviewer", "developer", "user-reviewer", "code-reviewer", "verifier", "jay")
-DEFAULT_ROLE = {"urgent": "coordinator", "intake": "coordinator", "criteria": "coordinator", "close": "coordinator",
+DEFAULT_ROLE = {"intake": "coordinator", "criteria": "coordinator", "close": "coordinator",
                 "plan-review": "tech-reviewer", "user-check": "user-reviewer"}
 
 
@@ -136,7 +135,7 @@ def build(argv):
     p.add_argument("op", choices=("work", "plan", "start", "review", "verify", "handoff", "block", "role", "finding",
                                   "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
                                   "tasks", "add", "intake", "criteria", "plan-review", "user-check", "close",
-                                  "deploy-plan", "reply", "urgent"))
+                                  "deploy-plan", "reply"))
     p.add_argument("key")
     p.add_argument("decision", nargs="?", help="plan-review: APPROVE or SEND_BACK; user-check: pass or fail")
     p.add_argument("--role", choices=ROLES)
@@ -202,7 +201,6 @@ def build(argv):
         "block": lambda: {"reason": a.reason, **{k: getattr(a, k) for k in ("what", "why", "action", "impact", "technical")
                                                    if getattr(a, k)},
                           **({"owner": a.next_owner} if a.next_owner else {})},
-        "urgent": lambda: {"kind": a.kind, "reason": a.reason},
         "role": lambda: {"role": a.role, **meta},
         "finding": lambda: {"finding": {"scope": a.scope, "category": a.category, "summary": a.summary},
                             "source": a.source},

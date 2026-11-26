@@ -1123,7 +1123,7 @@ class Daemon(LeadChat, HqDaemon):
                         "waitingOn": fl["waitingOn"], "stale": fl["stale"],
                         # CC-076: a build that is fixing review findings is closer to done than a fresh one.
                         "reworked": pl.rework_prs(key) is not None and t["status"] in ("IN_PROGRESS", "READY_TO_IMPLEMENT"),
-                        "urgent": bool(pl.urgent_of(t["id"])), "needsTriage": pl.needs_triage(t, w)})
+                        "needsTriage": pl.needs_triage(t, w)})
         return out
 
     async def work_tick(self, now=None):
@@ -1676,7 +1676,7 @@ class Daemon(LeadChat, HqDaemon):
 
     PIPELINE_OPS = ("plan", "start", "review", "verify", "confirm", "handoff", "block", "role", "finding",
                     "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
-                    "intake", "criteria", "plan-review", "user-check", "close", "deploy-plan", "reply", "urgent")
+                    "intake", "criteria", "plan-review", "user-check", "close", "deploy-plan", "reply")
 
     def task_work(self, key):
         self._need_tasks()
@@ -1707,15 +1707,7 @@ class Daemon(LeadChat, HqDaemon):
         prs = self._open_prs(ticket)
         return prs[0] if len(prs) == 1 else None
 
-    def _trusted_actor(self, claimed, developer, actor_token):
-        """Who a claim is backed by: Jay only with Developer Unlock, an agent only with its own valid actor token.
-        X-CCD-Actor is self-asserted, so a lead-only op that widens limits (urgent, CC-076) trusts this instead."""
-        if developer and claimed == "jay":
-            return "jay"
-        hit = self.actor_tokens.lookup(actor_token) if actor_token and self.actor_tokens else None
-        return claimed if hit and hit["actor"] == claimed else None
-
-    def task_work_op(self, key, op, body, actor="jay", developer=False, actor_token=None):
+    def task_work_op(self, key, op, body, actor="jay", developer=False):
         """One pipeline step. Owner gates (confirm) need Jay with Developer Unlock; the rest any token holder,
         recorded under the actor it states (X-CCD-Actor: agent:<role>)."""
         self._need_tasks()
@@ -1754,12 +1746,6 @@ class Daemon(LeadChat, HqDaemon):
             explain = body.get("explain") if isinstance(body.get("explain"), dict) else \
                 {k: body.get(k) for k in pl.EXPLAIN if body.get(k)}
             r = self._wrap(pl.block, key, body.get("reason"), actor, explain or None, body.get("owner"))
-        elif op == "urgent":
-            trusted = self._trusted_actor(actor, developer, actor_token)
-            if trusted is None:
-                raise ActionError(403, "the urgent exception needs Jay with Developer Unlock or the lead's actor token: "
-                                       "X-CCD-Actor alone is a claim, not proof")
-            r = self._wrap(pl.urgent, key, body.get("kind"), body.get("reason"), trusted)
         elif op == "role":
             r = self._wrap(pl.role, key, body.get("role"), actor, **meta)
         elif op == "finding":
@@ -1831,8 +1817,8 @@ class Daemon(LeadChat, HqDaemon):
                     f"implementation.")
         return None
 
-    async def task_work_op_async(self, key, op, body, actor="jay", developer=False, actor_token=None):
-        work = self.task_work_op(key, op, body, actor, developer, actor_token)
+    async def task_work_op_async(self, key, op, body, actor="jay", developer=False):
+        work = self.task_work_op(key, op, body, actor, developer)
         if op == "reply":
             # The agent's answer to Jay's question from Slack goes back to the thread he asked in.
             posted = False
@@ -2319,7 +2305,7 @@ class Daemon(LeadChat, HqDaemon):
             self._event("tasks", "task.pipeline", f"{ticket['key']} {text}"[:300], project=ticket["project"],
                         ref=ticket["key"], data={"kind": kind, **({"actor": actor} if actor else {})},
                         severity="action" if kind in ("pipeline.gate_opened", "pipeline.blocked",
-                                                      "pipeline.unreviewed_merge", "pipeline.questions", "pipeline.urgent",
+                                                      "pipeline.unreviewed_merge", "pipeline.questions",
                                                       "pipeline.deploy_requested", "pipeline.replan",
                                                       "pipeline.auto_merge_held", "pipeline.auto_merged",
                                                       "pipeline.auto_merge_failed") else "info")

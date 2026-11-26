@@ -37,7 +37,6 @@ At the end: the closing note.
     python -m ccd.pipeline_cli ask SV-082 --role coordinator --question "Export which columns?" \
         --option "Same as the table" --option "All fields" --recommend 1 --why "matches what they see"
     python -m ccd.pipeline_cli block SV-082 --role coordinator --reason "…" --what "…" --action "…" --next-owner developer
-    python -m ccd.pipeline_cli urgent SV-082 --role coordinator --kind production --reason "the live site is down"   # see below
     python -m ccd.pipeline_cli stale SV-071 --role coordinator --reason "superseded by SV-082"   # Jay decides
     python -m ccd.pipeline_cli close SV-082 --role coordinator --note "What changed, why, how it was checked"  # (flow PR)
 
@@ -47,17 +46,11 @@ Start with `pipeline_cli tasks PROJECT`. A line marked `TRIAGE TODAY` is a block
 owner. Do one of these today: `handoff --next "…" --next-owner SEAT`, `rework` (an ordinary fix inside the plan),
 `replan` (the assumptions or scope changed), or `ask` Jay with options and a recommendation.
 
-## Finish first, then the urgent exception
+## Finish first
 
 Take work closest to done first (code review, user check, release, then build fixing review findings, other builds,
 technical review, investigation), the lowest ticket number first inside a step. A new idea waits in intake; never
 drop it or push current work aside for it. Priority and due date do not reorder work.
-
-One thing may jump the 2 investigate / 2 build limits and the 4-hour rule: a serious technical, security or production
-problem. Declare it with `pipeline_cli urgent KEY --role coordinator --kind technical|security|production --reason "…"`.
-Only you or Jay can; one open per project; it passes no stage, review, plan, merge or deploy approval. The reason goes
-to the project's Slack channel for Jay, so write no secret, customer data or exploit detail. It ends at the first
-move to Verifying; the work it paused resumes first, closest to done.
 
 ## When a review sends it back (round 1)
 
