@@ -1,0 +1,97 @@
+#!/usr/bin/python3 -I
+"""Weekly prune of Docker's unused build cache (CC-096). Runs `docker builder prune -f` and nothing else.
+
+Why so narrow: this is the server's first scheduled delete, outside D-058's cc-cleanup tool until CC-089 lands and
+replaces it. The argv is a fixed constant, the script takes no arguments, and it logs one line without docker's output.
+-I in the shebang and the cron line keeps scripts/ off sys.path and user-site code out (CC-096 security plan review).
+"""
+import errno
+import fcntl
+import os
+import re
+import stat
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+ARGV = ("docker", "builder", "prune", "-f")
+DOCKER = "/usr/bin/docker"  # absolute, so a PATH entry can never substitute another binary
+# Docker 29 prints "Total:<TAB><size>" (buildx plugin); the old CLI printed "Total reclaimed space: <size>".
+TOTAL = re.compile(r"^Total(?::|\s+reclaimed space:)\s*(\S.*)$")
+SIZE = re.compile(r"[0-9.]+ ?[kKMGT]?i?B")
+
+
+def _log(text):
+    print(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} {text}", flush=True)
+
+
+def _freed(stdout):
+    # Only a regex-checked size is ever logged, never docker's own text (cache ids, paths, errors).
+    for line in stdout.splitlines():
+        m = TOTAL.match(line.strip())
+        if m and SIZE.fullmatch(m.group(1).strip()):
+            return m.group(1).strip()
+    return "unknown"
+
+
+def main(argv=None, run=subprocess.run, home=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv:
+        print("cc-prune-build-cache takes no arguments", file=sys.stderr)
+        return 2
+    state = Path(home or Path.home()) / "command-center" / "state"
+    # Fail closed: a stop file of any kind (file, directory, dangling symlink) or any error checking it means no run.
+    # lstat, not exists(): exists() reports a permission error as "absent" and would let the run through.
+    try:
+        os.lstat(state / "cleanup.stop")
+        _log("stopped")
+        return 0
+    except FileNotFoundError:
+        pass
+    except OSError:
+        _log("stop check error")
+        return 1
+    try:
+        if not stat.S_ISDIR(os.lstat(state).st_mode):  # a symlinked or missing state dir is never trusted
+            raise OSError(errno.ENOTDIR, "state")
+        # O_NOFOLLOW: a planted symlink must not redirect the lock; no O_TRUNC: never rewrite what it points at.
+        fd = os.open(state / "build-cache-prune.lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError:
+        _log("lock error")
+        return 1
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            _log("busy")
+            return 0
+        except OSError:
+            _log("lock error")
+            return 1
+        env = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(home or Path.home()),
+            "DOCKER_HOST": "unix:///var/run/docker.sock",
+            "BUILDX_BUILDER": "default",  # buildx remembers a current builder in ~/.docker; pin the local one
+        }
+        try:
+            done = run(list(ARGV), executable=DOCKER, env=env, capture_output=True, text=True, errors="replace",
+                       timeout=600, close_fds=True)
+        except subprocess.TimeoutExpired:
+            _log("docker timeout")
+            return 1
+        except OSError:
+            _log("docker error")
+            return 1
+        if done.returncode != 0:
+            _log(f"docker exit {int(done.returncode)}")
+            return 1
+        _log(f"freed {_freed(done.stdout or '')}")
+        return 0
+    finally:
+        os.close(fd)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
