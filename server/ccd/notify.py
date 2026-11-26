@@ -46,6 +46,8 @@ with the bot or a channel the bot is in, are read; everything else is ignored. A
                 "answers"). "merge" merges that one PR at the head the DM showed, as the Merge button does. A
                 deploy takes two replies: "approve" (or "deploy") asks the agent to PREPARE; its plan comes back as
                 a new DM (deploy_go), and only "deploy" there tells it to deploy.
+    release     (CC-088, a release list's thread in the DM) only ticket IDs from that list, which pulls them from
+                the release (ReleaseMail.pull). Anything else there gets a why and does nothing.
     otherwise   the text goes to the project's lead (Daemon.deliver_to_lead, the in-app chat's store), and the
                 lead's reply comes back in the same thread.
 
@@ -1120,9 +1122,13 @@ class Notifier:
         return ev.get("type") == "message" and isinstance(ev.get("text"), str)
 
     async def on_slack(self, payload):
-        """One Events API payload from the socket. Anything not from Jay is dropped without a trace in Slack."""
+        """One Events API payload from the socket. Anything not from Jay is dropped without a trace in Slack, except
+        that a plain human message in a release list's thread gets Jay one fixed DM (ReleaseMail.foreign, CC-088)."""
         ev = (payload or {}).get("event") or {}
-        if not self.settings["slack"] or not self.from_jay(ev, payload.get("team_id")):
+        if not self.settings["slack"]:
+            return None
+        if not self.from_jay(ev, payload.get("team_id")):
+            await self.mail.foreign(ev, payload)
             return None
         # Slack redelivers an event after a missed ack or a reconnect: act on each message once.
         mark = ev.get("client_msg_id") or payload.get("event_id") or f"{ev.get('channel')}:{ev.get('ts')}"
@@ -1135,8 +1141,8 @@ class Notifier:
         here = thread or ev.get("ts")
         item = self.threads.get(f"{cid}:{thread}") if thread else None
         if item is None and thread:
-            item = self._ticket_item(cid, thread)
-        result = await self.handle_reply(cid, item, text)
+            item = self._ticket_item(cid, thread) or self.mail.find_thread(cid, thread)
+        result = await self.handle_reply(cid, item, text, ev)
         self.d._event("notify", "notify.slack_reply", f"Slack reply: {result['did']}",
                       project=result.get("project"), ref=(item or {}).get("ref"),
                       data={"kind": result["did"], "count": len(text)})
@@ -1160,7 +1166,11 @@ class Notifier:
             return False
         return True
 
-    async def handle_reply(self, cid, item, text):
+    async def handle_reply(self, cid, item, text, ev=None):
+        if item and item.get("type") == "release":
+            # CC-088: a release list's thread only pulls. This returns before every approve, merge, deploy and
+            # lead path, so no other word there does anything but get a why (tech review A6).
+            return await self.mail.pull(item, text, ev or {})
         if not text:
             return {"did": "empty"}
         if item and item.get("type") == "ticket":

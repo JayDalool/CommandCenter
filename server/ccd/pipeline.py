@@ -1057,13 +1057,18 @@ class Pipeline:
             return {}, {}, []       # standard / risky: the lead's closing note finishes it (`close`)
         return {"status": "DONE"}, {"gate": None, "gate_reason": None}, [("pipeline.done", "done", {})]
 
-    def release_items(self, project, start, cutoff, since, now):
+    def release_items(self, project, start, cutoff, since, now, pulled=(), urgent_after=None):
         """Read-only (CC-078): what the release digest for the window starting at `start` lists, from one read of
         ticket_work. scheduled: a live deploy waiting for this window, or an open merged ticket whose merge is on or
         before the window's cutoff and has no live deploy request yet (Go Live ships main as it is). verified: a live
         deploy that passed after `since`, closed tickets included. held: a live deploy waiting for a later window.
-        Urgent deploys have no window and are not listed. Changes nothing."""
+        Urgent deploys have no window and are not listed. Changes nothing.
+        CC-088, for a correction email: keys in `pulled` (Jay pulled them by Slack reply) move from scheduled to held,
+        marked "pulled"; with `urgent_after`, "urgent" lists the open live deploys Jay approved as urgent after that
+        time and not yet done. With neither, the output is exactly the digest's."""
         out = {"scheduled": [], "verified": [], "held": []}
+        if urgent_after is not None:
+            out["urgent"] = []
         rows = self.db.execute(
             "SELECT t.key, t.title, t.status, w.merge, w.deploy FROM tickets t JOIN ticket_work w ON w.ticket_id=t.id "
             "WHERE t.project=?", (project,)).fetchall()
@@ -1076,16 +1081,25 @@ class Pipeline:
                 if (d.get("deployedAt") or 0) > since:
                     out["verified"].append(row)
                 continue
-            if status in CLOSED or d.get("urgent"):
+            if status in CLOSED:
                 continue
+            if d.get("urgent"):
+                if urgent_after is not None and live and not d.get("result") \
+                        and (d.get("approvedAt") or 0) > urgent_after:
+                    out["urgent"].append(row)
+                continue
+            this = out["scheduled"]
+            if key in pulled:
+                row["pulled"] = True
+                this = out["held"]
             if live and d.get("requestedAt") and not d.get("result"):
                 held = self._held({"project": project}, {"merge": m, "deploy": d}, now)
                 if held == start:
-                    out["scheduled"].append(row)
+                    this.append(row)
                 elif held and held > start:
                     out["held"].append(row)
             elif m.get("at") is not None and m["at"] <= cutoff:
-                out["scheduled"].append(row)
+                this.append(row)
         for v in out.values():
             v.sort(key=lambda r: (r["key"].rsplit("-", 1)[0], int(r["key"].rsplit("-", 1)[-1])))
         return out

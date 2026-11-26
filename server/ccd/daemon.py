@@ -26,6 +26,7 @@ from pathlib import Path
 from . import __version__, autonomy, coordid, coordinators, github, ledger, merge_policy, model, profiles, registry, sources
 from . import flow as flow_mod
 from . import release as release_mod
+from . import releasemail
 from . import pipeline as pipeline_mod
 from . import workers as workers_mod
 from . import inbox as inbox_mod
@@ -3624,7 +3625,9 @@ class Daemon(LeadChat, HqDaemon):
         # Approve only what Jay saw AND is still open: a gate that opened after the page loaded stays open for him.
         open_now = [a["key"] for a in self.go_live_review(project)["approves"]]
         pending = [k for k in shown if k in open_now]
-        skipped = [{"key": k, "reason": "its live-deploy gate is no longer open"} for k in shown if k not in open_now]
+        pulled = releasemail.pulled(self.store, project)
+        skipped = [{"key": k, "reason": releasemail.PULL_REASON if k in pulled
+                    else "its live-deploy gate is no longer open"} for k in shown if k not in open_now]
         text = GO_LIVE_TEMPLATE.format(project=project, approved=", ".join(pending) or "none")
         self._broker("go_live.approve", project, ("Go Live: " + (", ".join(pending) or "none"))[:200])
         # The coordinator must be reachable before anything is approved: no approval without the message. Every
@@ -3633,6 +3636,11 @@ class Daemon(LeadChat, HqDaemon):
         name = await self._to_coordinator(project, "go-live", text, {"approved": pending})
         approved, errors = [], []
         for key in pending:
+            # A pull Jay sent from Slack while the coordinator message was on its way (CC-088, tech review A4): read
+            # again right before each approval, so the item's gate stays open for the next window.
+            if key in releasemail.pulled(self.store, project):
+                skipped.append({"key": key, "reason": releasemail.PULL_REASON})
+                continue
             try:
                 self._pipeline_result(*self._wrap(self.pipeline.confirm, key, "deploy", actor, "go-live"), actor=actor)
                 approved.append(key)
@@ -3646,16 +3654,21 @@ class Daemon(LeadChat, HqDaemon):
     def go_live_review(self, project):
         """What Go Live would approve in `project` (tickets whose live-deploy gate is open), and what Jay should
         look at first: tickets merged into main (VERIFYING) that are not verified, or still wait for a UI review.
-        Go Live prepares the deploy of main as it is, so those ride along."""
+        Go Live prepares the deploy of main as it is, so those ride along. An item Jay pulled from the release by
+        Slack (CC-088) is never approved: it is a warning, because its code still ships until reverted."""
         out = {"approves": [], "warnings": []}
         if self.tasks is None or self.pipeline is None:
             return out
         open_ = sorted((t for t in self.tasks.list(project=project) if t["status"] not in tasks_mod.CLOSED),
                        key=lambda t: t["number"])
         marks = self.pipeline.compact(t["id"] for t in open_)
+        pulled = releasemail.pulled(self.store, project)
         for t in open_:
             m = marks.get(t["id"]) or {}
             row = {"key": t["key"], "title": CONTROL_RE.sub(" ", str(t["title"])).strip()[:100]}
+            if t["key"] in pulled:
+                out["warnings"].append(dict(row, reason=releasemail.PULL_REASON))
+                continue
             if m.get("gate") == "deploy":
                 out["approves"].append(row)
             if t["status"] == "VERIFYING":
