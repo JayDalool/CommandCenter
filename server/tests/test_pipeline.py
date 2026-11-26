@@ -182,10 +182,25 @@ class Review(Base):
         self.pl.review(c, "APPROVE", head_c, "agent:reviewer", session="shared-review", pr=self.pr(head=head_c))
         with self.assertRaises(TaskError):                                    # it built B, so it may not review B
             self.pl.review(b, "APPROVE", head_b, "agent:reviewer", session="shared-review", pr=self.pr(head=head_b))
-        self.pl.review(b, "REQUEST_CHANGES", head_b, "agent:reviewer", session="shared-review")   # a round on B only
+        with self.assertRaises(TaskError):                                    # CC-072: nor may it request changes on B
+            self.pl.review(b, "REQUEST_CHANGES", head_b, "agent:reviewer", session="shared-review")
+        self.assertEqual(self.pl.work(b)["review"]["cycles"], 0)              # the refusal wrote nothing
+        self.pl.review(b, "REQUEST_CHANGES", head_b, "agent:reviewer", session="review-2")   # a round on B only
         wa, wb, wc = self.pl.work(a), self.pl.work(b), self.pl.work(c)
         self.assertEqual((wa["review"]["head"], wc["review"]["head"]), (HEAD, head_c))
         self.assertEqual((wa["review"]["cycles"], wb["review"]["cycles"], wc["review"]["cycles"]), (0, 1, 0))
+
+    def test_the_implementer_cannot_request_changes_on_its_own_ticket(self):
+        # CC-072: the own-work refusal used to cover APPROVE only.
+        k = self.ticket()
+        self.to_review(k)
+        before = self.pl.work(k)
+        for actor, session in (("agent:implementer", "review-1"), ("agent:reviewer", k.lower())):
+            with self.assertRaises(TaskError) as e:
+                self.pl.review(k, "REQUEST_CHANGES", HEAD, actor, session=session)
+            self.assertEqual(e.exception.status, 409)
+        after = self.pl.work(k)
+        self.assertEqual((after["review"], after["roles"], after["findings"]), (before["review"], before["roles"], before["findings"]))
 
     def test_review_keeps_the_model_of_the_same_session_only(self):
         # CC-067: writing the verdict used to reset the model; a new session must not inherit the old one either.

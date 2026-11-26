@@ -833,10 +833,12 @@ class Pipeline:
         def fn(tid, t, w, at):
             self._need(t, ("IN_REVIEW", "READY_TO_MERGE"), "a review")
             impl = (w["roles"].get("implementer") or {})
+            # CC-072: the refusal covers REQUEST_CHANGES too, so an implementer cannot write a review verdict
+            # (and a cycle count) on its own ticket; only a fresh reviewer session may.
+            own = {x for x in (impl.get("session"), t["key"].lower(), t["key"]) if x}
+            if actor == "agent:implementer" or (session and session in own):
+                raise TaskError(409, "the implementer cannot review its own work; a fresh reviewer must")
             if verdict == "APPROVE":
-                own = {x for x in (impl.get("session"), t["key"].lower(), t["key"]) if x}
-                if actor == "agent:implementer" or (session and session in own):
-                    raise TaskError(409, "the implementer cannot approve its own work; a fresh reviewer must")
                 if not session:
                     raise TaskError(400, "say which fresh reviewer session approves (--session)")
                 f = self._flow(tid)
