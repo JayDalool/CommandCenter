@@ -68,6 +68,14 @@ class CtoSettingsTemplate(unittest.TestCase):
                 self.assertFalse(_denied(cmd))
 
 
+class CtoRulesFile(unittest.TestCase):
+    def test_exists_and_names_d058(self):
+        self.assertIn("D-058", (ROOT / "scripts" / "cto" / "CLAUDE.md").read_text())
+
+    def test_runbook_mentions_it(self):
+        self.assertIn("scripts/cto/CLAUDE.md", (ROOT / "docs" / "runbooks" / "cto-deny-rules.md").read_text())
+
+
 class DecisionD058(unittest.TestCase):
     def test_names_tiers_and_rules(self):
         t = (ROOT / "docs" / "decisions" / "D-058.md").read_text().lower()
