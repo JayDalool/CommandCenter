@@ -112,6 +112,13 @@ class AuthorityAgrees(unittest.TestCase):
             self.assertEqual(workflow, name)
             self.assertIn(job, jobs)
         self.assertIn(f"branches: [{mp.BASE['commandcenter']}]", pr)
+        # Codex CC-080 r1: the rollup names a workflow but not its file, so ci.yml must be the only workflow with
+        # that name (required_ci holds any PR that changes .github/, so a PR cannot add a look-alike).
+        folder = os.path.join(ROOT, ".github", "workflows")
+        named = sorted(n for n in os.listdir(folder) if n.endswith((".yml", ".yaml")) and any(
+            ln.split(":", 1)[1].strip().strip("'\"") == name
+            for ln in read(f".github/workflows/{n}").splitlines() if ln.startswith("name:")))
+        self.assertEqual(named, ["ci.yml"])
         # A path filter would let a PR skip a required job; absent then holds the merge, but say so here first.
         self.assertFalse([ln for ln in pr if ln.startswith(("paths", "paths-ignore"))], pr)
 

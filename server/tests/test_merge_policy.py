@@ -6,7 +6,8 @@ from unittest import mock
 from ccd import merge_policy as mp
 
 HEAD = "ab" * 20
-REF = "JayDalool/CommandCenter#7"
+REPO = "JayDalool/CommandCenter"
+REF = REPO + "#7"
 
 
 def f(path, change="MODIFIED", add=5, dele=2):
@@ -20,8 +21,9 @@ def fr(project, files):
 
 
 def run(job, conclusion="SUCCESS", workflow="ci", status="COMPLETED"):
-    """One check run as `gh pr view --json statusCheckRollup` reports it (seen on PR #161)."""
-    return {"__typename": "CheckRun", "workflowName": workflow, "name": job, "status": status, "conclusion": conclusion}
+    """One check run as `gh pr view --json statusCheckRollup` reports it (seen on PRs #161 and #166)."""
+    return {"__typename": "CheckRun", "workflowName": workflow, "name": job, "status": status, "conclusion": conclusion,
+            "detailsUrl": "https://github.com/JayDalool/CommandCenter/actions/runs/45765556042/job/139725494370"}
 
 
 # ci.yml's two required jobs, green (CC-080: a qualifying PR needs both).
@@ -282,7 +284,7 @@ class RequiredChecks(unittest.TestCase):
         return [r for r in GREEN if r["name"] != job] + [run(job, conclusion)]
 
     def test_both_green_pass(self):
-        self.assertEqual(mp.required_ci("commandcenter", GREEN), ([], []))
+        self.assertEqual(mp.required_ci("commandcenter", GREEN, REPO, view()["files"]), ([], []))
         self.assertTrue(decide(view(statusCheckRollup=GREEN)).ok)
 
     def test_an_absent_required_check_holds_naming_it(self):
@@ -295,8 +297,20 @@ class RequiredChecks(unittest.TestCase):
             d = decide(view(statusCheckRollup=self.other("web", bad)))
             self.assertEqual((d.ok, d.wait), (False, False), bad)
             self.assertIn(f"required check ci/web is {bad.lower()}", d.reasons, bad)
-        d = decide(view(statusCheckRollup=[run("backend"), run("web", "", status="COMPLETED")]))
-        self.assertIn("required check ci/web is completed", d.reasons)        # done with no conclusion: unknown
+
+    def test_only_completed_and_success_together_pass(self):
+        # Codex CC-080 r1: a SUCCESS conclusion beside a running, missing or unknown status is malformed and holds.
+        for status, conclusion in (("IN_PROGRESS", "SUCCESS"), ("QUEUED", "SUCCESS"), (None, "SUCCESS"),
+                                   ("", "SUCCESS"), ("SOMETHING_NEW", "SUCCESS"), ("completed", "SUCCESS"),
+                                   ("COMPLETED", "success"), ("COMPLETED", ""), ("COMPLETED", None), ("COMPLETED", 7),
+                                   (7, None), ("SOMETHING_NEW", ""), (["QUEUED"], None), ({}, "")):
+            d = decide(view(statusCheckRollup=[run("backend"), run("web", conclusion, status=status)]))
+            self.assertEqual((d.ok, d.wait), (False, False), (status, conclusion))
+            self.assertTrue(any(r.startswith("required check ci/web is ") for r in d.reasons), (status, conclusion))
+        for status, conclusion in (("IN_PROGRESS", ""), ("QUEUED", None), ("PENDING", ""), ("WAITING", None),
+                                   ("REQUESTED", "")):
+            d = decide(view(statusCheckRollup=[run("backend"), run("web", conclusion, status=status)]))
+            self.assertEqual((d.ok, d.wait), (False, True), (status, conclusion))
 
     def test_a_running_required_check_waits(self):
         for status in ("IN_PROGRESS", "QUEUED"):
@@ -314,6 +328,24 @@ class RequiredChecks(unittest.TestCase):
             self.assertFalse(d.ok, impostor)
             self.assertIn("required check ci/backend did not report at this head", d.reasons, impostor)
 
+    def test_a_look_alike_workflow_does_not_count(self):
+        # Codex CC-080 r1: "ci"/"backend" by name alone is not ci.yml. A run must be an Actions job of this
+        # repository, and a PR that changes .github/ (which could add its own workflow named ci) is held.
+        for url in ("https://github.com/Someone/Fork/actions/runs/1/job/2", "https://ci.example.com/JayDalool/CommandCenter",
+                    "https://github.com/JayDalool/CommandCenter/runs/1", "", None, 7):
+            d = decide(view(statusCheckRollup=[dict(run("backend"), detailsUrl=url), run("web")]))
+            self.assertFalse(d.ok, url)
+            self.assertIn("required check ci/backend did not report at this head", d.reasons, url)
+        lookalike = "required check ci/backend did not report at this head"
+        self.assertTrue(decide(view(statusCheckRollup=GREEN)).ok)
+        self.assertNotIn(lookalike, decide(view(statusCheckRollup=GREEN)).reasons)
+        why = "the PR changes .github/ (or lists no files), so its checks cannot prove they ran ci.yml"
+        for path in (".github/workflows/lookalike.yml", ".GITHUB/workflows/ci2.yml", ".github/actions/x/action.yml"):
+            d = decide(view([f(path, "ADDED"), f("docs/a.md")], statusCheckRollup=GREEN))
+            self.assertFalse(d.ok, path)
+            self.assertIn(why, d.reasons, path)
+        self.assertIn(why, mp.required_ci("commandcenter", GREEN, REPO, None)[0])
+
     def test_a_second_run_that_did_not_pass_holds(self):
         for second in ("FAILURE", "SKIPPED"):
             d = decide(view(statusCheckRollup=GREEN + [run("web", second)]))
@@ -330,8 +362,10 @@ class RequiredChecks(unittest.TestCase):
         self.assertIn("a CI check is in a state ccd does not recognise", d.reasons)
 
     def test_a_project_without_required_checks_or_an_unreadable_rollup_holds(self):
-        self.assertEqual(mp.required_ci("gyst", GREEN), (["gyst has no required CI checks"], []))
-        self.assertEqual(mp.required_ci("commandcenter", "green"), (["the PR's CI checks could not be read"], []))
+        self.assertEqual(mp.required_ci("gyst", GREEN, REPO, []), (["gyst has no required CI checks"], []))
+        for rollup, repo in (("green", REPO), (GREEN, None), (GREEN, "")):
+            self.assertEqual(mp.required_ci("commandcenter", rollup, repo, view()["files"]),
+                             (["the PR's CI checks could not be read"], []))
         with mock.patch.dict(mp.REQUIRED_CHECKS, clear=True):
             self.assertIn("commandcenter has no required CI checks", decide().reasons)
 

@@ -185,31 +185,53 @@ def ci_state(rollup):
     return "pending" if any(s in _PENDING for s in states) else "green"
 
 
-def required_ci(project, rollup):
+_RUNNING = {"QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED"}   # check-run statuses that end by themselves
+
+
+def _run_state(c):
+    """'ok' | 'running' | the reason a required run fails. Only status COMPLETED with conclusion SUCCESS passes
+    (Codex, CC-080 r1: a SUCCESS conclusion beside a missing or running status is malformed and holds)."""
+    status, conclusion = c.get("status"), c.get("conclusion")
+    if status == "COMPLETED" and isinstance(conclusion, str) and conclusion:
+        return "ok" if conclusion == "SUCCESS" else conclusion.lower()
+    if isinstance(status, str) and status in _RUNNING and not conclusion:
+        return "running"
+    return f"in an unreadable state ({str(status)[:20]}/{str(conclusion)[:20]})"
+
+
+def required_ci(project, rollup, repo=None, files=None):
     """(holds, pending) for the project's REQUIRED_CHECKS in `statusCheckRollup` (CC-080 c4).
 
-    Only a GitHub Actions check run whose workflow and job both match counts: a commit status, or a check run of
-    another workflow with the same job name, never stands in for a required check. Every run of a pair must be
-    SUCCESS (a re-run that failed beside one that passed holds), so SKIPPED and NEUTRAL hold here, unlike in
-    ci_state (U-08, which stays as it is for autonomy and replay). Absent holds: right after a push that is
-    final for that head, which fails closed."""
+    A run counts for a pair only if it is a CheckRun with that workflow name and job name whose detailsUrl is a
+    GitHub Actions job of `repo` (so not another app's check, nor a commit status, nor a check in another
+    repository). The rollup carries no workflow file path, so ci.yml is proven by elimination instead: a PR that
+    changes anything under .github/ is held here (its checks may have run its own workflows), and
+    test_merge_authority pins ci.yml as the only workflow named "ci" in the repository. Every run of a pair must
+    be COMPLETED and SUCCESS (a re-run that failed beside one that passed holds), so SKIPPED and NEUTRAL hold here,
+    unlike in ci_state (U-08, unchanged for autonomy and replay). Absent holds: right after a push that is final
+    for that head, which fails closed."""
     required = REQUIRED_CHECKS.get(project)
     if not required:
         return [f"{project} has no required CI checks"], []
-    if not isinstance(rollup, list):
+    if not isinstance(rollup, list) or not isinstance(repo, str) or not repo:
         return ["the PR's CI checks could not be read"], []
     holds, pending = [], []
+    if not isinstance(files, list) or any(not isinstance(x, dict) or not isinstance(x.get("path"), str)
+                                          or x["path"].lower().startswith(".github/") for x in files):
+        holds.append("the PR changes .github/ (or lists no files), so its checks cannot prove they ran ci.yml")
+    actions = f"https://github.com/{repo}/actions/runs/"
     for workflow, job in required:
         name = f"{workflow}/{job}"
-        states = [str(c.get("conclusion") or c.get("status") or "").upper() for c in rollup
+        states = [_run_state(c) for c in rollup
                   if isinstance(c, dict) and c.get("__typename") == "CheckRun"
-                  and c.get("workflowName") == workflow and c.get("name") == job]
-        bad = sorted({s for s in states if s != "SUCCESS" and s not in _PENDING})
+                  and c.get("workflowName") == workflow and c.get("name") == job
+                  and isinstance(c.get("detailsUrl"), str) and c["detailsUrl"].startswith(actions)]
+        bad = sorted({s for s in states if s not in ("ok", "running")})
         if not states:
             holds.append(f"required check {name} did not report at this head")
         elif bad:
-            holds.append(f"required check {name} is {', '.join(b.lower() for b in bad)}")
-        elif any(s in _PENDING for s in states):
+            holds.append(f"required check {name} is {', '.join(bad)}")
+        elif "running" in states:
             pending.append(f"required check {name} is still running")
     return holds, pending
 
@@ -309,7 +331,8 @@ def classify(project, ticket, work, pr, pr_ref, open_prs, policy="low-risk"):
         reasons.append("a CI check is in a state ccd does not recognise")
     elif ci == "pending":
         wait.append("CI is still running")
-    holds, pending = required_ci(project, pr.get("statusCheckRollup"))
+    holds, pending = required_ci(project, pr.get("statusCheckRollup"), (pr_ref or "").rpartition("#")[0],
+                                 pr.get("files"))
     reasons += holds
     wait += pending
 

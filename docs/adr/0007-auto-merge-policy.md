@@ -116,9 +116,16 @@ refused before can qualify now, and anything it cannot decide is a hold for Jay,
 - **An authorized base per project** (`merge_policy.BASE`, Command Center: `main`). A project with no entry never
   qualifies; a stacked PR based on another branch is held.
 - **Required CI by name** (`merge_policy.REQUIRED_CHECKS`, Command Center: `ci/backend` and `ci/web`, the jobs of
-  `.github/workflows/ci.yml`, which runs on every PR to main). Every GitHub Actions run of each pair must be SUCCESS
-  at the PR's head. Absent, failed, cancelled, skipped, neutral or unknown holds; a commit status or a check of
-  another workflow with the same job name does not count; running waits, then the 30-minute clock opens a gate.
+  `.github/workflows/ci.yml`, which runs on every PR to main). Every run of each pair must have status COMPLETED
+  and conclusion SUCCESS at the PR's head. Absent, failed, cancelled, skipped, neutral, or a malformed or unknown
+  status or conclusion holds; queued or in progress waits, then the 30-minute clock opens a gate.
+- **Which workflow ran, plainly.** The `gh pr view` rollup names a check's workflow (`workflowName`) and job but
+  not its file, so it cannot by itself tell `ci.yml` from another workflow also named `ci`. ccd counts only a
+  CheckRun whose workflow and job names match and whose `detailsUrl` is an Actions job of this repository (so no
+  commit status, other app's check or other repository's run counts), and proves the file by elimination: a PR
+  that changes anything under `.github/` is held (its checks may have run its own workflows), and a test pins
+  `ci.yml` as the only workflow named `ci` in the repository. Reading the workflow file path needs another GitHub
+  read, which slice 2 may add.
   `merge_policy.ci_state` is unchanged (autonomy and replay use it), and any other check still pending still waits.
 - The size and user-check rules live in `ticket_reasons`, which the daemon re-runs after its last await, right
   before `gh pr merge`, so a size raised or a UI label added while `gh pr view` ran holds the merge.
