@@ -1,6 +1,7 @@
 # ADR 0007 — Auto-merge of reviewed low-risk Command Center PRs (ccd's first GitHub write)
 
-Date: 2026-10-09 · Status: accepted (Jay's decision, option B, 2026-10-09) · Ticket: CC-025
+Date: 2026-10-09 · Status: accepted (Jay's decision, option B, 2026-10-09) · Ticket: CC-025 ·
+Amended by CC-080 (2026-11-26, see the last section)
 
 ## Context
 
@@ -29,8 +30,9 @@ review) and everything else to keep waiting for him.
    type, no plan-gate label and no `owner:accept`.
 4. **The review must still hold at merge time**: verdict APPROVE, `review_head` equal to the PR's head in a fresh
    `gh pr view`, recorded against this very PR, and the ticket has exactly one open linked PR. The PR is open, not a
-   draft, MERGEABLE, based on `main`, not from a fork, and CI has nothing failing or pending. **No checks at all is
-   allowed** (there is no PR workflow yet; CC-033 adds one) and the events then say "no CI checks", never "green".
+   draft, MERGEABLE, based on `main`, not from a fork, and CI has nothing failing or pending. Until CC-080 a PR with
+   no checks at all qualified (there was no PR workflow yet; CC-033 added one) and the events said "no CI checks",
+   never "green". **CC-080 withdrew that allowance**: a PR with no checks is now held (see the last section).
    The old "approved head X with green checks" text had the same flaw and is fixed.
 5. **Three switches, all of which must allow it**: registry `merge: "low-risk"` (code, merged by Jay);
    `auto_merge: true` in `config.json` (default `false`, read at start); and no file
@@ -101,3 +103,37 @@ or "stopped". It is switched on by Jay, per machine, and one file stops it at on
 - A PR test workflow (CC-033), then widen the allowlist deliberately, one folder at a time.
 - A UI toggle (deliberately not built: the switch is a config file and a stop file).
 - Per-project allowlists for other repositories, only after Jay asks for them.
+
+## Amended by CC-080, slice 1 (2026-11-26)
+
+Jay approved the plan (question 224). Every rule below only adds a refusal to `merge_policy.classify`; nothing it
+refused before can qualify now, and anything it cannot decide is a hold for Jay, never a merge.
+
+- **Small tickets only** (Jay's Q170 answer): the ticket's shown size must be `small`. Unsized, standard and risky
+  tickets are held, and a plan-gate label makes a ticket read as risky.
+- **The user check at the reviewed head**, when the ticket's route has one (a UI ticket, already held, or a
+  standard or risky one).
+- **An authorized base per project** (`merge_policy.BASE`, Command Center: `main`). A project with no entry never
+  qualifies; a stacked PR based on another branch is held.
+- **Required CI by name** (`merge_policy.REQUIRED_CHECKS`, Command Center: `ci/backend` and `ci/web`, the jobs of
+  `.github/workflows/ci.yml`, which runs on every PR to main). Every run of each pair must have status COMPLETED
+  and conclusion SUCCESS at the PR's head. Absent, failed, cancelled, skipped, neutral, or a malformed or unknown
+  status or conclusion holds; queued or in progress waits, then the 30-minute clock opens a gate.
+- **Which workflow ran, plainly.** The `gh pr view` rollup names a check's workflow (`workflowName`) and job but
+  not its file, so it cannot by itself tell `ci.yml` from another workflow also named `ci`. ccd counts only a
+  CheckRun whose workflow and job names match and whose `detailsUrl` is an Actions job of this repository (so no
+  commit status, other app's check or other repository's run counts), and proves the file by elimination: a PR
+  that changes anything under `.github/` is held (its checks may have run its own workflows), and a test pins
+  `ci.yml` as the only workflow named `ci` in the repository. Reading the workflow file path needs another GitHub
+  read, which slice 2 may add.
+  `merge_policy.ci_state` is unchanged (autonomy and replay use it), and any other check still pending still waits.
+- The size and user-check rules live in `ticket_reasons`, which the daemon re-runs after its last await, right
+  before `gh pr merge`, so a size raised or a UI label added while `gh pr view` ran holds the merge.
+
+**`auto_merge` must stay off until slice 2 lands.** Slice 1 does not see a PR retargeted after its approval, or
+between `gh pr view` and `gh pr merge` (`--match-head-commit` guards only the head), and does not re-read the base
+after the merge. Required CI is checked at the PR's head, not against a base that moved since it ran. It guards
+ccd's own merge path only: main has no branch protection, and nothing technical stops an agent running
+`gh pr merge` itself. Later slices, each its own PR and review with `auto_merge` off throughout: slice 2 retarget
+detection and a post-merge target alert; slice 3 a per-project switch in Settings; slice 4 other projects; slice 5
+ccd performing Jay's merges and a guard on agents' merges.

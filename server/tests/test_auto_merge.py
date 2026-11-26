@@ -14,7 +14,8 @@ from ccd.store import Store
 from ccd.tasks import TaskStore
 
 from .helpers import cfg, new_db
-from .test_merge_policy import HEAD, REF, f, view
+from .test_merge_policy import GREEN, HEAD, REF, f, run, view
+from .test_notify import ReplyBase, need
 
 PLAN = {"summary": "add tests", "requirements": [], "approach": "tests", "affected": [], "risk": "low",
         "tests": ["unit"], "questions": []}
@@ -47,6 +48,12 @@ class FakeGh:
         return [c for c in self.calls if c[:3] == ["gh", "pr", verb]]
 
 
+def size_ticket(pl, key, size):
+    """Size a ticket as the lead's intake would have (its flow row), whatever stage it is in now."""
+    if size is not None:
+        pl._flow_set(pl.ts._id_of(key), time.time(), size=size)
+
+
 class Base(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.mkdtemp(prefix="am-")
@@ -64,8 +71,9 @@ class Base(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.store.close()
 
-    def ready(self, project="commandcenter", number=7, head=HEAD, cache=True, **fields):
-        """A ticket in READY_TO_MERGE: planned, started, its PR linked, an approving review recorded at `head`."""
+    def ready(self, project="commandcenter", number=7, head=HEAD, cache=True, size="small", **fields):
+        """A ticket in READY_TO_MERGE: planned, started, its PR linked, an approving review recorded at `head`,
+        sized `size` (CC-080: only a small ticket merges by itself)."""
         d, pl = self.daemon, self.daemon.pipeline
         t, _ = self.tickets.create(project, "Add tests", **fields)
         k = t["key"]
@@ -84,6 +92,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
                 d.gh[project] = {"data": {"prs": []}, "asOf": 1, "error": None}
             d.gh[project]["data"]["prs"].append({"number": number, "headRefOid": head, "statusCheckRollup": [],
                                                  "isDraft": False})
+        size_ticket(pl, k, size)
         return k
 
     def kinds(self, key):
@@ -106,16 +115,15 @@ class Merges(Base):
         self.assertEqual(len(self.gh.calls), 2)
         self.assertEqual(self.daemon.pipeline.work(k)["gate"], None)
         merged = [e for e in self.tickets.get(k)["timeline"] if e["kind"] == "pipeline.auto_merged"]
+        # CC-080: only a PR whose required checks passed merges (no checks at all is now a hold, Holds below).
         self.assertEqual([(e["actor"], e["data"]["head"], e["data"]["ci"]) for e in merged],
-                         [("system:auto-merge", HEAD, "none")])
-        self.assertIn("no CI checks", merged[0]["trigger"])
-        self.assertNotIn("green", merged[0]["trigger"])
+                         [("system:auto-merge", HEAD, "green")])
         sec = self.events("merge.auto")
         self.assertEqual([(e["source"], e["ref"]) for e in sec], [("security", k)])
 
     async def test_green_ci_is_said_as_green(self):
         k = self.ready()
-        self.gh.pr = view(statusCheckRollup=[{"conclusion": "SUCCESS"}])
+        self.gh.pr = view(statusCheckRollup=GREEN)
         await self.daemon._auto_merge()
         self.assertEqual(len(self.gh.of("merge")), 1)
         text = [e["trigger"] for e in self.tickets.get(k)["timeline"] if e["kind"] == "pipeline.auto_merged"][0]
@@ -260,7 +268,7 @@ class Skips(Base):
 
     async def test_pending_ci_and_unknown_mergeability_wait_without_a_gate(self):
         k = self.ready()
-        self.gh.pr = view(statusCheckRollup=[{"status": "IN_PROGRESS", "conclusion": ""}])
+        self.gh.pr = view(statusCheckRollup=[run("backend"), run("web", "", status="IN_PROGRESS")])
         await self.daemon._auto_merge()
         await self.daemon._auto_merge()      # looked at once, then left alone for a minute
         self.assertEqual((len(self.gh.of("view")), self.gh.of("merge")), (1, []))
@@ -496,7 +504,7 @@ class Gates(Base):
 class Pending(Base):
     async def test_a_pr_pending_too_long_opens_a_gate(self):
         k = self.ready()
-        self.gh.pr = view(statusCheckRollup=[{"status": "QUEUED", "conclusion": ""}])
+        self.gh.pr = view(statusCheckRollup=GREEN + [run("e2e", "", workflow="web-e2e", status="QUEUED")])
         await self.daemon._auto_merge()
         self.assertEqual(self.daemon.pipeline.work(k)["gate"], None)
         self.daemon._am_next.clear()
@@ -552,3 +560,125 @@ class Pending(Base):
         d._am_next.clear()
         await d._auto_merge()
         self.assertEqual(d.pipeline.work(k)["gate"], None)                 # the old clock would have opened a gate
+
+
+class LateGuard(Base):
+    """CC-080 c3: what ticket_reasons adds is re-checked after the last await (Codex ff35a39 High 2)."""
+
+    async def held_with(self, k, *why):
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        w = self.daemon.pipeline.work(k)
+        self.assertEqual(w["gate"], "merge")
+        for reason in why:
+            self.assertIn(reason, w["gateReason"])
+
+    async def test_size_raised_to_risky_while_gh_view_runs_holds_the_merge(self):
+        k = self.ready()
+        self.gh.on_view = lambda: size_ticket(self.daemon.pipeline, k, "risky")
+        await self.held_with(k, "the ticket is risky, not small")
+
+    async def test_a_plan_gate_label_added_while_gh_view_runs_holds_the_merge(self):
+        k = self.ready()
+        self.gh.on_view = lambda: self.tickets.update(k, {"labels": ["migration"]}, "jay")
+        await self.held_with(k, "the ticket is risky, not small")     # the shown size: a plan-gate label is risky
+
+    async def test_a_user_check_stage_appearing_while_gh_view_runs_holds_the_merge(self):
+        k = self.ready()
+        self.gh.on_view = lambda: self.tickets.update(k, {"labels": ["ui"]}, "jay")     # the route gains userCheck
+        await self.held_with(k, "the ui label", f"the user check has not passed at the reviewed head {HEAD[:7]}")
+
+    async def test_an_unsized_or_standard_ticket_is_held_and_a_small_one_merges(self):
+        for size, why in ((None, "the ticket is not sized, not small"), ("standard", "the ticket is standard, not small")):
+            k = self.ready(number=8 if size else 9, head=("cd" if size else "ef") * 20, size=size)
+            self.gh.pr = view(headRefOid=("cd" if size else "ef") * 20)
+            self.gh.calls.clear()
+            await self.daemon._auto_merge()
+            self.assertEqual(self.gh.of("merge"), [], size)
+            self.assertIn(why, self.daemon.pipeline.work(k)["gateReason"])
+        self.ready()
+        self.gh.pr = view()
+        await self.daemon._auto_merge()
+        self.assertEqual(len(self.gh.of("merge")), 1)
+
+
+class RequiredCiInTheDaemon(Base):
+    async def test_a_required_check_running_too_long_opens_a_gate_naming_it(self):
+        k = self.ready()
+        self.gh.pr = view(statusCheckRollup=[run("backend"), run("web", "", status="IN_PROGRESS")])
+        await self.daemon._auto_merge()
+        self.assertEqual(self.daemon.pipeline.work(k)["gate"], None)
+        self.daemon._am_next.clear()
+        self.daemon._am_waiting[k] = (self.daemon._review_stamp(self.daemon.pipeline.work(k)),
+                                      time.monotonic() - self.daemon.AUTO_MERGE_WAIT_LIMIT - 5)
+        await self.daemon._auto_merge()
+        w = self.daemon.pipeline.work(k)
+        self.assertEqual(w["gate"], "merge")
+        self.assertIn("required check ci/web is still running", w["gateReason"])
+        self.assertIn("for over 30 minutes", w["gateReason"])
+        self.assertEqual(self.gh.of("merge"), [])
+
+
+class Replays(Base):
+    """CC-080 c6: the merge mistakes the ticket names, replayed against ccd's automatic merge. The retargeted PR
+    (and a stacked PR GitHub retargets to main) is slice 2; the Slack replies are in SlackReplays below."""
+
+    async def test_stale_approval_merges_nothing(self):
+        k = self.ready()                                         # approved at HEAD; the PR has moved on since
+        self.gh.pr = view(headRefOid="cd" * 20)
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertEqual(self.tickets.get(k)["status"], "READY_TO_MERGE")
+
+    async def test_a_commit_between_approval_and_merge_merges_nothing(self):
+        k = self.ready()
+        new = "cd" * 20
+        pl = self.daemon.pipeline
+        # The push lands while `gh pr view` runs (which still saw the reviewed head): the GitHub poll records it.
+        self.gh.on_view = lambda: pl.sync_pr(k, {"ref": REF, "head": new, "ciGreen": True, "draft": False})
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertNotEqual(self.tickets.get(k)["status"], "READY_TO_MERGE")
+
+    async def test_a_pr_with_no_checks_is_held_with_the_reason(self):
+        k = self.ready()
+        self.gh.pr = view(statusCheckRollup=[])
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertIn("required check ci/backend did not report at this head", self.daemon.pipeline.work(k)["gateReason"])
+
+    async def test_a_stacked_pr_is_held_for_its_base(self):
+        k = self.ready()
+        self.gh.pr = view(baseRefName="CC-054-manitoba-tz")
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertIn("the PR is based on CC-054-manitoba-tz, not main", self.daemon.pipeline.work(k)["gateReason"])
+
+
+class SlackReplays(ReplyBase):
+    """CC-080 c6: Jay's merge reply in Slack (notify.Notifier.approve) is exact: one merge per DM, the word merge."""
+
+    def merge_dm(self, key):
+        self.n.update_settings({"replyScope": "all"})
+        self.d.work[key] = {"review": {"verdict": "APPROVE", "head": HEAD, "pr": f"{REPO}#7"}}
+        return self.send(need(key, "gate", "merge", project="commandcenter",
+                              text=f"Ready to merge: PR {REPO}#7 approved and green"))
+
+    def test_a_duplicate_merge_reply_merges_nothing_more(self):
+        ts = self.merge_dm("CC-41")
+        merge = self.d.slack_merge
+
+        async def merge_and_close(key, head):
+            # What Daemon.act_merge does: it confirms the merge gate, so that gate leaves the Needs Jay list.
+            self.d.needs_list = [n for n in self.d.needs_list if n["ref"] != key]
+            return await merge(key, head)
+        self.d.slack_merge = merge_and_close
+        self.assertEqual(self.reply("merge", ts)["did"], "approved_merge")
+        self.assertEqual(self.reply("merge", ts)["did"], "approval_stale")
+        self.assertEqual(self.d.merged, [("CC-41", HEAD)])
+
+    def test_an_ambiguous_reply_merges_nothing(self):
+        ts = self.merge_dm("CC-42")
+        for text in ("merge?", "ok", "merge it but wait", "merge after lunch", "yes"):
+            self.assertNotEqual(self.reply(text, ts)["did"], "approved_merge", text)
+        self.assertEqual((self.d.merged, self.d.confirmed), ([], []))

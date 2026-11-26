@@ -12,19 +12,24 @@ Low-risk means ALL of:
      AGENTS.md, AGENTS.override.md, AGENT.md, GEMINI.md, SKILL.md) anywhere
   2. at most MAX_FILES files and MAX_LINES changed lines
   3. no needs:jay, needs:legal, UI or deploy flag, no SECURITY / LEGAL / DESIGN type, no plan-gate label, and
-     Jay has not asked to accept it (owner:accept)
+     Jay has not asked to accept it (owner:accept); the ticket is sized small, and when its route has a user
+     check, that check passed at the reviewed head (CC-080)
   4. the recorded review APPROVEs, it covers the PR's head right now, it was recorded against this very PR,
      and the ticket has exactly one open linked PR
-  5. the PR is open, not a draft, MERGEABLE, based on `main` and from the same repository
-  6. CI has nothing failing or pending. No checks at all is allowed (the PRs this allows are tests and docs;
-     there is no PR workflow yet, CC-033) but it is reported as "no CI checks", never as "green".
+  5. the PR is open, not a draft, MERGEABLE, based on the project's authorized branch (BASE) and from the same
+     repository
+  6. CI has nothing failing or pending, and every required check (REQUIRED_CHECKS) reported SUCCESS at this
+     head. No checks at all is a hold: CC-080 withdrew ADR 0007's no-checks allowance once CI ran on every PR.
+
+Every CC-080 rule only adds a refusal; nothing refused before can qualify now. Anything this module cannot decide
+(no size, an unknown check state, no BASE or REQUIRED_CHECKS entry) is a hold for Jay, never a merge.
 
 The daemon (ccd/daemon.py `_auto_merge`) does the rest: the two switches, the stop file, the merge itself.
 """
 import re
 from collections import namedtuple
 
-from . import pipeline
+from . import flow, pipeline
 
 # project key → glob patterns a changed file must match. No entry, no auto-merge.
 ALLOW = {
@@ -43,6 +48,12 @@ DENY = (
     "requirements*.txt", "pyproject.toml", "setup.py", "setup.cfg", "Pipfile", "go.mod", "go.sum",
     "Cargo.toml", "tsconfig*.json", "vite.config.*",
 )
+# CC-080: the branch each project's PRs may be merged into. No entry, no auto-merge (a stacked PR is held).
+BASE = {"commandcenter": "main"}
+# CC-080: (workflow name, job name) pairs that must each report SUCCESS at the PR's head. These are ci.yml's two
+# jobs, which run on every PR to main; web-e2e is path-filtered, so it cannot be required (a pending one still
+# waits through ci_state). A pair names its workflow so a same-named check from elsewhere cannot stand in for it.
+REQUIRED_CHECKS = {"commandcenter": (("ci", "backend"), ("ci", "web"))}
 MAX_FILES = 10
 MAX_LINES = 300
 GOOD_CHANGES = ("ADDED", "MODIFIED")
@@ -174,6 +185,57 @@ def ci_state(rollup):
     return "pending" if any(s in _PENDING for s in states) else "green"
 
 
+_RUNNING = {"QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED"}   # check-run statuses that end by themselves
+
+
+def _run_state(c):
+    """'ok' | 'running' | the reason a required run fails. Only status COMPLETED with conclusion SUCCESS passes
+    (Codex, CC-080 r1: a SUCCESS conclusion beside a missing or running status is malformed and holds)."""
+    status, conclusion = c.get("status"), c.get("conclusion")
+    if status == "COMPLETED" and isinstance(conclusion, str) and conclusion:
+        return "ok" if conclusion == "SUCCESS" else conclusion.lower()
+    if isinstance(status, str) and status in _RUNNING and not conclusion:
+        return "running"
+    return f"in an unreadable state ({str(status)[:20]}/{str(conclusion)[:20]})"
+
+
+def required_ci(project, rollup, repo=None, files=None):
+    """(holds, pending) for the project's REQUIRED_CHECKS in `statusCheckRollup` (CC-080 c4).
+
+    A run counts for a pair only if it is a CheckRun with that workflow name and job name whose detailsUrl is a
+    GitHub Actions job of `repo` (so not another app's check, nor a commit status, nor a check in another
+    repository). The rollup carries no workflow file path, so ci.yml is proven by elimination instead: a PR that
+    changes anything under .github/ is held here (its checks may have run its own workflows), and
+    test_merge_authority pins ci.yml as the only workflow named "ci" in the repository. Every run of a pair must
+    be COMPLETED and SUCCESS (a re-run that failed beside one that passed holds), so SKIPPED and NEUTRAL hold here,
+    unlike in ci_state (U-08, unchanged for autonomy and replay). Absent holds: right after a push that is final
+    for that head, which fails closed."""
+    required = REQUIRED_CHECKS.get(project)
+    if not required:
+        return [f"{project} has no required CI checks"], []
+    if not isinstance(rollup, list) or not isinstance(repo, str) or not repo:
+        return ["the PR's CI checks could not be read"], []
+    holds, pending = [], []
+    if not isinstance(files, list) or any(not isinstance(x, dict) or not isinstance(x.get("path"), str)
+                                          or x["path"].lower().startswith(".github/") for x in files):
+        holds.append("the PR changes .github/ (or lists no files), so its checks cannot prove they ran ci.yml")
+    actions = f"https://github.com/{repo}/actions/runs/"
+    for workflow, job in required:
+        name = f"{workflow}/{job}"
+        states = [_run_state(c) for c in rollup
+                  if isinstance(c, dict) and c.get("__typename") == "CheckRun"
+                  and c.get("workflowName") == workflow and c.get("name") == job
+                  and isinstance(c.get("detailsUrl"), str) and c["detailsUrl"].startswith(actions)]
+        bad = sorted({s for s in states if s not in ("ok", "running")})
+        if not states:
+            holds.append(f"required check {name} did not report at this head")
+        elif bad:
+            holds.append(f"required check {name} is {', '.join(bad)}")
+        elif "running" in states:
+            pending.append(f"required check {name} is still running")
+    return holds, pending
+
+
 def ticket_reasons(ticket, work):
     """Why the ticket itself is not low-risk (rule 3)."""
     out = []
@@ -189,8 +251,20 @@ def ticket_reasons(ticket, work):
     labels = sorted(set(ticket.get("labels") or []) & pipeline.PLAN_GATE_LABELS)
     if labels:
         out.append("the ticket has plan-gate labels: " + ", ".join(labels))
-    if "owner:accept" in ((work or {}).get("confirmed") or []):
+    work = work or {}
+    if "owner:accept" in (work.get("confirmed") or []):
         out.append("Jay asked to accept this ticket's merge himself")
+    # CC-080 (Jay's Q170: small tickets only). work["size"] is the shown size, so a plan-gate label reads risky.
+    # These run again in the daemon's late guard after the last await, so a size raised or a user check cleared
+    # while `gh pr view` ran holds the merge (Codex ff35a39 High 2).
+    size = work.get("size")
+    if size != "small":
+        out.append(f"the ticket is {size or 'not sized'}, not small")
+    head = str((work.get("review") or {}).get("head") or "")
+    if "userCheck" in flow.route(size, pipeline.policy(ticket)):
+        uc = work.get("userCheck") or {}
+        if uc.get("result") != "pass" or uc.get("head") != head:
+            out.append(f"the user check has not passed at the reviewed head {head[:7] or '?'}")
     return out
 
 
@@ -199,7 +273,7 @@ def classify(project, ticket, work, pr, pr_ref, open_prs, policy="low-risk"):
 
     project   the registry key (picks the allowlist)
     ticket    tasks.get(): status, type, flags, labels, project
-    work      pipeline.work(): review {verdict, head, pr}, gate, confirmed
+    work      pipeline.work(): review {verdict, head, pr}, gate, confirmed, size, userCheck
     pr        a fresh `gh pr view --json state,isDraft,mergeable,baseRefName,headRefOid,isCrossRepository,files,
               additions,deletions,statusCheckRollup`
     pr_ref    "owner/repo#N" of the PR in `pr`
@@ -242,8 +316,11 @@ def classify(project, ticket, work, pr, pr_ref, open_prs, policy="low-risk"):
         wait.append("GitHub has not worked out mergeability yet")
     elif mergeable != "MERGEABLE":
         reasons.append(f"the PR is {str(mergeable or 'of unknown mergeability').lower()}, not mergeable")
-    if pr.get("baseRefName") != "main":
-        reasons.append(f"the PR is based on {pr.get('baseRefName') or '?'}, not main")
+    base = BASE.get(project)
+    if not base:
+        reasons.append(f"{project} has no authorized base branch")
+    elif pr.get("baseRefName") != base:
+        reasons.append(f"the PR is based on {pr.get('baseRefName') or '?'}, not {base}")
     if pr.get("isCrossRepository") is not False:
         reasons.append("the PR comes from another repository")
 
@@ -254,6 +331,10 @@ def classify(project, ticket, work, pr, pr_ref, open_prs, policy="low-risk"):
         reasons.append("a CI check is in a state ccd does not recognise")
     elif ci == "pending":
         wait.append("CI is still running")
+    holds, pending = required_ci(project, pr.get("statusCheckRollup"), (pr_ref or "").rpartition("#")[0],
+                                 pr.get("files"))
+    reasons += holds
+    wait += pending
 
     reasons += file_reasons(project, pr.get("files"), pr.get("additions"), pr.get("deletions"))
     if reasons:

@@ -119,6 +119,8 @@ close, split, start or move anything even by mistake.
 Command Center PR. It needs all of: `auto_merge: true` in `config.json` (default `false`), registry merge policy
 `low-risk` (only `commandcenter`), and no file `~/command-center/state/auto-merge.stop` (the kill switch, checked
 immediately before every merge; `touch` it to stop at once, delete it to resume). `ccd/merge_policy.py` decides:
+a small ticket (and its user check at the reviewed head when its route has one), a PR based on `main` whose
+`ci/backend` and `ci/web` checks both report SUCCESS at its head (no checks at all is a hold, CC-080), and
 only added or modified `server/tests/**/*.py`, `web/app/tests/**/*.ts(x)`, `docs/**/*.md` and `README.md` files, at most
 10 files and 300 lines, never `server/ccd/**`, `scripts/**`, `launcher/**`, `.github/**`, `web/app/src/**`,
 lockfiles, manifests, `plans/**`, `docs/SECURITY.md`, `docs/adr/**`, any dot-folder or dot-file at any depth (`.claude/`, `.mcp.json`, `.codex/`), `__pycache__`, or `AGENTS.md`, `AGENTS.override.md`, `AGENT.md`, `CLAUDE.md`, `CLAUDE.local.md`, `GEMINI.md`, `SKILL.md` anywhere.
@@ -133,7 +135,7 @@ folder, and their `gh` is logged in as Jay. "Agents never merge" and "Jay switch
 review, not technical blocks; ccd reads `auto_merge` only at start, so a config edit does nothing until ccd is
 restarted. The reviewer's "fresh review" is self-reported: ccd checks the recorded APPROVE, its session name and
 the exact head, not who really read the diff. Details and the missing separation (a second GitHub identity or
-branch protection): ADR 0007.
+branch protection): ADR 0007. CC-080 keeps `auto_merge` off until it also detects a PR retargeted after approval.
 
 
 ## P4B additions
