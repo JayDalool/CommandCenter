@@ -62,6 +62,10 @@ test("Slack and phone show what is not set up yet, fit a phone, and ask for Deve
   const group = page.getByRole("region", { name: "Slack and phone" });
   await expect(group.getByText("Tokens not set up on jay-server (slack.env)")).toBeVisible();
   await expect(group.getByText("No ntfy topic in config.json")).toBeVisible();
+  // Release email (CC-078): off, and it says what is missing; switching it on asks for Developer Unlock first.
+  const mailRow = group.getByRole("group", { name: "Release email" });
+  await expect(mailRow.getByRole("button", { name: "Off" })).toHaveAttribute("aria-pressed", "true");
+  await expect(group.getByText("No mail settings on jay-server (mail.env)")).toBeVisible();
   await expect(group.getByLabel("Quiet hours start")).toHaveValue("22:00");
   await expect(group.getByRole("button", { name: "Send a test" })).toBeDisabled();
   await expect(group.getByRole("group", { name: "Your Slack replies" }).getByRole("button", { name: "Answers only" }))
@@ -76,6 +80,9 @@ test("Slack and phone show what is not set up yet, fit a phone, and ask for Deve
   await expect(page.getByRole("dialog", { name: "Developer Unlock" })).toBeVisible();
   await page.keyboard.press("Escape");
   await group.getByRole("group", { name: "Slack", exact: true }).getByRole("button", { name: "On" }).click();
+  await expect(page.getByRole("dialog", { name: "Developer Unlock" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await mailRow.getByRole("button", { name: "On" }).click();
   await expect(page.getByRole("dialog", { name: "Developer Unlock" })).toBeVisible();
   await page.keyboard.press("Escape");
   expect(watch.writes).toEqual([]);
