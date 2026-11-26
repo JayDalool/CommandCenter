@@ -610,6 +610,33 @@ class Codex1(Base):
         self.tick(DUE)
         self.assertEqual(self.server.sent, [])
 
+    def test_mail_env_symlink_0644_and_a_swapped_file_are_refused_on_the_open_file(self):
+        # CC-091: the mail.env caller goes through the same single-open reader.
+        os.unlink(self.env_path)
+        real = os.path.join(self.tmp, "real.env")
+        with open(real, "w") as f:
+            f.write("MAIL_HOST=h\n")
+        os.chmod(real, 0o600)
+        os.symlink(real, self.env_path)
+        self.assertIn("not a link", self.n.public()["mail"]["error"])
+        os.unlink(self.env_path)
+        self.write_env()
+        os.chmod(self.env_path, 0o644)
+        self.assertIn("chmod 600", self.n.public()["mail"]["error"])
+        real_open = os.open
+
+        def swap_after_open(path, *a, **kw):
+            fd = real_open(path, *a, **kw)
+            os.unlink(self.env_path)
+            with open(self.env_path, "w") as f:
+                f.write("MAIL_HOST=h\n")
+            os.chmod(self.env_path, 0o600)       # a clean file swapped in must not rescue the 0644 one
+            return fd
+        with mock.patch.object(os, "open", swap_after_open):
+            conf, error = self.n.mail.config()
+        self.assertIsNone(conf)
+        self.assertIn("chmod 600", error)
+
     def test_the_runbooks_mail_env_example_is_accepted_as_written(self):
         text = (Path(__file__).resolve().parents[2] / "docs" / "runbooks" / "slack-and-ntfy.md").read_text()
         block = re.search(r"```\n(MAIL_HOST=.*?)```", re.sub(r"(?m)^   ", "", text), re.S).group(1)
