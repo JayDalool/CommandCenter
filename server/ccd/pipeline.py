@@ -1149,7 +1149,15 @@ class Pipeline:
                 if fs in ("techReview", "userCheck"):
                     rounds = dict(self._flow(tid)["rounds"], **{fs: 0})
                     self._flow_set(tid, at, rounds=rounds)
-                return {"status": RESUME_STATUS.get(stage, "RESEARCHING")}, work, events
+                back = RESUME_STATUS.get(stage, "RESEARCHING")
+                # CC-099: a small ticket's route has no investigation, so RESEARCHING is a dead end (plan
+                # refuses it, start needs READY_TO_IMPLEMENT). Only a ticket that WAS ready to implement when
+                # block recorded it goes back there: size alone would skip intake (blocked in INBOX/PROPOSED)
+                # or a pending plan review. No recorded status (older block): today's behaviour.
+                if stage == "PLAN" and (w["blocked"] or {}).get("fromStatus") == "READY_TO_IMPLEMENT" \
+                        and flow_mod.effective_size(self._flow(tid)["size"], policy(t)) == "small":
+                    back = "READY_TO_IMPLEMENT"
+                return {"status": back}, work, events
             if gate == "deploy" and not (w["deploy"] or {}).get("requestedAt") and not policy(t)["deploy"]:
                 # A risky ticket's release approval (the flow): Jay approves the release; nothing is deployed and
                 # no live deploy is requested by it. The ticket goes on as after any owner check.
@@ -1203,7 +1211,8 @@ class Pipeline:
             if not stage or stage == "DONE":
                 raise TaskError(409, f"{t['key']} is {t['status']}; nothing to block")
             return {"status": "BLOCKED"}, {"gate": "failure", "gate_reason": reason,
-                                           "blocked": dict(more, stage=stage, reason=reason, at=at)}, \
+                                           "blocked": dict(more, stage=stage, reason=reason, at=at,
+                                                           fromStatus=t["status"])}, \
                 [("pipeline.blocked", reason, {"stage": stage})]
         return self._tx(key, actor, fn)
 
