@@ -812,9 +812,8 @@ class Notifier:
             lines.append("_Reply *approve* to clear the blocker and resume, *fix* (with what to fix, if you like) to "
                          "send it back to implementation as Fix and continue does, *replan:* and why to send it back "
                          "to planning, or write to the lead._")
-        elif n.get("kind") == "gate" and n.get("gate") in LOW_RISK_GATES and self.allows(n.get("gate"), proj):
-            lines.append("_Reply *approve* to " + ("clear the blocker" if n["gate"] == "failure" else "accept the UI")
-                         + ", or write to the lead._")
+        elif n.get("kind") == "gate" and n.get("gate") == "ui" and self.allows("ui", proj):
+            lines.append("_Reply *approve* to accept the UI, or write to the lead._")
         elif n.get("kind") == "gate":
             lines.append("_Approve this in CommandCenter. A reply here goes to the lead._")
         return "\n".join(lines) + open_
@@ -1182,7 +1181,9 @@ class Notifier:
                     # A merge ships: an "ok" or 👍 is not one. (A deploy approval only asks for a plan, so it may.)
                     return {"did": "merge_word_needed", "project": proj,
                             "say": "Nothing was merged: reply *merge* to merge this PR."}
-                if item.get("kind") == "gate" and gate == "failure" and self.allows("failure", proj):
+                if item.get("kind") == "gate" and gate == "failure" and self.allows("failure", proj) \
+                        and not text.rstrip().endswith("?"):
+                    # "fix what? the test or the code?" is a question for the lead, not Fix and continue.
                     fix, replan = FIX_RE.match(text), REPLAN_RE.match(text)
                     if fix or replan:
                         return dict(await self.unblock(ref, "rework" if fix else "replan",

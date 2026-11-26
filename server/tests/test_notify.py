@@ -623,6 +623,7 @@ class Replies(ReplyBase):
         self.assertEqual(self.reply("Replan - the cache belongs in the server", ts)["did"], "unblocked_replan")
         ts = self.send(need("CC-4", "gate", "failure", project="commandcenter", text="Blocked: lint"))
         self.d.work["CC-4"] = {"blocked": {"reason": "lint fails", "action": "run the formatter"}}
+        self.assertEqual(self.reply("fix what? the test or the code?", ts)["did"], "lead_nudged")   # a question
         self.assertEqual(self.reply("Fix and continue", ts)["did"], "unblocked_rework")
         self.assertEqual(self.d.confirmed, [("CC-1", "failure")])
         self.assertEqual(self.d.unblocked, [("GY-2", "rework", "add the missing fixture"),

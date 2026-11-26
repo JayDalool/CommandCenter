@@ -2009,7 +2009,7 @@ class Daemon(LeadChat, HqDaemon):
         if not self.notifier.allows("failure", t["project"]):
             raise ActionError(403, "blockers in this project are cleared in CommandCenter")
         w = self.task_work(key)
-        if w.get("status") != "BLOCKED" and w.get("gate") != "failure":
+        if w.get("status") != "BLOCKED" or w.get("gate") != "failure":
             raise ActionError(409, f"{t['key']} is not blocked")
         if op == "rework":
             r = self._wrap(self.pipeline.rework, key, reason, "jay", open_prs=self._open_prs(t))
