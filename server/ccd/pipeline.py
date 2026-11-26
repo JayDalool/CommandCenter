@@ -50,7 +50,6 @@ ROLE_NAMES = ("coordinator", "planner", "implementer", "reviewer", "verifier",
 LEADS = ("jay", "agent:coordinator")          # who runs intake, edits criteria and writes the closing note
 USER_REVIEWERS = ("agent:user-reviewer", "agent:design-reviewer")
 CRITERION_ID_RE = re.compile(r"^c[0-9]{1,3}$")
-MAX_LANES = 2
 MAX_REVIEW_CYCLES = 2
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")   # the full PR head commit: no prefix can match another head
 SLUG_RE = r"[a-z0-9][a-z0-9-]{0,60}"
@@ -292,10 +291,9 @@ def clean_criteria(raw, old=(), at=None, by=None):
 class Pipeline:
     """Ops over one TaskStore. Methods return (ticket, changes, events)."""
 
-    def __init__(self, store, max_lanes=MAX_LANES):
+    def __init__(self, store):
         self.ts = store
         self.db = store.db
-        self.max_lanes = max_lanes
         # Whether ccd's auto-merge is switched on (config.json `auto_merge`, set by the daemon). While it is off,
         # a "low-risk" project behaves like "owner": a ready PR opens a merge gate for Jay.
         self.auto_merge = False
@@ -657,18 +655,9 @@ class Pipeline:
             "SELECT COUNT(*) FROM tickets t JOIN ticket_work w ON w.ticket_id=t.id "
             "WHERE t.status='IN_PROGRESS' AND w.worktree IS NOT NULL AND t.project=?", (project,)).fetchone()[0]
 
-    def lane_limit(self, project):
-        """At most this many implementation lanes per project (registry pipeline `max_lanes`, else the default)."""
-        return int(registry.pipeline_of(project).get("max_lanes") or self.max_lanes)
-
-    def _lane_free(self, t, what="wait for one to finish"):
-        limit = self.lane_limit(t["project"])
-        if self.lanes(t["project"]) >= limit:
-            raise TaskError(409, f"{limit} implementation lanes are already running in {t['project']}; {what}")
-
-    def investigate_limit(self, project):
-        """At most this many tickets in investigate with an investigator per project (registry `max_investigate`)."""
-        return int(registry.pipeline_of(project).get("max_investigate") or flow_mod.MAX_INVESTIGATE)
+    # No per-project cap on implementation lanes or investigations (Jay, 2026-11-26: "working at all the tasks all
+    # the time"). The 2-lane / 2-investigation limits made start, rework, "Fix and continue" and clearing a blocker
+    # fail with 409; lanes() and investigating() still count, for the flow view.
 
     def in_flight(self, project):
         """[(ticket, work, flow, handoffs)] for the project's open tickets past intake (not INBOX / PROPOSED)."""
@@ -688,13 +677,6 @@ class Pipeline:
                 if t["key"] != exclude and fl["size"] is not None and fl["stage"] == "investigate"
                 and t["status"] == "RESEARCHING" and fl["waitingOn"] != "jay"
                 and fl["holder"] and fl["holder"]["seat"] == "investigator"]
-
-    def _investigate_free(self, t):
-        limit = self.investigate_limit(t["project"])
-        busy = self.investigating(t["project"], exclude=t["key"])
-        if len(busy) >= limit:
-            raise TaskError(409, f"{limit} tickets are already being investigated in {t['project']} "
-                                 f"({', '.join(busy[:4])}); finish one first")
 
     def unseated(self, project, exclude=None, now=None):
         """Finishing first: the project's sized tickets that have waited more than 4 hours in technical review,
@@ -809,9 +791,6 @@ class Pipeline:
             raise TaskError(409, f"{t['key']} is {t['status']}; its plan was already reviewed (re-plan to change it)")
         if t["status"] != "RESEARCHING":
             raise TaskError(409, f"{t['key']} is {t['status']}; run intake first")
-        fl, _h = flow_mod.view(t, w, f, self._events(tid), pol)
-        if fl["stage"] == "investigate" and not fl["holder"] and fl["waitingOn"] != "jay":   # a seat is taken now
-            self._investigate_free(t)
         work = {"plan": plan, "roles": self._role(w, "planner", model, session, at),
                 "confirmed": [g for g in w["confirmed"] if g != "plan"], "plan_state": "proposed"}
         if w["gate"] == "plan":     # a risky plan waiting for Jay was replaced: it goes back through review
@@ -831,7 +810,6 @@ class Pipeline:
             if not isinstance(worktree, str) or not worktree.startswith("/") or len(worktree) > 300 \
                     or not re.match(r"^/[A-Za-z0-9._/-]+$", worktree) or "/../" in worktree + "/":
                 raise TaskError(400, "worktree must be an absolute path")
-            self._lane_free(t)
             self._finish_first(t, "starting new work")
             held = self.held(t["key"])
             if held:
@@ -1166,8 +1144,6 @@ class Pipeline:
                 return {"status": "READY_TO_IMPLEMENT"}, work, events
             if gate == "failure":
                 stage = (w["blocked"] or {}).get("stage") or "PLAN"
-                if stage == "BUILD":
-                    self._lane_free(t, "resume this one later")
                 work.update(blocked=None, review_cycles=0 if stage == "REVIEW" else w["review"]["cycles"])
                 fs = (w["blocked"] or {}).get("flowStage")
                 if fs in ("techReview", "userCheck"):
@@ -1236,11 +1212,6 @@ class Pipeline:
             raise TaskError(400, f"role must be one of {', '.join(ROLE_NAMES)}")
 
         def fn(tid, t, w, at):
-            f = self._flow(tid)
-            if role == "planner" and t["status"] == "RESEARCHING" and f["size"] in flow_mod.SIZES:
-                fl, _h = flow_mod.view(t, w, f, self._events(tid), policy(t))
-                if fl["stage"] == "investigate" and not fl["holder"] and not w["gate"]:
-                    self._investigate_free(t)
             return {}, {"roles": self._role(w, role, model, session, at)}, \
                 [("pipeline.role", f"{role} reported", {"role": role})]
         return self._tx(key, actor, fn)
@@ -1433,7 +1404,6 @@ class Pipeline:
             self._need(t, ("IN_REVIEW", "READY_TO_MERGE", "VERIFYING", "BLOCKED"), "rework")
             if w["planState"] != "accepted" and self._flow(tid)["size"] != "small":
                 raise TaskError(409, f"{t['key']} has no accepted plan; re-plan instead")
-            self._lane_free(t)
             # The change is being rewritten: an approval, a verification, a UI acceptance or a live-deploy
             # approval was for the old one, and an open UI / deploy / merge / failure gate no longer applies.
             work = {"review_verdict": None, "confirmed": [g for g in _no_merge(w["confirmed"]) if g not in ("ui", "deploy")],
@@ -1945,7 +1915,6 @@ class Pipeline:
                 work.update(gate="failure", gate_reason=reason,
                             blocked={"stage": "BUILD", "flowStage": "userCheck", "reason": reason, "at": at})
                 return {"status": "BLOCKED"}, work, events + [("pipeline.blocked", reason, {"stage": "BUILD"})]
-            self._lane_free(t)
             # The PRs this rework is about (rework_prs / new_head): only a new head returns it to review.
             return {"status": "IN_PROGRESS"}, work, events + [
                 ("pipeline.rework", "back to implementation: the user check failed",

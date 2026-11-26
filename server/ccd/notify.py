@@ -95,11 +95,20 @@ PLAN_GATES = frozenset({"plan"})
 # "all": a stolen Slack login alone cannot turn it on.
 SHIP_GATES = frozenset({"merge", "deploy"})
 SLACK_GATES = LOW_RISK_GATES | PLAN_GATES | SHIP_GATES
+# Projects whose blockers Jay clears from Slack whatever replyScope says (Jay, 2026-11-26: "answer or fix any
+# blockages from Slack itself without using the CommandCenter app" for CommandCenter and GYST). In a Blocked DM's
+# thread: "approve" clears the blocker and resumes, "fix …" is Fix and continue (back to implementation with what to
+# fix) and "replan: …" is Re-plan, the same three steps as the ticket's blocked card. None merges or deploys.
+UNBLOCK_PROJECTS = frozenset({"commandcenter", "gyst"})
 REPLY_SCOPES = ("answers", "answers_low_risk", "all")
 APPROVE_RE = re.compile(r"^\s*(approve|approved|yes|y|ok|okay|go|go ahead|lgtm|:\+1:|👍|✅)\s*[.!]*\s*$", re.I)
 # Only these words merge or deploy: an "ok" or 👍 on a merge DM or a deploy plan does neither (handle_reply).
 MERGE_RE = re.compile(r"^\s*(merge|merge it|merge now)\s*[.!]*\s*$", re.I)
 DEPLOY_RE = re.compile(r"^\s*(deploy|deploy it|deploy now|go live|ship it)\s*[.!]*\s*$", re.I)
+# On a Blocked DM: "fix", "fix and continue", "fix: the test needs a fixture" → Fix and continue (pipeline rework);
+# "replan: the approach is wrong" → Re-plan. The words after it, if any, are what Claude is told to fix or why.
+FIX_RE = re.compile(r"^\s*(?:fix(?:\s+and\s+continue)?|rework)\b[\s:,.!-]*(.*)$", re.I | re.S)
+REPLAN_RE = re.compile(r"^\s*re-?plan\b[\s:,.!-]*(.*)$", re.I | re.S)
 POST_LIMIT = 3900   # characters of one Slack post ccd sends; longer text is cut
 # Projects whose Messages files are never uploaded to Slack, whatever slackFiles says (client projects too).
 NO_SLACK_FILES = frozenset({"samvision", "cto"})
@@ -799,9 +808,12 @@ class Notifier:
         elif n.get("kind") == "gate" and n.get("gate") == "deploy" and self.allows("deploy"):
             lines.append("_Reply *approve* and the agent prepares it: its deploy plan comes to you as a new message, "
                          "and nothing deploys until you reply *deploy* to that one._")
-        elif n.get("kind") == "gate" and n.get("gate") in LOW_RISK_GATES and self.allows(n.get("gate")):
-            lines.append("_Reply *approve* to " + ("clear the blocker" if n["gate"] == "failure" else "accept the UI")
-                         + ", or write to the lead._")
+        elif n.get("kind") == "gate" and n.get("gate") == "failure" and self.allows("failure", proj):
+            lines.append("_Reply *approve* to clear the blocker and resume, *fix* (with what to fix, if you like) to "
+                         "send it back to implementation as Fix and continue does, *replan:* and why to send it back "
+                         "to planning, or write to the lead._")
+        elif n.get("kind") == "gate" and n.get("gate") == "ui" and self.allows("ui", proj):
+            lines.append("_Reply *approve* to accept the UI, or write to the lead._")
         elif n.get("kind") == "gate":
             lines.append("_Approve this in CommandCenter. A reply here goes to the lead._")
         return "\n".join(lines) + open_
@@ -1169,6 +1181,13 @@ class Notifier:
                     # A merge ships: an "ok" or 👍 is not one. (A deploy approval only asks for a plan, so it may.)
                     return {"did": "merge_word_needed", "project": proj,
                             "say": "Nothing was merged: reply *merge* to merge this PR."}
+                if item.get("kind") == "gate" and gate == "failure" and self.allows("failure", proj) \
+                        and not text.rstrip().endswith("?"):
+                    # "fix what? the test or the code?" is a question for the lead, not Fix and continue.
+                    fix, replan = FIX_RE.match(text), REPLAN_RE.match(text)
+                    if fix or replan:
+                        return dict(await self.unblock(ref, "rework" if fix else "replan",
+                                                       (fix or replan).group(1), item), project=proj)
                 word = {"merge": MERGE_RE, "deploy": DEPLOY_RE}.get(gate)
                 if item.get("kind") == "gate" and (APPROVE_RE.match(text) or (word and word.match(text))):
                     return dict(await self.approve(ref, gate, item), project=proj)
@@ -1302,22 +1321,54 @@ class Notifier:
                 said = "Answered. Not delivered yet: " + esc(str(r.get("reason") or "no session was reached")) + "."
         return {"did": "answered", "say": said}
 
-    def allows(self, gate):
-        """Whether a Slack reply closes this gate now: fixed in code (SLACK_GATES), then Jay's replyScope."""
+    def allows(self, gate, project=None):
+        """Whether a Slack reply closes this gate now: fixed in code (SLACK_GATES), then Jay's replyScope. A blocker
+        on an UNBLOCK_PROJECTS project is always cleared from Slack (Jay, 2026-11-26); a client project never is."""
         scope = self.settings["replyScope"]
+        if gate == "failure" and project in UNBLOCK_PROJECTS and not self.client(project):
+            return True
         return (gate in PLAN_GATES or (gate in LOW_RISK_GATES and scope in ("answers_low_risk", "all"))
                 or (gate in SHIP_GATES and scope == "all"))
 
+    def _same(self, key, gate, item):
+        """Whether the gate this DM showed (same ticket, gate, reason and time) is still the one open now."""
+        now = [n for n in self.needs() if n.get("kind") == "gate" and n.get("ref") == key and n.get("gate") == gate]
+        return bool(item) and any(_digest(n.get("text")) == item.get("textHash") and n.get("since") == item.get("since")
+                                  for n in now)
+
+    async def unblock(self, key, op, reason, item):
+        """Fix and continue ("rework") or Re-plan ("replan") on the blocker this DM showed, from Jay's Slack reply.
+        With no words after "fix", the blocker's own recommended action (else its reason) is what Claude is told,
+        as the blocked card's Fix and continue suggests."""
+        link = self.link({"ref": key})
+        if not self._same(key, "failure", item):
+            return {"did": "unblock_stale",
+                    "say": "This has changed since this message, so nothing was done." + (f" <{link}|Open it>" if link else "")}
+        reason = " ".join(str(reason or "").split())
+        if not reason:
+            b = (self._work(key).get("blocked") or {})
+            reason = " ".join(str(b.get("action") or b.get("reason") or "").split())
+        if not reason:
+            return {"did": "unblock_reason_needed",
+                    "say": ("Say what to fix: reply *fix:* and what needs fixing." if op == "rework"
+                            else "Say why: reply *replan:* and why it goes back to planning.")}
+        try:
+            r = await self.d.slack_unblock(key, op, reason[:300])
+        except Exception as e:  # noqa: BLE001
+            return {"did": "unblock_failed", "say": f"Could not do that: {esc(getattr(e, 'message', None) or e)}"}
+        said = ("Back to implementation: Claude fixes it in the same worktree and it returns to review on the new head."
+                if op == "rework" else "Back to planning: Claude re-plans it.")
+        return {"did": f"unblocked_{op}",
+                "say": said + ("" if (r or {}).get("delivered", True) else " The task session was not running to hear it.")}
+
     async def approve(self, key, gate, item=None):
         link = self.link({"ref": key})
-        if not self.allows(gate):
+        if not self.allows(gate, (item or {}).get("project")):
             return {"did": "approval_refused",
                     "say": "That one is approved in CommandCenter, not from Slack." + (f" <{link}|Open it>" if link else "")}
         # Only the gate that message showed: same ticket, gate, reason and time, and for a plan the same plan.
         # Anything else is refused.
-        now = [n for n in self.needs() if n.get("kind") == "gate" and n.get("ref") == key and n.get("gate") == gate]
-        same = bool(item) and any(_digest(n.get("text")) == item.get("textHash") and n.get("since") == item.get("since")
-                                  for n in now)
+        same = self._same(key, gate, item)
         if gate in PLAN_GATES and item and not item.get("planHash"):
             return {"did": "approval_refused",
                     "say": "This plan could not be shown here in full, so it is approved in CommandCenter only."

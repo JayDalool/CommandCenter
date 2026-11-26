@@ -1123,10 +1123,8 @@ class Daemon(LeadChat, HqDaemon):
         return out
 
     def work_next(self, project):
-        """movable() for a project, told by pipeline's own lane count whether its build lanes are full (CC-090)."""
-        pl = self.pipeline
-        full = pl is not None and pl.lanes(project) >= pl.lane_limit(project)
-        return workmode_mod.movable(self.work_rows(project), build_full=full)
+        """movable() for a project. No build lanes fill up any more (Jay, 2026-11-26), so every build is listed."""
+        return workmode_mod.movable(self.work_rows(project))
 
     async def work_tick(self, now=None):
         """Remind each idle lead of a project in work mode that tickets can move without Jay (workmode.decide)."""
@@ -1770,7 +1768,8 @@ class Daemon(LeadChat, HqDaemon):
     # ---------- the delivery flow (ccd/flow.py) ----------
 
     def flow_state(self):
-        """GET /api/flow: per project, its seats (who is in each), the tickets in flight and the WIP limits."""
+        """GET /api/flow: per project, its seats (who is in each), the tickets in flight and how many are in
+        investigate and build. `max` is null: there is no limit (Jay, 2026-11-26)."""
         self._need_tasks()
         pl = self.pipeline
         coords = (self.snap or {}).get("coordinators") or {}
@@ -1798,8 +1797,8 @@ class Daemon(LeadChat, HqDaemon):
                          for t, _w, fl, _h in flying]
             out.append({"key": key, "name": p.get("name") or key, "seats": seats, "inFlight": in_flight,
                         "limits": {"investigate": {"used": len(pl.investigating(key, flying=flying)),
-                                                   "max": pl.investigate_limit(key)},
-                                   "build": {"used": pl.lanes(key), "max": pl.lane_limit(key)}}})
+                                                   "max": None},
+                                   "build": {"used": pl.lanes(key), "max": None}}})
         return {"projects": out}
 
     def release_state(self, now=None):
@@ -1998,6 +1997,30 @@ class Daemon(LeadChat, HqDaemon):
             return {"work": work, "delivered": True}
         delivered, reason = await self._nudge_task(work["key"], text)
         return {"work": work, "delivered": delivered, "reason": reason}
+
+    async def slack_unblock(self, key, op, reason):
+        """Jay's Fix and continue ("rework") or Re-plan ("replan") on a blocked ticket, from his reply to its Blocked
+        DM in Slack (notify.Notifier.unblock): the blocked card's own two steps, recorded as Jay with the same nudge
+        to the task session. Only on a ticket that is blocked now, a blocker Slack may clear for its project
+        (notify.allows: UNBLOCK_PROJECTS, or replyScope), and never a client project."""
+        if op not in ("rework", "replan"):
+            raise ActionError(403, f"{op} is not a Slack unblock step")
+        t = self._slack_ticket(key, "failure")
+        if not self.notifier.allows("failure", t["project"]):
+            raise ActionError(403, "blockers in this project are cleared in CommandCenter")
+        w = self.task_work(key)
+        if w.get("status") != "BLOCKED" or w.get("gate") != "failure":
+            raise ActionError(409, f"{t['key']} is not blocked")
+        if op == "rework":
+            r = self._wrap(self.pipeline.rework, key, reason, "jay", open_prs=self._open_prs(t))
+        else:
+            r = self._wrap(self.pipeline.replan, key, reason, "jay")
+        self._pipeline_result(*r, actor="jay")
+        self._event("tasks", "task.pipeline", f"{t['key']} Jay chose {op} from Slack", project=t["project"],
+                    ref=t["key"], data={"kind": "pipeline.slack_unblock", "op": op, "via": "slack"})
+        work = self.task_work(key)
+        delivered, why = await self._nudge_task(work["key"], self._nudge_text(work["key"], op, {"reason": reason}, work))
+        return {"work": work, "delivered": delivered, "reason": why}
 
     async def slack_ask_back(self, key, text):
         """Jay's question back, from Slack, about a ticket's open questions: his words typed into the ticket's task
