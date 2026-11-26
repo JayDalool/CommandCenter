@@ -2,6 +2,7 @@
 
 Steps only Jay can do. Newest first. Delete a line when it's done.
 
+- [ ] CC-089 · Install CTO deny rules in /home/jay/cto · https://github.com/JayDalool/CommandCenter/blob/CC-089-cto-deny-rules/docs/runbooks/cto-deny-rules.md
 - [ ] CC-078 · Create mail.env (0600) for release email · docs/runbooks/slack-and-ntfy.md
 - [ ] CC-054 · Check PC clock and browser read Winnipeg -05 · docs/MANITOBA-TIMEZONE-AUDIT-2026.md
 - [ ] CC-054 · Upgrade host Node to 22.23.5; run scripts/check-tz.sh · docs/MANITOBA-TIMEZONE-AUDIT-2026.md
