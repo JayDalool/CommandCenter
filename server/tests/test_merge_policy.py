@@ -1,6 +1,7 @@
 """The auto-merge classifier (ccd/merge_policy.py): pure functions over plain dicts, no GitHub, no database."""
 import copy
 import unittest
+from unittest import mock
 
 from ccd import merge_policy as mp
 
@@ -18,10 +19,19 @@ def fr(project, files):
     return mp.file_reasons(project, files, sum(x["additions"] for x in ok), sum(x["deletions"] for x in ok))
 
 
+def run(job, conclusion="SUCCESS", workflow="ci", status="COMPLETED"):
+    """One check run as `gh pr view --json statusCheckRollup` reports it (seen on PR #161)."""
+    return {"__typename": "CheckRun", "workflowName": workflow, "name": job, "status": status, "conclusion": conclusion}
+
+
+# ci.yml's two required jobs, green (CC-080: a qualifying PR needs both).
+GREEN = [run("backend"), run("web")]
+
+
 def view(files=None, **over):
     files = files if files is not None else [f("server/tests/test_x.py", "ADDED"), f("docs/API.md")]
     pr = {"state": "OPEN", "isDraft": False, "mergeable": "MERGEABLE", "baseRefName": "main", "headRefOid": HEAD,
-          "isCrossRepository": False, "files": files, "statusCheckRollup": [],
+          "isCrossRepository": False, "files": files, "statusCheckRollup": list(GREEN),
           "additions": sum(x["additions"] for x in files), "deletions": sum(x["deletions"] for x in files)}
     pr.update(over)
     return pr
@@ -35,7 +45,8 @@ def ticket(**over):
 
 
 def work(**over):
-    w = {"gate": None, "confirmed": [], "review": {"verdict": "APPROVE", "head": HEAD, "pr": REF, "cycles": 0}}
+    w = {"gate": None, "confirmed": [], "review": {"verdict": "APPROVE", "head": HEAD, "pr": REF, "cycles": 0},
+         "size": "small", "userCheck": None}
     w.update(over)
     return w
 
@@ -170,16 +181,19 @@ class Ci(unittest.TestCase):
         self.assertEqual(mp.ci_state([{"status": "COMPLETED"}]), "unknown")
         self.assertEqual(mp.ci_state("green"), "unknown")
 
-    def test_no_checks_at_all_qualifies_and_is_not_called_green(self):
+    def test_no_checks_at_all_holds_and_is_not_called_green(self):
+        # CC-080 c4/c6: ADR 0007's no-checks allowance is withdrawn. An empty rollup is a hold, never a wait.
         d = decide(view(statusCheckRollup=[]))
-        self.assertEqual((d.ok, d.ci), (True, "none"))
-        self.assertEqual(decide(view(statusCheckRollup=[{"conclusion": "SUCCESS"}])).ci, "green")
+        self.assertEqual((d.ok, d.wait, d.ci), (False, False, "none"))
+        self.assertIn("required check ci/backend did not report at this head", d.reasons)
+        self.assertIn("required check ci/web did not report at this head", d.reasons)
+        self.assertEqual(decide(view(statusCheckRollup=GREEN)).ci, "green")
 
     def test_failing_blocks_and_pending_waits(self):
         d = decide(view(statusCheckRollup=[{"conclusion": "FAILURE"}]))
         self.assertEqual((d.ok, d.wait, d.ci), (False, False, "failing"))
         self.assertIn("a CI check is failing", d.reasons)
-        d = decide(view(statusCheckRollup=[{"conclusion": "SUCCESS"}, {"status": "QUEUED", "conclusion": ""}]))
+        d = decide(view(statusCheckRollup=GREEN + [{"status": "QUEUED", "conclusion": ""}]))
         self.assertEqual((d.ok, d.wait, d.ci), (False, True, "pending"))
         d = decide(view(statusCheckRollup=[{"conclusion": "SOMETHING_NEW"}]))
         self.assertEqual((d.ok, d.wait), (False, False))
@@ -259,3 +273,124 @@ class Decide(unittest.TestCase):
             self.assertFalse(decide(pr=view([f(path, "MODIFIED")])).ok, path)
         self.assertFalse(decide(pr=view([f("server/tests/test_merge_policy.py", "ADDED"),
                                          f("server/ccd/merge_policy.py")])).ok)
+
+
+class RequiredChecks(unittest.TestCase):
+    """CC-080 c4: ci/backend and ci/web must each report SUCCESS at the head; anything else holds or waits."""
+
+    def other(self, job, conclusion):
+        return [r for r in GREEN if r["name"] != job] + [run(job, conclusion)]
+
+    def test_both_green_pass(self):
+        self.assertEqual(mp.required_ci("commandcenter", GREEN), ([], []))
+        self.assertTrue(decide(view(statusCheckRollup=GREEN)).ok)
+
+    def test_an_absent_required_check_holds_naming_it(self):
+        d = decide(view(statusCheckRollup=[run("web")]))
+        self.assertEqual((d.ok, d.wait), (False, False))
+        self.assertIn("required check ci/backend did not report at this head", d.reasons)
+
+    def test_a_failed_skipped_or_neutral_required_check_holds_naming_it(self):
+        for bad in ("FAILURE", "CANCELLED", "SKIPPED", "NEUTRAL", "TIMED_OUT", "SOMETHING_NEW"):
+            d = decide(view(statusCheckRollup=self.other("web", bad)))
+            self.assertEqual((d.ok, d.wait), (False, False), bad)
+            self.assertIn(f"required check ci/web is {bad.lower()}", d.reasons, bad)
+        d = decide(view(statusCheckRollup=[run("backend"), run("web", "", status="COMPLETED")]))
+        self.assertIn("required check ci/web is completed", d.reasons)        # done with no conclusion: unknown
+
+    def test_a_running_required_check_waits(self):
+        for status in ("IN_PROGRESS", "QUEUED"):
+            d = decide(view(statusCheckRollup=[run("backend"), run("web", "", status=status)]))
+            self.assertEqual((d.ok, d.wait), (False, True), status)
+            self.assertIn("required check ci/web is still running", d.reasons)
+
+    def test_a_same_named_check_from_elsewhere_does_not_count(self):
+        for impostor in (run("backend", workflow="lint"), run("backend", workflow=""), run("backend", workflow=None),
+                         {"__typename": "StatusContext", "context": "backend", "state": "SUCCESS"},
+                         {"__typename": "StatusContext", "context": "ci/backend", "state": "SUCCESS"},
+                         dict(run("backend"), __typename="StatusContext"), {k: v for k, v in run("backend").items()
+                                                                            if k != "__typename"}):
+            d = decide(view(statusCheckRollup=[impostor, run("web")]))
+            self.assertFalse(d.ok, impostor)
+            self.assertIn("required check ci/backend did not report at this head", d.reasons, impostor)
+
+    def test_a_second_run_that_did_not_pass_holds(self):
+        for second in ("FAILURE", "SKIPPED"):
+            d = decide(view(statusCheckRollup=GREEN + [run("web", second)]))
+            self.assertEqual((d.ok, d.wait), (False, False), second)
+            self.assertIn(f"required check ci/web is {second.lower()}", d.reasons)
+
+    def test_required_green_and_another_check_pending_waits(self):
+        d = decide(view(statusCheckRollup=GREEN + [run("e2e", "", workflow="web-e2e", status="IN_PROGRESS")]))
+        self.assertEqual((d.ok, d.wait, d.reasons), (False, True, ["CI is still running"]))
+
+    def test_required_green_and_an_unknown_state_holds(self):
+        d = decide(view(statusCheckRollup=GREEN + [run("e2e", "SOMETHING_NEW", workflow="web-e2e")]))
+        self.assertEqual((d.ok, d.wait), (False, False))
+        self.assertIn("a CI check is in a state ccd does not recognise", d.reasons)
+
+    def test_a_project_without_required_checks_or_an_unreadable_rollup_holds(self):
+        self.assertEqual(mp.required_ci("gyst", GREEN), (["gyst has no required CI checks"], []))
+        self.assertEqual(mp.required_ci("commandcenter", "green"), (["the PR's CI checks could not be read"], []))
+        with mock.patch.dict(mp.REQUIRED_CHECKS, clear=True):
+            self.assertIn("commandcenter has no required CI checks", decide().reasons)
+
+
+class AuthorizedBase(unittest.TestCase):
+    """CC-080 c3: the PR must be based on the project's authorized branch."""
+
+    def test_a_stacked_pr_holds_with_the_base_reason(self):
+        d = decide(view(baseRefName="CC-057-merge-rules"))
+        self.assertEqual((d.ok, d.wait), (False, False))
+        self.assertIn("the PR is based on CC-057-merge-rules, not main", d.reasons)
+
+    def test_a_project_with_no_base_entry_holds_even_on_main(self):
+        with mock.patch.dict(mp.BASE, clear=True):
+            d = decide()
+        self.assertFalse(d.ok)
+        self.assertIn("commandcenter has no authorized base branch", d.reasons)
+
+
+class TicketSizeAndUserCheck(unittest.TestCase):
+    """CC-080 c3: small tickets only (Jay, Q170), and the route's user check at the reviewed head."""
+
+    def test_only_a_small_ticket_qualifies(self):
+        for size, why in ((None, "the ticket is not sized, not small"), ("standard", "the ticket is standard, not small"),
+                          ("risky", "the ticket is risky, not small"), ("tiny", "the ticket is tiny, not small")):
+            d = decide(w=work(size=size))
+            self.assertEqual((d.ok, d.wait), (False, False), size)
+            self.assertIn(why, d.reasons, size)
+        self.assertTrue(decide(w=work(size="small")).ok)
+        self.assertFalse(decide(w={k: v for k, v in work().items() if k != "size"}).ok)
+
+    def test_a_small_ui_ticket_holds(self):
+        d = decide(t=ticket(labels=["ui"]))
+        self.assertFalse(d.ok)
+        self.assertIn("the ticket has the ui label", d.reasons)
+
+    def test_a_route_with_a_user_check_needs_a_pass_at_the_reviewed_head(self):
+        # A small ticket's route has a user check only when policy().ui is set (which already holds); a standard
+        # one always has one. ticket_reasons is checked directly so the user-check reason is seen on its own.
+        t = ticket(labels=["ui"])
+        why = f"the user check has not passed at the reviewed head {HEAD[:7]}"
+        for uc in (None, {"result": "fail", "head": HEAD}, {"result": "pass", "head": "cd" * 20}, {"result": "pass"}):
+            self.assertIn(why, mp.ticket_reasons(t, work(userCheck=uc)), uc)
+        self.assertNotIn(why, mp.ticket_reasons(t, work(userCheck={"result": "pass", "head": HEAD})))
+        self.assertIn(why, mp.ticket_reasons(ticket(), work(size="standard")))
+        self.assertEqual(mp.ticket_reasons(ticket(), work()), [])        # small, not UI: no user-check stage
+
+    def test_the_reviewed_head_must_still_be_the_prs(self):
+        d = decide(pr=view(headRefOid="cd" * 20))
+        self.assertIn(f"the PR head cdcdcdc is not the reviewed head {HEAD[:7]}", d.reasons)
+
+
+class SizeLimitsThroughClassify(unittest.TestCase):
+    """CC-080 c2: the 10-file and 300-line limits hold in classify, at the boundary."""
+
+    def test_ten_files_and_three_hundred_lines_pass_one_more_holds(self):
+        ten = [f(f"docs/a{i}.md", "ADDED", 20, 10) for i in range(10)]
+        self.assertTrue(decide(pr=view(ten)).ok)
+        d = decide(pr=view(ten + [f("docs/a10.md", "ADDED", 0, 0)]))
+        self.assertIn("11 files changed (limit 10)", d.reasons)
+        d = decide(pr=view(ten[:9] + [f("docs/a9.md", "ADDED", 20, 11)]))
+        self.assertIn("301 lines changed (limit 300)", d.reasons)

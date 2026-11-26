@@ -53,7 +53,7 @@ CI configuration is never changed without Jay's explicit approval.
 - One ticket, one branch, one worktree, one PR. Branch names start with the ticket key (`CC-123-short-name`).
 - PR title starts with the ticket key; the body lists each acceptance criterion and how it is met.
 - Never force-push a shared branch, rewrite main's history, merge, tag or release. Jay merges (ADR 0007's low-risk
-  policy is the only exception, and it is off).
+  policy is the only exception, and it is off: CC-080 keeps `auto_merge` off until its retarget slice lands).
 - Feature flags stay off unless Jay turns them on: `auto_merge`, `onboarding_groundwork`, `phase2_*`, `chat_start_leads`.
 
 ## Who decides

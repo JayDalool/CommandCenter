@@ -14,6 +14,7 @@ from ccd.tasks import TaskStore
 
 from .helpers import cfg, new_db
 from .test_auto_merge import PLAN, FakeGh
+from .test_auto_merge import size_ticket
 from .test_merge_policy import HEAD, f, view
 
 POL = profiles.load()
@@ -148,6 +149,7 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         if not (d.gh.get(project) or {}).get("data"):
             d.gh[project] = {"data": {"prs": []}, "asOf": 1, "error": None}
         d.gh[project]["data"]["prs"].append({"number": number, "headRefOid": HEAD, "statusCheckRollup": [], "isDraft": False})
+        size_ticket(pl, k, "small")   # CC-080: only a small ticket merges by itself
         return k, ref
 
     async def test_a_merge_gate_is_requested_approved_by_jay_and_consumed_by_the_merge(self):
