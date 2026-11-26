@@ -69,7 +69,11 @@ def main(argv=None, run=subprocess.run, home=None):
             _log("lock error")
             return 1
         try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
+            try:
+                regular = stat.S_ISREG(os.fstat(fd).st_mode)
+            except OSError:  # an fstat failure must be one log line, not a traceback in cron mail (CC-096 round 2)
+                regular = False
+            if not regular:
                 _log("lock error")
                 return 1
             return _locked(fd, run, home)

@@ -253,6 +253,13 @@ class Lock(Base):
         self.go(Runner("Total:\t1GB\n"))
         self.assertEqual(stat.S_IMODE((self.state / "build-cache-prune.lock").stat().st_mode), 0o600)
 
+    def test_fstat_error_is_one_lock_error_line_and_no_run(self):
+        r = Runner()
+        with mock.patch.object(mod.os, "fstat", side_effect=OSError(5, "io")):
+            code, out = self.go(r)
+        self.assertEqual((code, len(r.calls), len(out)), (1, 0, 1))
+        self.assertTrue(out[0].endswith(" lock error"))
+
     def test_flock_other_error_means_no_run(self):
         r = Runner()
         with mock.patch.object(mod.fcntl, "flock", side_effect=OSError(5, "io")):
