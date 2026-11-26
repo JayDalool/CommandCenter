@@ -96,17 +96,13 @@ def _free(r):
     return not (r.get("type") == "OWNER_ACTION" or "needs_legal" in flags)           # Jay's own to-do; a lawyer's question
 
 
-def movable(rows, build_full=False):
+def movable(rows):
     """The tickets the lead can move without Jay, in the order to take them. `rows`: dicts with key, status, type,
     flags, number, stage, holder, waitingOn, stale, reworked (a build fixing review findings) (flow.view's
-    fields plus the ticket's). Priority and due date are on the row for describe() but do not order it.
-    `build_full`: the project's build lanes are all taken (pipeline.lanes >= lane_limit)."""
+    fields plus the ticket's). Priority and due date are on the row for describe() but do not order it. There is no
+    build-lane limit any more (Jay, 2026-11-26), so a ticket waiting to start a build is always listed."""
     out = []
     for r in rows:
-        # CC-090: with every build lane taken, starting another build is refused (409), so naming it made the lead
-        # get the same dispatch again and again. A ticket already IN_PROGRESS holds its own lane and stays listed.
-        if build_full and r.get("stage") == "build" and r.get("status") != "IN_PROGRESS":
-            continue
         if not _free(r) or r.get("status") == "BLOCKED":
             continue                                    # a blocked ticket is triaged (triage()), not moved
         if r.get("waitingOn") == "jay" or r.get("stage") not in STAGE_ORDER:

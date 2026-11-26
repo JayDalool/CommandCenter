@@ -205,6 +205,10 @@ class FakeDaemon:
         self.plan_hash = plan_hash
         return {"delivered": True, "work": self.work.get(key, {})}
 
+    async def slack_unblock(self, key, op, reason):
+        self.unblocked = getattr(self, "unblocked", []) + [(key, op, reason)]
+        return {"delivered": True}
+
     async def slack_merge(self, key, head):
         self.merged.append((key, head))
         return {"merging": [{"key": key, "head": head}], "skipped": []}
@@ -603,6 +607,45 @@ class Replies(ReplyBase):
             r = self.reply("approve", ts)
             self.assertEqual(r["did"], "approval_refused", gate)
         self.assertEqual(self.d.confirmed, [("SV-failure", "failure"), ("SV-ui", "ui")])
+
+    def test_commandcenter_and_gyst_blockers_are_cleared_from_slack_whatever_the_scope(self):
+        # Jay, 2026-11-26: fix any blockage from Slack for CommandCenter and GYST, without opening CommandCenter.
+        self.assertEqual(self.n.settings["replyScope"], "answers")
+        ts = self.send(need("CC-1", "gate", "failure", project="commandcenter", text="Blocked: tests keep failing"))
+        dm = self.slack.posts[-1]["text"]
+        self.assertIn("*approve* to clear the blocker and resume", dm)
+        self.assertIn("*fix*", dm)
+        self.assertIn("*replan:*", dm)
+        self.assertEqual(self.reply("approve", ts)["did"], "approved_failure")
+        ts = self.send(need("GY-2", "gate", "failure", project="gyst", text="Blocked: needs a fixture"))
+        self.assertEqual(self.reply("fix: add the missing fixture", ts)["did"], "unblocked_rework")
+        ts = self.send(need("GY-3", "gate", "failure", project="gyst", text="Blocked: wrong approach"))
+        self.assertEqual(self.reply("Replan - the cache belongs in the server", ts)["did"], "unblocked_replan")
+        ts = self.send(need("CC-4", "gate", "failure", project="commandcenter", text="Blocked: lint"))
+        self.d.work["CC-4"] = {"blocked": {"reason": "lint fails", "action": "run the formatter"}}
+        self.assertEqual(self.reply("fix what? the test or the code?", ts)["did"], "lead_nudged")   # a question
+        self.assertEqual(self.reply("Fix and continue", ts)["did"], "unblocked_rework")
+        self.assertEqual(self.d.confirmed, [("CC-1", "failure")])
+        self.assertEqual(self.d.unblocked, [("GY-2", "rework", "add the missing fixture"),
+                                            ("GY-3", "replan", "the cache belongs in the server"),
+                                            ("CC-4", "rework", "run the formatter")])
+
+    def test_other_projects_keep_their_scope_for_blockers(self):
+        ts = self.send(need("SV-70", "gate", "failure", text="Blocked: needs a sample file"))
+        self.assertNotIn("*fix*", self.slack.posts[-1]["text"])
+        self.assertEqual(self.reply("fix: use the sample", ts)["did"], "lead_nudged")    # words for the lead
+        self.assertEqual(self.reply("approve", ts)["did"], "approval_refused")
+        self.assertEqual(getattr(self.d, "unblocked", []), [])
+        ts = self.send(need("GM-70", "gate", "failure", project="gauzemate", text="Blocked"))
+        self.reply("fix it", ts)                                                     # a client project never
+        self.assertEqual(getattr(self.d, "unblocked", []), [])
+
+    def test_a_fix_on_a_changed_blocker_does_nothing(self):
+        ts = self.send(dict(need("CC-9", "gate", "failure", project="commandcenter", text="Blocked: a"), since=1.0))
+        self.d.needs_list = [dict(need("CC-9", "gate", "failure", project="commandcenter", text="Blocked: b"),
+                                  since=2.0)]
+        self.assertEqual(self.reply("fix: x", ts)["did"], "unblock_stale")
+        self.assertEqual(getattr(self.d, "unblocked", []), [])
 
     HEAD = "a" * 40
 
@@ -1475,6 +1518,29 @@ class InTheDaemon(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(q["answeredBy"], "jay:slack")
         (data,) = self.ts.db.execute("SELECT data FROM ticket_events WHERE kind='pipeline.answered'").fetchone()
         self.assertEqual(json.loads(data).get("via"), "slack")
+
+    async def test_a_commandcenter_blocker_goes_back_to_implementation_from_slack(self):
+        ts = TaskStore(":memory:", [{"key": "commandcenter", "name": "Command Center", "prefix": "CC"},
+                                    {"key": "samvision", "name": "SamVision", "prefix": "SV"}])
+        d = Daemon(cfg(meter={"enabled": False}), self.store, None, tasks=ts)
+        d.notifier = notify.Notifier(d, {"notify": {}}, slack=FakeSlack())
+        t, _ = ts.create("commandcenter", "Lanes")
+        d.pipeline.plan(t["key"], {"summary": "s", "risk": "low"}, "agent:planner")
+        with self.assertRaises(ActionError) as e:                     # not blocked: nothing to fix
+            await d.slack_unblock(t["key"], "rework", "x")
+        self.assertEqual(e.exception.status, 409)
+        d.pipeline.block(t["key"], "tests keep failing", "agent:coordinator")
+        r = await d.slack_unblock(t["key"], "rework", "fix the flaky test")
+        self.assertEqual(r["work"]["status"], "IN_PROGRESS")
+        self.assertIsNone(r["work"]["gate"])
+        s, _ = ts.create("samvision", "Valuation")                    # scope "answers": not from Slack here
+        d.pipeline.plan(s["key"], {"summary": "s", "risk": "low"}, "agent:planner")
+        d.pipeline.block(s["key"], "x", "agent:coordinator")
+        with self.assertRaises(ActionError) as e:
+            await d.slack_unblock(s["key"], "replan", "y")
+        self.assertEqual(e.exception.status, 403)
+        with self.assertRaises(ActionError):
+            await d.slack_unblock(t["key"], "merge", "z")
 
     async def test_client_project_gates_are_refused(self):
         t, _ = self.ts.create("gauzemate", "Intake")

@@ -587,7 +587,7 @@ class PipelineApi(Automation):
         self.assertEqual([(t["key"], t["stage"], t["waitingOn"]) for t in sv["inFlight"]],
                          [("SV-056", "codeReview", "reviewer")])
         self.assertEqual(len(sv["inFlight"][0]["route"]), 9)
-        self.assertEqual(sv["limits"], {"investigate": {"used": 0, "max": 2}, "build": {"used": 0, "max": 2}})
+        self.assertEqual(sv["limits"], {"investigate": {"used": 0, "max": None}, "build": {"used": 0, "max": None}})
         r = self.step("review", {"verdict": "APPROVE", "head": head, "session": "cr-1"}, "agent:reviewer")
         self.assertEqual(r.json()["status"], "READY_TO_MERGE", r.text)
         self.gh.data["samvision"]["prs"] = []
@@ -886,8 +886,8 @@ class PipelineApi(Automation):
                  if e["kind"] == "task.pipeline"]
         self.assertIn("pipeline.unreviewed_merge", kinds)
 
-    def test_no_cap_on_agent_work_and_the_two_by_two_limits_stay(self):
-        # c15: six tickets in work do not queue a new one; the 2 investigate / 2 build limits are the only caps.
+    def test_no_cap_on_agent_work_and_no_build_limit(self):
+        # c15: six tickets in work do not queue a new one, and a third build starts too (no lane limit, Jay 2026-11-26).
         for n in range(1, 7):
             self.tickets.create("samvision", f"busy {n}", number=100 + n, status="RESEARCHING")
         agent = {"x-ccd-actor": "agent:coordinator"}
@@ -915,7 +915,7 @@ class PipelineApi(Automation):
                          headers=dict(JSON, **{"x-ccd-actor": "agent:planner"}))
         r = self.client.post(f"/api/tasks/{k}/work/start", headers=dict(JSON, **agent),
                              content=json.dumps({"branch": f"{k}-x", "worktree": f"/srv/w/{k}"}))
-        self.assertEqual(r.status_code, 409, r.text)
+        self.assertEqual((r.status_code, r.json()["status"]), (200, "IN_PROGRESS"), r.text)
 
     def test_blocked_needs_triage_until_it_names_a_next_step_and_an_owner(self):
         self.ticket("INBOX")
