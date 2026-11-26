@@ -41,56 +41,73 @@ def main(argv=None, run=subprocess.run, home=None):
         print("cc-prune-build-cache takes no arguments", file=sys.stderr)
         return 2
     state = Path(home or Path.home()) / "command-center" / "state"
-    # Fail closed: a stop file of any kind (file, directory, dangling symlink) or any error checking it means no run.
-    # lstat, not exists(): exists() reports a permission error as "absent" and would let the run through.
+    # One directory descriptor, opened without following a symlink; the stop check and the lock both go through it, so
+    # a directory swapped mid-run cannot make them look at different places (CC-096 Codex round 1).
     try:
-        os.lstat(state / "cleanup.stop")
-        _log("stopped")
-        return 0
-    except FileNotFoundError:
-        pass
+        dfd = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     except OSError:
-        _log("stop check error")
+        _log("state error")
         return 1
     try:
-        if not stat.S_ISDIR(os.lstat(state).st_mode):  # a symlinked or missing state dir is never trusted
-            raise OSError(errno.ENOTDIR, "state")
-        # O_NOFOLLOW: a planted symlink must not redirect the lock; no O_TRUNC: never rewrite what it points at.
-        fd = os.open(state / "build-cache-prune.lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-    except OSError:
-        _log("lock error")
-        return 1
-    try:
+        # Fail closed: a stop file of any kind (file, directory, dangling symlink) or any error checking it means no run.
+        # lstat, not exists(): exists() reports a permission error as "absent" and would let the run through.
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            _log("busy")
+            os.lstat("cleanup.stop", dir_fd=dfd)
+            _log("stopped")
             return 0
+        except FileNotFoundError:
+            pass
+        except OSError:
+            _log("stop check error")
+            return 1
+        try:
+            # O_NOFOLLOW: a planted symlink must not redirect the lock; no O_TRUNC: never rewrite what it points at;
+            # O_NONBLOCK: opening a FIFO here must fail, not hang cron. Anything but a regular file is refused.
+            fd = os.open("build-cache-prune.lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                         0o600, dir_fd=dfd)
         except OSError:
             _log("lock error")
             return 1
-        env = {
-            "PATH": "/usr/bin:/bin",
-            "HOME": str(home or Path.home()),
-            "DOCKER_HOST": "unix:///var/run/docker.sock",
-            "BUILDX_BUILDER": "default",  # buildx remembers a current builder in ~/.docker; pin the local one
-        }
         try:
-            done = run(list(ARGV), executable=DOCKER, env=env, capture_output=True, text=True, errors="replace",
-                       timeout=600, close_fds=True)
-        except subprocess.TimeoutExpired:
-            _log("docker timeout")
-            return 1
-        except OSError:
-            _log("docker error")
-            return 1
-        if done.returncode != 0:
-            _log(f"docker exit {int(done.returncode)}")
-            return 1
-        _log(f"freed {_freed(done.stdout or '')}")
-        return 0
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                _log("lock error")
+                return 1
+            return _locked(fd, run, home)
+        finally:
+            os.close(fd)
     finally:
-        os.close(fd)
+        os.close(dfd)
+
+
+def _locked(fd, run, home):
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        _log("busy")
+        return 0
+    except OSError:
+        _log("lock error")
+        return 1
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(home or Path.home()),
+        "DOCKER_HOST": "unix:///var/run/docker.sock",
+        "BUILDX_BUILDER": "default",  # buildx remembers a current builder in ~/.docker; pin the local one
+    }
+    try:
+        done = run(list(ARGV), executable=DOCKER, env=env, capture_output=True, text=True, errors="replace",
+                   timeout=600, close_fds=True)
+    except subprocess.TimeoutExpired:
+        _log("docker timeout")
+        return 1
+    except OSError:
+        _log("docker error")
+        return 1
+    if done.returncode != 0:
+        _log(f"docker exit {int(done.returncode)}")
+        return 1
+    _log(f"freed {_freed(done.stdout or '')}")
+    return 0
 
 
 if __name__ == "__main__":

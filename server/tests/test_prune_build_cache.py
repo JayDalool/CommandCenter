@@ -7,7 +7,9 @@ import ast
 import fcntl
 import os
 import re
+import signal
 import stat
+import sys
 import subprocess
 import tempfile
 import unittest
@@ -146,6 +148,73 @@ class Lock(Base):
         code, out = self.go(r)
         self.assertEqual((code, r.calls), (0, []))
         self.assertTrue(out[0].endswith(" busy"))
+
+    def test_busy_when_another_process_holds_the_lock(self):
+        # A real second process, not the same-process fd: flock conflicts are per open file description either way, but
+        # this is the cron-overlap case the plan review asked for.
+        code_src = ("import fcntl,os,sys;fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT,0o600);"
+                    "fcntl.flock(fd,fcntl.LOCK_EX);print('ready',flush=True);sys.stdin.read()")
+        holder = subprocess.Popen([sys.executable, "-I", "-c", code_src, str(self.state / "build-cache-prune.lock")],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.addCleanup(holder.stdout.close)
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.stdin.close)
+        self.assertEqual(holder.stdout.readline().strip(), "ready")
+        r = Runner()
+        code, out = self.go(r)
+        self.assertEqual((code, len(r.calls)), (0, 0))
+        self.assertEqual(len(out), 1)
+        self.assertTrue(out[0].endswith(" busy"))
+
+    def test_fifo_lock_is_refused_without_hanging(self):
+        lock = self.state / "build-cache-prune.lock"
+        os.mkfifo(lock)
+        reader = os.open(lock, os.O_RDONLY | os.O_NONBLOCK)  # lets a plain open succeed, so only the fstat check refuses
+        self.addCleanup(os.close, reader)
+
+        def timeout(*_):
+            raise AssertionError("lock open hung on a FIFO")
+
+        old = signal.signal(signal.SIGALRM, timeout)
+        self.addCleanup(signal.signal, signal.SIGALRM, old)
+        signal.alarm(5)
+        self.addCleanup(signal.alarm, 0)
+        r = Runner()
+        code, out = self.go(r)
+        self.assertEqual((code, len(r.calls)), (1, 0))
+        self.assertEqual(len(out), 1)
+        self.assertTrue(out[0].endswith(" lock error"))
+
+    def test_fifo_lock_without_reader_does_not_hang(self):
+        os.mkfifo(self.state / "build-cache-prune.lock")
+        old = signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(AssertionError("hung")))
+        self.addCleanup(signal.signal, signal.SIGALRM, old)
+        signal.alarm(5)
+        self.addCleanup(signal.alarm, 0)
+        r = Runner()
+        self.assertEqual((self.go(r)[0], r.calls), (1, []))
+
+    def test_state_dir_swapped_after_stop_check_still_uses_the_checked_directory(self):
+        real, moved = self.state, self.home / "moved-state"
+        evil = self.home / "evil"
+        evil.mkdir()
+        orig = os.lstat
+        r = Runner("Total:\t1GB\n")
+
+        # The stop file is absent, so lstat raises; swap in the finally, i.e. right after the stop check.
+        def swap_on_missing(path, *a, **k):
+            try:
+                return orig(path, *a, **k)
+            finally:
+                if path == "cleanup.stop":
+                    os.rename(real, moved)
+                    real.symlink_to(evil)
+
+        with mock.patch.object(mod.os, "lstat", side_effect=swap_on_missing):
+            code, _ = self.go(r)
+        self.assertEqual((code, len(r.calls)), (0, 1))
+        self.assertTrue((moved / "build-cache-prune.lock").exists())
+        self.assertEqual(list(evil.iterdir()), [])
 
     def test_symlinked_lock_path_fails_and_target_untouched(self):
         target = self.home / "victim"
