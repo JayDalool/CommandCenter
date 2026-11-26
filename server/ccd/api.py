@@ -82,7 +82,8 @@
                                      and the flow's intake criteria plan-review user-check close;
                                      `confirm` (close an owner gate) needs Jay AND Developer Unlock
     GET   /api/flow                  the delivery flow per project: seats, tickets in flight, WIP limits
-    GET   /api/release               live per project, the weekly release window (next start) and the merge cutoff
+    GET   /api/release               live per project, the weekly release window (next start), the merge cutoff and
+                                     autoRelease, the automatic-release dry run's record (CC-081; records only)
     PUT   /api/release/window        Jay AND Developer Unlock. {weekday 0=Sunday..6, time "HH:MM"} (Winnipeg time)
     PUT   /api/release/projects/{project}  Jay AND Developer Unlock. {live: true|false}
     GET   /api/work-mode             work mode per project: on/off, why nothing was sent, the tickets that move next

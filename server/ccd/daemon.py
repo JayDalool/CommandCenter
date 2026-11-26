@@ -26,6 +26,7 @@ from pathlib import Path
 from . import __version__, autonomy, coordid, coordinators, github, ledger, merge_policy, model, profiles, registry, sources
 from . import flow as flow_mod
 from . import release as release_mod
+from . import autorelease as autorelease_mod
 from . import pipeline as pipeline_mod
 from . import workers as workers_mod
 from . import inbox as inbox_mod
@@ -328,6 +329,10 @@ class Daemon(LeadChat, HqDaemon):
         self.releases = release_mod.Release(cfg.get("release_path") or STATE_DIR / "release.json")
         if self.pipeline is not None:
             self.pipeline.releases = self.releases
+        # Automatic release, slice 1 (CC-081): a dry run that only records. config auto_release is read once, here.
+        self.auto_release = autorelease_mod.AutoRelease(
+            store, self.pipeline, self.releases, self.policy, mode=autorelease_mod.mode_of(cfg),
+            projects=lambda: [p["key"] for p in self._projects()]) if self.pipeline is not None else None
         # Work mode: per project, Jay's switch for reminding an idle lead of tickets it can move (ccd/workmode.py).
         self.work = workmode_mod.WorkMode(cfg.get("work_mode_path") or STATE_DIR / "work-mode.json")
         # Auto-merge (CC-025): the config switch is read once, here. `gh_cli(args) -> (code, stdout, stderr)` is the
@@ -1053,6 +1058,13 @@ class Daemon(LeadChat, HqDaemon):
                 raise
             except Exception as e:  # noqa: BLE001 — the supervisor must never take ccd down
                 log.warning(json.dumps({"msg": "night shift tick failed", "error": repr(e)[:200]}))
+            if self.auto_release is not None:
+                try:
+                    await self.auto_release.tick()      # CC-081: records only; its file and git reads run in a thread
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001 — the dry run must never take ccd down
+                    log.warning(json.dumps({"msg": "auto-release tick failed", "error": type(e).__name__}))
 
     async def night_tick(self):
         """Remind each idle night-shift coordinator to continue, or end its shift (nightshift.NightShift.decide)."""
@@ -1802,8 +1814,13 @@ class Daemon(LeadChat, HqDaemon):
         return {"projects": out}
 
     def release_state(self, now=None):
-        """GET /api/release: the window (with its next start), the merge cutoff, and live per project."""
-        return self.releases.public([p["key"] for p in self._projects()], _now() if now is None else now)
+        """GET /api/release: the window (with its next start), the merge cutoff, live per project, and the automatic
+        release dry run's record (CC-081; the kv ledger only, no file or git read)."""
+        keys = [p["key"] for p in self._projects()]
+        out = self.releases.public(keys, _now() if now is None else now)
+        out["autoRelease"] = self.auto_release.public(keys) if self.auto_release is not None else \
+            {"mode": autorelease_mod.OFF, "stopped": None, "projects": {}}
+        return out
 
     def release_set(self, what, body, actor="jay", developer=False, project=None):
         """PUT /api/release/window {weekday, time} or /api/release/projects/{project} {live}: Jay with Developer Unlock."""
