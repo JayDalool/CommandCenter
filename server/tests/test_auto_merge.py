@@ -64,7 +64,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.store.close()
 
-    def ready(self, project="commandcenter", number=7, head=HEAD, cache=True, **fields):
+    def ready(self, project="commandcenter", number=7, head=HEAD, cache=True, pin=False, **fields):
         """A ticket in READY_TO_MERGE: planned, started, its PR linked, an approving review recorded at `head`."""
         d, pl = self.daemon, self.daemon.pipeline
         t, _ = self.tickets.create(project, "Add tests", **fields)
@@ -74,6 +74,8 @@ class Base(unittest.IsolatedAsyncioTestCase):
         pl.plan(k, PLAN, "agent:planner")
         if pl.work(k)["gate"] == "plan":
             pl.confirm(k, "plan", "jay")
+        if pin:    # CC-071: the lead pinned the ticket to this PR
+            pl.link(k, ref, "agent:coordinator")
         pl.start(k, f"{k}-tests", f"/srv/server/worktrees/x/{k}", "agent:coordinator")
         self.tickets.update(k, {"status": "IN_REVIEW"}, "system:automation", trigger=f"PR #{number} is open")
         self.tickets.link(k, "github", "pr", ref, None, "x", "system:automation")
@@ -162,6 +164,42 @@ class Merges(Base):
         self.daemon._auto_merge = am
         await self.daemon.rederive()
         self.assertEqual(order, ["automation", "auto-merge"])
+
+
+class Pinned(Base):
+    """CC-071: a PR the lead pinned is merged by Jay, never by ccd; an unpinned merge is dropped if the ticket's PR
+    changed during the awaited gh call."""
+    async def test_a_pinned_ticket_is_held_and_gh_is_never_called(self):
+        k = self.ready(pin=True)
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.calls, [])
+        w = self.daemon.pipeline.work(k)
+        self.assertEqual(w["gate"], "merge")
+        self.assertIn("linked by hand; Jay merges it", w["gateReason"])
+
+    async def _decided_elsewhere(self, k, change):
+        self.gh.on_view = change
+        await self.daemon._auto_merge()
+        self.assertEqual(self.gh.of("merge"), [])
+        self.assertEqual(self.tickets.get(k)["status"], "READY_TO_MERGE")
+
+    async def test_a_pin_added_while_gh_view_runs_stops_the_merge(self):
+        k = self.ready()
+        ref = f"{REPO}#7"
+        await self._decided_elsewhere(k, lambda: self.daemon.pipeline._tx(
+            k, "agent:coordinator", lambda tid, t, w, at: ({}, {}, [("pipeline.linked", "pinned", {"pr": ref})])))
+
+    async def test_a_review_on_another_pr_while_gh_view_runs_stops_the_merge(self):
+        k = self.ready()
+        await self._decided_elsewhere(k, lambda: self.daemon.pipeline._tx(
+            k, "agent:reviewer", lambda tid, t, w, at: ({}, {"review_pr": f"{REPO}#8"}, [])))
+
+    async def test_a_second_link_added_while_gh_view_runs_stops_the_merge(self):
+        k = self.ready()
+        d = self.daemon
+        d.gh["commandcenter"]["data"]["prs"].append({"number": 8, "headRefOid": "cd" * 20, "statusCheckRollup": [],
+                                                     "isDraft": False})
+        await self._decided_elsewhere(k, lambda: self.tickets.link(k, "github", "pr", f"{REPO}#8", None, "x", "jay"))
 
 
 class Skips(Base):

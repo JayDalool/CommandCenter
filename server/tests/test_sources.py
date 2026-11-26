@@ -36,6 +36,13 @@ class Reshape(unittest.TestCase):
         self.assertEqual(r["prs"][0]["statusCheckRollup"], [{"state": "SUCCESS"}])
         self.assertEqual(r["ci"][0]["conclusion"], "failure")
 
+    def test_merged_nodes_carry_the_head_that_merged_and_the_query_asks_for_it(self):
+        # CC-071: a pinned ticket moves on a merge only at the head its review approved.
+        self.assertIn("nodes { number title url mergedAt headRefOid mergeCommit { oid } }", sources.GITHUB_QUERY)
+        g = copy.deepcopy(GRAPHQL)
+        g["data"]["repository"]["merged"]["nodes"][0]["headRefOid"] = "a" * 40
+        self.assertEqual(sources.reshape(g)["merged"][0]["headRefOid"], "a" * 40)
+
     def test_model_reads_it_exactly_as_before(self):
         c = cfg()
         view = model.project_view(c["projects"][1], sources.reshape(GRAPHQL), [], {}, c)

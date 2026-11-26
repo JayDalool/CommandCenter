@@ -417,6 +417,10 @@ class Daemon(LeadChat, HqDaemon):
             gh_cache[p["key"]] = {"data": data, "asOf": at, "error": None if data else "not fetched yet",
                                   "lastAttempt": None}
         self.gh = gh_cache
+        # CC-071: repositories outside the project list that a ticket is pinned to (jay-dev for a CC ticket), keyed by
+        # lowercase slug. Never stored and never mixed into self.gh, which must list exactly the project keys
+        # (snapshot, health, the Needs queue). Empty at start, so nothing stored from an earlier run can count.
+        self.gh_repos = {}
         (unpushed, _), (worktrees, git_at) = store.get("git:unpushed", {}), store.get("git:worktrees", {})
         (branches, _) = store.get("git:branches", {})
         self.git = {"unpushed": unpushed or {}, "worktrees": worktrees or {}, "branches": branches or {},
@@ -665,7 +669,36 @@ class Daemon(LeadChat, HqDaemon):
                 self._event("github", "daemon.github_recovered", f"{key}: GitHub back", project=key)
             entry.update(data=result, asOf=_now(), error=None)
             self.store.put(f"gh:{key}", result)
+        await self._poll_pinned_repos()
         self._dirty.set()
+
+    async def _poll_pinned_repos(self):
+        """CC-071: one whole-repo poll per repository an open ticket is pinned to that is not a project's own repo.
+        Same call and error handling as the projects; a failure here never stops the projects' poll or the other way."""
+        if self.tasks is None or self.pipeline is None:
+            return
+        own = {str(p.get("repo") or "").lower() for p in self.cfg["projects"]}
+        slugs = {}
+        for ref in self.pipeline.pins():
+            slug = ref.rpartition("#")[0]
+            if slug not in own:
+                slugs.setdefault(slug, None)
+        for slug in [k for k in self.gh_repos if k not in slugs]:
+            del self.gh_repos[slug]       # nothing pins it any more: its data may never be read again
+        for slug in slugs:
+            entry = self.gh_repos.setdefault(slug, {"data": None, "asOf": None, "error": "not fetched yet",
+                                                    "lastAttempt": None, "slug": slug})
+            entry["lastAttempt"] = _now()
+            try:
+                result = await asyncio.to_thread(self.github_fn, {"key": slug, "repo": slug, "branch": "main"})
+            except Exception as e:  # noqa: BLE001
+                entry["error"] = repr(e)[:160]
+                continue
+            failed = [v["error"] for v in result.values() if isinstance(v, dict) and "error" in v]
+            if failed:
+                entry["error"] = failed[0]
+                continue
+            entry.update(data=result, asOf=_now(), error=None)
 
     async def github_loop(self):
         while not self._stopping:
@@ -1346,10 +1379,13 @@ class Daemon(LeadChat, HqDaemon):
 
     def _pr_index(self, project_key):
         """PR number → one flat record, open PRs and recently merged ones alike."""
-        g = self.gh.get(project_key) or {}
-        data = g.get("data") or {}
         slug = next((p.get("repo") for p in self.cfg["projects"] if p["key"] == project_key), None) \
             or registry.github_of(project_key)
+        return self._index_of(self.gh.get(project_key), slug)
+
+    def _index_of(self, entry, slug):
+        g = entry or {}
+        data = g.get("data") or {}
         out = {}
         for pr in data.get("prs") if isinstance(data.get("prs"), list) else []:
             if not isinstance(pr, dict) or not isinstance(pr.get("number"), int):
@@ -1414,16 +1450,33 @@ class Daemon(LeadChat, HqDaemon):
             if t["project"] not in prs_by_project:
                 prs_by_project[t["project"]] = self._pr_index(t["project"])
             prs = prs_by_project[t["project"]]
+            own_slug = str(registry.github_of(t["project"]) or "").lower()
+            pin = self.pipeline.pin_of(t["key"]) if self.pipeline is not None else None
             branches = (self.git.get("branches") or {}).get(t["project"]) or {}
             branch = self._branch_for(t, branches)
-            linked = []
-            for link in links.get(t["key"]) or []:
-                num = link["ref"].rsplit("#", 1)[-1]
-                rec = prs.get(int(num)) if num.isdigit() else None
-                linked.append(rec or {"number": int(num) if num.isdigit() else None, "state": "UNKNOWN",
-                                      "url": github.pr_ref_url(link["ref"]), "title": link["title"], "ci": "NONE",
-                                      "review": "PENDING", "mergedAt": None, "branch": None, "asOf": None})
+            def record(ref, title=None):
+                num = ref.rsplit("#", 1)[-1]
+                # CC-071: a link is looked up in the index of its own repository, never by number alone
+                # (jay-dev#10 is not CommandCenter#10).
+                lslug = ref.rpartition("#")[0].lower()
+                if lslug == own_slug:
+                    rec = prs.get(int(num)) if num.isdigit() else None
+                elif lslug in self.gh_repos:
+                    rec = self._index_of(self.gh_repos[lslug], ref.rpartition("#")[0]).get(int(num)) \
+                        if num.isdigit() else None
+                else:
+                    rec = None
+                return rec or {"number": int(num) if num.isdigit() else None, "state": "UNKNOWN",
+                               "url": github.pr_ref_url(ref), "title": title, "ci": "NONE",
+                               "review": "PENDING", "mergedAt": None, "branch": None, "asOf": None}
+
+            linked = [record(link["ref"], link["title"]) for link in links.get(t["key"]) or []]
             pr = linked[0] if linked else None
+            if pin:
+                pinned = [x for x, l in zip(linked, links.get(t["key"]) or []) if l["ref"].lower() == pin.lower()]
+                # CC-071 (Codex round 5): the pin is durable but its display link can be removed; the ticket's
+                # PR is still the pin, never whichever unrelated link is left.
+                pr = pinned[0] if pinned else record(pin)
             merged = bool(pr and pr["state"] == "MERGED")
             if merged:
                 merge = "MERGED"
@@ -1605,7 +1658,7 @@ class Daemon(LeadChat, HqDaemon):
 
     PIPELINE_OPS = ("plan", "start", "review", "verify", "confirm", "handoff", "block", "role", "finding",
                     "ask", "replan", "rework", "evidence", "writer", "deploy-request", "deployed", "stale",
-                    "intake", "criteria", "plan-review", "user-check", "close", "deploy-plan", "reply")
+                    "intake", "criteria", "plan-review", "user-check", "close", "deploy-plan", "reply", "link")
 
     def task_work(self, key):
         self._need_tasks()
@@ -1614,23 +1667,53 @@ class Daemon(LeadChat, HqDaemon):
         w["project"] = self.tasks.get(w["key"])["project"]
         return w
 
-    def _open_prs(self, ticket):
-        """The ticket's linked PRs that the last GitHub poll saw open, as pipeline PR states."""
+    def _repo_entry(self, project, slug):
+        """The GitHub poll entry for a repository: the project's own, or one pinned from outside (CC-071)."""
+        if slug.lower() == str(registry.github_of(project) or "").lower():
+            return self.gh.get(project)
+        return self.gh_repos.get(slug.lower())
+
+    def _ticket_prs(self, ticket):
+        """CC-071: the one function that says which PRs a ticket has, for review, user check, rework, auto-merge and
+        Merge ready alike, as pipeline PR states.
+
+        Pinned: only the pin, and only when this ticket owns it and its repository was polled in this process, the
+        poll succeeded and listed the PR open (never stored data, never a failed poll). Unpinned: the linked PRs
+        the last poll of its project saw open, as before, except PRs another ticket's pin owns."""
+        pin = self.pipeline.pin_of(ticket["key"]) if self.pipeline is not None else None
+        if pin:
+            slug = pin.rpartition("#")[0]
+            entry = self._repo_entry(ticket["project"], slug)
+            if self.pipeline.pins().get(pin.lower()) != ticket["key"] or not entry or entry.get("error") is not None \
+                    or not entry.get("asOf") or entry["asOf"] < self.started:
+                return []
+            for pr in (entry.get("data") or {}).get("prs") or []:
+                if isinstance(pr, dict) and f"{slug}#{pr.get('number')}".lower() == pin.lower():
+                    return [self._pr_of(pin, pr)]
+            return []
         g = (self.gh.get(ticket["project"]) or {}).get("data") or {}
         refs = {link["ref"] for link in ticket.get("links") or [] if link.get("provider") == "github" and link.get("kind") == "pr"}
         repo = next((p.get("repo") for p in self.cfg["projects"] if p["key"] == ticket["project"]), None) \
             or registry.github_of(ticket["project"])
+        owned = self.pipeline.pins() if self.pipeline is not None else {}
         out = []
         for pr in g.get("prs") if isinstance(g.get("prs"), list) else []:
             ref = f"{repo}#{pr.get('number')}"
-            if ref in refs:
-                ci = model.ci_mark(pr.get("statusCheckRollup"))
-                out.append({"ref": ref, "head": pr.get("headRefOid") or "", "ciGreen": ci in ("✓", "–"),
-                            "ciNone": ci == "–", "draft": bool(pr.get("isDraft"))})
+            if ref in refs and ref.lower() not in owned:
+                out.append(self._pr_of(ref, pr))
         return out
 
+    @staticmethod
+    def _pr_of(ref, pr):
+        ci = model.ci_mark(pr.get("statusCheckRollup"))
+        return {"ref": ref, "head": pr.get("headRefOid") or "", "ciGreen": ci in ("✓", "–"),
+                "ciNone": ci == "–", "draft": bool(pr.get("isDraft"))}
+
+    def _open_prs(self, ticket):
+        return self._ticket_prs(ticket)
+
     def _pr_state(self, ticket):
-        prs = self._open_prs(ticket)
+        prs = self._ticket_prs(ticket)
         return prs[0] if len(prs) == 1 else None
 
     def task_work_op(self, key, op, body, actor="jay", developer=False):
@@ -1649,8 +1732,12 @@ class Daemon(LeadChat, HqDaemon):
             self._meter_report(key, op, actor, body)
         if op == "plan":
             r = self._wrap(pl.plan, key, body.get("plan"), actor, **meta)
+        elif op == "link":
+            r = self._wrap(pl.link, key, body.get("pr"), actor)
         elif op == "start":
-            r = self._wrap(pl.start, key, body.get("branch"), body.get("worktree"), actor, **meta)
+            proj = self.tasks.get(key)["project"] if self.tasks.exists(key) else None
+            base = next((p.get("branch") for p in self.cfg["projects"] if p["key"] == proj), None)
+            r = self._wrap(pl.start, key, body.get("branch"), body.get("worktree"), actor, base=base, **meta)
         elif op == "review":
             t = self._wrap(self.tasks.get, key)
             if len(self._open_prs(t)) > 1:
@@ -2882,12 +2969,17 @@ class Daemon(LeadChat, HqDaemon):
         if self.tasks is None:
             return
         prefixes = self.tasks.key_prefixes()  # a retired prefix still owns its old keys
+        # CC-071: pinned PRs (lowercase ref -> owner key) and the tickets that hold any pin, once per run. A pinned
+        # PR moves only its owner; a pinned ticket ignores every other PR, key-led or linked by hand.
+        pins, pinned = self.pipeline.pins(), self.pipeline.pinned_keys()
         for p in self.cfg["projects"]:
             g = self.gh.get(p["key"]) or {}
             if g.get("error") or not g.get("data") or self._auto_seen.get(p["key"]) == g.get("asOf"):
                 continue
             self._auto_seen[p["key"]] = g.get("asOf")
             data = g["data"]
+            # Stored data from before this process started never moves a pinned ticket.
+            fresh = bool(g.get("asOf")) and g["asOf"] >= self.started
 
             def mine(k):
                 return prefixes.get(k.rsplit("-", 1)[0]) == p["key"] and self.tasks.exists(k)
@@ -2896,8 +2988,14 @@ class Daemon(LeadChat, HqDaemon):
                 try:
                     n = pr["number"]
                     ref = f"{p['repo']}#{n}"
-                    keys = [k for k in self.tasks.pr_keys(pr.get("title", ""), pr.get("headRefName", "")) if mine(k)]
-                    keys += [k for k in self.tasks.keys_linked("github", "pr", ref) if k not in keys]
+                    if ref.lower() in pins:
+                        if fresh:
+                            self._pin_open(pins[ref.lower()], pr, ref)
+                        continue
+                    keys = [k for k in self.tasks.pr_keys(pr.get("title", ""), pr.get("headRefName", "")) if mine(k)
+                            and k not in pinned]
+                    keys += [k for k in self.tasks.keys_linked("github", "pr", ref) if k not in keys and mine(k)
+                             and k not in pinned]
                     ci = model.ci_mark(pr.get("statusCheckRollup"))
                     ready = pr.get("reviewDecision") == "APPROVED" and ci in ("✓", "–") and not pr.get("isDraft")
                     # What the pipeline needs to tie a recorded review to this PR's current head.
@@ -2943,7 +3041,14 @@ class Daemon(LeadChat, HqDaemon):
                 try:
                     ref = f"{p['repo']}#{m['number']}"
                     why = f"PR #{m['number']} merged"
+                    if ref.lower() in pins:
+                        if fresh:
+                            self._pipeline_result(*self.pipeline.pin_merged(
+                                pins[ref.lower()], ref, m.get("headRefOid"), (m.get("mergeCommit") or {}).get("oid")))
+                        continue
                     for k in self.tasks.keys_linked("github", "pr", ref):
+                        if k in pinned or not mine(k):
+                            continue
                         # A merge moves a ticket once. GitHub keeps listing a merged PR for a while, so after a
                         # reopen or rework the old merge must not send the ticket on to VERIFYING again.
                         if self.tasks.moved_by(k, "VERIFYING", why) or (
@@ -2954,6 +3059,48 @@ class Daemon(LeadChat, HqDaemon):
                             self._pipeline_result(*self.pipeline.merged(k, ref, ((m.get("mergeCommit") or {}).get("oid"))))
                 except Exception as e:  # noqa: BLE001
                     log.warning(json.dumps({"msg": "ticket automation skipped a merge", "error": repr(e)[:200]}))
+        # Repositories only a pin points at (jay-dev): pinned refs only, never key-led, independent of any project's
+        # poll, each gated on its own error and asOf.
+        for slug, entry in list(self.gh_repos.items()):
+            if entry.get("error") or not entry.get("data") or not entry.get("asOf") or entry["asOf"] < self.started \
+                    or self._auto_seen.get(("repo", slug)) == entry["asOf"]:
+                continue
+            self._auto_seen[("repo", slug)] = entry["asOf"]
+            data = entry["data"]
+            for pr in data.get("prs") if isinstance(data.get("prs"), list) else []:
+                try:
+                    ref = f"{entry['slug']}#{pr['number']}"
+                    if ref.lower() in pins:
+                        self._pin_open(pins[ref.lower()], pr, ref)
+                except Exception as e:  # noqa: BLE001
+                    log.warning(json.dumps({"msg": "ticket automation skipped a pinned PR", "error": repr(e)[:200]}))
+            for m in data.get("merged") if isinstance(data.get("merged"), list) else []:
+                try:
+                    ref = f"{entry['slug']}#{m['number']}"
+                    if ref.lower() in pins:
+                        self._pipeline_result(*self.pipeline.pin_merged(
+                            pins[ref.lower()], ref, m.get("headRefOid"), (m.get("mergeCommit") or {}).get("oid")))
+                except Exception as e:  # noqa: BLE001
+                    log.warning(json.dumps({"msg": "ticket automation skipped a pinned merge", "error": repr(e)[:200]}))
+
+    def _pin_open(self, owner, pr, ref):
+        """CC-071: a pinned PR is open: its owner reaches review on the PR's first or a new head, and its recorded
+        review is tied to the head (sync_pr), exactly as for a key-led PR but with the pin's own spelling of the ref."""
+        pin = self.pipeline.pin_of(owner)
+        st = dict(self._pr_of(pin or ref, pr))
+        if not pin or not self.tasks.exists(owner):
+            return
+        # CC-071 (Codex round 5): a poll node without a head is not an observation; "" would count as a new
+        # head and move the pinned ticket to review.
+        if not st["head"]:
+            return
+        if self.pipeline.new_head(owner, st):
+            sha = st["head"][:7]
+            why = (f"PR #{pr['number']} new head {sha} after rework" if self.pipeline.rework_prs(owner) is not None
+                   else f"PR #{pr['number']} new head {sha}" if self.pipeline.review_head(owner)
+                   else f"PR #{pr['number']} is open")
+            self._auto(owner, ("IN_PROGRESS",), "IN_REVIEW", why)
+        self._pipeline_result(*self.pipeline.sync_pr(owner, st))
 
     # ---------- auto-merge (CC-025, docs/adr/0007-auto-merge-policy.md) ----------
 
@@ -3041,6 +3188,9 @@ class Daemon(LeadChat, HqDaemon):
         w = self.pipeline.work(key)
         rv = w["review"]
         head = rv["head"]
+        if self.pipeline.pin_of(key):    # CC-071: a PR pinned by hand is merged by Jay; no gh call, no policy read
+            self._auto_merge_hold(t, head, "its PR was linked by hand; Jay merges it")
+            return
         open_prs = [p["ref"] for p in self._open_prs(t)]
         pr_ref = rv["pr"] if rv.get("pr") and rv["pr"].rpartition("#")[0] == repo else (open_prs[0] if len(open_prs) == 1 else None)
         number = (pr_ref or "").rpartition("#")[2]
@@ -3084,6 +3234,11 @@ class Daemon(LeadChat, HqDaemon):
         w2 = self.pipeline.work(key)
         if t2["status"] != "READY_TO_MERGE" or w2["gate"] or w2["review"]["head"] != head \
                 or w2["review"]["verdict"] != "APPROVE":
+            return
+        # CC-071: a pin, a re-linked PR or another review PR during the awaited gh call means the merge was decided
+        # for something else (the heads are identical, so the head check above cannot see it).
+        if w2["review"].get("pr") != rv.get("pr") or self.pipeline.pin_of(key) \
+                or [p["ref"] for p in self._ticket_prs(t2)] != [pr_ref]:
             return
         late = merge_policy.ticket_reasons(t2, w2)
         if late:
@@ -3512,10 +3667,14 @@ class Daemon(LeadChat, HqDaemon):
             prs = {p["ref"]: p for p in self._open_prs(t)}
             ref = rv.get("pr") or (next(iter(prs)) if len(prs) == 1 else None)
             pr = prs.get(ref) if ref else None
+            pin = self.pipeline.pin_of(t["key"])
+            foreign = bool(pin) and pin.rpartition("#")[0].lower() != str(registry.github_of(t["project"]) or "").lower()
             # A convenience press, never a bypass: an open gate other than the merge gate itself (plan, UI,
             # deploy, failure) keeps the ticket out, exactly as it would keep it out of a merge by hand.
             reason = ("an open " + str(w["gate"]) + " gate" if w["gate"] not in (None, "merge")
                       else "no approved review" if rv["verdict"] != "APPROVE" or not rv["head"]
+                      else "its PR is in another repository; merge it by hand" if foreign
+                      else "the review was not on its pinned PR" if pin and str(rv.get("pr") or "").lower() != pin.lower()
                       else "its PR is not open (or several are linked)" if not pr
                       else "the PR head changed since the review" if pr["head"] != rv["head"]
                       else "CI is not green" if not pr["ciGreen"]

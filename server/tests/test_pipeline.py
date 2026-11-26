@@ -378,6 +378,11 @@ class Cli(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 pipeline_cli.build(argv)
 
+    def test_link_pins_a_ticket_to_a_pr_as_the_lead(self):
+        m, path, body, actor = pipeline_cli.build(["link", "SV-087", "--pr", "JayDalool/SamVisionAI#249"])
+        self.assertEqual((m, path, body, actor), ("POST", "/api/tasks/SV-087/work/link",
+                                                  {"pr": "JayDalool/SamVisionAI#249"}, "agent:coordinator"))
+
     def test_plan_reads_a_json_file(self):
         f = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
         json.dump(PLAN, f)

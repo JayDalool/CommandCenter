@@ -43,6 +43,8 @@ FLAG_LABEL = {"needs_jay": "needs:jay", "needs_legal": "needs:legal", "needs_ui_
               "needs_deploy": "needs:deploy"}
 RELATION_KINDS = ("blocks", "related", "duplicates")  # "blocked_by" is the inverse view of "blocks"
 LINK_PROVIDERS = ("github", "legacy", "url")
+# CC-071: owner/repo#N, no leading zero on N, no "." or ".." repo, no spaces or newlines (matched with fullmatch).
+PR_REF_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}#[1-9][0-9]{0,6}")
 
 # Fields a PATCH may change, and how each is checked. Everything else is read-only.
 TEXT_FIELDS = {"title": 300, "description": 20000, "branch": 200}

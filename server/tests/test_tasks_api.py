@@ -900,3 +900,513 @@ class PipelineApi(Automation):
         self.assertEqual(self.step("plan", {"plan": "do it"}).status_code, 400)
         self.assertEqual(self.client.post("/api/tasks/SV-056/work/plan", content="{}",
                                           headers=dict(JSON, **{"x-ccd-actor": "root"})).status_code, 400)
+
+
+class PinnedPr(Automation):
+    """CC-071: the lead pins a ticket to exactly one PR; only that PR moves, reviews or merges it."""
+    SV = "JayDalool/SamVisionAI#249"
+    JD = "JayDalool/jay-dev#10"
+    JDL = "jaydalool/jay-dev"          # the poll's own spelling: pins are matched in lowercase
+    NATIVE = "SV-118-advisor-typed-guard"
+    H1 = "a1" * 20
+    H2 = "b2" * 20
+    key = "SV-087"
+
+    def step(self, op, body, actor="agent:coordinator", key=None):
+        h = dict(JSON, **{"x-ccd-actor": actor})
+        return self.client.post(f"/api/tasks/{key or self.key}/work/{op}", content=json.dumps(body), headers=h)
+
+    def lane(self, number=87, project="samvision", size="standard"):
+        """A planned ticket: READY_TO_IMPLEMENT, with an accepted plan. Later steps act on its key."""
+        prefix = {"samvision": "SV", "commandcenter": "CC"}[project]
+        self.key = f"{prefix}-{number:03d}"
+        self.tickets.create(project, f"feature {number}", number=number, status="INBOX", description="Comps miss sold homes")
+        self.step("intake", {"size": size, "criteria": ["Five comps show"], "priority": "HIGH"})
+        self.step("role", {"role": "planner", "session": f"inv-{number}"}, "agent:planner")
+        self.step("plan", {"plan": {"summary": "the feature"}, "session": f"inv-{number}"}, "agent:planner")
+        r = self.step("plan-review", {"verdict": "APPROVE", "note": "ok", "session": f"tr-{number}"}, "agent:tech-reviewer")
+        self.assertEqual(r.json()["status"], "READY_TO_IMPLEMENT", r.text)
+        return self.key
+
+    def pin(self, ref="", key=None, actor="agent:coordinator"):
+        return self.step("link", {"pr": self.SV if ref == "" else ref}, actor, key)
+
+    def started(self, number=87, ref=None, branch=None, project="samvision"):
+        self.lane(number, project)
+        r = self.pin(ref or (self.SV if project == "samvision" else self.JD))
+        self.assertEqual(r.status_code, 200, r.text)
+        r = self.step("start", {"branch": branch or self.NATIVE, "worktree": f"/srv/server/worktrees/x/{self.key}"})
+        self.assertEqual((r.status_code, r.json()["status"]), (200, "IN_PROGRESS"), r.text)
+        return self.key
+
+    def sv_open(self, *rows):
+        """rows: (number, branch, head, title); the SamVision poll lists exactly these PRs open."""
+        self.gh.data["samvision"]["prs"] = [dict(pr(n, t), headRefName=b, headRefOid=h) for n, b, h, t in rows]
+        self.poll()
+
+    def sv_merged(self, number=249, head=None, title="SV-118 advisor", **extra):
+        node = {"number": number, "title": title, "url": "u", "mergedAt": "2026-10-03T00:00:00Z",
+                "mergeCommit": {"oid": "f" * 40}}
+        if head:
+            node["headRefOid"] = head
+        self.gh.data["samvision"]["prs"] = []
+        self.gh.data["samvision"]["merged"] = [dict(node, **extra)]
+        self.poll()
+
+    def jd(self, opened=(), merged=()):
+        """What jay-dev's poll lists. opened rows: (number, branch, head)."""
+        self.gh.data[self.JDL] = {"issues": [], "prs": [dict(pr(n, "jay-dev change"), headRefName=b, headRefOid=h)
+                                                        for n, b, h in opened], "merged": list(merged), "closed": [], "ci": []}
+        self.poll()
+
+    def cc_polled(self):
+        """Make CommandCenter one of the polled projects, as it is in production, so a CC ticket has an own-repo poll."""
+        base = next(p for p in self.daemon.cfg["projects"] if p["key"] == "samvision")
+        self.daemon.cfg["projects"].append(dict(base, key="commandcenter", name="Command Center", session="commandcenter",
+                                                repo="JayDalool/CommandCenter", branch="main"))
+        self.daemon.gh["commandcenter"] = {k: (v.copy() if isinstance(v, dict) else v)
+                                           for k, v in self.daemon.gh["samvision"].items()}
+        self.gh.data["commandcenter"] = {"issues": [], "prs": [], "merged": [], "closed": [], "ci": []}
+
+    def status(self, key=None):
+        return self.tickets.get(key or self.key)["status"]
+
+    def events(self, kind, key=None):
+        return [json.loads(d or "{}") for (d,) in self.tickets.db.execute(
+            "SELECT e.data FROM ticket_events e JOIN tickets t ON t.id=e.ticket_id WHERE t.key=? AND e.kind=?",
+            (key or self.key, kind))]
+
+    def work(self, key=None):
+        return self.get(f"/api/tasks/{key or self.key}/work").json()
+
+    def user_pass(self, head, key=None):
+        return self.step("user-check", {"result": "pass", "head": head, "note": "tried it", "session": "ur-1",
+                                        "criteria": ["c1=pass"]}, "agent:user-reviewer", key)
+
+    def approve(self, head, key=None):
+        return self.step("review", {"verdict": "APPROVE", "head": head, "session": "cr-1"}, "agent:reviewer", key)
+
+    # P1
+    def test_P1_only_the_lead_or_jay_pins_and_a_plain_link_never_does(self):
+        self.lane()
+        for actor in ("agent:implementer", "agent:reviewer", "agent:planner"):
+            self.assertEqual(self.pin(actor=actor).status_code, 403, actor)
+        self.assertEqual(self.events("pipeline.linked"), [])
+        # a plain links row, by an agent or by Jay, is display only: native start is still refused
+        for actor in ("agent:implementer", "jay"):
+            r = self.client.post(f"/api/tasks/{self.key}/links", headers=dict(JSON, **{"x-ccd-actor": actor}),
+                                 content=json.dumps({"provider": "github", "kind": "pr", "ref": self.SV,
+                                                     "url": "https://github.com/JayDalool/SamVisionAI/pull/249"}))
+            self.assertIn(r.status_code, (200, 201), r.text)
+        r = self.step("start", {"branch": self.NATIVE, "worktree": "/srv/server/worktrees/x/SV-087"})
+        self.assertEqual(r.status_code, 400, r.text)
+        for actor in ("agent:coordinator", "jay"):
+            self.assertEqual(self.pin(actor=actor).status_code, 200, actor)
+        self.assertEqual(len(self.events("pipeline.linked")), 1)          # the same ref again is a no-op
+
+    # P2
+    def test_P2_link_refuses_what_is_not_a_pinnable_pr(self):
+        self.lane()
+        bad = ["JayDalool/SamVisionAI#0249", "JayDalool/SamVisionAI#0", "JayDalool/./x#1", "JayDalool/SamVisionAI#1\\n",
+               " JayDalool/SamVisionAI#1", "JayDalool/..#1", "JayDalool/SamVisionAI #1", "noslash#1", None, 5,
+               "JayDalool/gyst-lifeops#1", "JayDalool/GauzeMate#1", "JayDalool/jay-dev#10", "other/repo#1"]
+        for ref in bad:
+            r = self.pin(ref)
+            self.assertEqual(r.status_code, 400, (ref, r.text))
+        self.tickets.create("samvision", "not planned", number=88, status="READY_TO_IMPLEMENT")
+        self.assertEqual(self.pin(key="SV-088").status_code, 409)            # not in the pipeline
+        self.assertEqual(self.pin("jaydalool/samvisionai#249").status_code, 200)
+        self.assertEqual(self.events("pipeline.linked")[0]["pr"], self.SV)       # stored in the registry's casing
+        self.tickets.create("gauzemate", "paused", number=1, status="READY_TO_IMPLEMENT")
+        r = self.pin("JayDalool/GauzeMate#5", key="GZ-001", actor="jay")
+        self.assertEqual(r.status_code, 409, r.text)
+        self.assertEqual(self.events("pipeline.linked", "GZ-001"), [])
+        self.tickets.update(self.key, {"status": "IN_REVIEW"}, "jay")
+        self.assertEqual(self.pin("JayDalool/SamVisionAI#250").status_code, 409)   # only before review
+
+    def test_P2_a_plain_row_in_another_case_does_not_break_the_pin_or_double_the_row(self):
+        self.lane()
+        self.tickets.link(self.key, "github", "pr", "jaydalool/samvisionai#249", None, "x", "agent:implementer")
+        self.assertEqual(self.pin().status_code, 200)
+        self.assertEqual(len([l for l in self.tickets.get(self.key)["links"] if l["ref"].lower() == self.SV.lower()]), 1)
+        self.assertEqual(self.pin("JayDalool/SamVisionAI#250").status_code, 200)   # a re-pin before review
+
+    # P3
+    def test_P3_one_owner_and_a_cancelled_owner_gives_the_pr_up(self):
+        a = self.started(87)
+        self.lane(88)
+        b = self.key
+        r = self.pin(key=b)
+        self.assertEqual(r.status_code, 409, r.text)
+        self.tickets.update(a, {"status": "CANCELLED"}, "jay")
+        self.assertEqual(self.pin(key=b).status_code, 200)
+        self.step("start", {"branch": "SV-118-other-name", "worktree": "/srv/server/worktrees/x/SV-088"}, key=b)
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 advisor"))
+        self.assertEqual(self.status(b), "IN_REVIEW")
+        # the old ticket is reopened: it still holds its pin, but it is inert, and the new owner still moves
+        self.tickets.update(a, {"status": "IN_REVIEW"}, "jay")
+        r = self.approve(self.H1, key=a)
+        self.assertEqual(r.status_code, 409, r.text)
+        self.assertEqual(self.daemon._ticket_prs(self.tickets.get(a)), [])
+        self.assertEqual([p["ref"] for p in self.daemon._ticket_prs(self.tickets.get(b))], [self.SV])
+
+    # P4
+    def test_P4_a_native_branch_needs_a_pin_and_a_safe_name(self):
+        from ccd.pipeline import native_branch_problem
+        self.lane()
+        wt = {"worktree": "/srv/server/worktrees/x/SV-087"}
+        self.assertEqual(self.step("start", dict(wt, branch=self.NATIVE)).status_code, 400)
+        self.pin()
+        for bad in ("main", "master", "Main", "HEAD", "refs/heads/x", "origin/x", "SV-118/", "x.lock", "a..b", "-x",
+                    "a b", "x\\n", "a/b/c/d"):
+            r = self.step("start", dict(wt, branch=bad))
+            self.assertEqual(r.status_code, 400, (bad, r.text))
+            self.assertEqual(self.status(), "READY_TO_IMPLEMENT")
+        self.assertIn("base", native_branch_problem("develop", base="develop"))
+        self.assertEqual(self.step("start", dict(wt, branch=self.NATIVE)).json()["status"], "IN_PROGRESS")
+
+    def test_P4_a_key_led_branch_still_starts_without_a_pin(self):
+        self.lane()
+        r = self.step("start", {"branch": "SV-087-feature", "worktree": "/srv/server/worktrees/x/SV-087"})
+        self.assertEqual(r.json()["status"], "IN_PROGRESS", r.text)
+
+    # P5, P6
+    def test_P5_an_explicit_pin_wins_over_key_led_linking_and_plain_links(self):
+        self.tickets.create("samvision", "the SV-118 ticket", number=118, status="IN_PROGRESS")
+        self.started(87)
+        self.tickets.create("samvision", "plain", number=56, status="IN_PROGRESS")
+        self.tickets.link("SV-056", "github", "pr", self.SV, None, "x", "agent:implementer")
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 advisor"))
+        self.assertEqual((self.status("SV-087"), self.status("SV-118"), self.status("SV-056")),
+                         ("IN_REVIEW", "IN_PROGRESS", "IN_PROGRESS"))
+        self.assertEqual(self.tickets.get("SV-118")["links"], [])
+        self.assertEqual(self.daemon._ticket_prs(self.tickets.get("SV-056")), [])     # not offered to review, rework, merge
+        self.assertEqual(self.daemon._pr_state(self.tickets.get("SV-056")), None)
+
+    def test_c3_without_a_pin_a_key_led_pr_still_links_and_a_pinned_native_one_moves_its_own_ticket(self):
+        self.tickets.create("samvision", "keyled", number=56, status="IN_PROGRESS")
+        self.started(57, ref=self.SV)
+        self.sv_open((94, "sv-056-feature", "94" * 20, "SV-056: the feature"), (249, self.NATIVE, self.H1, "SV-118 x"))
+        self.assertEqual((self.status("SV-056"), self.status("SV-057")), ("IN_REVIEW", "IN_REVIEW"))
+        self.assertEqual(self.tickets.get("SV-056")["prNumber"], 94)
+
+    def test_P6_a_pinned_ticket_ignores_a_key_led_pr_of_its_own_key(self):
+        self.started(87)
+        self.sv_open((300, "SV-087-other", self.H2, "SV-087: another PR"))
+        self.assertEqual(self.status(), "IN_PROGRESS")
+        self.assertEqual(self.daemon._ticket_prs(self.tickets.get(self.key)), [])
+        self.sv_open((300, "SV-087-other", self.H2, "SV-087: another PR"), (249, self.NATIVE, self.H1, "x"))
+        self.assertEqual(self.status(), "IN_REVIEW")
+        self.assertEqual([p["ref"] for p in self.daemon._ticket_prs(self.tickets.get(self.key))], [self.SV])
+        self.assertEqual(self.approve(self.H2).status_code, 409)                  # #300's head is not the pin's
+
+    # P7
+    def test_P7_review_and_user_check_bind_to_the_pin_and_its_head(self):
+        self.started(87)
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"))
+        self.assertEqual(self.status(), "IN_REVIEW")
+        self.assertEqual(self.user_pass(self.H2).status_code, 409)                # not the observed head
+        self.assertEqual(self.approve(self.H2).status_code, 409)
+        # CC-071 (Codex round 5): the user-check and APPROVE refusals above also have older, independent causes
+        # (head guard, missing user check). A changes-requested review at a wrong head has none, so only the pin's
+        # own head-equality guard (pipeline._one_pr) refuses it.
+        r = self.step("review", {"verdict": "REQUEST_CHANGES", "head": self.H2, "session": "cr-1"}, "agent:reviewer")
+        self.assertEqual(r.status_code, 409, r.text)
+        self.assertEqual((self.status(), self.work()["review"]["cycles"]), ("IN_REVIEW", 0))
+        # bootstrap data from before this process started never counts
+        entry = self.daemon.gh["samvision"]
+        old = entry["asOf"]
+        entry["asOf"] = self.daemon.started - 5
+        self.assertEqual(self.user_pass(self.H1).status_code, 409)
+        self.assertEqual(self.approve(self.H1).status_code, 409)
+        entry["asOf"] = old
+        # a failed poll after an open one
+        self.gh.fail = True
+        self.poll()
+        self.assertEqual(self.user_pass(self.H1).status_code, 409)
+        self.gh.fail = False
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"))
+        r = self.user_pass(self.H1)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.work()["userCheck"]["pr"], self.SV)
+        # a user check recorded on another ref at the same head does not carry to the pin
+        pl = self.daemon.pipeline
+        tid = pl.ts._id_of(self.key)
+        uc = dict(self.work()["userCheck"], pr="JayDalool/other#1")
+        pl._flow_set(tid, 1.0, user_check=uc)
+        self.assertEqual(self.approve(self.H1).status_code, 409)
+        pl._flow_set(tid, 2.0, user_check=dict(uc, pr=self.SV))
+        self.assertEqual(self.approve(self.H1).json()["status"], "READY_TO_MERGE")
+        # the PR closed: nothing to approve against
+        self.sv_open()
+        self.assertEqual(self.daemon._ticket_prs(self.tickets.get(self.key)), [])
+
+    def test_data_stored_before_this_process_started_moves_and_merges_nothing(self):
+        """CC-071 (Codex round 5): the open and the merged automation both refuse pre-start data; asOf is only
+        trusted once this process has polled."""
+        self.started(87)
+        self.daemon.started = self.daemon.started + 3600              # every poll below is "from before the start"
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"))
+        self.assertEqual(self.status(), "IN_PROGRESS")
+        self.daemon.started = self.daemon.started - 3600
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"))
+        self.assertEqual(self.user_pass(self.H1).status_code, 200)
+        self.assertEqual(self.approve(self.H1).json()["status"], "READY_TO_MERGE")
+        self.daemon.started = self.daemon.started + 3600
+        self.sv_merged(249, head=self.H1)
+        self.assertEqual((self.status(), self.events("pipeline.unreviewed_merge"), self.events("pipeline.merged")),
+                         ("READY_TO_MERGE", [], []))
+        self.daemon.started = self.daemon.started - 3600
+        self.sv_merged(249, head=self.H1)
+        self.assertEqual(self.status(), "VERIFYING")
+
+    def test_a_jay_dev_poll_stored_before_this_process_started_moves_nothing(self):
+        self.lane(7, "commandcenter")
+        self.pin(self.JD)
+        self.step("start", {"branch": "fix-thing", "worktree": "/srv/server/worktrees/x/CC-007"})
+        self.daemon.started = self.daemon.started + 3600
+        self.jd(opened=[(10, "fix-thing", self.H1)])
+        self.assertEqual(self.status("CC-007"), "IN_PROGRESS")
+        self.daemon.started = self.daemon.started - 3600
+        self.jd(opened=[(10, "fix-thing", self.H1)])
+        self.assertEqual(self.status("CC-007"), "IN_REVIEW")
+        self.assertEqual(self.user_pass(self.H1, "CC-007").status_code, 200)
+        self.assertEqual(self.approve(self.H1, "CC-007").json()["status"], "READY_TO_MERGE")
+        self.daemon.started = self.daemon.started + 3600
+        node = {"number": 10, "title": "x", "url": "u", "mergedAt": "x", "headRefOid": self.H1,
+                "mergeCommit": {"oid": "e" * 40}}
+        self.jd(merged=[node])
+        self.assertEqual((self.status("CC-007"), self.events("pipeline.merged", "CC-007")), ("READY_TO_MERGE", []))
+
+    def test_a_poll_node_without_a_head_does_not_move_a_pinned_ticket(self):
+        """CC-071 (Codex round 5): "" is not an observed head, and new_head("") is true."""
+        self.started(87)
+        node = dict(pr(249, "SV-118 x"), headRefName=self.NATIVE)
+        del node["headRefOid"]
+        self.gh.data["samvision"]["prs"] = [node]
+        self.poll()
+        self.assertEqual(self.status(), "IN_PROGRESS")
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"))
+        self.assertEqual(self.status(), "IN_REVIEW")
+        self.lane(7, "commandcenter")
+        self.pin(self.JD)
+        self.step("start", {"branch": "fix-thing", "worktree": "/srv/server/worktrees/x/CC-007"})
+        self.jd(opened=[(10, "fix-thing", self.H1)])
+        self.gh.data[self.JDL]["prs"][0].pop("headRefOid")
+        self.tickets.update("CC-007", {"status": "IN_PROGRESS"}, "jay")
+        self.poll()
+        self.assertEqual(self.status("CC-007"), "IN_PROGRESS")
+
+    def test_development_shows_the_pin_when_its_display_link_is_gone(self):
+        """CC-071 (Codex round 5): the pin is durable, its plain link row is not; the row must not fall back to an
+        unrelated link's PR."""
+        self.started(87)
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"), (10, "other", self.H2, "SV-087 look-alike"))
+        self.tickets.link(self.key, "github", "pr", "JayDalool/SamVisionAI#10", None, "other", "agent:implementer")
+        self.tickets.link(self.key, "github", "pr", self.SV, None, None, "jay", remove=True)
+        self.assertEqual(self.daemon.pipeline.pin_of(self.key), self.SV)
+        row = next(r for r in self.daemon.development()["rows"] if r["key"] == self.key)
+        self.assertEqual((row["pr"]["number"], row["pr"]["url"]), (249, "https://github.com/JayDalool/SamVisionAI/pull/249"))
+        self.assertEqual(row["pr"]["state"], "OPEN")
+
+    # P8
+    def test_P8_a_merge_counts_only_for_the_pin_at_the_reviewed_head(self):
+        self.started(87)
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"))
+        self.assertEqual(self.user_pass(self.H1).status_code, 200)
+        self.assertEqual(self.approve(self.H1).json()["status"], "READY_TO_MERGE")
+        self.sv_merged(249, head=self.H2)                      # merged at another head: not what was reviewed
+        self.sv_merged(249, head=self.H2)
+        self.assertEqual(self.status(), "READY_TO_MERGE")
+        self.assertEqual(len(self.events("pipeline.unreviewed_merge")), 1)
+        self.sv_merged(249, head=self.H1)
+        self.assertEqual(self.status(), "VERIFYING")
+        w = self.work()
+        self.assertEqual((w["merge"]["pr"], w["merge"]["sha"]), (self.SV, "f" * 40))
+        self.assertEqual([e["pr"] for e in self.events("pipeline.merged")], [self.SV])
+        # replay after a hand reopen does not fire again
+        self.tickets.update(self.key, {"status": "IN_REVIEW"}, "jay")
+        self.sv_merged(249, head=self.H1)
+        self.assertEqual(len(self.events("pipeline.merged")), 1)
+        self.assertEqual(self.status(), "IN_REVIEW")
+
+    def test_P8_a_merge_before_any_review_does_not_move_the_ticket_and_notes_once(self):
+        self.started(87)
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"))
+        for _ in range(2):
+            self.sv_merged(249, head=self.H1)
+        self.assertEqual(self.status(), "IN_REVIEW")
+        self.assertEqual(len(self.events("pipeline.unreviewed_merge")), 1)
+
+    def test_a_pinned_pr_first_seen_already_merged_in_progress_notes_once_and_does_not_advance(self):
+        self.started(87)
+        for _ in range(2):
+            self.sv_merged(249, head=self.H1)
+        self.assertEqual(self.status(), "IN_PROGRESS")
+        self.assertEqual(len(self.events("pipeline.unreviewed_merge")), 1)
+
+    def test_a_merged_node_without_its_head_neither_moves_nor_notes_until_it_has_one(self):
+        self.started(87)
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"))
+        self.user_pass(self.H1)
+        self.approve(self.H1)
+        self.sv_merged(249)                                     # data stored before headRefOid was fetched
+        self.assertEqual((self.status(), self.events("pipeline.unreviewed_merge")), ("READY_TO_MERGE", []))
+        self.sv_merged(249, head=self.H1)
+        self.assertEqual(self.status(), "VERIFYING")
+
+    def test_a_plain_linked_commandcenter_merge_leaves_the_jay_dev_pinned_ticket_alone(self):
+        """CC-071 P8 (Codex round 5): CommandCenter#10 is not jay-dev#10, even when plain-linked to the ticket."""
+        self.cc_polled()
+        self.lane(7, "commandcenter")
+        self.pin(self.JD)
+        self.step("start", {"branch": "fix-thing", "worktree": "/srv/server/worktrees/x/CC-007"})
+        self.tickets.link("CC-007", "github", "pr", "JayDalool/CommandCenter#10", None, "plain", "agent:implementer")
+        self.jd(opened=[(10, "fix-thing", self.H1)])
+        self.assertEqual(self.user_pass(self.H1, "CC-007").status_code, 200)
+        self.assertEqual(self.approve(self.H1, "CC-007").json()["status"], "READY_TO_MERGE")
+
+        def cc_merged():
+            self.gh.data["commandcenter"]["merged"] = [{"number": 10, "title": "CC-007 look-alike", "url": "u",
+                                                        "mergedAt": "x", "headRefOid": self.H1,
+                                                        "mergeCommit": {"oid": "c" * 40}}]
+            self.poll()
+        cc_merged()
+        self.assertEqual(self.status("CC-007"), "READY_TO_MERGE")
+        self.assertEqual((self.events("pipeline.merged", "CC-007"), self.work("CC-007")["merge"]), ([], None))
+        self.jd(merged=[{"number": 10, "title": "x", "url": "u", "mergedAt": "x", "headRefOid": self.H1,
+                         "mergeCommit": {"oid": "e" * 40}}])
+        self.assertEqual(self.status("CC-007"), "VERIFYING")
+        cc_merged()                                                       # and again once VERIFYING
+        w = self.work("CC-007")
+        self.assertEqual((w["merge"]["pr"], w["merge"]["sha"]), (self.JD, "e" * 40))
+        self.assertEqual(len(self.events("pipeline.merged", "CC-007")), 1)
+
+    # re-pin
+    def test_a_repin_drops_the_old_pr_and_an_old_approval_does_not_carry(self):
+        self.started(87)
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"), (250, "SV-119-next", self.H1, "SV-119 y"))
+        self.assertEqual(self.status(), "IN_REVIEW")
+        self.assertEqual(self.user_pass(self.H1).status_code, 200)
+        self.assertEqual(self.approve(self.H1).json()["status"], "READY_TO_MERGE")      # both on #249
+        self.assertEqual(self.step("rework", {"reason": "other PR"}, "jay").json()["status"], "IN_PROGRESS")
+        self.assertEqual(self.pin("JayDalool/SamVisionAI#250").status_code, 200)
+        self.assertEqual([p["ref"] for p in self.daemon._ticket_prs(self.tickets.get(self.key))],
+                         ["JayDalool/SamVisionAI#250"])
+        self.lane(88)
+        self.assertEqual(self.pin(self.SV, key="SV-088").status_code, 200)       # #249 is free for another ticket
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"), (250, "SV-119-next", self.H1, "SV-119 y"))
+        self.assertEqual(self.status("SV-087"), "IN_REVIEW")
+        # #250 has the very head #249 was approved at: neither the approval nor the user check carries over
+        self.assertEqual(self.approve(self.H1, "SV-087").status_code, 409)
+        self.assertEqual(self.status("SV-087"), "IN_REVIEW")
+        self.assertEqual(self.user_pass(self.H1, "SV-087").status_code, 200)
+        self.assertEqual(self.work("SV-087")["userCheck"]["pr"], "JayDalool/SamVisionAI#250")
+        self.assertEqual(self.approve(self.H1, "SV-087").json()["status"], "READY_TO_MERGE")
+
+    def test_a_reworked_pinned_ticket_returns_to_review_only_on_its_repinned_pr(self):
+        self.started(87)
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"))
+        self.user_pass(self.H1)
+        self.approve(self.H1)
+        self.sv_merged(249, head=self.H1)
+        self.assertEqual(self.status(), "VERIFYING")
+        r = self.step("rework", {"reason": "follow-up"}, "jay")
+        self.assertEqual(r.json()["status"], "IN_PROGRESS", r.text)
+        self.gh.data["samvision"]["merged"] = []
+        self.sv_open((300, "SV-087-follow-up", self.H2, "SV-087: follow-up"))     # key-led: ignored
+        self.assertEqual(self.status(), "IN_PROGRESS")
+        self.assertEqual(self.pin("JayDalool/SamVisionAI#300").status_code, 200)
+        self.sv_open((300, "SV-087-follow-up", self.H2, "SV-087: follow-up"))
+        self.assertEqual(self.status(), "IN_REVIEW")
+
+    def test_the_pin_matches_the_polled_slug_in_any_case(self):
+        self.started(87)
+        self.gh.data["samvision"]["prs"] = [dict(pr(249, "SV-118 x"), headRefName=self.NATIVE, headRefOid=self.H1)]
+        self.daemon.cfg["projects"][0]["repo"] = "jaydalool/samvisionai"
+        self.poll()
+        self.assertEqual(self.status(), "IN_REVIEW")
+        self.assertEqual([p["ref"] for p in self.daemon._ticket_prs(self.tickets.get(self.key))], [self.SV])
+
+    # P9, c5
+    def test_c5_a_ticket_pinned_to_a_jay_dev_pr_is_reviewed_there_and_its_merge_moves_it_on(self):
+        polled = []
+        inner = self.daemon.github_fn
+
+        def spy(project):
+            polled.append(project["key"])
+            return inner(project)
+        self.daemon.github_fn = spy
+        self.lane(7, "commandcenter")
+        self.poll()
+        self.assertNotIn(self.JDL, polled)                                       # polled only while a ticket pins it
+        self.assertEqual(self.pin(self.JD).status_code, 200)
+        self.step("start", {"branch": "fix-thing", "worktree": "/srv/server/worktrees/x/CC-007"})
+        self.jd(opened=[(10, "fix-thing", self.H1)])
+        self.assertIn(self.JDL, polled)
+        self.assertEqual(self.status(), "IN_REVIEW")
+        self.assertEqual(set(self.daemon.health()["gh"]["projects"]), {p["key"] for p in self.cfg["projects"]})
+        # jay-dev is not a project: it must not appear in the polled snapshot either
+        self.assertEqual(set(self.daemon.gh), {p["key"] for p in self.cfg["projects"]})
+        # ... nor in the public snapshot's GitHub map (CC-071 c5)
+        self.assertEqual(set(self.daemon.state()["sources"]["github"]), {p["key"] for p in self.cfg["projects"]})
+        r = self.user_pass(self.H1)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.work()["userCheck"]["pr"], self.JD)
+        self.assertEqual(self.approve(self.H1).json()["status"], "READY_TO_MERGE")
+        self.assertEqual(self.work()["review"]["pr"], self.JD)
+        row = next(r for r in self.daemon.development()["rows"] if r["key"] == self.key)
+        self.assertEqual(row["pr"]["url"], "https://github.com/JayDalool/jay-dev/pull/10")
+        self.assertEqual(row["pr"]["state"], "OPEN")
+        ready, skipped = self.daemon.merge_batch("commandcenter")
+        self.assertEqual(ready, [])
+        self.assertIn("another repository", skipped[0]["reason"])
+        self.jd(merged=[{"number": 10, "title": "jay-dev change", "url": "u", "mergedAt": "x", "headRefOid": self.H1,
+                         "mergeCommit": {"oid": "e" * 40}}])
+        self.assertEqual(self.status(), "VERIFYING")
+        self.assertEqual(self.work()["merge"]["pr"], self.JD)
+        kinds = [e["data"].get("kind") for e in self.get("/api/activity?limit=200").json()["events"] if e["kind"] == "task.pipeline"]
+        self.assertIn("pipeline.merged", kinds)                                  # announced like any merge
+
+    def test_an_approved_own_repo_pin_is_merge_ready_with_its_full_ref(self):
+        self.cc_polled()
+        CC = "JayDalool/CommandCenter#20"
+        self.lane(7, "commandcenter")
+        self.assertEqual(self.pin(CC).status_code, 200)
+        self.step("start", {"branch": "CC-007-x", "worktree": "/srv/server/worktrees/x/CC-007"})
+        self.gh.data["commandcenter"]["prs"] = [dict(pr(20, "CC-007 x"), headRefName="CC-007-x", headRefOid=self.H1)]
+        self.poll()
+        self.assertEqual(self.user_pass(self.H1).status_code, 200)
+        self.assertEqual(self.approve(self.H1).json()["status"], "READY_TO_MERGE")
+        ready, skipped = self.daemon.merge_batch("commandcenter")
+        self.assertEqual([(r["key"], r["pr"]) for r in ready], [("CC-007", CC)], skipped)
+
+    def test_P9_a_failed_repo_poll_stops_only_itself(self):
+        self.cc_polled()
+        self.started(87)
+        self.lane(7, "commandcenter")
+        self.pin(self.JD)
+        self.step("start", {"branch": "fix-thing", "worktree": "/srv/server/worktrees/x/CC-007"})
+        inner = self.daemon.github_fn
+        broken = {"key": self.JDL}
+
+        def flaky(project):
+            if project["key"] == broken["key"]:
+                e = {"error": "gh failed"}
+                return {k: e for k in ("issues", "prs", "merged", "closed", "ci")}
+            return inner(project)
+        self.daemon.github_fn = flaky
+        self.gh.data[self.JDL] = {"issues": [], "prs": [dict(pr(10, "x"), headRefName="fix-thing", headRefOid=self.H1)],
+                                  "merged": [], "closed": [], "ci": []}
+        self.key = "SV-087"
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"))
+        self.assertEqual((self.status("SV-087"), self.status("CC-007")), ("IN_REVIEW", "IN_PROGRESS"))
+        broken["key"] = "commandcenter"                                          # the pinned ticket's own repo fails
+        self.poll()
+        self.assertEqual(self.status("CC-007"), "IN_REVIEW")                     # jay-dev still moves it
+
+    def test_a_plain_samvision_link_on_a_cc_ticket_does_not_move_it(self):
+        self.tickets.create("commandcenter", "cc", number=9, status="IN_PROGRESS")
+        self.tickets.link("CC-009", "github", "pr", self.SV, None, "x", "agent:implementer")
+        self.sv_open((249, self.NATIVE, self.H1, "SV-118 x"))
+        self.assertEqual(self.status("CC-009"), "IN_PROGRESS")

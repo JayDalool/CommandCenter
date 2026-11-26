@@ -28,9 +28,10 @@ import unicodedata
 import zoneinfo
 
 from . import flow as flow_mod
+from . import github
 from . import registry
 from .security import redact
-from .tasks import CLOSED, TaskError, _printable
+from .tasks import CLOSED, PR_REF_RE, TaskError, _printable
 
 STAGES = ("PLAN", "BUILD", "REVIEW", "MERGE", "VERIFY", "DONE")
 STAGE_OF = {"INBOX": "PLAN", "PROPOSED": "PLAN", "RESEARCHING": "PLAN", "READY_TO_IMPLEMENT": "PLAN",
@@ -48,6 +49,27 @@ OWNER_GATES = ("plan", "ui", "deploy", "failure", "merge")
 ROLE_NAMES = ("coordinator", "planner", "implementer", "reviewer", "verifier",
               "tech-reviewer", "user-reviewer", "design-reviewer")       # the flow's seats (flow.ROLE_OF)
 LEADS = ("jay", "agent:coordinator")          # who runs intake, edits criteria and writes the closing note
+# CC-071: a branch that is not KEY-<slug> (a repo-native name such as SamVision's SV-118-*) may start a ticket only
+# when the lead pinned the ticket to a PR. The name still has to be safe to hand to git, a worktree and `git log`.
+NATIVE_BRANCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,2}")
+PIN_STATUSES = ("READY_TO_IMPLEMENT", "IN_PROGRESS")
+
+
+def native_branch_problem(branch, base=None):
+    """Why a repo-native branch name is refused, or None. Refs and base branches would let `start` name the wrong
+    thing (HEAD, origin/x, refs/heads/x are not task branches); .lock and .. are git-invalid or traversal."""
+    if not isinstance(branch, str) or not NATIVE_BRANCH_RE.fullmatch(branch):
+        return "the branch name has characters or a shape ccd will not accept"
+    segs = branch.split("/")
+    if segs[0].lower() in ("refs", "heads", "remotes", "origin"):
+        return "the branch name starts like a git ref, not a task branch"
+    if ".." in branch or any(x.endswith(".lock") or x.endswith(".") for x in segs):
+        return "the branch name is not valid for git"
+    if branch.lower() in ("head", "main", "master") or (base and branch.lower() == str(base).lower()):
+        return "that is the base branch, not a task branch"
+    return None
+
+
 USER_REVIEWERS = ("agent:user-reviewer", "agent:design-reviewer")
 CRITERION_ID_RE = re.compile(r"^c[0-9]{1,3}$")
 MAX_REVIEW_CYCLES = 2
@@ -637,6 +659,40 @@ class Pipeline:
         prs = json.loads(r[0] or "{}").get("prs") or []
         return {(p.get("ref"), p.get("head")) for p in prs if isinstance(p, dict)}
 
+    def _pin_of(self, tid):
+        r = self.db.execute("SELECT data FROM ticket_events WHERE ticket_id=? AND kind='pipeline.linked' "
+                            "ORDER BY id DESC LIMIT 1", (tid,)).fetchone()
+        return (json.loads(r[0] or "{}").get("pr") or None) if r else None
+
+    def pin_of(self, key):
+        """The one PR (`owner/repo#N`) the lead pinned the ticket to, or None (CC-071). A pin is the ticket's latest
+        pipeline.linked event, written only by `link`: the plain links route and ccd's own key-led linking never
+        pin. There is no unpin; a re-pin replaces it."""
+        r = self.db.execute("SELECT id FROM tickets WHERE key=?", (str(key).upper(),)).fetchone()
+        return self._pin_of(r[0]) if r else None
+
+    def pins(self):
+        """lowercase PR ref -> key of the open ticket that owns it: the newest pin among tickets that are neither
+        closed nor archived. A ticket that holds a pin it does not own (a reopen after another ticket took the PR)
+        is inert for it. One query, no per-ticket reads."""
+        out = {}
+        marks = ",".join("?" * len(CLOSED))
+        for key, data in self.db.execute(
+                "SELECT t.key, e.data FROM ticket_events e JOIN tickets t ON t.id=e.ticket_id "
+                "WHERE e.kind='pipeline.linked' AND t.archived=0 AND t.status NOT IN (" + marks + ") "
+                "AND e.id=(SELECT MAX(x.id) FROM ticket_events x WHERE x.ticket_id=e.ticket_id AND "
+                "x.kind='pipeline.linked') ORDER BY e.id", CLOSED):
+            ref = json.loads(data or "{}").get("pr")
+            if ref:
+                out[ref.lower()] = key
+        return out
+
+    def pinned_keys(self):
+        """Keys of every ticket that holds a pin, owner or not: a pinned ticket ignores every other PR."""
+        return {r[0] for r in self.db.execute(
+            "SELECT DISTINCT t.key FROM ticket_events e JOIN tickets t ON t.id=e.ticket_id "
+            "WHERE e.kind='pipeline.linked' AND t.archived=0")}
+
     def new_head(self, key, pr):
         """True when this (PR, head) is one the pipeline has not already dealt with: not the reviewed head, and
         not an open PR recorded when the ticket was last sent back to implementation. Only such a head or
@@ -798,7 +854,45 @@ class Pipeline:
         self._flow_set(tid, at, review_due=at, plan_review=None)
         return {}, work, [("pipeline.plan", "plan recorded for technical review", {"owner": False, "review": True})]
 
-    def start(self, key, branch, worktree, actor, model=None, session=None):
+    def link(self, key, ref, actor):
+        """CC-071: the lead (or Jay) pins the ticket to the one PR (`owner/repo#N`) that may move it, be reviewed,
+        be user-checked and count as its merge. Needed when the PR's branch does not lead with the key (SamVision's
+        SV-118-*) or lives in another allow-listed repository (jay-dev). Only this step pins; the plain links route
+        never does. The actor is self-asserted (X-CCD-Actor), the same strength as intake."""
+        self._lead(actor, "link")
+
+        def fn(tid, t, w, at):
+            project = t["project"]
+            if registry.paused(project):
+                raise TaskError(409, f"{project} is paused; nothing is pinned there, not even by Jay")
+            self._need(t, PIN_STATUSES, "link")
+            if not self.participating(t["key"]):
+                raise TaskError(409, f"{t['key']} is not in the pipeline yet (it needs an accepted plan)")
+            if not isinstance(ref, str) or not PR_REF_RE.fullmatch(ref):
+                raise TaskError(400, "pr must be owner/repo#N (N without a leading zero)")
+            allowed = {a.lower(): a for a in registry.link_repos(project)}
+            slug, _, num = ref.rpartition("#")
+            if slug.lower() not in allowed:
+                raise TaskError(400, f"{slug} is not on {project}'s list of repositories a ticket may be pinned to "
+                                     f"({', '.join(sorted(allowed.values())) or 'none'})")
+            canon = f"{allowed[slug.lower()]}#{num}"
+            owner = self.pins().get(canon.lower())
+            if owner and owner != t["key"]:
+                raise TaskError(409, f"{canon} is pinned to {owner}; one PR belongs to one open ticket")
+            previous = self._pin_of(tid)
+            if previous and previous.lower() == canon.lower():
+                return {}, {}, []
+            # A display row only: the pin is the event. Never updated or promoted, and not added when a row with
+            # another spelling of the same PR is there (links are unique by exact spelling).
+            if not self.db.execute("SELECT 1 FROM ticket_links WHERE ticket_id=? AND provider='github' AND kind='pr' "
+                                   "AND lower(ref)=lower(?)", (tid, canon)).fetchone():
+                self.db.execute("INSERT INTO ticket_links(ticket_id, provider, kind, ref, url, title, created_at, "
+                                "created_by) VALUES (?,?,?,?,?,?,?,?)",
+                                (tid, "github", "pr", canon, github.pr_ref_url(canon), "", at, actor))
+            return {}, {}, [("pipeline.linked", f"pinned to {canon}", {"pr": canon, "previous": previous})]
+        return self._tx(key, actor, fn)
+
+    def start(self, key, branch, worktree, actor, model=None, session=None, base=None):
         def fn(tid, t, w, at):
             self._need(t, ("READY_TO_IMPLEMENT",), "start")
             f = self._flow(tid)
@@ -806,7 +900,14 @@ class Pipeline:
             if w["planState"] != "accepted" and not small:
                 raise TaskError(409, f"{t['key']} has no accepted plan")
             if not isinstance(branch, str) or not re.match(rf"^{re.escape(t['key'])}-{SLUG_RE}$", branch):
-                raise TaskError(400, f"branch must be {t['key']}-<short-slug> (lowercase, digits, hyphens)")
+                # CC-071: a repo-native branch starts a ticket only when the lead pinned it to its PR first.
+                if not self._pin_of(tid):
+                    raise TaskError(400, f"branch must be {t['key']}-<short-slug> (lowercase, digits, hyphens); for a "
+                                         f"repo-native branch the lead pins the PR first "
+                                         f"(pipeline_cli link {t['key']} --pr owner/repo#N)")
+                problem = native_branch_problem(branch, base)
+                if problem:
+                    raise TaskError(400, f"branch must be {t['key']}-<short-slug> or a safe repo-native name: {problem}")
             if not isinstance(worktree, str) or not worktree.startswith("/") or len(worktree) > 300 \
                     or not re.match(r"^/[A-Za-z0-9._/-]+$", worktree) or "/../" in worktree + "/":
                 raise TaskError(400, "worktree must be an absolute path")
@@ -823,6 +924,21 @@ class Pipeline:
                     [("pipeline.started", f"implementation started on {branch}", {"branch": branch})])
         return self._tx(key, actor, fn)
 
+    def _one_pr(self, tid, t, pr, head):
+        """CC-071: on a pinned ticket the pin is the only PR a review or user check can be about: it must be the
+        ticket's own pin (not inert after a re-pin or another ticket's claim), ccd must have seen it open in this
+        process, and the head submitted must be the head seen. Unpinned tickets pass untouched."""
+        pin = self._pin_of(tid)
+        if not pin:
+            return None
+        if self.pins().get(pin.lower()) != t["key"]:
+            raise TaskError(409, f"{t['key']}'s pin {pin} belongs to another ticket now; the lead pins it again")
+        if not pr or str(pr.get("ref") or "").lower() != pin.lower() or not pr.get("head"):
+            raise TaskError(409, f"{t['key']} is pinned to {pin} and ccd has not seen that PR open; one PR per ticket")
+        if pr["head"] != head:
+            raise TaskError(409, f"{head[:7]} is not the head of {pin} ({pr['head'][:7]})")
+        return pin
+
     def review(self, key, verdict, head, actor, findings=(), model=None, session=None, pr=None):
         if verdict not in ("APPROVE", "REQUEST_CHANGES"):
             raise TaskError(400, "verdict must be APPROVE or REQUEST_CHANGES")
@@ -832,6 +948,7 @@ class Pipeline:
 
         def fn(tid, t, w, at):
             self._need(t, ("IN_REVIEW", "READY_TO_MERGE"), "a review")
+            pin = self._one_pr(tid, t, pr, head)
             impl = (w["roles"].get("implementer") or {})
             if verdict == "APPROVE":
                 own = {x for x in (impl.get("session"), t["key"].lower(), t["key"]) if x}
@@ -845,6 +962,8 @@ class Pipeline:
                     if uc.get("result") != "pass" or uc.get("head") != head:
                         raise TaskError(409, f"{t['key']} has not passed its user check at {head[:7]}; "
                                              f"the code review approves after it")
+                    if pin and str(uc.get("pr") or "").lower() != pin.lower():
+                        raise TaskError(409, f"the user check of {t['key']} was not on {pin}; it is checked again there")
             roles = self._role(w, "reviewer", model, session, at)
             for f in rows:
                 self.db.execute("INSERT INTO ticket_findings(ticket_id, at, source, scope, category, summary, head) "
@@ -1016,6 +1135,36 @@ class Pipeline:
         tid = self.ts._id_of(key)
         if t["status"] != "VERIFYING" or ((self._row(tid) or {}).get("merge") or {}).get("pr") == pr_ref:
             return t, [], []
+        return self._tx(key, "system:automation", fn)
+
+    def pin_merged(self, key, ref, head, sha=None):
+        """CC-071: the PR a ticket is pinned to merged. The ticket moves to VERIFYING only when that PR is its pin,
+        the recorded review approved this very PR at the head that merged, and this merge is not already recorded.
+        One transaction. A merge nobody approved leaves the status alone and writes one note per PR (the lead
+        moves it by hand); a merge replayed after a reopen, or seen without its head (data stored before this
+        field was fetched), is ignored."""
+        if not isinstance(head, str) or not SHA_RE.match(head):
+            return self.ts.get(key), [], []
+
+        def fn(tid, t, w, at):
+            pin = self._pin_of(tid)
+            if not pin or pin.lower() != str(ref).lower() or self.pins().get(pin.lower()) != t["key"] \
+                    or t["status"] not in ("IN_PROGRESS", "IN_REVIEW", "READY_TO_MERGE") or (w["merge"] or {}).get("pr") == pin:
+                return {}, {}, []
+            rv = w["review"]
+            # CC-071: a PR first seen already merged while the ticket is still IN_PROGRESS must never advance it,
+            # but the lead still gets the unreviewed-merge note.
+            if t["status"] == "IN_PROGRESS" or rv["verdict"] != "APPROVE" or str(rv.get("pr") or "").lower() != pin.lower() or rv["head"] != head:
+                if any(json.loads(r[0] or "{}").get("pr") == pin for r in self.db.execute(
+                        "SELECT data FROM ticket_events WHERE ticket_id=? AND kind='pipeline.unreviewed_merge'", (tid,))):
+                    return {}, {}, []
+                return {}, {}, [("pipeline.unreviewed_merge",
+                                 f"{pin} merged at {head[:7]} without an approval of that PR at that head; "
+                                 f"the lead moves {t['key']} by hand", {"pr": pin, "head": head})]
+            work = {"merge": {"pr": pin, "sha": sha, "at": at}}
+            if w["gate"] == "merge":
+                work.update(gate=None, gate_reason=None)
+            return {"status": "VERIFYING"}, work, [("pipeline.merged", f"{pin} merged", {"pr": pin, "sha": sha})]
         return self._tx(key, "system:automation", fn)
 
     def verify(self, key, result, evidence, actor, model=None, session=None):
@@ -1867,6 +2016,7 @@ class Pipeline:
 
         def fn(tid, t, w, at):
             self._need(t, ("IN_REVIEW",), "a user check")
+            self._one_pr(tid, t, pr, head)
             f = self._flow(tid)
             if "userCheck" not in flow_mod.route(f["size"], policy(t)):
                 raise TaskError(409, f"{t['key']}'s route has no user check")

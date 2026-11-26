@@ -58,6 +58,8 @@ PROJECTS = {
                       "pipeline": {"merge": "owner"}},   # Jay accepts every MFE merge (2026-10-09)
     "commandcenter": {"name": "Command Center",   "prefix": "CC",   "legacy": (),
                       "root": "/srv/server/repos/CommandCenter",    "github": "JayDalool/CommandCenter",
+                      # CC-071: a CC ticket may be linked (by the lead or Jay) to a PR in these other repos.
+                      "link_repos": ("JayDalool/jay-dev",),
                       # The only project that may auto-merge, and only its tests and docs (merge_policy.ALLOW).
                       "pipeline": {"merge": "low-risk"}},
     "gyst":          {"name": "GYST / LifeOps",   "prefix": "GYST", "legacy": (),
@@ -223,6 +225,15 @@ def class_of(key):
 def github_of(key):
     """`owner/repo` of a registered project, or None."""
     return (PROJECTS.get(key) or {}).get("github")
+
+
+def link_repos(key):
+    """Repositories (`owner/repo`) a lead may explicitly link a ticket's PR from: the project's own repo plus the
+    extras its registry row names (CC-071). The ONLY allow list ccd reads for explicit PR links; a repo not here is
+    refused, so a typo or another project's repo can never be read from GitHub."""
+    p = PROJECTS.get(key) or {}
+    own = p.get("github")
+    return tuple(([own] if own else []) + list(p.get("link_repos") or ()))
 
 
 def rows():
