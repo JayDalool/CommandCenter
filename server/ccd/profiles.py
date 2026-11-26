@@ -100,7 +100,6 @@ ENFORCED = {
     "merge": _enum("owner", "low-risk"),
     "night": _enum("normal", "careful"),
     "paused": _text(),
-    "max_lanes": _int(1, 8),
     "ui_fix": _enum("ask", "auto"),
 }
 TARGET = {
@@ -269,12 +268,11 @@ def _read(path):
 
 def enforced_now(key):
     """What the registry makes Command Center do today, in the shape of a profile's [enforced] section."""
-    from . import pipeline   # import here: pipeline imports registry, profiles is imported early
     pol = registry.pipeline_of(key)
     # The registry's raw value: a value the pipeline does not know (it treats it as "owner") still shows as drift.
     return {"merge": pol.get("merge", "owner"),
             "night": registry.night_mode(key), "paused": registry.paused(key) or "",
-            "max_lanes": int(pol.get("max_lanes") or pipeline.MAX_LANES), "ui_fix": registry.ui_fix(key)}
+            "ui_fix": registry.ui_fix(key)}
 
 
 def drift(key, profile):

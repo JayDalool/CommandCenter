@@ -22,6 +22,8 @@ live means the weekly window. A live deploy always waits for Jay's approval; not
     python -m ccd.pipeline_cli verify SV-082 --role verifier --result pass --evidence "main@<sha>, preview: export works"
     python -m ccd.pipeline_cli evidence SV-082 --role verifier --kind screenshot --ref verify-offers.png
 
+One verifier run may check several merged tickets; record one `verify` per ticket, each with its own commit.
+
 After `verify pass`, a standard or risky ticket waits for the lead's closing note.
 
 ## Fail it when
