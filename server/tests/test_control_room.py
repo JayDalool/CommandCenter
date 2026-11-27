@@ -652,6 +652,27 @@ class ControlRoomApi(PipelineApi):
         self.assertNotIn("/exit", [p["text"] for m, p in self.fake.calls if m == "agent.prompt"])
         self.assertIn("left running", self.get("/api/tasks/SV-056/work").json()["released"]["claude"])
 
+    def test_the_criteria_op_past_investigation_is_jays_with_developer_unlock(self):       # CC-100 (c2, c4)
+        self.ticket("IN_PROGRESS")
+        body = {"criteria": ["First", "Second"], "requirements": ["keep the URL"], "size": "risky", "due": "2999-01-01"}
+        crit = lambda: self.get("/api/tasks/SV-056/work").json()["criteria"]
+        for actor, headers, code in (("agent:coordinator", self.dev(), 409), ("jay", None, 403)):
+            self.assertEqual(self.step("criteria", body, actor, headers).status_code, code, actor)
+            self.assertEqual(crit(), [])                                       # nothing written
+        r = self.client.post("/api/tasks/SV-056/work/criteria", content=json.dumps(body), headers=JSON)
+        self.assertEqual(r.status_code, 403)                                   # no actor header, no Unlock
+        r = self.step("criteria", body, "jay", self.dev())
+        self.assertEqual(r.status_code, 200, r.text)
+        w = r.json()
+        self.assertEqual([c["text"] for c in w["criteria"]], ["First", "Second"])
+        self.assertEqual((w["requirements"], w["size"]), (["keep the URL"], "risky"))
+        self.assertIsNotNone(self.get("/api/tasks/SV-056").json()["dueAt"])
+        # Keep c1 (state and id), edit c2, add one: c1 survives, the edited one is open, the new id is c3.
+        r = self.step("criteria", {"criteria": [{"id": "c1", "text": "First"}, {"id": "c2", "text": "Second, edited"},
+                                                "Third"]}, "jay", self.dev())
+        self.assertEqual([(c["id"], c["text"]) for c in r.json()["criteria"]],
+                         [("c1", "First"), ("c2", "Second, edited"), ("c3", "Third")])
+
     def test_a_writer_handover_sends_one_fixed_sentence_never_the_checkpoint_text(self):
         self.ticket("IN_PROGRESS")
         self.task_agent()

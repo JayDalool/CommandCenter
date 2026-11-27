@@ -406,7 +406,7 @@ row each, oldest first; an empty seat has `session: null`. The lead's session is
 coordinator resolver; the others come from the `roles` of tickets in flight (open, past intake).
 
 Events (ticket timeline and `/api/activity` `task.pipeline` with `data.kind`; mostly ids, but `pipeline.plan_reviewed` data in the timeline also carries the review's `session`, `note`, `blast` and `tests`, kept for good because events are append-only, so plan-review refuses text the secret filter would hide): `pipeline.intake`,
-`pipeline.criteria`, `pipeline.plan_reviewed`, `pipeline.user_checked`, `pipeline.user_check_stale`,
+`pipeline.criteria` (its text names each changed criterion by id, e.g. `criteria updated: c1 edited, c4 added, c2 removed`; its data keeps `criteria` as the count and adds `added`, `edited`, `removed` id lists, ids only, never texts; new criterion ids start above the highest id ever used on the ticket), `pipeline.plan_reviewed`, `pipeline.user_checked`, `pipeline.user_check_stale`,
 `pipeline.closed_note`, `pipeline.flow_stale`.
 
 

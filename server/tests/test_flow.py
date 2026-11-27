@@ -201,6 +201,32 @@ class Criteria(Base):
         crit = self.pl.work(k)["criteria"]
         self.assertEqual([(c["id"], c["state"]) for c in crit], [("c1", "pass"), ("c2", "open")])
 
+    def test_the_history_names_changed_criteria_by_id_and_ids_are_never_reused(self):      # CC-100
+        k = self.sized()                                                    # c1, c2
+        self.pl.define(k, "agent:coordinator", criteria=["Five comps show", "Sold dates are used", "Third"])   # c3
+        self.pl.role(k, "planner", "agent:planner", session="inv-1")
+        self.pl.plan(k, PLAN, "agent:planner", session="inv-1")
+        # Jay edits c1, removes c2 and c3 (the highest), adds one, and changes requirements and size.
+        _, _, events = self.pl.define(k, "jay", criteria=[{"id": "c1", "text": "Five recent comps show"}, "Fresh one"],
+                                      requirements=["keep the URL"], size="risky", developer=True)
+        kind, text, data = events[0]
+        self.assertEqual(kind, "pipeline.criteria")
+        self.assertEqual(text, "criteria updated: c1 edited, c4 added, c2 removed, c3 removed, 1 requirements, size risky")
+        self.assertEqual((data["criteria"], data["added"], data["edited"], data["removed"], data["requirements"]),
+                         (2, ["c4"], ["c1"], ["c2", "c3"], 1))                  # data.criteria stays the count
+        # Remove the highest id again; a later add must not become c4 once more.
+        crit = self.pl.work(k)["criteria"]
+        self.assertEqual([c["id"] for c in crit], ["c1", "c4"])
+        self.pl.define(k, "jay", criteria=[{"id": "c1", "text": crit[0]["text"]}], developer=True)
+        self.pl.define(k, "jay", criteria=[{"id": "c1", "text": crit[0]["text"]}, "Another"], developer=True)
+        self.assertEqual([c["id"] for c in self.pl.work(k)["criteria"]], ["c1", "c5"])
+
+    def test_a_save_that_changes_no_criterion_keeps_the_count_text(self):
+        k = self.sized()
+        _, _, events = self.pl.define(k, "agent:coordinator", criteria=["Five comps show", "Sold dates are used"])
+        self.assertEqual(events[0][1], "criteria updated: 2 criteria")
+        self.assertNotIn("added", events[0][2])
+
     def test_only_jay_lowers_a_risky_ticket(self):
         k = self.sized("risky")
         self.refused(403, self.pl.define, k, "agent:coordinator", size="standard")

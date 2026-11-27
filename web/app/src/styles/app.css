@@ -396,6 +396,17 @@ tr:focus-visible, .row-btn:focus-visible { outline-offset: -2px; }
 .td-body { overflow: auto; padding: 12px 16px 24px; display: grid; gap: 18px; align-content: start; }
 .td-props { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 18px; }
 .td-sec-title { font: 700 10.5px var(--font-mono); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted); margin-bottom: 6px; display: flex; gap: 8px; align-items: center; }
+/* CC-100: the criteria section and its editor. Tokens only; inputs take the full width at phone width. */
+.td-crit-list { display: grid; gap: 4px; padding: 0; margin: 0; list-style: none; }
+.td-crit-list li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
+.td-crit-list.is-plain li { grid-template-columns: minmax(0, 1fr); }
+.td-crit-text { overflow-wrap: anywhere; }
+.td-crit-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.td-crit-id { min-width: 24px; }
+.td-crit-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; }
+.td-crit-note { color: var(--text); border-left: 3px solid var(--warn); padding: 4px 8px; background: var(--surface-2); }
+.td-crit .btn, .td-crit .input, .td-crit .select { min-height: 32px; }
+@media (max-width: 640px) { .td-crit-pair { grid-template-columns: minmax(0, 1fr); } }
 .desc { white-space: pre-wrap; line-height: 1.5; color: var(--text); }
 .desc.is-empty { color: var(--faint); font-style: italic; }
 .rel { display: grid; grid-template-columns: 90px auto minmax(0, 1fr) auto; gap: 8px; align-items: center; height: 26px; }

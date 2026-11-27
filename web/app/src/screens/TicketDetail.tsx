@@ -18,6 +18,7 @@ import { WorkPanel } from "../tickets/WorkPanel";
 import { GateCard } from "../tickets/GateCard";
 import { QuestionsForm } from "../tickets/Questions";
 import { useWork } from "../tickets/useWork";
+import { ScopeEditor } from "../tickets/ScopeEditor";
 import { taskHref } from "../lib/control";
 
 /** The decision this ticket waits on and Claude's open questions — the same cards as the Workspace. */
@@ -44,9 +45,10 @@ export function TicketDetailPane({ ticketKey, onClose, onOpenRoom }: { ticketKey
     app.loadTicket(ticketKey).catch((e) => setErr((e as Error).message));
   }, [ticketKey]);
   useEffect(() => {
+    // CC-100: Esc with the criteria editor open belongs to the editor, not the pane.
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName;
-      if (e.key === "Escape" && !["INPUT", "TEXTAREA", "SELECT"].includes(tag) && !document.querySelector("[role=dialog]")) onClose();
+      if (e.key === "Escape" && !["INPUT", "TEXTAREA", "SELECT"].includes(tag) && !document.querySelector("[role=dialog]") && !document.querySelector("[data-scope-editing]")) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -146,6 +148,7 @@ function Detail({ t, onClose, onOpenRoom }: { t: TicketDetail; onClose: () => vo
 
       <Decisions ticketKey={t.key} />
       <WorkPanel t={t} />
+      <ScopeEditor key={t.key} t={t} />
 
       <section aria-label="Development">
         <div className="td-sec-title">Development</div>

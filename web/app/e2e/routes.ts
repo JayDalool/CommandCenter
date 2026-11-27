@@ -45,7 +45,10 @@ export const slug = (route: string) => route.replace(/[^A-Za-z0-9]+/g, "-").repl
  *  and the rest of the screen must still match the base branch pixel for pixel; each must be on the page, so a stale
  *  entry fails. Anything listed here is not compared, so keep it to new elements and say why in the PR. Once the
  *  branch merges, its base has them too: the next branch starts this list empty. */
-export const ADDED: Record<string, string[]> = {};
+export const ADDED: Record<string, string[]> = {
+  // CC-100: the task detail pane gains the Acceptance criteria section (read mode, with its Edit button).
+  "tasks/SV-056": ['section[aria-label="Acceptance criteria"]'],
+};
 
 /** Not new, but different in the HQ preview by design, by route: the preview's screenshots are compared with the
  *  base branch's Classic ones, so a control that shows which interface is on cannot match. Permanent, unlike ADDED.
