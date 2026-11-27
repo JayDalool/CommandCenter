@@ -83,3 +83,42 @@ test("Escape leaves the editor without saving", async ({ page, watch }) => {
   expect(posts).toEqual([]);
   expect(await problems(page, watch)).toEqual([]);
 });
+
+// CC-100 user check: a draft opened on one ticket was saved onto the next one Jay moved to.
+test("moving to another ticket drops the draft; Save never writes it onto that ticket", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const posts = await serve(page);
+  const other: string[] = [];
+  await page.route("**/api/tasks/CC-001/work/criteria", (r) => { other.push(r.request().url()); return r.fulfill({ status: 500, json: { ok: false, error: "must not be called" } }); });
+  // Visit the other ticket first: the pane keeps a loaded ticket's form mounted, which is how the draft leaked.
+  await open(page, "tasks/CC-001");
+  await expect(page.getByRole("region", { name: "Acceptance criteria" })).toBeVisible();
+  await page.evaluate(() => { location.hash = "#/tasks/SV-056"; });
+  const section = page.getByRole("region", { name: "Acceptance criteria" });
+  await section.getByRole("button", { name: "Edit" }).click();
+  await section.getByRole("textbox", { name: "Criterion c1" }).fill("draft for SV-056");
+  await page.evaluate(() => { location.hash = "#/tasks/CC-001"; });
+  await expect(page.getByRole("region", { name: "Acceptance criteria" }).getByRole("button", { name: "Edit" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Criterion c1" })).toHaveCount(0);
+  await page.keyboard.press("Control+Enter");
+  expect([posts, other]).toEqual([[], []]);
+});
+
+test("Ctrl+Enter saves from the Size select, and Esc outside the form does not close the pane", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const posts = await serve(page);
+  await open(page, "tasks/SV-056");
+  const section = page.getByRole("region", { name: "Acceptance criteria" });
+  await section.getByRole("button", { name: "Edit" }).click();
+  await section.getByRole("textbox", { name: "Criterion c1" }).fill("via the size select");
+  await expect(section.getByText("Left empty: no due date is set.")).toBeVisible();
+  await section.getByRole("combobox", { name: "Size" }).focus();
+  await page.keyboard.press("Control+Enter");
+  await expect.poll(() => posts.length).toBe(1);
+
+  await section.getByRole("button", { name: "Edit" }).click();
+  await page.locator("body").click({ position: { x: 1, y: 1 } });
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL(/#\/tasks\/SV-056$/);
+  await expect(section.getByRole("textbox", { name: "Criterion c1" })).toBeVisible();
+});

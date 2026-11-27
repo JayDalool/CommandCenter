@@ -41,6 +41,9 @@ export function ScopeEditor({ t }: { t: TicketDetail }) {
   const [due, setDue] = useState("");
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // CC-100: the ticket the draft was made for. The pane reuses this component when Jay moves to another ticket, and a
+  // draft once went to the wrong ticket; the mount is keyed by ticket and every send names this key and re-checks it.
+  const draftKey = useRef(t.key);
   const editBtn = useRef<HTMLButtonElement>(null);
   const focusRow = useRef<number | null>(null);
   const refocus = useRef(false);
@@ -63,6 +66,7 @@ export function ScopeEditor({ t }: { t: TicketDetail }) {
     setSize(work.size ?? "");
     setDue(dueNow);
     setNote(null);
+    draftKey.current = t.key;
     setEditing(true);
   };
   const close = () => { refocus.current = true; setEditing(false); setNote(null); };
@@ -104,11 +108,13 @@ export function ScopeEditor({ t }: { t: TicketDetail }) {
   };
 
   const send = async (body: Record<string, unknown>) => {
+    const key = draftKey.current;
+    if (key !== t.key) { setNote("This draft was made for another ticket and was not sent."); return; }
     setBusy(true);
     try {
-      const next = await app.api.workOp(t.key, "criteria", body);
+      const next = await app.api.workOp(key, "criteria", body);
       setWork(next);
-      app.toast(`${t.key}: scope saved`);
+      app.toast(`${key}: scope saved`);
       close();
     } catch (e) {
       // ccd writes nothing on a refusal, and Jay's edits stay in the form so he can retry or copy them.
@@ -149,7 +155,7 @@ export function ScopeEditor({ t }: { t: TicketDetail }) {
 
   return <section aria-label="Acceptance criteria" className="td-crit">
     <div className="td-sec-title">Acceptance criteria</div>
-    <form className="stack" style={{ gap: 8 }} noValidate
+    <form className="stack" style={{ gap: 8 }} noValidate data-scope-editing=""
       onSubmit={(e) => { e.preventDefault(); if (!busy) save(); }}
       onKeyDown={(e) => {
         if (e.key === "Escape") { e.stopPropagation(); close(); }
@@ -172,7 +178,8 @@ export function ScopeEditor({ t }: { t: TicketDetail }) {
             {!size && <option value="">Not set</option>}
             {sizes.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
         <label className="stack" style={{ gap: 2 }}><span className="mono-xs muted">Due date</span>
-          <input className="input" type="date" value={due} min={today()} aria-label="Due date" onChange={(e) => setDue(e.target.value)} /></label>
+          <input className="input" type="date" value={due} min={today()} aria-label="Due date" onChange={(e) => setDue(e.target.value)} />
+          {!due && <span className="mono-xs muted">{dueNow ? `Left empty: the due date stays ${dueNow}.` : "Left empty: no due date is set."}</span>}</label>
       </div>
 
       {note && <div role="status" className="td-crit-note">{note}</div>}

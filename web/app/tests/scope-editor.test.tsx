@@ -179,3 +179,23 @@ it("after a resolved save the section shows the returned criteria and the ticket
   expect(refresh).toHaveBeenCalledWith("SV-056");
   expect(screen.queryByText("Third")).toBeNull();
 });
+
+it("a draft made for one ticket is never sent for another (CC-100 user check)", async () => {
+  const op = vi.spyOn(app.api, "workOp").mockResolvedValue(work());
+  const other = { ...T, key: "CC-032" } as TicketDetail;
+  const first = work();
+  const second = { ...work(), key: "CC-032" } as TicketWork;
+  works.set({ "SV-056": first, "CC-032": second });
+  vi.spyOn(app.api, "taskWork").mockImplementation(async (k: string) => (k === "CC-032" ? second : first));
+  // Without a key on the mount, the same component instance is reused, as the pane did before the fix.
+  const view = render(<ScopeEditor t={T} />);
+  edit();
+  type("Criterion c1", "SV-056 draft");
+  view.rerender(<ScopeEditor t={other} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("another ticket"));
+  expect(op).not.toHaveBeenCalled();
+  // Keyed (as the pane mounts it): the draft is dropped and the editor is closed.
+  view.rerender(<ScopeEditor key="CC-032" t={other} />);
+  expect(screen.queryByRole("textbox", { name: "Criterion c1" })).toBeNull();
+});
